@@ -109,9 +109,9 @@ classifications:
 		warn_method: kafka_server
 		warn_for_incoming: true
 		predict: 60
-		ip: sussykafka.com/connect
-		username: sussy
-		password: baka
+		ip: examplekafka.com/connect
+		username: root
+		password: password
 		save:
 			decimate: 0
 			mark_important: true
