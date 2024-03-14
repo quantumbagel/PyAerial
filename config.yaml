@@ -1,0 +1,66 @@
+home:
+  latitude: 36.6810752
+  longitude: -78.8758528
+
+
+zones:
+  main:  # smaller area randomly picked out for testing
+    coordinates:
+      [[35.753821, -78.909304],
+      [35.755597, -78.904969],
+      [35.756642, -78.898232],
+      [35.755214, -78.892738],
+      [35.753333, -78.888490],
+      [35.749293, -78.889606],
+      [35.747343, -78.891494],
+      [35.746507, -78.895742],
+      [35.747482, -78.900806],
+      [35.748910, -78.906085],
+      [35.751348, -78.910205]]
+    warn_time: 45
+    warn_category: warn
+    alert_category: alert
+  alternate: # Most of raleigh area
+    coordinates:
+      [[36.279595, -79.349321],
+      [35.943933, -79.534100],
+      [35.560548, -79.501141],
+      [35.058494, -79.138592],
+      [35.049501, -78.776043],
+      [35.184300, -78.248700],
+      [35.435327, -78.017987],
+      [35.801494, -77.963055],
+      [36.112746, -77.974041],
+      [36.254624, -78.226727],
+      [36.334318, -78.666180],
+      [36.325467, -78.929852],
+      [36.343168, -79.259442],]
+    warn_time: 120
+    warn_category: warn
+    alert_category: alert
+
+categories:
+  warn:
+    priority: 10
+    send_alert:
+      method: print
+    send_warning:
+      method: print
+    save:
+      telemetry: alert
+      telemetry_method: all
+      packet: all
+      calculated: all
+      calculated_method: all
+  alert:
+    priority: -1
+    send_alert:
+      method: print
+    send_warning:
+      method: print
+    save:
+      telemetry: all
+      telemetry_method: all
+      packet: all
+      calculated: all
+      calculated_method: all
