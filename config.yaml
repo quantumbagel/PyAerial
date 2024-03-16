@@ -18,8 +18,8 @@ zones:
       [35.748910, -78.906085],
       [35.751348, -78.910205]]
     warn_time: 45
-    warn_category: warn
-    alert_category: alert
+    warn_category: really_high_priority
+    alert_category: really_high_priority
   alternate: # Most of raleigh area
     coordinates:
       [[36.279595, -79.349321],
@@ -40,6 +40,18 @@ zones:
     alert_category: alert
 
 categories:
+  really_high_priority:
+    priority: 1000000
+    send_alert:
+      method: print
+    send_warning:
+      method: print
+    save:
+      telemetry: alert
+      telemetry_method: all
+      packet: all
+      calculated: all
+      calculated_method: all
   warn:
     priority: 10
     send_alert:

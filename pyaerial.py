@@ -1,7 +1,10 @@
+import logging
 import math
 import threading
 import time
 import pyModeS as pms
+import requests
+
 import signal_generator
 import ruamel.yaml
 import geopy.distance
@@ -38,14 +41,14 @@ configuration, zones, categories = load_configuration()
 
 generator_thread = initate_signal_generator()
 
-categories = {2: {1: "Surface Emergency Vehicle", 3: "Surface Service Vehicle", 4: "Ground Obstruction (4)",
-                  5: "Ground Obstruction (5)", 6: "Ground Obstruction (6)", 7: "Ground Obstruction (7)"},
-              3: {1: "Glider/Sailplane", 2: "Lighter-than-air", 3: "Parachutist/Skydiver",
-                  4: "Ultralight/Hang-glider/paraglider", 6: "UAV (unmanned aerial vehicle)",
-                  7: "Space/transatmospheric vehicle"},
-              4: {1: "Light (<7000kg)", 2: "Medium 1 (7000 to 34000kg)", 3: "Medium 2 (34000 to 136000kg)",
-                  4: "High vortex aircraft", 5: "Heavy (>13600kg)",
-                  6: "High performance (>5g) and high speed (>740km/h)", 7: "Rotorcraft (helicopter)"}}
+vehicle_categories = {2: {1: "Surface Emergency Vehicle", 3: "Surface Service Vehicle", 4: "Ground Obstruction (4)",
+                          5: "Ground Obstruction (5)", 6: "Ground Obstruction (6)", 7: "Ground Obstruction (7)"},
+                      3: {1: "Glider/Sailplane", 2: "Lighter-than-air", 3: "Parachutist/Skydiver",
+                          4: "Ultralight/Hang-glider/paraglider", 6: "UAV (unmanned aerial vehicle)",
+                          7: "Space/transatmospheric vehicle"},
+                      4: {1: "Light (<7000kg)", 2: "Medium 1 (7000 to 34000kg)", 3: "Medium 2 (34000 to 136000kg)",
+                          4: "High vortex aircraft", 5: "Heavy (>13600kg)",
+                          6: "High performance (>5g) and high speed (>740km/h)", 7: "Rotorcraft (helicopter)"}}
 
 
 def classify(msg):
@@ -87,6 +90,7 @@ def classify(msg):
 
     elif typecode == 19:  # Airbone velocities
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
+        print(speed, angle, vert_rate, speed_type, angle_source, vert_rate_source)
         data = {STORE_INFO: {"icao": icao},
                 STORE_RECV_DATA: {"horizontal_speed": speed * 1.852, "direction": angle,
                                   "vertical_speed": vert_rate * 0.018288}}
@@ -201,6 +205,16 @@ def process_messages(msgs):
     return processed
 
 
+def execute_method(method="print", method_arguments=None, payload=None):
+    if method == "print":
+        icao = method_arguments["icao"]
+        tag = method_arguments["callsign"]
+        message_type = method_arguments["type"]
+        print_me = {"icao": icao, "callsign": tag, "type": message_type, "payload": payload}
+        l = logging.getLogger(f"{message_type}")
+        l.error(print_me)
+
+
 def calculate():
     for plane in planes:
         if "latitude" not in planes[plane][STORE_RECV_DATA].keys():  # Haven't yet received latitude/longitude packet
@@ -257,13 +271,65 @@ def calculate():
             patch_append(plane, STORE_CALC_DATA, "heading", [final_heading, speed_time])
 
             geofence_etas = {}
+            current_warn_category = None
+            current_alert_category = None
+            print(list(zones.values())[0], current_warn_category, current_alert_category)
+            send_warning = False
+            send_alert = False
             for geofence_name in zones:
                 geofence = zones[geofence_name]
                 eta = time_to_enter_geofence(current, final_heading, final_speed, geofence["coordinates"],
                                              geofence["warn_time"])
                 geofence_etas[geofence_name] = eta
+                if 0 < eta < math.inf:
+                    send_warning = True
+                if 0 == eta:
+                    send_alert = True
+                if eta != math.inf and (current_warn_category is None or current_alert_category is None):
+                    print(eta, geofence)
+                    current_warn_category = geofence["warn_category"]
+                    current_alert_category = geofence["alert_category"]
+                if 0 < eta < math.inf and categories[geofence["warn_category"]]["priority"] < \
+                        categories[current_warn_category]["priority"]:
+                    # We are not in the zone YET, but we should sound a warning
+                    current_warn_category = geofence["warn_category"]
+                if 0 == eta and categories[geofence["alert_category"]]["priority"] < \
+                        categories[current_alert_category]["priority"]:
+                    # We are in the zone
+                    current_alert_category = geofence["alert_category"]
 
+            print("Calert, Cwarning", current_warn_category, current_alert_category)
             print("Geofence ETAs:", geofence_etas)  # TODO: Add actual use of the geofence ETAs
+            try:
+                callsign = planes[plane]['info']['callsign']
+            except KeyError:
+                callsign = get_callsign(plane)  # Callsign might not always exist
+                if callsign is not None:  # if we got it
+                    planes[plane]['info']['callsign'] = callsign  # save it
+
+            if send_alert:
+                reason = {"zones": geofence_etas, "category": current_alert_category}
+                alert_method_arguments = {"type": "alert", "icao": plane, "callsign": callsign}
+                payload = {"reason": reason}  # TODO: add latest lat/long/alt
+                print(alert_method_arguments)
+                execute_method(categories[current_alert_category]["send_alert"]["method"], alert_method_arguments,
+                               payload=payload)
+            elif send_warning:
+                reason = {"zones": geofence_etas, "category": current_alert_category}
+                warn_method_arguments = {"type": "warning", "icao": plane, "callsign": callsign, "reason": reason}
+                payload = {"reason": reason}  # TODO: add latest lat/long/alt
+                print(warn_method_arguments)
+                execute_method(categories[current_alert_category]["send_warning"]["method"], warn_method_arguments,
+                               payload=payload)
+
+
+def get_callsign(icao):
+    resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{icao}", timeout=1)
+    json = resp.json()
+    if "Registration" in json.keys():
+        return json["Registration"]
+    else:
+        return None
 
 
 def check_for_old_planes(current_time):

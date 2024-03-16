@@ -12,7 +12,7 @@ ADS-B packet types
 
 
 
-I will just copy the aircraft vortex types here
+I will just copy the aircraft vortex types here because I'm rly lazy
 
 
 
