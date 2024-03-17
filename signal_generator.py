@@ -2,6 +2,9 @@ import time
 import numpy as np
 import pyModeS as pms
 from typing import Any
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)  # IDK why they used pkg resources, this supresses
 import rtlsdr
 
 # typecodes:
@@ -42,6 +45,7 @@ def initalize_sdr():
     sdr.gain = "auto"
     return sdr
 
+
 def calc_noise() -> float:
     """
     Calculate the noise floor of the SDR
@@ -62,10 +66,10 @@ def process_buffer() -> list[list[Any]]:
     Process the raw IQ data into the buffer
     :return: the messages processed
     """
-    
+
     global noise_floor
     global signal_buffer
-    
+
     # Calculate the noise floor
     noise_floor = min(calc_noise(), noise_floor)
 
@@ -94,7 +98,7 @@ def process_buffer() -> list[list[Any]]:
             binary_messages = []
             for frame_index in range(0, frame_length, 2):
                 frame_slice = frame_pulses[frame_index:frame_index + 2]
-                
+
                 if len(frame_slice) < 2:  # For some reason this caused a crash EVEN THOUGH IT SHOULD ALWAYS BE 2
                     break
 
@@ -136,7 +140,7 @@ def check_preamble(pulses) -> bool:
         return False
 
     for i in range(16):
-        if abs(pulses[i] - preamble[i]) > th_amp_diff:   # Check that the amplitude is "close enough"
+        if abs(pulses[i] - preamble[i]) > th_amp_diff:  # Check that the amplitude is "close enough"
             return False
 
     return True
@@ -205,7 +209,3 @@ def run() -> str:
             last_return = "Lost connection to SDR. Was it disconnected?"
             return last_return
         read_callback(data)
-
-
-if __name__ == "__main__":
-    print(run())

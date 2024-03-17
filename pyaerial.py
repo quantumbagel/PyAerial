@@ -90,7 +90,6 @@ def classify(msg):
 
     elif typecode == 19:  # Airbone velocities
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
-        print(speed, angle, vert_rate, speed_type, angle_source, vert_rate_source)
         data = {STORE_INFO: {"icao": icao},
                 STORE_RECV_DATA: {"horizontal_speed": speed * 1.852, "direction": angle,
                                   "vertical_speed": vert_rate * 0.018288}}
@@ -166,21 +165,22 @@ def process_messages(msgs):
         if message_data is None:  # Not implemented yet :(
             continue
         processed += 1
-        if message_data[STORE_INFO]["icao"] not in planes.keys():  # Do we have this plane in our current tracker?
-            planes[message_data[STORE_INFO]["icao"]] = message_data  # We don't, so just format the data and insert it
-            for item in planes[message_data[STORE_INFO]["icao"]][STORE_RECV_DATA]:
-                c_item = planes[message_data[STORE_INFO]["icao"]][STORE_RECV_DATA][item]
-                planes[message_data[STORE_INFO]["icao"]][STORE_RECV_DATA][item] = [[c_item, message[1]]]
+        icao = message_data[STORE_INFO]["icao"]
+        if icao not in planes.keys():  # Do we have this plane in our current tracker?
+            planes[icao] = message_data  # We don't, so just format the data and insert it
+            for item in planes[icao][STORE_RECV_DATA]:
+                c_item = planes[icao][STORE_RECV_DATA][item]
+                planes[icao][STORE_RECV_DATA][item] = [[c_item, message[1]]]
         else:  # We do, so find and replace (or update) data
-            current_info = planes[message_data[STORE_INFO]["icao"]][STORE_INFO]  # Current plane info
+            current_info = planes[icao][STORE_INFO]  # Current plane info
             my_info = message_data[STORE_INFO]
             for item in my_info.keys():  # Find and replace/update data
                 if item not in current_info.keys():
                     current_info.update({item: my_info[item]})
                 else:
                     current_info[item] = my_info[item]
-            planes[message_data[STORE_INFO]["icao"]][STORE_INFO] = current_info
-            current_data = planes[message_data[STORE_INFO]["icao"]][STORE_RECV_DATA]
+            planes[icao][STORE_INFO] = current_info
+            current_data = planes[icao][STORE_RECV_DATA]
             # Similar thing here, but using lists
             for datum in message_data[STORE_RECV_DATA].keys():
                 new_packet = [message_data[STORE_RECV_DATA][datum], message[1]]
@@ -190,12 +190,12 @@ def process_messages(msgs):
                     if check_should_be_added(current_data[datum], new_packet):
                         current_data[datum].append(new_packet)
 
-        if "internal" not in planes[message_data[STORE_INFO]["icao"]].keys():  # Update internal metrics
-            planes[message_data[STORE_INFO]["icao"]].update({"internal": {"last_update": message[1], "packets": 1,
-                                                                          "first_packet": message[1], "packet_type":
-                                                                              {typecode_cat: 1}}})
+        if "internal" not in planes[icao].keys():  # Update internal metrics
+            planes[icao].update({"internal":
+                                     {"last_update": message[1], "packets": 1,
+                                      "first_packet": message[1], "packet_type": {typecode_cat: 1}}})
         else:
-            internal_data_storage = planes[message_data[STORE_INFO]["icao"]]["internal"]
+            internal_data_storage = planes[icao]["internal"]
             internal_data_storage["last_update"] = message[1]
             internal_data_storage["packets"] += 1
             if typecode_cat in internal_data_storage["packet_type"].keys():
@@ -273,7 +273,6 @@ def calculate():
             geofence_etas = {}
             current_warn_category = None
             current_alert_category = None
-            print(list(zones.values())[0], current_warn_category, current_alert_category)
             send_warning = False
             send_alert = False
             for geofence_name in zones:
@@ -286,7 +285,6 @@ def calculate():
                 if 0 == eta:
                     send_alert = True
                 if eta != math.inf and (current_warn_category is None or current_alert_category is None):
-                    print(eta, geofence)
                     current_warn_category = geofence["warn_category"]
                     current_alert_category = geofence["alert_category"]
                 if 0 < eta < math.inf and categories[geofence["warn_category"]]["priority"] < \
@@ -298,29 +296,38 @@ def calculate():
                     # We are in the zone
                     current_alert_category = geofence["alert_category"]
 
-            print("Calert, Cwarning", current_warn_category, current_alert_category)
-            print("Geofence ETAs:", geofence_etas)  # TODO: Add actual use of the geofence ETAs
             try:
                 callsign = planes[plane]['info']['callsign']
             except KeyError:
+
                 callsign = get_callsign(plane)  # Callsign might not always exist
                 if callsign is not None:  # if we got it
                     planes[plane]['info']['callsign'] = callsign  # save it
+                else:  # if we didn't
+                    planes[plane]['info']['callsign'] = ''  # save that we failed so we don't keep requesting data
 
+            payload = {"altitude": get_latest(STORE_RECV_DATA, "altitude", planes[plane])[0],
+                       "latitude": get_latest(STORE_RECV_DATA, "latitude", planes[plane])[0],
+                       "longitude": get_latest(STORE_RECV_DATA, "longitude", planes[plane])[0]}
             if send_alert:
                 reason = {"zones": geofence_etas, "category": current_alert_category}
-                alert_method_arguments = {"type": "alert", "icao": plane, "callsign": callsign}
-                payload = {"reason": reason}  # TODO: add latest lat/long/alt
-                print(alert_method_arguments)
+                alert_method_arguments = {"type": "alert", "icao": plane, "callsign": callsign, "reason": reason}
                 execute_method(categories[current_alert_category]["send_alert"]["method"], alert_method_arguments,
                                payload=payload)
             elif send_warning:
                 reason = {"zones": geofence_etas, "category": current_alert_category}
                 warn_method_arguments = {"type": "warning", "icao": plane, "callsign": callsign, "reason": reason}
-                payload = {"reason": reason}  # TODO: add latest lat/long/alt
-                print(warn_method_arguments)
                 execute_method(categories[current_alert_category]["send_warning"]["method"], warn_method_arguments,
                                payload=payload)
+
+
+def get_latest(information_type, information_datum, plane_data):
+    if information_type not in plane_data.keys():
+        return None
+    data = plane_data[information_type]
+    if information_datum not in data.keys():
+        return None
+    return data[information_datum][::-1][0]
 
 
 def get_callsign(icao):
@@ -344,7 +351,7 @@ def check_for_old_planes(current_time):
 
 def process_old_planes(old_planes):
     for plane in old_planes:
-        print(len(planes) - 1, planes[plane])
+        print("Old plane processed! (newlen, removed plane)=", len(planes) - 1, planes[plane])
         del planes[plane]
 
 
@@ -359,12 +366,10 @@ def time_to_enter_geofence(plane_position, heading, speed, geofence_coordinates,
     verified = False
     for point in geofence_polygon.exterior.coords:
         general_direction = calculate_heading(plane_position, point)
-        # print(general_direction, heading)
         if abs(heading - general_direction) < POINT_ACCURACY_THRESHOLD_DEG:
             verified = True
 
     if verified is False:
-        print("not verified")
         return math.inf
 
     time_step = 0.1
