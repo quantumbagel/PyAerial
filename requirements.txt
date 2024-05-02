@@ -1,0 +1,7 @@
+shapely
+geopy
+pymodes
+requests
+numpy
+pyrtlsdr
+kafka-python

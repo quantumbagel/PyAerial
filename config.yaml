@@ -34,7 +34,7 @@ zones:
       [36.254624, -78.226727],
       [36.334318, -78.666180],
       [36.325467, -78.929852],
-      [36.343168, -79.259442],]
+      [36.343168, -79.259442]]
     warn_time: 120
     warn_category: warn
     alert_category: alert
@@ -67,7 +67,8 @@ categories:
   alert:
     priority: -1
     send_alert:
-      method: print
+      method: kafka
+      server: 127.0.0.1:9092
     send_warning:
       method: print
     save:

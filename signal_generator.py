@@ -114,8 +114,8 @@ def process_buffer() -> list[list[Any]]:
 
                 binary_messages.append(c)
 
-            i = frame_start + frame_index  # The frame index is how much we had to read to get a single message
-            # yes this is hacky :(
+            i = frame_start + frame_index  # The frame index is how much we had to read to get a single message before
+            # the loop broke - kinda janky, but it does work :)
 
             if len(binary_messages) > 0:  # If we got any messages:
                 msghex = pms.bin2hex("".join([str(i) for i in binary_messages]))  # Turn them into normal hexadecimal

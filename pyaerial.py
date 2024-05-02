@@ -1,25 +1,13 @@
-import logging
-import math
-import threading
 import time
 import pyModeS as pms
-import requests
-
+import calculations
 import signal_generator
 import ruamel.yaml
-import geopy.distance
-from shapely.geometry import Point, Polygon
-
-STORE_INFO = "info"
-STORE_RECV_DATA = "received_data"
-STORE_CALC_DATA = "calculated_data"
-MAX_SPEED_CALC_BACK_PACKET = 10
-BACKDATE_HORIZONTAL_SPEED = 10
-REMEMBER_PLANES = 60
-POINT_ACCURACY_THRESHOLD_DEG = 10
+import threading
+from constants import *
 
 
-def initate_signal_generator():
+def initiate_signal_generator():
     signal_thread = threading.Thread(target=signal_generator.run, daemon=True)
     signal_thread.start()
     return signal_thread
@@ -39,7 +27,10 @@ def load_configuration():
 
 configuration, zones, categories = load_configuration()
 
-generator_thread = initate_signal_generator()
+calculations.share_configuration_context(configuration, zones, categories)
+
+
+generator_thread = initiate_signal_generator()
 
 vehicle_categories = {2: {1: "Surface Emergency Vehicle", 3: "Surface Service Vehicle", 4: "Ground Obstruction (4)",
                           5: "Ground Obstruction (5)", 6: "Ground Obstruction (6)", 7: "Ground Obstruction (7)"},
@@ -116,46 +107,7 @@ def check_generator_thread():
         print("Generator thread has died! Waiting 3 seconds to restart...")
         time.sleep(3)  # Wait it out
         print("Restarting generator thread...")
-        generator_thread = initate_signal_generator()
-
-
-def calculate_heading(previous, current):
-    """
-    Calculate the direction of the heading from the lat long pair previous to the lat long pair current.
-    :param previous: The previous position (lat/long)
-    :param current: The current position (lat/long)
-    :return: The heading (degrees)
-    """
-
-    pi_c = math.pi / 180
-    first_lat = previous[0] * pi_c
-    first_lon = previous[1] * pi_c
-    second_lat = current[0] * pi_c
-    second_lon = current[1] * pi_c
-    y = math.sin(second_lon - first_lon) * math.cos(second_lat)
-    x = (math.cos(first_lat) * math.sin(second_lat)) - (
-            math.sin(first_lat) * math.cos(second_lat) * math.cos(second_lon - first_lon))
-    heading_rads = math.atan2(y, x)
-    heading_degs = ((heading_rads * 180 / math.pi) + 360) % 360
-    return heading_degs
-
-
-def calculate_speed(previous, current, previous_time, current_time):
-    dist_xz = geopy.distance.geodesic(previous, current).m
-    elapsed_time = current_time - previous_time
-    speed = dist_xz / elapsed_time * 3.6  # m/s to km/h
-    return speed
-
-
-def patch_append(plane, category, message_type, message):
-    if message_type in planes[plane][category].keys():
-        planes[plane][category][message_type].append(message)
-        return True
-    else:
-        planes[plane][category][message_type] = [message]
-        return True
-    # return False
-
+        generator_thread = initiate_signal_generator()
 
 def process_messages(msgs):
     global planes
@@ -205,138 +157,9 @@ def process_messages(msgs):
     return processed
 
 
-def execute_method(method="print", method_arguments=None, payload=None):
-    if method == "print":
-        icao = method_arguments["icao"]
-        tag = method_arguments["callsign"]
-        message_type = method_arguments["type"]
-        print_me = {"icao": icao, "callsign": tag, "type": message_type, "payload": payload}
-        l = logging.getLogger(f"{message_type}")
-        l.error(print_me)
-
-
 def calculate():
     for plane in planes:
-        if "latitude" not in planes[plane][STORE_RECV_DATA].keys():  # Haven't yet received latitude/longitude packet
-            continue
-        latitude_data = planes[plane][STORE_RECV_DATA]["latitude"]
-        longitude_data = planes[plane][STORE_RECV_DATA]["longitude"]
-        if len(latitude_data) == 1:  # Need at least two lat/long pairs
-            continue
-        else:
-            if len(latitude_data) < MAX_SPEED_CALC_BACK_PACKET:  # If we don't have at least the max calc back packets,
-                # set the previous to the first packet
-                previous_lat = latitude_data[0]
-                previous_lon = longitude_data[0]
-
-            else:
-                old_packet = len(latitude_data) - MAX_SPEED_CALC_BACK_PACKET  # Find the indice of the old packet
-                previous_lat = latitude_data[old_packet]
-                previous_lon = longitude_data[old_packet]
-            previous = [previous_lat[0], previous_lon[0]]  # Previous lat/long
-            previous_time = previous_lat[1]
-            current_lat = latitude_data[-1]
-            current_lon = longitude_data[-1]
-            current = [current_lat[0], current_lon[0]]  # Current lat/long
-            current_time = current_lat[1]
-            speed = calculate_speed(previous, current, previous_time, current_time)  # Calculate speed
-            heading = calculate_heading(previous, current)  # Calculate heading
-            if "horizontal_speed" not in planes[plane][STORE_RECV_DATA].keys():
-                # If we haven't received a horiz_speed packet, don't even consider using it
-                final_speed = speed
-                speed_time = current_time
-            else:
-                horiz_plane_speed = planes[plane][STORE_RECV_DATA]["horizontal_speed"][-1]
-                # Otherwise, get the time of the newest one
-                time_ago = current_time - horiz_plane_speed[1]
-                if time_ago < MAX_SPEED_CALC_BACK_PACKET:  # Is it new enough to be relevant?
-                    final_speed = horiz_plane_speed[0]  # Use it
-                    speed_time = horiz_plane_speed[1]
-                else:
-                    final_speed = speed  # Not relevant, use computed speed
-                    speed_time = current_time
-
-            # Add speed to data
-            patch_append(plane, STORE_CALC_DATA, "horizontal_speed", [final_speed, speed_time])
-
-            if "heading" not in planes[plane][STORE_RECV_DATA].keys():  # If we don't have heading data
-                final_heading = heading  # Use computed heading
-            else:
-                heading_data = planes[plane][STORE_RECV_DATA]["heading"][-1]  # Get newest heading data
-                time_ago = current_time - heading_data[1]
-                if time_ago < MAX_SPEED_CALC_BACK_PACKET:  # Is it new enough?
-                    final_heading = heading_data[0]  # Use it
-                else:
-                    final_heading = heading  # Not relevant
-            patch_append(plane, STORE_CALC_DATA, "heading", [final_heading, speed_time])
-
-            geofence_etas = {}
-            current_warn_category = None
-            current_alert_category = None
-            send_warning = False
-            send_alert = False
-            for geofence_name in zones:
-                geofence = zones[geofence_name]
-                eta = time_to_enter_geofence(current, final_heading, final_speed, geofence["coordinates"],
-                                             geofence["warn_time"])
-                geofence_etas[geofence_name] = eta
-                if 0 < eta < math.inf:
-                    send_warning = True
-                if 0 == eta:
-                    send_alert = True
-                if eta != math.inf and (current_warn_category is None or current_alert_category is None):
-                    current_warn_category = geofence["warn_category"]
-                    current_alert_category = geofence["alert_category"]
-                if 0 < eta < math.inf and categories[geofence["warn_category"]]["priority"] < \
-                        categories[current_warn_category]["priority"]:
-                    # We are not in the zone YET, but we should sound a warning
-                    current_warn_category = geofence["warn_category"]
-                if 0 == eta and categories[geofence["alert_category"]]["priority"] < \
-                        categories[current_alert_category]["priority"]:
-                    # We are in the zone
-                    current_alert_category = geofence["alert_category"]
-
-            try:
-                callsign = planes[plane]['info']['callsign']
-            except KeyError:
-
-                callsign = get_callsign(plane)  # Callsign might not always exist
-                if callsign is not None:  # if we got it
-                    planes[plane]['info']['callsign'] = callsign  # save it
-                else:  # if we didn't
-                    planes[plane]['info']['callsign'] = ''  # save that we failed so we don't keep requesting data
-
-            payload = {"altitude": get_latest(STORE_RECV_DATA, "altitude", planes[plane])[0],
-                       "latitude": get_latest(STORE_RECV_DATA, "latitude", planes[plane])[0],
-                       "longitude": get_latest(STORE_RECV_DATA, "longitude", planes[plane])[0]}
-            if send_alert:
-                reason = {"zones": geofence_etas, "category": current_alert_category}
-                alert_method_arguments = {"type": "alert", "icao": plane, "callsign": callsign, "reason": reason}
-                execute_method(categories[current_alert_category]["send_alert"]["method"], alert_method_arguments,
-                               payload=payload)
-            elif send_warning:
-                reason = {"zones": geofence_etas, "category": current_alert_category}
-                warn_method_arguments = {"type": "warning", "icao": plane, "callsign": callsign, "reason": reason}
-                execute_method(categories[current_alert_category]["send_warning"]["method"], warn_method_arguments,
-                               payload=payload)
-
-
-def get_latest(information_type, information_datum, plane_data):
-    if information_type not in plane_data.keys():
-        return None
-    data = plane_data[information_type]
-    if information_datum not in data.keys():
-        return None
-    return data[information_datum][::-1][0]
-
-
-def get_callsign(icao):
-    resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{icao}", timeout=1)
-    json = resp.json()
-    if "Registration" in json.keys():
-        return json["Registration"]
-    else:
-        return None
+        calculations.calculate_plane(planes[plane])
 
 
 def check_for_old_planes(current_time):
@@ -355,38 +178,6 @@ def process_old_planes(old_planes):
         del planes[plane]
 
 
-def time_to_enter_geofence(plane_position, heading, speed, geofence_coordinates, max_time):
-    # Create a shapely Polygon object from the geofence coordinates
-    geofence_polygon = Polygon(geofence_coordinates)
-
-    # Check if the current position is inside the geofence
-    if geofence_polygon.contains(Point(plane_position)):
-        return 0  # The plane is already inside the geofence
-
-    verified = False
-    for point in geofence_polygon.exterior.coords:
-        general_direction = calculate_heading(plane_position, point)
-        if abs(heading - general_direction) < POINT_ACCURACY_THRESHOLD_DEG:
-            verified = True
-
-    if verified is False:
-        return math.inf
-
-    time_step = 0.1
-    current_time = time_step
-    while True:
-        if current_time > max_time:
-            return math.inf
-        destination = (
-            geopy.distance.geodesic(kilometers=time_step * speed / 3600)
-            .destination(plane_position, heading))
-
-        point = Point(destination.latitude, destination.longitude)
-        if geofence_polygon.contains(point):
-            return current_time
-        current_time += time_step
-
-
 planes = {}
 processed_messages = 0
 while True:
@@ -395,6 +186,6 @@ while True:
     calculate()
     signal_generator.message_queue = []  # Reset the messsages
     old = check_for_old_planes(time.time())
-    print(planes)  # Print all generated plane data
+    print(len(planes.keys()), planes)  # Print all generated plane data
     process_old_planes(old)
     time.sleep(0.5)
