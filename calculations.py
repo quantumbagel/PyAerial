@@ -14,16 +14,21 @@ from constants import *
 configuration = None
 zones = None
 categories = None
+backdate_packets = 0
 
 log = logging.getLogger("Calculation")
 
 def share_configuration_context(c, zo, cat):
-    global configuration, zones, categories
+    global configuration, zones, categories, backdate_packets
     configuration = c
     zones = zo
     categories = cat
+    backdate_packets = configuration['general']['backdate_packets']
 def get_callsign(icao):
-    resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{icao}", timeout=1)
+    try:
+        resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{icao}", timeout=1)
+    except requests.exceptions.RequestException:
+        return None
     if resp.status_code != 200:
         log.error(f"HEXDB API did not return 200! status:{resp.status_code}")
         return None
@@ -44,7 +49,7 @@ def time_to_enter_geofence(plane_position, heading, speed, geofence_coordinates,
     verified = False
     for point in geofence_polygon.exterior.coords:
         general_direction = calculate_heading(plane_position, point)
-        if abs(heading - general_direction) < POINT_ACCURACY_THRESHOLD_DEG:
+        if abs(heading - general_direction) < configuration['general']['point_accuracy_threshold']:
             verified = True
 
     if verified is False:
@@ -158,18 +163,18 @@ def calculate_plane(plane):
     # Check for lat/long data, which is a requirement for all advanced calculations
     if "latitude" not in plane[STORE_RECV_DATA].keys():  # Haven't yet received latitude/longitude packet
         return
-    latitude_data = plane[STORE_RECV_DATA]["latitude"]
-    longitude_data = plane[STORE_RECV_DATA]["longitude"]
+    latitude_data = plane[STORE_RECV_DATA][STORE_LAT]
+    longitude_data = plane[STORE_RECV_DATA][STORE_LONG]
     if len(latitude_data) == 1:  # Need at least two lat/long pairs to do anything
         return
     else:
-        if len(latitude_data) < MAX_SPEED_CALC_BACK_PACKET:  # If we don't have at least the max calc back packets,
+        if len(latitude_data) < configuration['general']['backdate_packets']:  # If we don't have at least the max calc back packets,
             # set the previous to the first packet
             previous_lat = latitude_data[0]
             previous_lon = longitude_data[0]
 
         else:
-            old_packet = len(latitude_data) - MAX_SPEED_CALC_BACK_PACKET  # Find the indice of the old packet
+            old_packet = len(latitude_data) - backdate_packets  # Find the indice of the old packet
             previous_lat = latitude_data[old_packet]
             previous_lon = longitude_data[old_packet]
         previous = [previous_lat[0], previous_lon[0]]  # Previous lat/long
@@ -180,15 +185,15 @@ def calculate_plane(plane):
         current_time = current_lat[1]
         speed = calculate_speed(previous, current, previous_time, current_time)  # Calculate speed
         heading = calculate_heading(previous, current)  # Calculate heading
-        if "horizontal_speed" not in plane[STORE_RECV_DATA].keys():
+        if STORE_HORIZ_SPEED not in plane[STORE_RECV_DATA].keys():
             # If we haven't received a horiz_speed packet, don't even consider using it
             final_speed = speed
             speed_time = current_time
         else:
-            horiz_plane_speed = plane[STORE_RECV_DATA]["horizontal_speed"][-1]
+            horiz_plane_speed = plane[STORE_RECV_DATA][STORE_HORIZ_SPEED][-1]
             # Otherwise, get the time of the newest one
             time_ago = current_time - horiz_plane_speed[1]
-            if time_ago < MAX_SPEED_CALC_BACK_PACKET:  # Is it new enough to be relevant?
+            if time_ago < backdate_packets:  # Is it new enough to be relevant?
                 final_speed = horiz_plane_speed[0]  # Use it
                 speed_time = horiz_plane_speed[1]
             else:
@@ -196,18 +201,18 @@ def calculate_plane(plane):
                 speed_time = current_time
 
         # Add speed to data
-        patch_append(plane, STORE_CALC_DATA, "horizontal_speed", [final_speed, speed_time])
+        patch_append(plane, STORE_CALC_DATA, STORE_HORIZ_SPEED, [final_speed, speed_time])
 
-        if "heading" not in plane[STORE_RECV_DATA].keys():  # If we don't have heading data
+        if STORE_HEADING not in plane[STORE_RECV_DATA].keys():  # If we don't have heading data
             final_heading = heading  # Use computed heading
         else:
-            heading_data = plane[STORE_RECV_DATA]["heading"][-1]  # Get newest heading data
+            heading_data = plane[STORE_RECV_DATA][STORE_HEADING][-1]  # Get newest heading data
             time_ago = current_time - heading_data[1]
-            if time_ago < MAX_SPEED_CALC_BACK_PACKET:  # Is it new enough?
+            if time_ago < backdate_packets:  # Is it new enough?
                 final_heading = heading_data[0]  # Use it
             else:
                 final_heading = heading  # Not relevant
-        patch_append(plane, STORE_CALC_DATA, "heading", [final_heading, speed_time])
+        patch_append(plane, STORE_CALC_DATA, STORE_HEADING, [final_heading, speed_time])
 
         geofence_etas = {}
         current_warn_category = None
@@ -248,19 +253,21 @@ def calculate_plane(plane):
                 # down the mainloop significantly
                 plane['info']['callsign'] = ''
 
-        payload = {"altitude": get_latest(STORE_RECV_DATA, "altitude", plane)[0],
-                   "latitude": get_latest(STORE_RECV_DATA, "latitude", plane)[0],
-                   "longitude": get_latest(STORE_RECV_DATA, "longitude", plane)[0]}
+        payload = {STORE_ALT: get_latest(STORE_RECV_DATA, STORE_ALT, plane)[0],
+                   STORE_LAT: get_latest(STORE_RECV_DATA, STORE_LAT, plane)[0],
+                   STORE_LONG: get_latest(STORE_RECV_DATA, STORE_LONG, plane)[0]}
         if send_alert:
             reason = {"zones": geofence_etas, "category": current_alert_category}
-            alert_method_arguments = {"type": "alert", "icao": plane[STORE_INFO]["icao"], "callsign": callsign, "reason": reason}
+            alert_method_arguments = {"type": "alert", "icao": plane[STORE_INFO]["icao"], "callsign": callsign,
+                                      "reason": reason}
             execute_method(method=categories[current_alert_category]["send_alert"]["method"],
                            meta_arguments=alert_method_arguments,
                            method_arguments=categories[current_alert_category]["send_alert"],
                            payload=payload)
         elif send_warning:
             reason = {"zones": geofence_etas, "category": current_alert_category}
-            warn_method_arguments = {"type": "warning", "icao": plane[STORE_INFO]["icao"], "callsign": callsign, "reason": reason}
+            warn_method_arguments = {"type": "warning", "icao": plane[STORE_INFO]["icao"], "callsign": callsign,
+                                     "reason": reason}
             execute_method(method=categories[current_alert_category]["send_warning"]["method"],
                            meta_arguments=warn_method_arguments,
                            method_arguments=categories[current_alert_category]["send_warning"],

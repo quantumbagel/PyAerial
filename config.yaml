@@ -1,3 +1,9 @@
+general:
+  mongodb: mongodb://localhost:27017
+  backdate_packets: 10
+  remember_planes: 60
+  point_accuracy_threshold: 10  # degrees
+
 home:
   latitude: 36.6810752
   longitude: -78.8758528
@@ -67,8 +73,7 @@ categories:
   alert:
     priority: -1
     send_alert:
-      method: kafka
-      server: 127.0.0.1:9092
+      method: print
     send_warning:
       method: print
     save:

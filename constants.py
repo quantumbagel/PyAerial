@@ -1,7 +1,10 @@
 STORE_INFO = "info"
 STORE_RECV_DATA = "received_data"
 STORE_CALC_DATA = "calculated_data"
-MAX_SPEED_CALC_BACK_PACKET = 10
-BACKDATE_HORIZONTAL_SPEED = 10
-REMEMBER_PLANES = 60
-POINT_ACCURACY_THRESHOLD_DEG = 10
+STORE_INTERNAL = "internal"
+STORE_LAT = "latitude"
+STORE_LONG = "longitude"
+STORE_ALT = "altitude"
+STORE_HORIZ_SPEED = "horizontal_speed"
+STORE_VERT_SPEED = "vertical_speed"
+STORE_HEADING = "direction"

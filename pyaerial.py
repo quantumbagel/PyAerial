@@ -1,11 +1,15 @@
+import logging
 import time
 import pyModeS as pms
 import calculations
+import constants
+import saving
 import signal_generator
 import ruamel.yaml
 import threading
 from constants import *
 
+logging.basicConfig(level=logging.INFO)
 
 def initiate_signal_generator():
     signal_thread = threading.Thread(target=signal_generator.run, daemon=True)
@@ -20,7 +24,7 @@ def load_configuration():
     home = data['home']
     home_lat = home['latitude']
     home_lon = home['longitude']
-    general = {'home': [home_lat, home_lon]}
+    general = {'home': [home_lat, home_lon], "general": data['general']}
 
     return general, data['zones'], data['categories']
 
@@ -28,7 +32,6 @@ def load_configuration():
 configuration, zones, categories = load_configuration()
 
 calculations.share_configuration_context(configuration, zones, categories)
-
 
 generator_thread = initiate_signal_generator()
 
@@ -66,14 +69,14 @@ def classify(msg):
         lat, lon = pms.adsb.position_with_ref(msg, configuration['home'][0], configuration['home'][1])
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
         data = {STORE_INFO: {"icao": icao},
-                STORE_RECV_DATA: {"latitude": lat, "longitude": lon, "horizontal_speed": speed * 1.852,
-                                  "direction": angle, "vertical_speed": vert_rate * 0.018288}}
+                STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_HORIZ_SPEED: speed * 1.852,
+                                  STORE_HEADING: angle, STORE_VERT_SPEED: vert_rate * 0.00508}}
         typecode_category = 2
 
     elif 9 <= typecode <= 18 or 20 <= typecode <= 22:  # Airbone position (baro alt/GNSS alt)
         lat, lon = pms.adsb.position_with_ref(msg, configuration['home'][0], configuration['home'][1])
-        alt = pms.adsb.altitude(msg)
-        data = {STORE_INFO: {"icao": icao}, STORE_RECV_DATA: {"latitude": lat, "longitude": lon, "altitude": alt}}
+        alt = pms.adsb.altitude(msg) * 0.3048  # convert feet to meters
+        data = {STORE_INFO: {"icao": icao}, STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_ALT: alt}}
         if 9 <= typecode <= 18:
             typecode_category = 3
         else:
@@ -82,8 +85,8 @@ def classify(msg):
     elif typecode == 19:  # Airbone velocities
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
         data = {STORE_INFO: {"icao": icao},
-                STORE_RECV_DATA: {"horizontal_speed": speed * 1.852, "direction": angle,
-                                  "vertical_speed": vert_rate * 0.018288}}
+                STORE_RECV_DATA: {STORE_HORIZ_SPEED: speed * 1.852, STORE_HEADING: angle,
+                                  STORE_VERT_SPEED: vert_rate * 0.00508}}
         typecode_category = 5
 
     elif typecode == 28:  # Aircraft status
@@ -108,6 +111,7 @@ def check_generator_thread():
         time.sleep(3)  # Wait it out
         print("Restarting generator thread...")
         generator_thread = initiate_signal_generator()
+
 
 def process_messages(msgs):
     global planes
@@ -142,12 +146,12 @@ def process_messages(msgs):
                     if check_should_be_added(current_data[datum], new_packet):
                         current_data[datum].append(new_packet)
 
-        if "internal" not in planes[icao].keys():  # Update internal metrics
-            planes[icao].update({"internal":
+        if STORE_INTERNAL not in planes[icao].keys():  # Update internal metrics
+            planes[icao].update({STORE_INTERNAL:
                                      {"last_update": message[1], "packets": 1,
                                       "first_packet": message[1], "packet_type": {typecode_cat: 1}}})
         else:
-            internal_data_storage = planes[icao]["internal"]
+            internal_data_storage = planes[icao][STORE_INTERNAL]
             internal_data_storage["last_update"] = message[1]
             internal_data_storage["packets"] += 1
             if typecode_cat in internal_data_storage["packet_type"].keys():
@@ -166,8 +170,8 @@ def check_for_old_planes(current_time):
     global planes
     old_planes = []
     for plane in planes:
-        last_packet_relative_time_ago = current_time - planes[plane]['internal']['last_update']
-        if last_packet_relative_time_ago > REMEMBER_PLANES:
+        last_packet_relative_time_ago = current_time - planes[plane][STORE_INTERNAL]['last_update']
+        if last_packet_relative_time_ago > configuration['general']['remember_planes']:
             old_planes.append(plane)
     return old_planes
 
@@ -178,6 +182,7 @@ def process_old_planes(old_planes):
         del planes[plane]
 
 
+saving.connect_to_database(configuration['general']['mongodb'])
 planes = {}
 processed_messages = 0
 while True:
