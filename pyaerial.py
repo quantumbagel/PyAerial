@@ -2,14 +2,14 @@ import logging
 import time
 import pyModeS as pms
 import calculations
-import constants
-import saving
 import signal_generator
 import ruamel.yaml
 import threading
+from helpers import Datum
 from constants import *
 
 logging.basicConfig(level=logging.INFO)
+
 
 def initiate_signal_generator():
     signal_thread = threading.Thread(target=signal_generator.run, daemon=True)
@@ -20,13 +20,13 @@ def initiate_signal_generator():
 # https://stackoverflow.com/questions/33311616/find-coordinate-of-the-closest-point-on-polygon-in-shapely
 def load_configuration():
     yaml = ruamel.yaml.YAML()
-    data = yaml.load(open('config.yaml'))
-    home = data['home']
-    home_lat = home['latitude']
-    home_lon = home['longitude']
-    general = {'home': [home_lat, home_lon], "general": data['general']}
+    data = yaml.load(open(CONFIG_FILE))
+    home = data[CONFIG_HOME]
+    home_lat = home[CONFIG_HOME_LATITUDE]
+    home_lon = home[CONFIG_HOME_LONGITUDE]
+    general = {CONFIG_HOME: [home_lat, home_lon], CONFIG_GENERAL: data[CONFIG_GENERAL]}
 
-    return general, data['zones'], data['categories']
+    return general, data[CONFIG_ZONES], data[CONFIG_CATEGORIES]
 
 
 configuration, zones, categories = load_configuration()
@@ -61,30 +61,30 @@ def classify(msg):
     typecode_category = "Unknown"
     if 1 <= typecode <= 4:  # Aircraft identification
         ca = pms.adsb.category(msg)
-        data = {STORE_INFO: {"icao": icao, "callsign": pms.adsb.callsign(msg).replace("_", ""),
-                             "category": [typecode, ca]}, STORE_RECV_DATA: {}}
+        data = {STORE_INFO: {STORE_ICAO: icao, STORE_CALLSIGN: pms.adsb.callsign(msg).replace("_", ""),
+                             STORE_PLANE_CATEGORY: [typecode, ca]}, STORE_RECV_DATA: {}}
         typecode_category = 1
 
     elif 5 <= typecode <= 8:  # Surface position
-        lat, lon = pms.adsb.position_with_ref(msg, configuration['home'][0], configuration['home'][1])
+        lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][0], configuration[CONFIG_HOME][1])
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
-        data = {STORE_INFO: {"icao": icao},
+        data = {STORE_INFO: {STORE_ICAO: icao},
                 STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_HORIZ_SPEED: speed * 1.852,
                                   STORE_HEADING: angle, STORE_VERT_SPEED: vert_rate * 0.00508}}
         typecode_category = 2
 
-    elif 9 <= typecode <= 18 or 20 <= typecode <= 22:  # Airbone position (baro alt/GNSS alt)
-        lat, lon = pms.adsb.position_with_ref(msg, configuration['home'][0], configuration['home'][1])
+    elif 9 <= typecode <= 18 or 20 <= typecode <= 22:  # Airborne position (barometric alt/GNSS alt)
+        lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][0], configuration[CONFIG_HOME][1])
         alt = pms.adsb.altitude(msg) * 0.3048  # convert feet to meters
-        data = {STORE_INFO: {"icao": icao}, STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_ALT: alt}}
+        data = {STORE_INFO: {STORE_ICAO: icao}, STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_ALT: alt}}
         if 9 <= typecode <= 18:
             typecode_category = 3
         else:
             typecode_category = 4
 
-    elif typecode == 19:  # Airbone velocities
+    elif typecode == 19:  # Airborne velocities
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
-        data = {STORE_INFO: {"icao": icao},
+        data = {STORE_INFO: {STORE_ICAO: icao},
                 STORE_RECV_DATA: {STORE_HORIZ_SPEED: speed * 1.852, STORE_HEADING: angle,
                                   STORE_VERT_SPEED: vert_rate * 0.00508}}
         typecode_category = 5
@@ -101,7 +101,7 @@ def classify(msg):
 
 
 def check_should_be_added(packets, new_packet):
-    return packets[-1][0] != new_packet[0]
+    return packets[-1].value != new_packet.value
 
 
 def check_generator_thread():
@@ -121,12 +121,12 @@ def process_messages(msgs):
         if message_data is None:  # Not implemented yet :(
             continue
         processed += 1
-        icao = message_data[STORE_INFO]["icao"]
+        icao = message_data[STORE_INFO][STORE_ICAO]
         if icao not in planes.keys():  # Do we have this plane in our current tracker?
             planes[icao] = message_data  # We don't, so just format the data and insert it
             for item in planes[icao][STORE_RECV_DATA]:
                 c_item = planes[icao][STORE_RECV_DATA][item]
-                planes[icao][STORE_RECV_DATA][item] = [[c_item, message[1]]]
+                planes[icao][STORE_RECV_DATA][item] = [Datum(c_item, message[1])]
         else:  # We do, so find and replace (or update) data
             current_info = planes[icao][STORE_INFO]  # Current plane info
             my_info = message_data[STORE_INFO]
@@ -139,7 +139,7 @@ def process_messages(msgs):
             current_data = planes[icao][STORE_RECV_DATA]
             # Similar thing here, but using lists
             for datum in message_data[STORE_RECV_DATA].keys():
-                new_packet = [message_data[STORE_RECV_DATA][datum], message[1]]
+                new_packet = Datum(message_data[STORE_RECV_DATA][datum], message[1])
                 if datum not in current_data.keys():
                     current_data.update({datum: [new_packet]})
                 else:
@@ -148,16 +148,16 @@ def process_messages(msgs):
 
         if STORE_INTERNAL not in planes[icao].keys():  # Update internal metrics
             planes[icao].update({STORE_INTERNAL:
-                                     {"last_update": message[1], "packets": 1,
-                                      "first_packet": message[1], "packet_type": {typecode_cat: 1}}})
+                                {STORE_MOST_RECENT_PACKET: message[1], STORE_TOTAL_PACKETS: 1,
+                                 STORE_FIRST_PACKET: message[1], STORE_PACKET_TYPE: {typecode_cat: 1}}})
         else:
             internal_data_storage = planes[icao][STORE_INTERNAL]
-            internal_data_storage["last_update"] = message[1]
-            internal_data_storage["packets"] += 1
-            if typecode_cat in internal_data_storage["packet_type"].keys():
-                internal_data_storage["packet_type"][typecode_cat] += 1
+            internal_data_storage[STORE_MOST_RECENT_PACKET] = message[1]
+            internal_data_storage[STORE_TOTAL_PACKETS] += 1
+            if typecode_cat in internal_data_storage[STORE_PACKET_TYPE].keys():
+                internal_data_storage[STORE_PACKET_TYPE][typecode_cat] += 1
             else:
-                internal_data_storage["packet_type"][typecode_cat] = 1
+                internal_data_storage[STORE_PACKET_TYPE][typecode_cat] = 1
     return processed
 
 
@@ -170,26 +170,26 @@ def check_for_old_planes(current_time):
     global planes
     old_planes = []
     for plane in planes:
-        last_packet_relative_time_ago = current_time - planes[plane][STORE_INTERNAL]['last_update']
-        if last_packet_relative_time_ago > configuration['general']['remember_planes']:
+        last_packet_relative_time_ago = current_time - planes[plane][STORE_INTERNAL][STORE_MOST_RECENT_PACKET]
+        if last_packet_relative_time_ago > configuration[CONFIG_GENERAL][CONFIG_GENERAL_REMEMBER]:
             old_planes.append(plane)
     return old_planes
 
 
 def process_old_planes(old_planes):
     for plane in old_planes:
-        print("Old plane processed! (newlen, removed plane)=", len(planes) - 1, planes[plane])
+        print("Old plane processed! ", len(planes) - 1, planes[plane])
         del planes[plane]
 
 
-saving.connect_to_database(configuration['general']['mongodb'])
+# saving.connect_to_database(configuration['general']['mongodb'])
 planes = {}
 processed_messages = 0
 while True:
     check_generator_thread()
     processed_messages += process_messages(signal_generator.message_queue[:])
     calculate()
-    signal_generator.message_queue = []  # Reset the messsages
+    signal_generator.message_queue = []  # Reset the messages
     old = check_for_old_planes(time.time())
     print(len(planes.keys()), planes)  # Print all generated plane data
     process_old_planes(old)

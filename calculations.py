@@ -38,6 +38,7 @@ def get_callsign(icao):
     else:
         return None
 
+
 def time_to_enter_geofence(plane_position, heading, speed, geofence_coordinates, max_time):
     # Create a shapely Polygon object from the geofence coordinates
     geofence_polygon = Polygon(geofence_coordinates)
@@ -111,11 +112,11 @@ def patch_append(plane, category, message_type, message):
     if latest == message:  # duplicate
         log.debug(f"[patch_append] "
                       f"turned aside message in category {category}/{message_type}"
-                      f" for plane id {plane[STORE_INFO]['icao']}")
+                      f" for plane id {plane[STORE_INFO][STORE_ICAO]}")
         return False
     log.debug(f"[patch_append] "
                   f"allowed message in category {category}/{message_type}"
-                  f" for plane id {plane[STORE_INFO]['icao']}")
+                  f" for plane id {plane[STORE_INFO][STORE_ICAO]}")
     if message_type in plane[category].keys():
         plane[category][message_type].append(message)
         return True
@@ -124,27 +125,37 @@ def patch_append(plane, category, message_type, message):
         return True
 
 
-def get_latest(information_type, information_datum, plane_data):
+def get_latest(information_type, information_datum, plane_data, after_time=None):
     if information_type not in plane_data.keys():
         return None
     data = plane_data[information_type]
     if information_datum not in data.keys():
         return None
-    return data[information_datum][::-1][0]
+    if after_time is None:
+        return data[information_datum][::-1][0]
+    else:
+        datum = None
+        best = math.inf
+        for item in data[information_datum][::-1]:
+            if abs(item.time-after_time) < best:
+                datum = item
+            else:
+                return datum
+        return datum
 
 
 def execute_method(method="print", meta_arguments=None, method_arguments=None, payload=None):
-    icao = meta_arguments["icao"]
-    tag = meta_arguments["callsign"]
+    icao = meta_arguments[STORE_ICAO]
+    tag = meta_arguments[STORE_CALLSIGN]
     message_type = meta_arguments["type"]
     log.debug(f"[execute_method] "
                   f"going to run method {method} with severity {message_type} on plane {icao}")
     if method == "print":
-        print_me = {"icao": icao, "callsign": tag, "type": message_type, "payload": payload}
+        print_me = {STORE_ICAO: icao, STORE_CALLSIGN: tag, "type": message_type, "payload": payload}
         logger = logging.getLogger(f"{message_type}")
         logger.error(print_me)
     elif method == "kafka":
-        data = {"callsign": tag, "type": message_type, "payload": payload}
+        data = {STORE_CALLSIGN: tag, "type": message_type, "payload": payload}
         try:
             producer = kafka.KafkaProducer(bootstrap_servers=[method_arguments["server"]])
             producer.send(meta_arguments["type"],
@@ -157,8 +168,7 @@ def execute_method(method="print", meta_arguments=None, method_arguments=None, p
     elif method == "post":
         pass
 
-
-
+ 
 def calculate_plane(plane):
     # Check for lat/long data, which is a requirement for all advanced calculations
     if "latitude" not in plane[STORE_RECV_DATA].keys():  # Haven't yet received latitude/longitude packet
@@ -177,12 +187,12 @@ def calculate_plane(plane):
             old_packet = len(latitude_data) - backdate_packets  # Find the indice of the old packet
             previous_lat = latitude_data[old_packet]
             previous_lon = longitude_data[old_packet]
-        previous = [previous_lat[0], previous_lon[0]]  # Previous lat/long
-        previous_time = previous_lat[1]
+        previous = [previous_lat.value, previous_lon.value]  # Previous lat/long
+        previous_time = previous_lat.time
         current_lat = latitude_data[-1]
         current_lon = longitude_data[-1]
-        current = [current_lat[0], current_lon[0]]  # Current lat/long
-        current_time = current_lat[1]
+        current = [current_lat.value, current_lon.value]  # Current lat/long
+        current_time = current_lat.time
         speed = calculate_speed(previous, current, previous_time, current_time)  # Calculate speed
         heading = calculate_heading(previous, current)  # Calculate heading
         if STORE_HORIZ_SPEED not in plane[STORE_RECV_DATA].keys():
@@ -192,10 +202,10 @@ def calculate_plane(plane):
         else:
             horiz_plane_speed = plane[STORE_RECV_DATA][STORE_HORIZ_SPEED][-1]
             # Otherwise, get the time of the newest one
-            time_ago = current_time - horiz_plane_speed[1]
+            time_ago = current_time - horiz_plane_speed.time
             if time_ago < backdate_packets:  # Is it new enough to be relevant?
-                final_speed = horiz_plane_speed[0]  # Use it
-                speed_time = horiz_plane_speed[1]
+                final_speed = horiz_plane_speed.value  # Use it
+                speed_time = horiz_plane_speed.time
             else:
                 final_speed = speed  # Not relevant, use computed speed
                 speed_time = current_time
@@ -207,68 +217,44 @@ def calculate_plane(plane):
             final_heading = heading  # Use computed heading
         else:
             heading_data = plane[STORE_RECV_DATA][STORE_HEADING][-1]  # Get newest heading data
-            time_ago = current_time - heading_data[1]
+            time_ago = current_time - heading_data.time
             if time_ago < backdate_packets:  # Is it new enough?
-                final_heading = heading_data[0]  # Use it
+                final_heading = heading_data.value  # Use it
             else:
                 final_heading = heading  # Not relevant
         patch_append(plane, STORE_CALC_DATA, STORE_HEADING, [final_heading, speed_time])
-
-        geofence_etas = {}
-        current_warn_category = None
-        current_alert_category = None
-        send_warning = False
-        send_alert = False
-        for geofence_name in zones:
-            geofence = zones[geofence_name]
-            eta = time_to_enter_geofence(current, final_heading, final_speed, geofence["coordinates"],
-                                         geofence["warn_time"])
-            geofence_etas[geofence_name] = eta
-            if 0 < eta < math.inf:
-                send_warning = True
-            if 0 == eta:
-                send_alert = True
-            if eta != math.inf and (current_warn_category is None or current_alert_category is None):
-                current_warn_category = geofence["warn_category"]
-                current_alert_category = geofence["alert_category"]
-            if 0 < eta < math.inf and categories[geofence["warn_category"]]["priority"] < \
-                    categories[current_warn_category]["priority"]:
-                # We are not in the zone YET, but we should sound a warning
-                current_warn_category = geofence["warn_category"]
-            if 0 == eta and categories[geofence["alert_category"]]["priority"] < \
-                    categories[current_alert_category]["priority"]:
-                # We are in the zone
-                current_alert_category = geofence["alert_category"]
-
         try:
-            callsign = plane['info']['callsign']
+            callsign = plane[STORE_INFO][STORE_CALLSIGN]
         except KeyError:
             callsign_async = threading.Thread(target=get_callsign, args=(plane,))
             callsign_async.start()
             callsign = get_callsign(plane)  # Callsign might not always exist
             if callsign is not None:  # if we got it
-                plane['info']['callsign'] = callsign  # save it
+                plane[STORE_INFO][STORE_CALLSIGN] = callsign  # save it
             else:  # if we didn't
                 # save that we failed, so we don't keep requesting data, which would slow
                 # down the mainloop significantly
-                plane['info']['callsign'] = ''
+                plane[STORE_INFO][STORE_CALLSIGN] = ''
+        geofence_etas = {}
+        for geofence_name in zones:
+            geofence = zones[geofence_name]
+            max_time = max([level["time"] for level in geofence["levels"]])
+            eta = time_to_enter_geofence(current, final_heading, final_speed, geofence["coordinates"],
+                                         max_time)
+            geofence_etas[geofence_name] = eta
 
-        payload = {STORE_ALT: get_latest(STORE_RECV_DATA, STORE_ALT, plane)[0],
-                   STORE_LAT: get_latest(STORE_RECV_DATA, STORE_LAT, plane)[0],
-                   STORE_LONG: get_latest(STORE_RECV_DATA, STORE_LONG, plane)[0]}
-        if send_alert:
-            reason = {"zones": geofence_etas, "category": current_alert_category}
-            alert_method_arguments = {"type": "alert", "icao": plane[STORE_INFO]["icao"], "callsign": callsign,
-                                      "reason": reason}
-            execute_method(method=categories[current_alert_category]["send_alert"]["method"],
-                           meta_arguments=alert_method_arguments,
-                           method_arguments=categories[current_alert_category]["send_alert"],
-                           payload=payload)
-        elif send_warning:
-            reason = {"zones": geofence_etas, "category": current_alert_category}
-            warn_method_arguments = {"type": "warning", "icao": plane[STORE_INFO]["icao"], "callsign": callsign,
-                                     "reason": reason}
-            execute_method(method=categories[current_alert_category]["send_warning"]["method"],
-                           meta_arguments=warn_method_arguments,
-                           method_arguments=categories[current_alert_category]["send_warning"],
-                           payload=payload)
+            valid_levels = [level for level in geofence["levels"] if geofence["levels"][level]["time"] <= eta]
+            print(valid_levels)
+
+            payload = {STORE_ALT: get_latest(STORE_RECV_DATA, STORE_ALT, plane).value,
+                       STORE_LAT: get_latest(STORE_RECV_DATA, STORE_LAT, plane).value,
+                       STORE_LONG: get_latest(STORE_RECV_DATA, STORE_LONG, plane).value}
+
+            for level in valid_levels:
+                reason = {CONFIG_ZONES: geofence_etas, CONFIG_ZONES_LEVELS_CATEGORY: geofence["levels"][level][CONFIG_ZONES_LEVELS_CATEGORY]}
+                meta_arguments = {"type": level, STORE_ICAO: plane[STORE_INFO][STORE_ICAO], STORE_CALLSIGN: callsign,
+                                         "reason": reason}
+                execute_method(method=categories[geofence["levels"][level][CONFIG_ZONES_LEVELS_CATEGORY]]["method"],
+                               meta_arguments=meta_arguments,
+                               method_arguments=categories[geofence["levels"][level][CONFIG_ZONES_LEVELS_CATEGORY]]["arguments"],
+                               payload=payload)

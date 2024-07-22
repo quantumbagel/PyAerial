@@ -3,18 +3,17 @@ import numpy as np
 import pyModeS as pms
 from typing import Any
 import warnings
-
-warnings.filterwarnings("ignore", category=DeprecationWarning)  # IDK why they used pkg resources, this supresses
+warnings.filterwarnings("ignore", category=DeprecationWarning)  # IDK why they used pkg resources, this suppresses
 import rtlsdr
 
-# typecodes:
+# type codes:
 # https://mode-s.org/decode/content/ads-b/1-basics.html.
 
 # These ~25 lines of code took me FOREVER to find (thx "The 1090 Megahertz Riddle")
 
 
 sampling_rate = 2e6
-samples_per_microsec = 2
+samples_per_microsecond = 2
 
 modes_frequency = 1090e6
 buffer_size = 1024 * 200
@@ -31,10 +30,10 @@ exception_queue = None
 last_return = ""
 
 
-def initalize_sdr():
+def initialize_sdr():
     """
     Initialize the SDR
-    :return: the SDR or None if failed
+    :return: the object representing the SDR or None if failed
     """
     try:
         sdr = rtlsdr.RtlSdr()
@@ -51,7 +50,7 @@ def calc_noise() -> float:
     Calculate the noise floor of the SDR
     :return: The noise floor
     """
-    window = samples_per_microsec * 100  # Take 100 samples
+    window = samples_per_microsecond * 100  # Take 100 samples
     total_len = len(signal_buffer)  # Our available samples
     means = (
         np.array(signal_buffer[: total_len // window * window])  # Thanks stack overflow
@@ -96,6 +95,7 @@ def process_buffer() -> list[list[Any]]:
             threshold = max(frame_pulses) * 0.2
 
             binary_messages = []
+            frame_index = 0
             for frame_index in range(0, frame_length, 2):
                 frame_slice = frame_pulses[frame_index:frame_index + 2]
 
@@ -115,12 +115,11 @@ def process_buffer() -> list[list[Any]]:
                 binary_messages.append(c)
 
             i = frame_start + frame_index  # The frame index is how much we had to read to get a single message before
-            # the loop broke - kinda janky, but it does work :)
 
             if len(binary_messages) > 0:  # If we got any messages:
-                msghex = pms.bin2hex("".join([str(i) for i in binary_messages]))  # Turn them into normal hexadecimal
-                if check_msg(msghex):  # Verify integrity
-                    messages.append([msghex, time.time()])  # Add messages w/ time of receival
+                msg_hex = pms.bin2hex("".join([str(i) for i in binary_messages]))  # Turn them into normal hexadecimal
+                if check_msg(msg_hex):  # Verify integrity
+                    messages.append([msg_hex, time.time()])  # Add messages w/ time of arrival
         else:
             i += 1
 
@@ -153,13 +152,13 @@ def check_msg(msg) -> bool:
     :return: bool
     """
     df = pms.df(msg)
-    msglen = len(msg)
-    if df == 17 and msglen == 28:  # Identification packet
+    message_length = len(msg)
+    if df == 17 and message_length == 28:  # Identification packet
         if pms.crc(msg) == 0:  # Make sure bits are valid
             return True
-    elif df in [20, 21] and msglen == 28:  # Common mode-s message
+    elif df in [20, 21] and message_length == 28:  # Common mode-s message
         return True
-    elif df in [4, 5, 11] and msglen == 14:  # Also common mode-s message EXCEPT for 11,
+    elif df in [4, 5, 11] and message_length == 14:  # Also common mode-s message EXCEPT for 11,
         # which is "all-call" interrogation reply
         return True
     return False
@@ -171,7 +170,7 @@ def read_callback(data) -> None:
     :param data: The new data
     :return: None
     """
-    amp = np.absolute(data)  # Positivize
+    amp = np.absolute(data)  # Ensure positivity
     signal_buffer.extend(amp.tolist())  # Add it to the list
 
     if len(signal_buffer) >= buffer_size:  # If we have enough to overflow normal buffer size, process data
@@ -198,9 +197,9 @@ def run() -> str:
     """
     global last_return
 
-    sdr = initalize_sdr()
+    sdr = initialize_sdr()
     if sdr is None:
-        last_return = "Couldn't initalize SDR. Is it connected?"
+        last_return = "Couldn't initialize SDR. Is it connected?"
         return last_return
     while True:
         try:

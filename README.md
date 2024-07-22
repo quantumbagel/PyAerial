@@ -121,7 +121,7 @@ classifications:
 ### Alert packet
 ```
 {"type": "alert".
- "icao": "09fs0df",
+ STORE_ICAO: "09fs0df",
  "tag": "3c3c3c",   # No tag = incalculable / not provided by plane
  "reason": {"zone": "area", "classification": "normal"},
 "latitude": 3249.92034,
@@ -132,7 +132,7 @@ classifications:
 ### Warning packet
 ```
 {"type": "warning".
- "icao": "09fs0df",
+ STORE_ICAO: "09fs0df",
  "tag": "3c3c3c",   # No tag = incalculable / not provided by plane
  "reason": {"zone": "circle", "classification": "serious"},
 "latitude": 3249.92034,

@@ -2,6 +2,24 @@ import sys
 import threading
 
 
+class Datum:
+    def __init__(self, value, timestamp):
+        """
+        amongus
+        """
+        self.value = value
+        self.time = timestamp
+
+    def __str__(self):
+        return f"Datum({self.value}, {self.time})"
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __eq__(self, other):
+        return self.value == other.value and self.time == other.time
+
+
 class ImprovedThread(threading.Thread):
     """
     A very similar version of threading.Thread that returns the value of the thread process

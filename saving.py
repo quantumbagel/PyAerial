@@ -1,12 +1,18 @@
 import pymongo
 from pymongo.errors import NetworkTimeout, ConnectionFailure, ServerSelectionTimeoutError, AutoReconnect
 import logging
-
-import constants
+import calculations
+from constants import *
+import ruamel.yaml
+import math
+import helpers
+import rosetta
 
 database = None
-
 log = logging.getLogger("Database")
+
+
+config = ruamel.yaml.YAML().load(open(CONFIG_FILE))
 
 
 def connect_to_database(uri):
@@ -27,16 +33,21 @@ def connect_to_database(uri):
             except (NetworkTimeout, ConnectionFailure, ServerSelectionTimeoutError, AutoReconnect):
                 log.warning(f"Failed to reconnect to MongoDB! (uri={uri})")
                 continue
-            log.info("Succesfully reconnected to MongoDB!")
+            log.info("Successfully reconnected to MongoDB!")
             break
 
-def filter_packets(packets, method="all"):
-    if method == "all":
+
+def filter_packets(packets, method=CONFIG_CAT_SAVE_METHOD_ALL):
+    if method == CONFIG_CAT_SAVE_METHOD_ALL:
         return packets
-    elif method.startswith("decimate"):
-        return [p for i, p in enumerate(packets) if i % int(method.replace("decimate", "")) == 0]
-    elif method.startswith("sdecimate"):
-        arg = tuple([float(i) for i in method.replace("sdecimate", "").replace("(", "").replace(")", "").split(",")])
+    elif method.startswith(CONFIG_CAT_SAVE_METHOD_DECIMATE):
+        return [p for i, p in enumerate(packets) if i % int(method.replace(CONFIG_CAT_SAVE_METHOD_DECIMATE, "")) == 0]
+    elif method.startswith(CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE):
+        arg = tuple([float(i) for i in method
+                    .replace(CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE, "")
+                    .replace("(", "")
+                    .replace(")", "")
+                    .split(",")])
         reset_timestamp = packets[0][1] + arg[1]
         return_packets = []
         window_population_size = 0
@@ -48,174 +59,46 @@ def filter_packets(packets, method="all"):
                 window_population_size = 0
                 reset_timestamp = packet[1] + arg[1]
         return return_packets
-    if method == "none":
+    if method == CONFIG_CAT_SAVE_METHOD_NONE:
         return []
 
-def add_flight_to_database(plane):
-    DO_ALL = "all"
-    DO_NONE = "none"
 
-    saving_info = {"telemetry": "all",
-                   "telemetry_method": "all",
-                   "packet": "all",
-                   "calculated": "all",
-                   "calculated_method": "all"}
-    planes = {'A4943F': {'info': {'icao': 'A4943F', 'callsign': ''}, 'received_data': {
-        'horizontal_speed': [[879.7, 1714825605.3863542], [877.8480000000001, 1714825625.416601],
-                             [879.7, 1714825627.3944087], [877.8480000000001, 1714825640.0652554],
-                             [879.7, 1714825652.9359019]],
-        'direction': [[26.726598999491742, 1714825605.3863542], [26.61895123597848, 1714825611.3873658],
-                      [26.67305440356359, 1714825625.416601], [26.61895123597848, 1714825627.3944087],
-                      [26.780853469265892, 1714825640.0652554], [26.61895123597848, 1714825652.9359019]],
-        'vertical_speed': [[0.0, 1714825605.3863542], [0.32512, 1714825611.3873658], [0.0, 1714825625.416601]],
-        'latitude': [[35.98832702636719, 1714825612.5609076], [35.990478515625, 1714825613.5115805],
-                     [36.00229037010063, 1714825619.6112313], [36.053358174986755, 1714825645.656194],
-                     [36.0552978515625, 1714825646.557823], [36.05750132415254, 1714825647.6509252],
-                     [36.08482360839844, 1714825661.6394966]],
-        'longitude': [[-78.68162155151367, 1714825612.5609076], [-78.68030548095703, 1714825613.5115805],
-                      [-78.67297882729389, 1714825619.6112313], [-78.64136391497674, 1714825645.656194],
-                      [-78.64019393920898, 1714825646.557823], [-78.63885108460772, 1714825647.6509252],
-                      [-78.62194061279297, 1714825661.6394966]], 'altitude': [[10668.0, 1714825612.5609076]]},
-                         'calculated_data': {
-                             'horizontal_speed': [[879.7, 1714825605.3863542], [885.5637410604618, 1714825619.6112313],
-                                                  [877.8480000000001, 1714825625.416601], [879.7, 1714825627.3944087],
-                                                  [877.8480000000001, 1714825640.0652554], [879.7, 1714825652.9359019]],
-                             'direction': [[26.61895123597848, 1714825605.3863542],
-                                           [26.61895123597848, 1714825619.6112313],
-                                           [26.67305440356359, 1714825625.416601],
-                                           [26.61895123597848, 1714825627.3944087],
-                                           [26.780853469265892, 1714825640.0652554],
-                                           [26.61895123597848, 1714825652.9359019]]},
-                         'internal': {'last_update': 1714825661.6394966, 'packets': 19,
-                                      'first_packet': 1714825605.3863542, 'packet_type': {5: 12, 3: 7}}},
-              'A0D374': {'info': {'icao': 'A0D374', 'callsign': ''}, 'received_data': {
-                  'horizontal_speed': [[890.812, 1714825606.6715012], [888.96, 1714825608.6237497],
-                                       [890.812, 1714825630.6460779]],
-                  'direction': [[67.16057701627099, 1714825606.6715012], [67.27026792005532, 1714825607.714454],
-                                [67.22419111238675, 1714825608.6237497], [67.27026792005532, 1714825630.6460779]],
-                  'vertical_speed': [[0.0, 1714825606.6715012], [-0.32512, 1714825630.6460779],
-                                     [0.0, 1714825652.574614]],
-                  'latitude': [[35.695587158203125, 1714825617.9329631], [35.69984048099841, 1714825622.8663058],
-                               [35.70469665527344, 1714825628.4945874], [35.71087336136123, 1714825635.6933148],
-                               [35.71585445080773, 1714825641.4909556], [35.726189047603285, 1714825653.467278]],
-                  'longitude': [[-78.53593826293945, 1714825617.9329631], [-78.52355307721078, 1714825622.8663058],
-                                [-78.50933074951172, 1714825628.4945874], [-78.49123690990692, 1714825635.6933148],
-                                [-78.47662743101729, 1714825641.4909556], [-78.44635659075799, 1714825653.467278]],
-                  'altitude': [[10066.02, 1714825617.9329631], [10058.4, 1714825635.6933148]]}, 'calculated_data': {
-                  'horizontal_speed': [[887.5176141841542, 1714825622.8663058], [890.1794624898336, 1714825628.4945874],
-                                       [890.812, 1714825630.6460779], [889.3038431494456, 1714825641.4909556],
-                                       [890.3936342827848, 1714825653.467278]],
-                  'direction': [[67.07406873777825, 1714825622.8663058], [67.13244102664385, 1714825628.4945874],
-                                [67.27026792005532, 1714825630.6460779], [67.16056032822337, 1714825641.4909556],
-                                [67.15665415126358, 1714825653.467278]]},
-                         'internal': {'last_update': 1714825655.632009, 'packets': 14,
-                                      'first_packet': 1714825606.6715012, 'packet_type': {5: 8, 3: 6}}},
-              'A32E86': {'info': {'icao': 'A32E86', 'callsign': 'DAL1224', 'category': [4, 3]}, 'received_data': {
-                  'latitude': [[35.76249979310116, 1714825607.3506827], [35.77189636230469, 1714825612.3121057],
-                               [35.7774896136785, 1714825615.1769853], [35.78118896484375, 1714825617.177296],
-                               [35.783401747881356, 1714825618.3014257], [35.79011535644531, 1714825621.821219],
-                               [35.79107666015625, 1714825622.3574977], [35.80206298828125, 1714825628.1218722],
-                               [35.803985595703125, 1714825629.1891527], [35.80807443392479, 1714825631.3271747],
-                               [35.81158447265625, 1714825633.1835563], [35.81346130371094, 1714825634.1150506],
-                               [35.82664877681409, 1714825641.1265574], [35.852508544921875, 1714825654.7623365]],
-                  'longitude': [[-78.6823873316988, 1714825607.3506827], [-78.67584228515625, 1714825612.3121057],
-                                [-78.67192694481383, 1714825615.1769853], [-78.66931915283203, 1714825617.177296],
-                                [-78.66783629072474, 1714825618.3014257], [-78.66313934326172, 1714825621.821219],
-                                [-78.6624526977539, 1714825622.3574977], [-78.65484237670898, 1714825628.1218722],
-                                [-78.65352630615234, 1714825629.1891527], [-78.65065554355054, 1714825631.3271747],
-                                [-78.6482048034668, 1714825633.1835563], [-78.64688873291016, 1714825634.1150506],
-                                [-78.63768232629654, 1714825641.1265574], [-78.61959457397461, 1714825654.7623365]],
-                  'altitude': [[10675.62, 1714825607.3506827], [10668.0, 1714825612.3121057],
-                               [10660.380000000001, 1714825654.7623365]],
-                  'horizontal_speed': [[874.144, 1714825608.082691], [872.292, 1714825611.935395],
-                                       [870.44, 1714825658.3763723]],
-                  'direction': [[29.54933332067137, 1714825608.082691], [29.609252403610522, 1714825611.935395],
-                                [29.503510299280375, 1714825630.1218994], [29.609252403610522, 1714825638.9788804],
-                                [29.669392830064098, 1714825658.3763723]],
-                  'vertical_speed': [[-0.32512, 1714825608.082691], [0.0, 1714825656.371335],
-                                     [-0.32512, 1714825657.829243]]}, 'calculated_data': {
-                  'horizontal_speed': [[872.292, 1714825611.935395], [874.9403366781042, 1714825622.3574977],
-                                       [874.7215019268136, 1714825628.1218722], [872.2350257825736, 1714825629.1891527],
-                                       [872.9283902105179, 1714825631.3271747], [873.2867104795355, 1714825633.1835563],
-                                       [872.2117816889822, 1714825634.1150506], [871.5709124386316, 1714825641.1265574],
-                                       [870.9002857412275, 1714825654.7623365], [870.44, 1714825658.3763723]],
-                  'direction': [[29.609252403610522, 1714825611.935395], [29.50172065895549, 1714825622.3574977],
-                                [29.45015455212473, 1714825628.1218722], [29.43035723792059, 1714825629.1891527],
-                                [29.503510299280375, 1714825629.1891527], [29.503510299280375, 1714825631.3271747],
-                                [29.503510299280375, 1714825633.1835563], [29.503510299280375, 1714825634.1150506],
-                                [29.609252403610522, 1714825634.1150506], [29.609252403610522, 1714825641.1265574],
-                                [29.498146005390197, 1714825654.7623365], [29.669392830064098, 1714825658.3763723]]},
-                         'internal': {'last_update': 1714825658.3763723, 'packets': 35,
-                                      'first_packet': 1714825607.3506827, 'packet_type': {3: 14, 5: 18, 1: 3}}},
-              'ADB77F': {'info': {'icao': 'ADB77F', 'callsign': ''}, 'received_data': {
-                  'latitude': [[36.22540283203125, 1714825608.300055], [36.22906494140625, 1714825610.1412473],
-                               [36.242706298828125, 1714825617.0115714], [36.25048828125, 1714825620.907004],
-                               [36.29942321777344, 1714825645.511168], [36.311279296875, 1714825651.4558907]],
-                  'longitude': [[-78.52134704589844, 1714825608.300055], [-78.51911544799805, 1714825610.1412473],
-                                [-78.51081848144531, 1714825617.0115714], [-78.5061264038086, 1714825620.907004],
-                                [-78.47625732421875, 1714825645.511168], [-78.46899032592773, 1714825651.4558907]],
-                  'altitude': [[11277.6, 1714825608.300055], [11269.980000000001, 1714825645.511168]],
-                  'horizontal_speed': [[887.1080000000001, 1714825615.3260763]],
-                  'direction': [[26.24436919257727, 1714825615.3260763], [26.351461189743553, 1714825633.5877743]],
-                  'vertical_speed': [[-0.32512, 1714825615.3260763], [0.0, 1714825655.6453898]]}, 'calculated_data': {
-                  'horizontal_speed': [[886.1004862268846, 1714825610.1412473], [887.1080000000001, 1714825615.3260763],
-                                       [886.0584638068349, 1714825645.511168], [886.5129935387155, 1714825651.4558907]],
-                  'direction': [[26.176702185293607, 1714825610.1412473], [26.24436919257727, 1714825615.3260763],
-                                [26.351461189743553, 1714825615.3260763], [26.145549296076524, 1714825645.511168],
-                                [26.161105673093402, 1714825651.4558907]]},
-                         'internal': {'last_update': 1714825655.6453898, 'packets': 12,
-                                      'first_packet': 1714825608.300055, 'packet_type': {3: 6, 5: 6}}},
-              'A04E24': {'info': {'icao': 'A04E24', 'callsign': 'FDX478', 'category': [4, 5]}, 'received_data': {
-                  'latitude': [[35.932462013373936, 1714825609.5747604], [35.9273878194518, 1714825618.509058]],
-                  'longitude': [[-79.14398842669549, 1714825609.5747604], [-79.16146136344747, 1714825618.509058]],
-                  'altitude': [[5196.84, 1714825609.5747604], [5311.14, 1714825618.509058]],
-                  'horizontal_speed': [[674.128, 1714825611.7408242]],
-                  'direction': [[250.2721367628164, 1714825611.7408242]],
-                  'vertical_speed': [[12.354560000000001, 1714825611.7408242]]},
-                         'calculated_data': {'horizontal_speed': [[674.128, 1714825611.7408242]],
-                                             'direction': [[250.2721367628164, 1714825611.7408242]]},
-                         'internal': {'last_update': 1714825618.509058, 'packets': 4,
-                                      'first_packet': 1714825609.5747604, 'packet_type': {3: 2, 5: 1, 1: 1}}},
-              'A39544': {'info': {'icao': 'A39544', 'callsign': ''}, 'received_data': {
-                  'horizontal_speed': [[394.476, 1714825630.6606162], [422.25600000000003, 1714825643.8790264],
-                                       [425.96000000000004, 1714825644.9724941], [427.812, 1714825646.0263422],
-                                       [450.036, 1714825657.265303], [453.74, 1714825662.9497182]],
-                  'direction': [[24.288802178381285, 1714825630.6606162], [11.1130405359483, 1714825643.8790264],
-                                [5.982956502816053, 1714825644.9724941], [3.4682292589171477, 1714825646.0263422],
-                                [336.0613544612128, 1714825657.265303], [322.10457547231164, 1714825662.9497182]],
-                  'vertical_speed': [[17.231360000000002, 1714825630.6606162], [13.980160000000001, 1714825643.8790264],
-                                     [13.655040000000001, 1714825646.0263422], [18.20672, 1714825657.265303]],
-                  'latitude': [[35.96188302767479, 1714825652.915681], [35.968121027542374, 1714825658.9141755]],
-                  'longitude': [[-78.74345495345744, 1714825652.915681], [-78.74672747672872, 1714825658.9141755]],
-                  'altitude': [[1874.52, 1714825652.915681], [1973.5800000000002, 1714825658.9141755]]},
-                         'calculated_data': {
-                             'horizontal_speed': [[450.036, 1714825657.265303], [453.74, 1714825662.9497182]],
-                             'direction': [[336.0613544612128, 1714825657.265303],
-                                           [322.10457547231164, 1714825662.9497182]]},
-                         'internal': {'last_update': 1714825662.9497182, 'packets': 8,
-                                      'first_packet': 1714825630.6606162, 'packet_type': {5: 6, 3: 2}}}}
+def add_flight_to_database(plane, saver: rosetta.Saver):
+    saver = rosetta.PrintSaver()
+    for item in [STORE_RECV_DATA, STORE_CALC_DATA]:
+        for datum in plane[item]:
+            plane[item][datum] = [helpers.Datum(pf[0], pf[1]) for pf in plane[item][datum]]
+    information = plane[STORE_INFO]
+    calculated_information = plane[STORE_CALC_DATA]
+    received_information = plane[STORE_RECV_DATA]
+    internal_information = plane[STORE_INTERNAL]
 
-    plane = planes["A32E86"]
-    packet_information = plane[constants.STORE_INFO]
-    calculated_information = plane[constants.STORE_CALC_DATA]
-    received_information = plane[constants.STORE_RECV_DATA]
-    internal_information = plane[constants.STORE_INTERNAL]
-    received_information = filter_packets(received_information, saving_info["telemetry_method"])
-    calculated_information = filter_packets(calculated_information, saving_info["calculated_method"])
+    for zone in config[CONFIG_ZONES]:
+        levels = config[CONFIG_ZONES][zone][CONFIG_ZONES_LEVELS]
+        for level in levels:
+            category = levels[level][CONFIG_ZONES_LEVELS_CATEGORY]
+            time = levels[level][CONFIG_ZONES_LEVELS_TIME]
+            minimum_eta = math.inf
+            for i, latitude_datum in enumerate(received_information[STORE_LAT]):
+                longitude_datum = received_information[STORE_LONG][i]
+                latest_direction = calculations.get_latest(STORE_CALC_DATA, STORE_HEADING, plane, latitude_datum.time)
+                latest_speed = calculations.get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, latitude_datum.time)
+                eta = calculations.time_to_enter_geofence([latitude_datum.value, longitude_datum.value],
+                                                          latest_direction.value,
+                                                          latest_speed.value,
+                                                          config[CONFIG_ZONES][zone][CONFIG_ZONES_COORDINATES], time)
+                if eta < minimum_eta:
+                    minimum_eta = eta
+            if minimum_eta <= time:
+                filtered_received_information = filter_packets(received_information,
+                                                               config[CONFIG_CATEGORIES][category][CONFIG_CAT_SAVE]
+                                                               [CONFIG_CAT_SAVE_TELEMETRY_METHOD])
+                filtered_calculated_information = filter_packets(calculated_information,
+                                                                 config[CONFIG_CATEGORIES][category][CONFIG_CAT_SAVE]
+                                                                 [CONFIG_CAT_SAVE_CALCULATED_METHOD])
 
-
-    print(packet_information, internal_information, calculated_information, received_information)
-
-
-add_flight_to_database(None)
-
-
-
-
-
-print(filter_packets(
-    [[872.292, 1714825611.935395], [874.9403366781042, 1714825622.3574977], [874.7215019268136, 1714825628.1218722],
-     [872.2350257825736, 1714825629.1891527], [872.9283902105179, 1714825631.3271747],
-     [873.2867104795355, 1714825633.1835563], [872.2117816889822, 1714825634.1150506],
-     [871.5709124386316, 1714825641.1265574], [870.9002857412275, 1714825654.7623365], [870.44, 1714825658.3763723]],
-    "sdecimate(1,17)"))
+                saver.add_plane_to_cache(plane[STORE_INFO][STORE_ICAO],
+                                         {STORE_CALC_DATA: filtered_calculated_information,
+                                          STORE_RECV_DATA: filtered_received_information,
+                                          STORE_INTERNAL: internal_information, STORE_INFO: information})
+        saver.save()
