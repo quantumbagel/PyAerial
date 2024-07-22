@@ -11,12 +11,13 @@ from shapely import Polygon, Point
 
 from constants import *
 
-configuration = None
-zones = None
-categories = None
+configuration = {}
+zones = {}
+categories = {}
 backdate_packets = 0
 
 log = logging.getLogger("Calculation")
+
 
 def share_configuration_context(c, zo, cat):
     global configuration, zones, categories, backdate_packets
@@ -24,6 +25,8 @@ def share_configuration_context(c, zo, cat):
     zones = zo
     categories = cat
     backdate_packets = configuration['general']['backdate_packets']
+
+
 def get_callsign(icao):
     try:
         resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{icao}", timeout=1)
@@ -88,13 +91,14 @@ def calculate_heading(previous, current):
     x = (math.cos(first_lat) * math.sin(second_lat)) - (
             math.sin(first_lat) * math.cos(second_lat) * math.cos(second_lon - first_lon))
     heading_rads = math.atan2(y, x)
-    heading_degs = ((heading_rads * 180 / math.pi) + 360) % 360
-    return heading_degs
+    heading_degrees = ((heading_rads * 180 / math.pi) + 360) % 360
+    return heading_degrees
 
 
 def calculate_speed(previous, current, previous_time, current_time):
     """
-    Calculate the average speed of the plane based on the previous position and the current position, and the time it took. 
+    Calculate the average speed of the plane based on
+     the previous position and the current position, and the time it took.
     :param previous: Previous lat/long
     :param current: Current lat/long
     :param previous_time: Previous timestamp
@@ -111,12 +115,12 @@ def patch_append(plane, category, message_type, message):
     latest = get_latest(category, message_type, plane)
     if latest == message:  # duplicate
         log.debug(f"[patch_append] "
-                      f"turned aside message in category {category}/{message_type}"
-                      f" for plane id {plane[STORE_INFO][STORE_ICAO]}")
+                  f"turned aside message in category {category}/{message_type}"
+                  f" for plane id {plane[STORE_INFO][STORE_ICAO]}")
         return False
     log.debug(f"[patch_append] "
-                  f"allowed message in category {category}/{message_type}"
-                  f" for plane id {plane[STORE_INFO][STORE_ICAO]}")
+              f"allowed message in category {category}/{message_type}"
+              f" for plane id {plane[STORE_INFO][STORE_ICAO]}")
     if message_type in plane[category].keys():
         plane[category][message_type].append(message)
         return True
@@ -137,48 +141,49 @@ def get_latest(information_type, information_datum, plane_data, after_time=None)
         datum = None
         best = math.inf
         for item in data[information_datum][::-1]:
-            if abs(item.time-after_time) < best:
+            if abs(item.time - after_time) < best:
                 datum = item
             else:
                 return datum
         return datum
 
 
-def execute_method(method="print", meta_arguments=None, method_arguments=None, payload=None):
+def execute_method(method=CONFIG_CAT_ALERT_METHOD_PRINT, meta_arguments=None, method_arguments=None, payload=None):
     icao = meta_arguments[STORE_ICAO]
     tag = meta_arguments[STORE_CALLSIGN]
-    message_type = meta_arguments["type"]
+    message_type = meta_arguments[ALERT_CAT_TYPE]
     log.debug(f"[execute_method] "
-                  f"going to run method {method} with severity {message_type} on plane {icao}")
-    if method == "print":
-        print_me = {STORE_ICAO: icao, STORE_CALLSIGN: tag, "type": message_type, "payload": payload}
+              f"going to run method {method} with severity {message_type} on plane {icao}")
+    if method == CONFIG_CAT_ALERT_METHOD_PRINT:
+        print_me = {STORE_ICAO: icao, STORE_CALLSIGN: tag, ALERT_CAT_TYPE: message_type,
+                    ALERT_CAT_PAYLOAD: payload, ALERT_CAT_ZONE: meta_arguments[ALERT_CAT_ZONE]}
         logger = logging.getLogger(f"{message_type}")
         logger.error(print_me)
-    elif method == "kafka":
-        data = {STORE_CALLSIGN: tag, "type": message_type, "payload": payload}
+    elif method == CONFIG_CAT_ALERT_METHOD_KAFKA:
+        data = {STORE_CALLSIGN: tag, ALERT_CAT_TYPE: message_type, ALERT_CAT_PAYLOAD: payload,
+                ALERT_CAT_ZONE: meta_arguments[ALERT_CAT_ZONE]}
         try:
-            producer = kafka.KafkaProducer(bootstrap_servers=[method_arguments["server"]])
-            producer.send(meta_arguments["type"],
+            producer = kafka.KafkaProducer(bootstrap_servers=[method_arguments[KAFKA_METHOD_ARGUMENT_SERVER]])
+            producer.send(meta_arguments[ALERT_CAT_TYPE],
                           key=bytes(icao, 'utf-8'),
                           value=bytes(json.dumps(data), 'utf-8'))
             producer.flush()
         except NoBrokersAvailable:
             log.error(f"[execute_method:kafka] Failed to send kafka message for plane {icao}! (NoBrokersAvailable)"
-                          " Is the kafka server down?")
-    elif method == "post":
-        pass
+                      " Is the kafka server down?")
 
- 
+
 def calculate_plane(plane):
     # Check for lat/long data, which is a requirement for all advanced calculations
-    if "latitude" not in plane[STORE_RECV_DATA].keys():  # Haven't yet received latitude/longitude packet
+    if STORE_LAT not in plane[STORE_RECV_DATA].keys():  # Haven't yet received latitude/longitude packet
         return
     latitude_data = plane[STORE_RECV_DATA][STORE_LAT]
     longitude_data = plane[STORE_RECV_DATA][STORE_LONG]
     if len(latitude_data) == 1:  # Need at least two lat/long pairs to do anything
         return
     else:
-        if len(latitude_data) < configuration['general']['backdate_packets']:  # If we don't have at least the max calc back packets,
+        if len(latitude_data) < configuration[CONFIG_GENERAL][CONFIG_GENERAL_BACKDATE]:
+            # If we don't have at least the max calc back packets,
             # set the previous to the first packet
             previous_lat = latitude_data[0]
             previous_lon = longitude_data[0]
@@ -238,23 +243,26 @@ def calculate_plane(plane):
         geofence_etas = {}
         for geofence_name in zones:
             geofence = zones[geofence_name]
-            max_time = max([level["time"] for level in geofence["levels"]])
-            eta = time_to_enter_geofence(current, final_heading, final_speed, geofence["coordinates"],
+            max_time = max([geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_TIME]
+                            for level in geofence[CONFIG_ZONES_LEVELS]])
+            eta = time_to_enter_geofence(current, final_heading, final_speed, geofence[CONFIG_ZONES_COORDINATES],
                                          max_time)
             geofence_etas[geofence_name] = eta
-
-            valid_levels = [level for level in geofence["levels"] if geofence["levels"][level]["time"] <= eta]
-            print(valid_levels)
-
+            valid_levels = [level for level in geofence[CONFIG_ZONES_LEVELS]
+                            if geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_TIME] <= eta]
             payload = {STORE_ALT: get_latest(STORE_RECV_DATA, STORE_ALT, plane).value,
                        STORE_LAT: get_latest(STORE_RECV_DATA, STORE_LAT, plane).value,
                        STORE_LONG: get_latest(STORE_RECV_DATA, STORE_LONG, plane).value}
-
             for level in valid_levels:
-                reason = {CONFIG_ZONES: geofence_etas, CONFIG_ZONES_LEVELS_CATEGORY: geofence["levels"][level][CONFIG_ZONES_LEVELS_CATEGORY]}
-                meta_arguments = {"type": level, STORE_ICAO: plane[STORE_INFO][STORE_ICAO], STORE_CALLSIGN: callsign,
-                                         "reason": reason}
-                execute_method(method=categories[geofence["levels"][level][CONFIG_ZONES_LEVELS_CATEGORY]]["method"],
+                reason = {CONFIG_ZONES: geofence_etas, CONFIG_ZONES_LEVELS_CATEGORY:
+                          geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]}
+                meta_arguments = {ALERT_CAT_TYPE: level, STORE_ICAO: plane[STORE_INFO][STORE_ICAO],
+                                  STORE_CALLSIGN: callsign,
+                                  ALERT_CAT_REASON: reason, ALERT_CAT_ZONE: geofence_name}
+                category = categories[geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]]
+                method_arguments = [
+                    CONFIG_CAT_ALERT_ARGUMENTS] if CONFIG_CAT_ALERT_ARGUMENTS in category.keys() else None
+                execute_method(method=category[CONFIG_CAT_METHOD],
                                meta_arguments=meta_arguments,
-                               method_arguments=categories[geofence["levels"][level][CONFIG_ZONES_LEVELS_CATEGORY]]["arguments"],
+                               method_arguments=method_arguments,
                                payload=payload)
