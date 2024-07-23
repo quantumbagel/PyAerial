@@ -17,6 +17,8 @@ class Datum:
         return self.__str__()
 
     def __eq__(self, other):
+        if other is None:
+            return False
         return self.value == other.value and self.time == other.time
 
 

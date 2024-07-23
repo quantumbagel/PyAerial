@@ -41,7 +41,7 @@ def initialize_sdr():
         return None
     sdr.sample_rate = sampling_rate
     sdr.center_freq = modes_frequency
-    sdr.gain = "auto"
+    sdr.gain = 496
     return sdr
 
 
@@ -91,7 +91,8 @@ def process_buffer() -> list[list[Any]]:
             frame_length = (fbits + 1) * 2
             frame_end = frame_start + frame_length
             frame_pulses = signal_buffer[frame_start:frame_end]
-
+            if not len(frame_pulses):  # Sometimes we get max arg is an empty sequence, this fixes that without crashing
+                break
             threshold = max(frame_pulses) * 0.2
 
             binary_messages = []
@@ -186,6 +187,7 @@ def handle_messages(messages) -> None:
     """
     for msg, t in messages:
         iden = pms.df(msg)
+        print(msg)
         if iden in [17, 18]:  # true ADS-B message
             message_queue.append([msg, t])
 
@@ -208,3 +210,7 @@ def run() -> str:
             last_return = "Lost connection to SDR. Was it disconnected?"
             return last_return
         read_callback(data)
+
+
+
+

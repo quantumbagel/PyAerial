@@ -1,3 +1,4 @@
+
 CONFIG_FILE = "config.yaml"
 
 # Data types
@@ -36,6 +37,12 @@ CONFIG_GENERAL_MONGODB = "mongodb"
 CONFIG_GENERAL_BACKDATE = "backdate_packets"
 CONFIG_GENERAL_REMEMBER = "remember_planes"
 CONFIG_GENERAL_PAT = "point_accuracy_threshold"
+CONFIG_GENERAL_PACKET_METHOD = "packet_method"
+CONFIG_GENERAL_PACKET_METHOD_TRADITIONAL = "python"
+CONFIG_GENERAL_PACKET_METHOD_DUMP1090 = "dump1090"
+INTERFACES_FOLDER = "interfaces"
+CONFIG_GENERAL_PACKET_METHODS = {CONFIG_GENERAL_PACKET_METHOD_TRADITIONAL: "signal_generator",
+                                 CONFIG_GENERAL_PACKET_METHOD_DUMP1090: "dump1090_tcp_interface"}
 
 # Home
 CONFIG_HOME_LATITUDE = "latitude"
@@ -79,3 +86,5 @@ ALERT_CAT_ZONE = "zone"
 ALERT_CAT_PAYLOAD = "payload"
 
 KAFKA_METHOD_ARGUMENT_SERVER = "server"
+
+CONFIGURATION = {}  # This configuration will be loaded by pyaerial.py on startup.

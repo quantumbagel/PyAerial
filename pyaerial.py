@@ -1,39 +1,42 @@
 import logging
 import time
 import pyModeS as pms
-import calculations
-import signal_generator
+import constants
 import ruamel.yaml
 import threading
 from helpers import Datum
 from constants import *
-
+import importlib
 logging.basicConfig(level=logging.INFO)
-
-
-def initiate_signal_generator():
-    signal_thread = threading.Thread(target=signal_generator.run, daemon=True)
-    signal_thread.start()
-    return signal_thread
 
 
 # https://stackoverflow.com/questions/33311616/find-coordinate-of-the-closest-point-on-polygon-in-shapely
 def load_configuration():
     yaml = ruamel.yaml.YAML()
-    data = yaml.load(open(CONFIG_FILE))
-    home = data[CONFIG_HOME]
-    home_lat = home[CONFIG_HOME_LATITUDE]
-    home_lon = home[CONFIG_HOME_LONGITUDE]
-    general = {CONFIG_HOME: [home_lat, home_lon], CONFIG_GENERAL: data[CONFIG_GENERAL]}
-
-    return general, data[CONFIG_ZONES], data[CONFIG_CATEGORIES]
+    with open(CONFIG_FILE) as config:
+        data = yaml.load(config)
+    logging.info(f"Loaded configuration from {CONFIG_FILE}.")
+    return data
 
 
-configuration, zones, categories = load_configuration()
+configuration = load_configuration()
 
-calculations.share_configuration_context(configuration, zones, categories)
+constants.CONFIGURATION = configuration
 
-generator_thread = initiate_signal_generator()
+# Now, import submodules that need configuration to function
+import rosetta
+import calculations
+interface = importlib.import_module(INTERFACES_FOLDER
+                                    + "." +
+                                    CONFIG_GENERAL_PACKET_METHODS[
+                                        configuration[CONFIG_GENERAL][CONFIG_GENERAL_PACKET_METHOD]])
+def initiate_generator():
+    signal_thread = threading.Thread(target=
+                                     interface.run, daemon=True)
+    signal_thread.start()
+    return signal_thread
+
+generator_thread = initiate_generator()
 
 vehicle_categories = {2: {1: "Surface Emergency Vehicle", 3: "Surface Service Vehicle", 4: "Ground Obstruction (4)",
                           5: "Ground Obstruction (5)", 6: "Ground Obstruction (6)", 7: "Ground Obstruction (7)"},
@@ -45,6 +48,9 @@ vehicle_categories = {2: {1: "Surface Emergency Vehicle", 3: "Surface Service Ve
                           6: "High performance (>5g) and high speed (>740km/h)", 7: "Rotorcraft (helicopter)"}}
 
 
+main_logger = logging.getLogger("Main")
+
+
 def classify(msg):
     """
     Classify an ADS-B message
@@ -53,8 +59,9 @@ def classify(msg):
     :return: some data ig
     """
     typecode = pms.typecode(msg)
+    log = main_logger.getChild("classify")
     if typecode == -1:
-        print(f"Invalid ADS-B message, ignoring. {msg}")
+        log.debug(f"Invalid ADS-B message, ignoring. {msg}. It is likely to be TC 0, not implemented yet.")
         return
     data = None
     icao = pms.icao(msg)
@@ -66,7 +73,7 @@ def classify(msg):
         typecode_category = 1
 
     elif 5 <= typecode <= 8:  # Surface position
-        lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][0], configuration[CONFIG_HOME][1])
+        lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][CONFIG_HOME_LATITUDE], configuration[CONFIG_HOME][CONFIG_HOME_LONGITUDE])
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
         data = {STORE_INFO: {STORE_ICAO: icao},
                 STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_HORIZ_SPEED: speed * 1.852,
@@ -74,29 +81,30 @@ def classify(msg):
         typecode_category = 2
 
     elif 9 <= typecode <= 18 or 20 <= typecode <= 22:  # Airborne position (barometric alt/GNSS alt)
-        lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][0], configuration[CONFIG_HOME][1])
+        lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][CONFIG_HOME_LATITUDE], configuration[CONFIG_HOME][CONFIG_HOME_LONGITUDE])
         alt = pms.adsb.altitude(msg) * 0.3048  # convert feet to meters
         data = {STORE_INFO: {STORE_ICAO: icao}, STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_ALT: alt}}
         if 9 <= typecode <= 18:
             typecode_category = 3
         else:
             typecode_category = 4
-
     elif typecode == 19:  # Airborne velocities
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
         data = {STORE_INFO: {STORE_ICAO: icao},
                 STORE_RECV_DATA: {STORE_HORIZ_SPEED: speed * 1.852, STORE_HEADING: angle,
                                   STORE_VERT_SPEED: vert_rate * 0.00508}}
         typecode_category = 5
-
     elif typecode == 28:  # Aircraft status
-        pass
+        return
     elif typecode == 29:  # Target state and status information
-        pass
+        return
     elif typecode == 31:  # Aircraft operation status
-        pass  # Not going to implement this type of message
+        return  # Not going to implement this type of message
     if data is not None:
+        log.debug(f"Collected ADS-B message from typecode {typecode}: {data}")
         data.update({STORE_CALC_DATA: {}})
+    else:
+        print("wut", typecode, msg)
     return data, typecode_category
 
 
@@ -105,20 +113,22 @@ def check_should_be_added(packets, new_packet):
 
 
 def check_generator_thread():
+    log = main_logger.getChild("check_generator_thread")
     global generator_thread
     if not generator_thread.is_alive():
-        print("Generator thread has died! Waiting 3 seconds to restart...")
+        log.warning("Generator thread has died! Waiting 3 seconds to restart...")
         time.sleep(3)  # Wait it out
-        print("Restarting generator thread...")
-        generator_thread = initiate_signal_generator()
+        log.warning("Restarting generator thread...")
+        generator_thread = initiate_generator()
 
 
 def process_messages(msgs):
     global planes
     processed = 0
     for message in msgs:
-        message_data, typecode_cat = classify(message[0])
-        if message_data is None:  # Not implemented yet :(
+        try:
+            message_data, typecode_cat = classify(message[0])
+        except TypeError:
             continue
         processed += 1
         icao = message_data[STORE_INFO][STORE_ICAO]
@@ -176,21 +186,25 @@ def check_for_old_planes(current_time):
     return old_planes
 
 
-def process_old_planes(old_planes):
+def process_old_planes(old_planes, saver: rosetta.Saver):
+    log = main_logger.getChild("process_old_planes")
     for plane in old_planes:
-        print("Old plane processed! ", len(planes) - 1, planes[plane])
+        log.debug(f"Old plane processed! {len(planes) - 1} {planes[plane]}")
+        saver.cache_flight(planes[plane])
         del planes[plane]
+    if len(old_planes):  # We actually removed planes
+        saver.save()
 
 
-# saving.connect_to_database(configuration['general']['mongodb'])
 planes = {}
 processed_messages = 0
+saver = rosetta.PrintSaver()
 while True:
     check_generator_thread()
-    processed_messages += process_messages(signal_generator.message_queue[:])
+    processed_messages += process_messages(interface.message_queue[:])
     calculate()
-    signal_generator.message_queue = []  # Reset the messages
+    interface.message_queue = []  # Reset the messages
     old = check_for_old_planes(time.time())
-    print(len(planes.keys()), planes)  # Print all generated plane data
-    process_old_planes(old)
+    print(len(planes.keys()), {p:planes[p][STORE_INTERNAL][STORE_TOTAL_PACKETS] for p in planes.keys()})  # Print all generated plane data
+    process_old_planes(old, saver)
     time.sleep(0.5)

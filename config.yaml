@@ -1,8 +1,9 @@
 general:
   mongodb: mongodb://localhost:27017
   backdate_packets: 10
-  remember_planes: 60
+  remember_planes: 30
   point_accuracy_threshold: 10  # degrees
+  packet_method: dump1090
 
 home:
   latitude: 36.6810752
