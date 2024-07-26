@@ -186,25 +186,61 @@ def check_for_old_planes(current_time):
     return old_planes
 
 
-def process_old_planes(old_planes, saver: rosetta.Saver):
+def process_old_planes(old_planes: list, defined_saver: rosetta.Saver) -> None:
+    """
+    Cache and save old planes using the defined Saver. Note that the Saver must already be
+    initialized for this method to work.
+
+    :param old_planes: the planes that are old
+    :param defined_saver: the Saver to save the old planes
+    """
     log = main_logger.getChild("process_old_planes")
     for plane in old_planes:
         log.debug(f"Old plane processed! {len(planes) - 1} {planes[plane]}")
-        saver.cache_flight(planes[plane])
+        defined_saver.cache_flight(planes[plane])
         del planes[plane]
     if len(old_planes):  # We actually removed planes
-        saver.save()
+        defined_saver.save()
+
+
+def get_top_planes(current_planes: dict, top: int = None) -> str:
+    """
+    Return a formatted message containing the top X planes
+
+    :param current_planes: the current planes
+    :param top: the top X planes to format
+    """
+    planes_by_packets = {p: current_planes[p][STORE_INTERNAL][STORE_TOTAL_PACKETS] for p in current_planes.keys()}
+    sorted_planes = dict(sorted(planes_by_packets.items(), key=lambda item: item[1], reverse=True))
+    message = ""
+    if top:
+        for current_number, plane in enumerate(sorted_planes):
+            if current_number + 1 == top and top != -1:
+                break
+            message += f"{plane} ({sorted_planes[plane]}), "
+    if not message:
+        return ""
+    if top == -1:
+        return f"Top planes: " + message[:-2]
+    if top > len(sorted_planes):
+        top = len(sorted_planes)
+    return f"Top {top} planes: " + message[:-2]
 
 
 planes = {}
 processed_messages = 0
-saver = rosetta.PrintSaver()
+saver = rosetta.MongoSaver(configuration[CONFIG_GENERAL][CONFIG_GENERAL_MONGODB])
+top_planes = configuration[CONFIG_GENERAL][CONFIG_GENERAL_TOP_PLANES]
 while True:
+    start_time = time.time()
     check_generator_thread()
     processed_messages += process_messages(interface.message_queue[:])
     calculate()
     interface.message_queue = []  # Reset the messages
     old = check_for_old_planes(time.time())
-    print(len(planes.keys()), {p:planes[p][STORE_INTERNAL][STORE_TOTAL_PACKETS] for p in planes.keys()})  # Print all generated plane data
+    main_logger.info(f"Currently tracking {len(planes.keys())} planes. {get_top_planes(planes, top_planes)}")  # Print all generated plane data
     process_old_planes(old, saver)
-    time.sleep(0.5)
+    end_time = time.time()
+    delta = 1/configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time-start_time)
+    if delta > 0:
+        time.sleep(delta)

@@ -4,6 +4,10 @@ Rosetta is PyAerial's module for filtering and saving to the database.
 
 import logging
 import math
+
+import pymongo
+from pymongo.errors import NetworkTimeout, ConnectionFailure, ServerSelectionTimeoutError, AutoReconnect
+
 import calculations
 from constants import *
 import helpers
@@ -49,6 +53,7 @@ def filter_packets(packets, method=CONFIG_CAT_SAVE_METHOD_ALL):
         return []
 
 
+
 class Saver:
     def __init__(self, log_name: str = "Saver") -> None:
         """
@@ -90,6 +95,9 @@ class Saver:
         # Ensure importance
         if STORE_LAT not in received_information.keys() or STORE_HEADING not in calculated_information.keys():
             # Not important enough LMAO
+            self.logger.getChild("cache_flight").warning(f"Plane {plane[STORE_INFO][STORE_ICAO]}"
+                                                         f" did not have heading and/or position information,"
+                                                         f" can't infer importance. Ignoring")
             return
 
         for zone in CONFIGURATION[CONFIG_ZONES]:
@@ -108,13 +116,15 @@ class Saver:
                     eta = calculations.time_to_enter_geofence([latitude_datum.value, longitude_datum.value],
                                                               latest_direction.value,
                                                               latest_speed.value,
-                                                              CONFIGURATION[CONFIG_ZONES][zone][CONFIG_ZONES_COORDINATES],
+                                                              CONFIGURATION[CONFIG_ZONES][zone][
+                                                                  CONFIG_ZONES_COORDINATES],
                                                               time)
                     if eta < minimum_eta:
                         minimum_eta = eta
                 if minimum_eta <= time:
                     filtered_received_information = filter_packets(received_information,
-                                                                   CONFIGURATION[CONFIG_CATEGORIES][category][CONFIG_CAT_SAVE]
+                                                                   CONFIGURATION[CONFIG_CATEGORIES][category][
+                                                                       CONFIG_CAT_SAVE]
                                                                    [CONFIG_CAT_SAVE_TELEMETRY_METHOD])
                     filtered_calculated_information = filter_packets(calculated_information,
                                                                      CONFIGURATION[CONFIG_CATEGORIES][category][
@@ -122,10 +132,10 @@ class Saver:
                                                                      [CONFIG_CAT_SAVE_CALCULATED_METHOD])
 
                     self.add_plane_to_cache(plane[STORE_INFO][STORE_ICAO], zone, level,
-                                             {STORE_CALC_DATA: filtered_calculated_information,
-                                              STORE_RECV_DATA: filtered_received_information,
-                                              STORE_INTERNAL: internal_information, STORE_INFO: information})
-    
+                                            {STORE_CALC_DATA: filtered_calculated_information,
+                                             STORE_RECV_DATA: filtered_received_information,
+                                             STORE_INTERNAL: internal_information, STORE_INFO: information})
+
 
 class PrintSaver(Saver):
     def __init__(self):
@@ -136,5 +146,63 @@ class PrintSaver(Saver):
         self._cache = {}
 
 
+class MongoSaver(Saver):
+    def __init__(self, uri):
+        super().__init__(log_name="MongoSaver")
+        self.database: pymongo.MongoClient = None
+        self.uri = uri
+        self.connect_to_database()
 
+    def connect_to_database(self):
+        self.database = pymongo.MongoClient(self.uri, serverSelectionTimeoutMS=2000,
+                                            connectTimeoutMS=1000, socketTimeoutMS=1000)
+        try:
+            # The ismaster command is cheap and does not require auth.
+            self.database.admin.command('ismaster')
+        except (NetworkTimeout, ConnectionFailure, ServerSelectionTimeoutError, AutoReconnect):
+            self.logger.error(f"Disconnected from MongoDB! Waiting to reconnect now... (uri={self.uri})")
+            while True:
+                try:
+                    self.logger.debug("Attempting to reconnect to MongoDB...")
+                    self.database = pymongo.MongoClient(self.uri, serverSelectionTimeoutMS=2000,
+                                                        connectTimeoutMS=1000, socketTimeoutMS=1000)
+                    self.database.admin.command('ismaster')
+                except (NetworkTimeout, ConnectionFailure, ServerSelectionTimeoutError, AutoReconnect):
+                    self.logger.warning(f"Failed to reconnect to MongoDB! (uri={self.uri})")
+                    continue
+                self.logger.info("Successfully reconnected to MongoDB!")
+                break
 
+    def save(self):
+        """
+        Save all the data to MongoDB.
+        """
+        self.logger.info(f"now saving: {self._cache}")
+        for flight in self._cache:
+            icao = flight[0]
+            zone = flight[1]
+            level = flight[2]
+            data = self._cache[flight]
+            data[STORE_INTERNAL][STORE_PACKET_TYPE] = {str(i): data[STORE_INTERNAL][STORE_PACKET_TYPE][i]
+                                                       for i in data[STORE_INTERNAL][STORE_PACKET_TYPE]}
+            database = self.database.get_database(icao.lower())  # Database is plane ID
+            # Truncate the flight start time for use, so it's cleaner
+            collection = database.get_collection(str(int(data[STORE_INTERNAL][STORE_FIRST_PACKET])))
+
+            for data_type in [STORE_RECV_DATA, STORE_CALC_DATA]:  # Add data to database.
+                # This is received and calculated data
+                for item in data[data_type]:
+                    document = {STORAGE_CATEGORY: data_type,
+                                STORAGE_DATA_TYPE: item,
+                                STORAGE_DATA: [[datum.time, datum.value] for datum in data[data_type][item]]}
+                    collection.insert_one(document)
+
+            # Add plane information to database. This is done under the STORE_INFO variable
+            document = {STORAGE_CATEGORY: STORE_INFO, STORAGE_ZONE: zone, STORAGE_LEVEL: level}
+            for info_type in [STORE_INFO, STORE_INTERNAL]:
+                document.update({str(i): data[info_type][i] for i in data[info_type]})
+            collection.insert_one(document)
+
+        # Reset cache
+        self.logger.info(f"done saving {len(self._cache)} planes.")
+        self._cache = {}

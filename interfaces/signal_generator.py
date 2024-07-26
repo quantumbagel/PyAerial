@@ -16,7 +16,7 @@ sampling_rate = 2e6
 samples_per_microsecond = 2
 
 modes_frequency = 1090e6
-buffer_size = 1024 * 200
+buffer_size = 16384 * 16
 read_size = 1024 * 100
 
 pbits = 8
@@ -187,10 +187,9 @@ def handle_messages(messages) -> None:
     """
     for msg, t in messages:
         iden = pms.df(msg)
-        print(msg)
-        if iden in [17, 18]:  # true ADS-B message
-            message_queue.append([msg, t])
-
+        # if iden in [17, 18]:  # true ADS-B message
+        #     message_queue.append([msg, t])
+        message_queue.append([msg, t])
 
 def run() -> str:
     """

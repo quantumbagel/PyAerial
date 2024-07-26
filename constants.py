@@ -40,6 +40,9 @@ CONFIG_GENERAL_PAT = "point_accuracy_threshold"
 CONFIG_GENERAL_PACKET_METHOD = "packet_method"
 CONFIG_GENERAL_PACKET_METHOD_TRADITIONAL = "python"
 CONFIG_GENERAL_PACKET_METHOD_DUMP1090 = "dump1090"
+CONFIG_GENERAL_TOP_PLANES = "status_message_top_planes"
+CONFIG_GENERAL_HERTZ = "hz"
+
 INTERFACES_FOLDER = "interfaces"
 CONFIG_GENERAL_PACKET_METHODS = {CONFIG_GENERAL_PACKET_METHOD_TRADITIONAL: "signal_generator",
                                  CONFIG_GENERAL_PACKET_METHOD_DUMP1090: "dump1090_tcp_interface"}
@@ -84,6 +87,15 @@ ALERT_CAT_TYPE = "type"
 ALERT_CAT_REASON = "reason"
 ALERT_CAT_ZONE = "zone"
 ALERT_CAT_PAYLOAD = "payload"
+
+
+# Database
+
+STORAGE_CATEGORY = "category"
+STORAGE_DATA_TYPE = "type"
+STORAGE_DATA = "data"
+STORAGE_LEVEL = "level"
+STORAGE_ZONE = "zone"
 
 KAFKA_METHOD_ARGUMENT_SERVER = "server"
 

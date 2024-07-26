@@ -1,9 +1,12 @@
 general:
   mongodb: mongodb://localhost:27017
+  kafka: "TODO_ADD_HERE"
   backdate_packets: 10
   remember_planes: 30
   point_accuracy_threshold: 10  # degrees
   packet_method: dump1090
+  status_message_top_planes: 5
+  hz: 2
 
 home:
   latitude: 36.6810752
