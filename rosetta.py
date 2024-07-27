@@ -10,7 +10,6 @@ from pymongo.errors import NetworkTimeout, ConnectionFailure, ServerSelectionTim
 
 import calculations
 from constants import *
-import helpers
 from helpers import Datum
 
 

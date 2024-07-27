@@ -1,3 +1,6 @@
+"""
+Helper classes that other PyAerial modules use.
+"""
 import sys
 import threading
 

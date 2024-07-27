@@ -1,3 +1,6 @@
+"""
+An interface that is a pure-python replacement for dump1090 that is nowhere NEAR as good :(
+"""
 import time
 import numpy as np
 import pyModeS as pms

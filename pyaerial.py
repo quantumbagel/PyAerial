@@ -1,3 +1,8 @@
+"""
+The main program. This contains the activation of most connections and the mainloop.
+
+(c) 2024 quantumbagel
+"""
 import logging
 import time
 import pyModeS as pms

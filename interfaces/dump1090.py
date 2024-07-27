@@ -1,5 +1,5 @@
 """
-Another interface that PyAerial can use, different from signal_generator, that uses dump1090
+Another interface that PyAerial can use that uses dump1090's networking to stream packets
 """
 
 import socket

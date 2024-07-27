@@ -1,3 +1,6 @@
+"""
+Performs the data analysis / aggregation for PyAerial.
+"""
 import json
 import logging
 import math

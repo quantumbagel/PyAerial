@@ -1,4 +1,6 @@
-
+"""
+Constants used by all PyAerial modules
+"""
 CONFIG_FILE = "config.yaml"
 
 # Data types
