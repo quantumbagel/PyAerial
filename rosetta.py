@@ -120,7 +120,7 @@ class Saver:
                                                               time)
                     if eta < minimum_eta:
                         minimum_eta = eta
-                if minimum_eta <= time:
+                if minimum_eta <= time:  # Should we cache this level of this plane?
                     filtered_received_information = filter_packets(received_information,
                                                                    CONFIGURATION[CONFIG_CATEGORIES][category][
                                                                        CONFIG_CAT_SAVE]
@@ -153,6 +153,9 @@ class MongoSaver(Saver):
         self.connect_to_database()
 
     def connect_to_database(self):
+        """
+        Connects to the MongoDB database.
+        """
         self.database = pymongo.MongoClient(self.uri, serverSelectionTimeoutMS=2000,
                                             connectTimeoutMS=1000, socketTimeoutMS=1000)
         try:

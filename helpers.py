@@ -3,10 +3,10 @@ import threading
 
 
 class Datum:
+    """
+    Store a value/time pair.
+    """
     def __init__(self, value, timestamp):
-        """
-        amongus
-        """
         self.value = value
         self.time = timestamp
 
