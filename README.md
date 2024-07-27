@@ -6,193 +6,157 @@ a.k.a. airstrik 2.0_
 
 ## General Project Concept
 
-PyAerial is intended to be a successor to airstrik.py.
-
+PyAerial is the successor to airstrik.py.
 
 PyAerial will scan for nearby planes using the ModeS/ADS-B protocol and provide an early-warning system for planes / helicopters that enter user-defined geofences, as well as programmable actions for the program to take (e.g. sending a POST request with data about the event or communicating with a Kafka server)
-
-This is intended to be a document describing how PyAerial should function (so there's no question later along). New concepts will be added to this document, as well as a brief description of why the feature was added.
-
-
-PyAerial addresses many of airstrik.py's problems like:
-
-
-## Problems (with airstrik.py) that are resolved
-### File IO latency
-
-Because airstrik.py relied on dump1090's JSON dump feature, it had to grapple with slower speeds and inconsistent tick timing brought on by large amounts of file IO. PyAerial will not have this problem because it will handle the decoding process by itself.
-
-
-### Drop support for dump978
-PyAerial will drop support for dump978, as its quantity of data isn't sufficient. Every plane that shows on 978mhz is on 1090mhz, and it just is not worth maintaining support for UAT 978mhz. This will allow 1090mhz specific handling of packets.
-
-### ICAO decoding for more planes
-PyAerial will calculate the ICAO decoding (instead of using a dictionary) for American and Canadian planes, the vast majority of planes in NC. If we see a plane that isn't recognized, PyAerial will attempt to classify it according to this list: https://www.aerotransport.org/html/ICAO_hex_decode.html. Nationality will be stored in MongoDB.
-
-## Improvements from airstrik.py
-### Better stats
-
-PyAerial will store daily stat metrics including
-- total unique planes
-- total (concluded) plane trips
-- Average trip length
-
-This may even be in a separate MongoDB database. I will flesh this out a little bit later when I have ideas on stats to store.
-
-### Better Metrics
-
-PyAerial will store additional plane-specific metrics like
-
-- Nationality for each stored plane that we've seen
-- Plane call sign
-- times we've seen the plane
-- total time we've seen the plane
-- trips we've seen the plane
-- Total packets received by the plane
-
-Also, PyAerial will store trip-specific metrics like
-
-- Length of trip
-- Packets received over trip
-- Log of zone entries/leaves with timestamp
-- Formatting of this:
-   - time: 192832989 (unix)
-   - entries:
-   - event: "entered", zone: "circle", priority: -10
-
-
-### Better zones
-
-Each zone can now be defined as a geofence (list of points) that will be checked for ETA as normal: (thanks turfpy)
-https://stackoverflow.com/questions/43892459/check-if-geo-point-is-inside-or-outside-of-polygon
-
-Zones can also be defined as a simple circle. I may also add other methods in the future.
 
 
 ## Formatting
 ### Configuration file example
 ```
-home: # Home lat/long point
-lat: 35.7270309
-lon: -78.695587
-remember: 60
-mongo_address: "127.0.0.1:27017"
+general:
+  mongodb: mongodb://localhost:27017
+  kafka: "localhost:12345"
+  backdate_packets: 10
+  remember_planes: 30
+  point_accuracy_threshold: 10  # degrees
+  packet_method: dump1090
+  status_message_top_planes: 5
+  hz: 2
+
+home:
+  latitude: 36.6810752
+  longitude: -78.8758528
+
 
 zones:
-	area:
-		type: geofence
-		coordinates:
-			(1, 1)
-			(2, 2)
-			(3,3)
-		altitude: 3000
-		classification: normal
-		
-	circle:
-		type: circle
-		radius: 100
-		altitude: 2000
-		classification: serious
+  main:  # smaller area randomly picked out for testing
+    coordinates:
+      [[35.753821, -78.909304],
+      [35.755597, -78.904969],
+      [35.756642, -78.898232],
+      [35.755214, -78.892738],
+      [35.753333, -78.888490],
+      [35.749293, -78.889606],
+      [35.747343, -78.891494],
+      [35.746507, -78.895742],
+      [35.747482, -78.900806],
+      [35.748910, -78.906085],
+      [35.751348, -78.910205]]
+    levels:
+      warn:
+        category: really_high_priority
+        time: 45
+        send: true
+      alert:
+        category: really_high_priority
+        time: 0
+        send: true
 
-classifications:
-	normal:
-		priority: 10
-		warn_method: get_request
-		warn_for_incoming: false
-		predict: 30  # Only "try" for 30 seconds to intersect
-		save:
-			decimate: 3
-			mark_important: false
-		ip: google.com
-	serious:
-		priority: -100
-		warn_method: kafka_server
-		warn_for_incoming: true
-		predict: 60
-		ip: examplekafka.com/connect
-		username: root
-		password: password
-		save:
-			decimate: 0
-			mark_important: true
+  alternate: # Most of raleigh area
+    coordinates:
+      [[36.279595, -79.349321],
+      [35.943933, -79.534100],
+      [35.560548, -79.501141],
+      [35.058494, -79.138592],
+      [35.049501, -78.776043],
+      [35.184300, -78.248700],
+      [35.435327, -78.017987],
+      [35.801494, -77.963055],
+      [36.112746, -77.974041],
+      [36.254624, -78.226727],
+      [36.334318, -78.666180],
+      [36.325467, -78.929852],
+      [36.343168, -79.259442]]
+    levels:
+      warn:
+        category: warn
+        time: 120
+      alert:
+        category: alert
+        time: 0
+
+categories:
+  really_high_priority:
+    priority: 1000000
+    method: print
+    save:
+      telemetry_method: all
+      calculated_method: all
+  warn:
+    priority: 10
+    method: kafka
+    arguments:
+      server: "localhost:60403"
+    save:
+      telemetry_method: all
+      calculated_method: all
+  alert:
+    priority: -1
+    method: print
+    save:
+      telemetry_method: all
+      calculated_method: all
 ```
 
+All names for anything can be customized in the `constants.py` file.
 
-### Alert packet
+
+
+### Alert packet example
 ```
-{"type": "alert".
- STORE_ICAO: "09fs0df",
- "tag": "3c3c3c",   # No tag = incalculable / not provided by plane
- "reason": {"zone": "area", "classification": "normal"},
-"latitude": 3249.92034,
-"longitude": 43.3948,
-"altitude": 3000}
+{'icao': 'AD61DE',
+ 'callsign': 'SWA1693',
+ 'type': 'warn', 
+ 'payload':
+      {'altitude': 617.22,
+       'latitude': 35.767181396484375,
+       'longitude': -78.92131805419922},
+ 'zone': 'main',
+ 'eta': 52}
 ```
 
-### Warning packet
-```
-{"type": "warning".
- STORE_ICAO: "09fs0df",
- "tag": "3c3c3c",   # No tag = incalculable / not provided by plane
- "reason": {"zone": "circle", "classification": "serious"},
-"latitude": 3249.92034,
-"longitude": 43.3948,
-"altitude": 3000,
-"eta": 53}
-```
+##  Configuration Options
+
+| Configuration Option                           | What does it control?                                                                                                                                                            | constants.py variable               |
+|------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------|
+| `general`                                      | Contains options relative to the entire program's scope that didn't fit anywhere else.                                                                                           | `CONFIG_GENERAL`                    |
+| `general/mongodb`                              | The URI of the MongoDB instance to connect to if MongoDB is set as the method to save packets                                                                                    | `CONFIG_GENERAL_MONGODB`            |
+| `general/backdate_packets`                     | How many latitude/longitude packets back we look to perform a rough average when we calculate the heading. More = less variance, less = more variance.                           | `CONFIG_GENERAL_BACKDATE`           |
+| `general/remember_planes`                      | How many seconds since the last packet we should keep the plane in RAM before saving it to MongoDB                                                                               | `CONFIG_GENERAL_REMEMBER`           |
+| `general/point_accuracy_threshold`             | The degree accuracy used for determining if we should "chase" geofences. This is just an optimization.                                                                           | `CONFIG_GENERAL_PAT`                |
+| `general/packet_method`                        | How the program should gather packets. Options: `dump1090` or `python`. Dump1090 is significantly better, but requires `dump1090 --raw --net` to be running in another terminal. | `CONFIG_GENERAL_PACKET_METHOD`      |
+| `general/status_message_top_planes`            | How many of the "top planes" (most messages sent) to display in the status message sent every tick at the INFO logging level.                                                    | `CONFIG_GENERAL_TOP_PLANES`         |
+| `general/hz`                                   | How many ticks per second to attempt. This is a maximum, not a minimum.                                                                                                          | `CONFIG_GENERAL_HZ`                 |
+| `home`                                         | Contains the position of the ADS-B tracker. This is used to calculate globally accurate positions from the ADS-B packets.                                                        | `CONFIG_HOME`                       |
+| `home/latitude`                                | The latitude of the ADS-B tracker                                                                                                                                                | `CONFIG_HOME_LATITUDE`              |
+| `home/longitude`                               | The longitude of the ADS-B tracker                                                                                                                                               | `CONFIG_HOME_LONGITUDE`             |
+| `zones`                                        | Contains information about the geofences and their different warning levels                                                                                                      | `CONFIG_ZONES`                      |
+| `zones/[zone]/coordinates`                     | A list of lists containing the decimal lat/long coordinates that compose the geofence.                                                                                           | `CONFIG_ZONES_COORDINATES`          |
+| `zones/[zone]/levels`                          | Contains information about the levels of triggers the geofence has.                                                                                                              | `CONFIG_ZONES_LEVELS`               |
+| `zones/[zone]/levels/[level]/category`         | The category (information about how to save and alert) that this level of the geofence is tied to                                                                                | `CONFIG_ZONES_LEVELS_CATEGORY`      |
+| `zones/[zone]/levels/[level]/time`             | The maximum ETA the plane must have relative to the geofence to trigger this level.                                                                                              | `CONFIG_ZONES_LEVELS_TIME`          |
+| `categories`                                   | Stores the categories (information for how alerts and saving works). Categories will only be used if they are put in at least one geofence                                       | `CONFIG_CATEGORIES`                 |
+| `categories/[category]/method`                 | Which method to use when alerting. Current options: `print`, `kafka`                                                                                                             | `CONFIG_CAT_METHOD`                 |
+| `categories[category]/arguments`               | If applicable, put arguments for the method in here. The only option is `server` for the `kafka` method currently.                                                               | `CONFIG_CAT_ALERT_ARGUMENTS`        |
+| `categories/[category]/save`                   | Filters for saving to MongoDB. Existing methods: `all`, `none`, `decimate(X)`, `sdecimate(X,Y)`                                                                                  | `CONFIG_CAT_SAVE`                   |
+| `categories/[category]/save/telemetry_method`  | What method to use for the telemetry data (stuff received by the ADS-B receiver with no inference).                                                                              | `CONFIG_CAT_SAVE_TELEMETRY_METHOD`  |
+| `categories/[category]/save/calculated_method` | What method to use for the calculated data (stuff we inferred from the ADS-B information, including corrected versions of telemetry data we already receive).                    | `CONFIG_CAT_SAVE_CALCULATED_METHOD` |
 
 
 ## Dependencies
 
-pyturf - Geofence calculations
-ruamel.yaml - YAML configuration file
-pymodes - Packet decoding
-geopy - some distance calculations
-pymongo - Database operations
-kafka-python - Send alert to kafka server when intrusion
-requests - Handle POST request with headers for "intruders"
+```
+shapely
+geopy
+pymodes
+requests
+pyrtlsdr
+kafka-python
+pymongo
+ruamel.yaml
+```
 
+`dump1090` is required for the `dump1090` packet method to function. You can also broadcast raw ADSB messages over TCP port `30002` and the interface will also work.
 
-
-
-
-
-## Project Checklist
-
-These are just things that have to happen. I don't know what order to do them in (fully)
-
-1. **Set up PyModeS / Test PyModeS**
-    - Run tests with local 1090mhz receiver / compare with dump1090
-    - Get mainloop that just prints out packets as they are received
-2. **Mainloop (basic)**
-    - Get each packet and save it to MongoDB
-    - Redundancy calculation
-3. **Prediction**
-    - Calculate
-        - heading
-        - speed
-        - (rip it out of airstrik.py)
-    - Predict ahead for the maximum amount of time allotted by any filter
-        - Maybe smart optimizations (could be a cool problem)
-    - Determine which zone/classification to use
-4. **Handling**
-    - Read data from classification
-    - Send requests:
-        - implement kafka sending
-        - Implement get/post requests
-5. **Validation**
-    - ensure that all configuration data is valid
-    - yea that's it
-6. **Mainloop (saving data)**
-    - Store data on each plane-trip with:
-        - Zones entered
-        - Zones warned
-        - Travel time
-    - When we lose sight of planes:
-        - Get classification of plane-trip
-           - Determine data compression
-            - decimate: remove nth unique packet, blindly
-            - smart_decimate: store (up to) one packet per minute, or settable amount
-            - all: ALL THE DATA
-            - info: just info like travel time, travel distance, hex code, etc (included in all others btw)
-        - Compress data and save
+Feel free to report any bugs or issues you find. Happy tracking!

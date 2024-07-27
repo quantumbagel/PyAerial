@@ -53,7 +53,6 @@ def filter_packets(packets, method=CONFIG_CAT_SAVE_METHOD_ALL):
         return []
 
 
-
 class Saver:
     def __init__(self, log_name: str = "Saver") -> None:
         """
@@ -86,7 +85,6 @@ class Saver:
         Filters packets, adds them to the Saver cache, and requests the Saver to save the information
         :param plane: The plane data to parse and save
         """
-        print(plane)
         information = plane[STORE_INFO]
         calculated_information = plane[STORE_CALC_DATA]
         received_information = plane[STORE_RECV_DATA]
@@ -108,7 +106,8 @@ class Saver:
                 minimum_eta = math.inf
 
                 for i, latitude_datum in enumerate(received_information[STORE_LAT]):
-                    longitude_datum = received_information[STORE_LONG][i]
+                    longitude_datum = calculations.get_latest(STORE_RECV_DATA, STORE_LONG, plane,
+                                                              latitude_datum.time)
                     latest_direction = calculations.get_latest(STORE_CALC_DATA, STORE_HEADING, plane,
                                                                latitude_datum.time)
                     latest_speed = calculations.get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane,

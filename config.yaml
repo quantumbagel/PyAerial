@@ -1,6 +1,5 @@
 general:
   mongodb: mongodb://localhost:27017
-  kafka: "TODO_ADD_HERE"
   backdate_packets: 10
   remember_planes: 30
   point_accuracy_threshold: 10  # degrees
@@ -11,7 +10,6 @@ general:
 home:
   latitude: 36.6810752
   longitude: -78.8758528
-
 
 zones:
   main:  # smaller area randomly picked out for testing
@@ -31,11 +29,9 @@ zones:
       warn:
         category: really_high_priority
         time: 45
-        send: true
       alert:
         category: really_high_priority
         time: 0
-        send: true
 
   alternate: # Most of raleigh area
     coordinates:
@@ -62,29 +58,17 @@ zones:
 
 categories:
   really_high_priority:
-    priority: 1000000
     method: print
     save:
-      telemetry: true
       telemetry_method: all
-      packet: true
-      calculated: true
       calculated_method: all
   warn:
-    priority: 10
     method: print
     save:
-      telemetry: alert
       telemetry_method: all
-      packet: all
-      calculated: all
       calculated_method: all
   alert:
-    priority: -1
     method: print
     save:
-      telemetry: all
       telemetry_method: all
-      packet: all
-      calculated: all
       calculated_method: all

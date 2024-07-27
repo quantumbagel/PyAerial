@@ -25,7 +25,6 @@ STORE_PACKET_TYPE = "packet_type"
 STORE_FIRST_PACKET = "first_packet"
 STORE_CALLSIGN = "callsign"
 STORE_PLANE_CATEGORY = "category"
-
 # Configuration main categories
 CONFIG_ZONES = "zones"
 CONFIG_CATEGORIES = "categories"
@@ -56,17 +55,12 @@ CONFIG_ZONES_COORDINATES = "coordinates"
 CONFIG_ZONES_LEVELS = "levels"
 CONFIG_ZONES_LEVELS_CATEGORY = "category"
 CONFIG_ZONES_LEVELS_TIME = "time"
-CONFIG_ZONES_LEVELS_SEND = "send"
 
 # Categories
-CONFIG_CAT_PRIORITY = "priority"
 CONFIG_CAT_METHOD = "method"
 CONFIG_CAT_SAVE = "save"
-CONFIG_CAT_SAVE_TELEMETRY = "telemetry"
 CONFIG_CAT_SAVE_TELEMETRY_METHOD = "telemetry_method"
-CONFIG_CAT_SAVE_CALCULATED = "calculated"
 CONFIG_CAT_SAVE_CALCULATED_METHOD = "calculated_method"
-CONFIG_CAT_SAVE_PACKET = "packet"
 
 # Alert methods
 CONFIG_CAT_ALERT_METHOD_PRINT = "print"
@@ -87,7 +81,7 @@ ALERT_CAT_TYPE = "type"
 ALERT_CAT_REASON = "reason"
 ALERT_CAT_ZONE = "zone"
 ALERT_CAT_PAYLOAD = "payload"
-
+ALERT_CAT_ETA = "eta"
 
 # Database
 

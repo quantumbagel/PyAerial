@@ -205,12 +205,13 @@ def execute_method(method: str=CONFIG_CAT_ALERT_METHOD_PRINT,
     log.debug(f"going to run method {method} with severity {message_type} on plane {icao}")
     if method == CONFIG_CAT_ALERT_METHOD_PRINT:
         print_me = {STORE_ICAO: icao, STORE_CALLSIGN: tag, ALERT_CAT_TYPE: message_type,
-                    ALERT_CAT_PAYLOAD: payload, ALERT_CAT_ZONE: meta_arguments[ALERT_CAT_ZONE]}
+                    ALERT_CAT_PAYLOAD: payload, ALERT_CAT_ZONE: meta_arguments[ALERT_CAT_ZONE],
+                    ALERT_CAT_ETA: meta_arguments[ALERT_CAT_ETA]}
         logger = logging.getLogger(f"{message_type}")
-        #logger.error(print_me) TODO: replace
+        logger.debug(print_me)
     elif method == CONFIG_CAT_ALERT_METHOD_KAFKA:
         data = {STORE_CALLSIGN: tag, ALERT_CAT_TYPE: message_type, ALERT_CAT_PAYLOAD: payload,
-                ALERT_CAT_ZONE: meta_arguments[ALERT_CAT_ZONE]}
+                ALERT_CAT_ZONE: meta_arguments[ALERT_CAT_ZONE], ALERT_CAT_ETA: meta_arguments[ALERT_CAT_ETA]}
         try:
             producer = kafka.KafkaProducer(bootstrap_servers=[method_arguments[KAFKA_METHOD_ARGUMENT_SERVER]])
             producer.send(meta_arguments[ALERT_CAT_TYPE],
@@ -308,7 +309,7 @@ def calculate_plane(plane: dict) -> None:
             # Determine the levels within the zone that qualify
 
             valid_levels = [level for level in geofence[CONFIG_ZONES_LEVELS]
-                            if geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_TIME] <= eta]
+                            if geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_TIME] >= eta]
             payload = {STORE_ALT: get_latest(STORE_RECV_DATA, STORE_ALT, plane).value,
                        STORE_LAT: get_latest(STORE_RECV_DATA, STORE_LAT, plane).value,
                        STORE_LONG: get_latest(STORE_RECV_DATA, STORE_LONG, plane).value}
@@ -319,7 +320,8 @@ def calculate_plane(plane: dict) -> None:
 
                 meta_arguments = {ALERT_CAT_TYPE: level, STORE_ICAO: plane[STORE_INFO][STORE_ICAO],
                                   STORE_CALLSIGN: callsign,
-                                  ALERT_CAT_REASON: reason, ALERT_CAT_ZONE: geofence_name}
+                                  ALERT_CAT_REASON: reason, ALERT_CAT_ZONE: geofence_name,
+                                  ALERT_CAT_ETA: eta}
 
                 category = categories[geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]]
 
