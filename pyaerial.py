@@ -13,6 +13,8 @@ from helpers import Datum
 from constants import *
 import importlib
 
+logging.basicConfig(level=logging.INFO)
+
 
 def load_configuration():
     yaml = ruamel.yaml.YAML()
