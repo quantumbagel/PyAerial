@@ -191,7 +191,7 @@ class MongoSaver(Saver):
             try:
                 collection = database.get_collection(str(int(data[STORE_INTERNAL][STORE_FIRST_PACKET]))
                                                      + "-" + zone + "-" + level)
-            except ServerSelectionTimeoutError:
+            except ServerSelectionTimeoutError or AutoReconnect:
                 self.connect_to_database()
                 collection = database.get_collection(str(int(data[STORE_INTERNAL][STORE_FIRST_PACKET]))
                                                      + "-" + zone + "-" + level)
@@ -204,7 +204,7 @@ class MongoSaver(Saver):
                                 STORAGE_DATA: [[datum.time, datum.value] for datum in data[data_type][item]]}
                     try:
                         collection.insert_one(document)
-                    except ServerSelectionTimeoutError:
+                    except ServerSelectionTimeoutError or AutoReconnect:
                         self.connect_to_database()
 
             # Add plane information to database. This is done under the STORE_INFO variable
@@ -213,7 +213,7 @@ class MongoSaver(Saver):
                 document.update({str(i): data[info_type][i] for i in data[info_type]})
             try:
                 collection.insert_one(document)
-            except ServerSelectionTimeoutError:
+            except ServerSelectionTimeoutError or AutoReconnect:
                 self.connect_to_database()
 
         # Reset cache
