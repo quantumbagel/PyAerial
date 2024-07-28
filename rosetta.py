@@ -147,7 +147,7 @@ class PrintSaver(Saver):
 class MongoSaver(Saver):
     def __init__(self, uri):
         super().__init__(log_name="MongoSaver")
-        self.database: pymongo.MongoClient = None
+        self.database: pymongo.MongoClient | None = None
         self.uri = uri
         self.connect_to_database()
 
@@ -188,8 +188,13 @@ class MongoSaver(Saver):
                                                        for i in data[STORE_INTERNAL][STORE_PACKET_TYPE]}
             database = self.database.get_database(icao.lower())  # Database is plane ID
             # Truncate the flight start time for use, so it's cleaner
-            collection = database.get_collection(str(int(data[STORE_INTERNAL][STORE_FIRST_PACKET]))
-                                                 + "-" + zone + "-" + level)
+            try:
+                collection = database.get_collection(str(int(data[STORE_INTERNAL][STORE_FIRST_PACKET]))
+                                                     + "-" + zone + "-" + level)
+            except ServerSelectionTimeoutError:
+                self.connect_to_database()
+                collection = database.get_collection(str(int(data[STORE_INTERNAL][STORE_FIRST_PACKET]))
+                                                     + "-" + zone + "-" + level)
 
             for data_type in [STORE_RECV_DATA, STORE_CALC_DATA]:  # Add data to database.
                 # This is received and calculated data
@@ -197,13 +202,19 @@ class MongoSaver(Saver):
                     document = {STORAGE_CATEGORY: data_type,
                                 STORAGE_DATA_TYPE: item,
                                 STORAGE_DATA: [[datum.time, datum.value] for datum in data[data_type][item]]}
-                    collection.insert_one(document)
+                    try:
+                        collection.insert_one(document)
+                    except ServerSelectionTimeoutError:
+                        self.connect_to_database()
 
             # Add plane information to database. This is done under the STORE_INFO variable
             document = {STORAGE_CATEGORY: STORE_INFO, STORAGE_ZONE: zone, STORAGE_LEVEL: level}
             for info_type in [STORE_INFO, STORE_INTERNAL]:
                 document.update({str(i): data[info_type][i] for i in data[info_type]})
-            collection.insert_one(document)
+            try:
+                collection.insert_one(document)
+            except ServerSelectionTimeoutError:
+                self.connect_to_database()
 
         # Reset cache
         self.logger.info(f"done saving {len(self._cache)} eligible flight-levels.")

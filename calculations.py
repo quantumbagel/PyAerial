@@ -44,9 +44,9 @@ def get_callsign(icao: str) -> str | None:
     return json_request["Registration"] if "Registration" in json_request.keys() else None
 
 
-def time_to_enter_geofence(plane_position: list[float, float],
+def time_to_enter_geofence(plane_position: list[float],
                            heading: float, speed: float,
-                           geofence_coordinates: list[list[float, float]], max_time: int) -> float:
+                           geofence_coordinates: list[list[float]], max_time: int) -> float:
     """
     Calculate the time a plane, with heading and speed, will take to enter a geofence, if at all.
 
@@ -186,7 +186,7 @@ def get_latest(information_type: str, information_datum: str, plane_data: dict, 
         return datum
 
 
-def execute_method(method: str=CONFIG_CAT_ALERT_METHOD_PRINT,
+def execute_method(method: str = CONFIG_CAT_ALERT_METHOD_PRINT,
                    meta_arguments: dict = None,
                    method_arguments: dict = None,
                    payload: dict = None) -> None:
@@ -253,8 +253,8 @@ def calculate_plane(plane: dict) -> None:
             previous_lon = get_latest(STORE_RECV_DATA, STORE_LAT, plane, previous_lat.time)
         previous = [previous_lat.value, previous_lon.value]  # Previous lat/long
         previous_time = previous_lat.time
-        current_lat = latitude_data[-1]
-        current_lon = longitude_data[-1]
+        current_lat: helpers.Datum = latitude_data[-1]
+        current_lon: helpers.Datum = longitude_data[-1]
         current = [current_lat.value, current_lon.value]  # Current lat/long
         current_time = current_lat.time
         speed = calculate_speed(previous, current, previous_time, current_time)  # Calculate speed
@@ -292,7 +292,7 @@ def calculate_plane(plane: dict) -> None:
         except KeyError:
             callsign_async = threading.Thread(target=get_callsign, args=(plane,))
             callsign_async.start()
-            callsign = get_callsign(plane)  # Callsign might not always exist
+            callsign = get_callsign(plane[STORE_INFO][STORE_ICAO])  # Callsign might not always exist
             if callsign is not None:  # if we got it
                 plane[STORE_INFO][STORE_CALLSIGN] = callsign  # save it
             else:  # if we didn't

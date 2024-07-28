@@ -190,9 +190,9 @@ def handle_messages(messages) -> None:
     """
     for msg, t in messages:
         iden = pms.df(msg)
-        # if iden in [17, 18]:  # true ADS-B message
-        #     message_queue.append([msg, t])
-        message_queue.append([msg, t])
+        if iden in [17, 18]:  # true ADS-B message
+            message_queue.append([msg, t])
+
 
 def run() -> str:
     """
@@ -212,7 +212,3 @@ def run() -> str:
             last_return = "Lost connection to SDR. Was it disconnected?"
             return last_return
         read_callback(data)
-
-
-
-

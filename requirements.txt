@@ -6,3 +6,4 @@ pyrtlsdr
 kafka-python
 pymongo
 ruamel.yaml
+numpy

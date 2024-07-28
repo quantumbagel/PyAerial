@@ -1,7 +1,7 @@
 """
 The main program. This contains the activation of most connections and the mainloop.
 
-(c) 2024 quantumbagel
+(c) 2024 Julian Reder (quantumbagel)
 """
 import logging
 import time
@@ -12,10 +12,8 @@ import threading
 from helpers import Datum
 from constants import *
 import importlib
-logging.basicConfig(level=logging.INFO)
 
 
-# https://stackoverflow.com/questions/33311616/find-coordinate-of-the-closest-point-on-polygon-in-shapely
 def load_configuration():
     yaml = ruamel.yaml.YAML()
     with open(CONFIG_FILE) as config:
@@ -28,19 +26,23 @@ configuration = load_configuration()
 
 constants.CONFIGURATION = configuration
 
+logging.basicConfig(level=LOGGING_LEVELS[configuration[CONFIG_GENERAL][CONFIG_GENERAL_LOGGING_LEVEL]])
+
 # Now, import submodules that need configuration to function
 import rosetta
 import calculations
+
 interface = importlib.import_module(INTERFACES_FOLDER
                                     + "." +
                                     CONFIG_GENERAL_PACKET_METHODS[
                                         configuration[CONFIG_GENERAL][CONFIG_GENERAL_PACKET_METHOD]])
 
+
 def initiate_generator():
-    signal_thread = threading.Thread(target=
-                                     interface.run, daemon=True)
+    signal_thread = threading.Thread(target=interface.run, daemon=True)
     signal_thread.start()
     return signal_thread
+
 
 generator_thread = initiate_generator()
 
@@ -52,7 +54,6 @@ vehicle_categories = {2: {1: "Surface Emergency Vehicle", 3: "Surface Service Ve
                       4: {1: "Light (<7000kg)", 2: "Medium 1 (7000 to 34000kg)", 3: "Medium 2 (34000 to 136000kg)",
                           4: "High vortex aircraft", 5: "Heavy (>13600kg)",
                           6: "High performance (>5g) and high speed (>740km/h)", 7: "Rotorcraft (helicopter)"}}
-
 
 main_logger = logging.getLogger("Main")
 
@@ -79,7 +80,8 @@ def classify(msg):
         typecode_category = 1
 
     elif 5 <= typecode <= 8:  # Surface position
-        lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][CONFIG_HOME_LATITUDE], configuration[CONFIG_HOME][CONFIG_HOME_LONGITUDE])
+        lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][CONFIG_HOME_LATITUDE],
+                                              configuration[CONFIG_HOME][CONFIG_HOME_LONGITUDE])
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
         data = {STORE_INFO: {STORE_ICAO: icao},
                 STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_HORIZ_SPEED: speed * 1.852,
@@ -87,7 +89,8 @@ def classify(msg):
         typecode_category = 2
 
     elif 9 <= typecode <= 18 or 20 <= typecode <= 22:  # Airborne position (barometric alt/GNSS alt)
-        lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][CONFIG_HOME_LATITUDE], configuration[CONFIG_HOME][CONFIG_HOME_LONGITUDE])
+        lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][CONFIG_HOME_LATITUDE],
+                                              configuration[CONFIG_HOME][CONFIG_HOME_LONGITUDE])
         alt = pms.adsb.altitude(msg) * 0.3048  # convert feet to meters
         data = {STORE_INFO: {STORE_ICAO: icao}, STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_ALT: alt}}
         if 9 <= typecode <= 18:
@@ -244,9 +247,10 @@ while True:
     calculate()
     interface.message_queue = []  # Reset the messages
     old = check_for_old_planes(time.time())
-    main_logger.info(f"Currently tracking {len(planes.keys())} planes. {get_top_planes(planes, top_planes)}")  # Print all generated plane data
+    # Print all generated plane data
+    main_logger.info(f"Currently tracking {len(planes.keys())} planes. {get_top_planes(planes, top_planes)}")
     process_old_planes(old, saver)
     end_time = time.time()
-    delta = 1/configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time-start_time)
+    delta = 1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time - start_time)
     if delta > 0:
         time.sleep(delta)

@@ -1,6 +1,7 @@
 """
 Constants used by all PyAerial modules
 """
+
 CONFIG_FILE = "config.yaml"
 
 # Data types
@@ -43,6 +44,12 @@ CONFIG_GENERAL_PACKET_METHOD_TRADITIONAL = "python"
 CONFIG_GENERAL_PACKET_METHOD_DUMP1090 = "dump1090"
 CONFIG_GENERAL_TOP_PLANES = "status_message_top_planes"
 CONFIG_GENERAL_HERTZ = "hz"
+CONFIG_GENERAL_LOGGING_LEVEL = "logs"
+
+LOGGING_LEVELS = {"debug": 10,
+                  "info": 20,
+                  "warning": 30,
+                  "error": 40}
 
 INTERFACES_FOLDER = "interfaces"
 CONFIG_GENERAL_PACKET_METHODS = {CONFIG_GENERAL_PACKET_METHOD_TRADITIONAL: "py1090",
@@ -95,4 +102,4 @@ STORAGE_ZONE = "zone"
 
 KAFKA_METHOD_ARGUMENT_SERVER = "server"
 
-CONFIGURATION = {}  # This configuration will be loaded by pyaerial.py on startup.
+CONFIGURATION = {}  # This configuration will be loaded by the main thread on startup

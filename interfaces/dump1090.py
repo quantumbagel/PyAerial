@@ -2,13 +2,11 @@
 Another interface that PyAerial can use that uses dump1090's networking to stream packets
 """
 
-import socket
 import time
 import logging
 import socket
 
 message_queue = []  # Stores (message, time), intercepted by the PyAerial main module
-
 
 
 def run():

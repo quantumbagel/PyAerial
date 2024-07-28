@@ -10,8 +10,8 @@ class Datum:
     Store a value/time pair.
     """
     def __init__(self, value, timestamp):
-        self.value = value
-        self.time = timestamp
+        self.value: float = value
+        self.time: float = timestamp
 
     def __str__(self):
         return f"Datum({self.value}, {self.time})"
@@ -65,5 +65,3 @@ class ImprovedThread(threading.Thread):
         """
         super().join(*args, **kwargs)
         return self.result
-
-
