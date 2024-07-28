@@ -159,7 +159,7 @@ def patch_append(plane: dict, category: str, message_type: str, message: helpers
 
 
 def get_latest(information_type: str, information_datum: str, plane_data: dict, after_time: float = None) \
-        -> helpers.Datum:
+        -> helpers.Datum | None:
     """
     Get the latest packet in a certain type/datum combination
 
@@ -249,7 +249,8 @@ def calculate_plane(plane: dict) -> None:
         else:
             old_packet = len(latitude_data) - backdate_packets  # Find the indice of the old packet
             previous_lat = latitude_data[old_packet]
-            previous_lon = longitude_data[old_packet]
+            # Get the most accurate data/time pairing
+            previous_lon = get_latest(STORE_RECV_DATA, STORE_LAT, plane, previous_lat.time)
         previous = [previous_lat.value, previous_lon.value]  # Previous lat/long
         previous_time = previous_lat.time
         current_lat = latitude_data[-1]
