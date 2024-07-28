@@ -65,3 +65,5 @@ class ImprovedThread(threading.Thread):
         """
         super().join(*args, **kwargs)
         return self.result
+
+
