@@ -35,6 +35,7 @@ interface = importlib.import_module(INTERFACES_FOLDER
                                     + "." +
                                     CONFIG_GENERAL_PACKET_METHODS[
                                         configuration[CONFIG_GENERAL][CONFIG_GENERAL_PACKET_METHOD]])
+
 def initiate_generator():
     signal_thread = threading.Thread(target=
                                      interface.run, daemon=True)

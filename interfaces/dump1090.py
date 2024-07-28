@@ -5,8 +5,10 @@ Another interface that PyAerial can use that uses dump1090's networking to strea
 import socket
 import time
 import logging
+import socket
 
-message_queue = []
+message_queue = []  # Stores (message, time), intercepted by the PyAerial main module
+
 
 
 def run():
@@ -18,6 +20,10 @@ def run():
         log.fatal("Failed to connect to TCP stream")
         raise e
     while True:
-        data = client.recv(1024).decode('utf-8')[1:-2]
+        try:
+            data = client.recv(1024).decode('utf-8')[1:-2]
+        except ConnectionResetError:
+            log.fatal("Connection reset by peer!")
+            continue
         for item in data.split("\n"):
             message_queue.append([item.replace("*", "").replace(";", ""), time.time()])

@@ -28,7 +28,7 @@ preamble = [1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0]  # Required beginnin
 th_amp_diff = 0.8  # signal amplitude threshold difference between 0 and 1 bit
 signal_buffer = []
 noise_floor = 1e6
-message_queue = []
+message_queue = []  # Stores (message, time), intercepted by the PyAerial main module
 exception_queue = None
 last_return = ""
 

@@ -188,7 +188,8 @@ class MongoSaver(Saver):
                                                        for i in data[STORE_INTERNAL][STORE_PACKET_TYPE]}
             database = self.database.get_database(icao.lower())  # Database is plane ID
             # Truncate the flight start time for use, so it's cleaner
-            collection = database.get_collection(str(int(data[STORE_INTERNAL][STORE_FIRST_PACKET])))
+            collection = database.get_collection(str(int(data[STORE_INTERNAL][STORE_FIRST_PACKET]))
+                                                 + "-" + zone + "-" + level)
 
             for data_type in [STORE_RECV_DATA, STORE_CALC_DATA]:  # Add data to database.
                 # This is received and calculated data
@@ -205,5 +206,5 @@ class MongoSaver(Saver):
             collection.insert_one(document)
 
         # Reset cache
-        self.logger.info(f"done saving {len(self._cache)} planes.")
+        self.logger.info(f"done saving {len(self._cache)} eligible flight-levels.")
         self._cache = {}
