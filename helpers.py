@@ -1,8 +1,9 @@
 """
-Helper classes that other PyAerial modules use.
+Helper classes and functions that other PyAerial modules use.
 """
 import sys
 import threading
+import operator
 
 
 class Datum:

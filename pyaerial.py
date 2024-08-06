@@ -13,7 +13,7 @@ from helpers import Datum
 from constants import *
 import importlib
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 
 def load_configuration():
@@ -26,9 +26,10 @@ def load_configuration():
 
 configuration = load_configuration()
 
-constants.CONFIGURATION = configuration
 
 logging.basicConfig(level=LOGGING_LEVELS[configuration[CONFIG_GENERAL][CONFIG_GENERAL_LOGGING_LEVEL]])
+
+constants.CONFIGURATION = configuration
 
 # Now, import submodules that need configuration to function
 import rosetta

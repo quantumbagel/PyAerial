@@ -304,9 +304,10 @@ def calculate_plane(plane: dict) -> None:
         geofence_etas = {}
         for geofence_name in zones:
             geofence = zones[geofence_name]
+
+            # Figure out the category that requires the most scanning within the zone.
             max_time = max([geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_TIME]
                             for level in geofence[CONFIG_ZONES_LEVELS]])
-            # Figure out the category that requires the most scanning within the zone.
             eta = time_to_enter_geofence(current, final_heading, final_speed, geofence[CONFIG_ZONES_COORDINATES],
                                          max_time)  # How long will it take?
             geofence_etas[geofence_name] = eta
@@ -327,7 +328,10 @@ def calculate_plane(plane: dict) -> None:
                                   ALERT_CAT_REASON: reason, ALERT_CAT_ZONE: geofence_name,
                                   ALERT_CAT_ETA: eta}
 
-                category = categories[geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]]
+
+                category = geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]
+                if type(category) is str:  # Contain reference or actual category data?
+                    category = categories[geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]]
 
                 method_arguments = category[CONFIG_CAT_ALERT_ARGUMENTS]\
                     if CONFIG_CAT_ALERT_ARGUMENTS in category.keys() else None

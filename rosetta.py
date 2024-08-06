@@ -101,6 +101,8 @@ class Saver:
             levels = CONFIGURATION[CONFIG_ZONES][zone][CONFIG_ZONES_LEVELS]
             for level in levels:
                 category = levels[level][CONFIG_ZONES_LEVELS_CATEGORY]
+                if type(category) == str:
+                    category = CONFIGURATION[CONFIG_CATEGORIES][category]
                 time = levels[level][CONFIG_ZONES_LEVELS_TIME]
                 minimum_eta = math.inf
 
@@ -121,12 +123,10 @@ class Saver:
                         minimum_eta = eta
                 if minimum_eta <= time:  # Should we cache this level of this plane?
                     filtered_received_information = filter_packets(received_information,
-                                                                   CONFIGURATION[CONFIG_CATEGORIES][category][
-                                                                       CONFIG_CAT_SAVE]
+                                                                   category[CONFIG_CAT_SAVE]
                                                                    [CONFIG_CAT_SAVE_TELEMETRY_METHOD])
                     filtered_calculated_information = filter_packets(calculated_information,
-                                                                     CONFIGURATION[CONFIG_CATEGORIES][category][
-                                                                         CONFIG_CAT_SAVE]
+                                                                     category[CONFIG_CAT_SAVE]
                                                                      [CONFIG_CAT_SAVE_CALCULATED_METHOD])
 
                     self.add_plane_to_cache(plane[STORE_INFO][STORE_ICAO], zone, level,
