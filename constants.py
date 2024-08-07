@@ -1,6 +1,7 @@
 """
 Constants used by all PyAerial modules
 """
+import operator
 
 CONFIG_FILE = "config.yaml"
 
@@ -64,7 +65,7 @@ CONFIG_HOME_LONGITUDE = "longitude"
 CONFIG_ZONES_COORDINATES = "coordinates"
 CONFIG_ZONES_LEVELS = "levels"
 CONFIG_ZONES_LEVELS_CATEGORY = "category"
-CONFIG_ZONES_LEVELS_TIME = "eta"
+CONFIG_ZONES_LEVELS_REQUIREMENTS = "requirements"
 
 # Categories
 CONFIG_CAT_METHOD = "method"
@@ -74,18 +75,27 @@ CONFIG_CAT_SAVE_CALCULATED_METHOD = "calculated_method"
 
 CONFIG_CAT_SAVE_METHOD_TYPES = [CONFIG_CAT_SAVE_TELEMETRY_METHOD, CONFIG_CAT_SAVE_CALCULATED_METHOD]
 
+# Alert messaging
+
+ALERT_CAT_TYPE = "type"
+ALERT_CAT_REASON = "reason"
+ALERT_CAT_ZONE = "zone"
+ALERT_CAT_PAYLOAD = "payload"
+ALERT_CAT_ETA = "eta"
+
 # Components
 
-CONFIG_COMP_TYPES = [STORE_LAT, STORE_LONG, STORE_VERT_SPEED, STORE_HORIZ_SPEED, STORE_HEADING, STORE_DISTANCE,
-                     CONFIG_ZONES_LEVELS_TIME]  # TODO: Add "seen" as a data type
+CONFIG_COMP_TYPES = [STORE_LAT, STORE_LONG, STORE_ALT, STORE_VERT_SPEED, STORE_HORIZ_SPEED, STORE_HEADING, STORE_DISTANCE,
+                     ALERT_CAT_ETA]  # TODO: Add "seen" as a data type
 
 # CTYPE = comparison type
 CONFIG_COMP_CTYPE_MINIMUM = "minimum"
-CONFIG_COMP_CTYPE_MAXIMUM = "minimum"
+CONFIG_COMP_CTYPE_MAXIMUM = "maximum"
 CONFIG_COMP_CTYPES = {CONFIG_COMP_CTYPE_MAXIMUM: [STORE_LAT, STORE_LONG, STORE_VERT_SPEED, STORE_HORIZ_SPEED,
-                                                  STORE_HEADING, STORE_DISTANCE, CONFIG_ZONES_LEVELS_TIME],
+                                                  STORE_HEADING, STORE_DISTANCE, ALERT_CAT_ETA],
                       CONFIG_COMP_CTYPE_MINIMUM: [STORE_LAT, STORE_LONG, STORE_VERT_SPEED, STORE_HORIZ_SPEED,
-                                                  STORE_HEADING, STORE_DISTANCE, CONFIG_ZONES_LEVELS_TIME]}
+                                                  STORE_HEADING, STORE_DISTANCE, ALERT_CAT_ETA]}
+CONFIG_COMP_FUNCTIONS = {CONFIG_COMP_CTYPE_MAXIMUM: operator.le, CONFIG_COMP_CTYPE_MINIMUM: operator.ge}
 
 
 # Alert methods
@@ -106,15 +116,6 @@ CONFIG_CAT_SAVE_METHODS = [CONFIG_CAT_SAVE_METHOD_DECIMATE,
                            CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE,
                            CONFIG_CAT_SAVE_METHOD_ALL,
                            CONFIG_CAT_SAVE_METHOD_NONE]
-
-
-# Alert messaging
-
-ALERT_CAT_TYPE = "type"
-ALERT_CAT_REASON = "reason"
-ALERT_CAT_ZONE = "zone"
-ALERT_CAT_PAYLOAD = "payload"
-ALERT_CAT_ETA = "eta"
 
 # Database
 

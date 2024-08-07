@@ -12,6 +12,13 @@ home:
   latitude: 36.6810752
   longitude: -78.8758528
 
+components:  # TODO: components
+  easy:
+    eta:
+      maximum: 120
+    altitude:
+      maximum: 1000
+
 zones:
   main:  # smaller area randomly picked out for testing
     coordinates:
@@ -29,10 +36,10 @@ zones:
     levels:
       warn:
         category: really_high_priority
-        time: 45
+        requirements: easy
       alert:
         category: really_high_priority
-        time: 0
+        requirements: easy
 
   alternate: # Most of raleigh area
     coordinates:
@@ -50,16 +57,16 @@ zones:
       [36.325467, -78.929852],
       [36.343168, -79.259442]]
     levels:
-      amongus:
+      not_inline_test:
         category: warn
-        time: 120
-      sussongus:
+        requirements: easy
+      inline_test:
         category:
           method: print
           save:
             telemetry_method: all
             calculated_method: all
-        time: 0
+        requirements: easy
 
 categories:
   really_high_priority:

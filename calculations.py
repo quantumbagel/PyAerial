@@ -1,16 +1,19 @@
 """
 Performs the data analysis / aggregation for PyAerial.
 """
+import ast
 import json
 import logging
 import math
+import operator
 import threading
 
 from geopy.distance import geodesic
 import kafka
 from kafka.errors import NoBrokersAvailable
 import requests
-from shapely import Polygon, Point
+from shapely import Polygon, Point, LineString
+from shapely.ops import nearest_points
 
 import constants
 import helpers
@@ -59,34 +62,26 @@ def time_to_enter_geofence(plane_position: list[float],
     :return: the time in seconds until the plane arrives, or math.inf if it doesn't
     """
     # Create a shapely Polygon object from the geofence coordinates
+
     geofence_polygon = Polygon(geofence_coordinates)
 
     # Check if the current position is inside the geofence
     if geofence_polygon.contains(Point(plane_position)):
         return 0  # The plane is already inside the geofence
 
-    # Check if we are "close enough" in degrees to the geofence. This is an approximation
-    verified = False
-    for point in geofence_polygon.exterior.coords:
-        general_direction = calculate_heading(plane_position, point)
-        if abs(heading - general_direction) < configuration['general']['point_accuracy_threshold']:
-            verified = True
-
-    if verified is False:  # We aren't remotely close, so we failed
+    distance_approx = max_time * speed / 3600
+    destination = (
+        geodesic(kilometers=distance_approx)
+        .destination(plane_position, heading))  # Where will the plane be in max_time
+    # The line through the maximum possible distance
+    line = LineString([Point(plane_position), Point(destination.latitude, destination.longitude)])
+    # Where are the intersection points?
+    intersect: LineString = line.intersection(geofence_polygon)
+    if not len(intersect.coords):  # No intersection
         return math.inf
-
-    time_step = 0.1
-    current_time = time_step
-    while True:
-        if current_time > max_time:  # We're past max_time, so return infinity
-            return math.inf
-        destination = (
-            geodesic(kilometers=time_step * speed / 3600)
-            .destination(plane_position, heading))  # Where will we be in time_step seconds?
-        point = Point(destination.latitude, destination.longitude)
-        if geofence_polygon.contains(point):  # Are we there?
-            return current_time  # Yes, return
-        current_time += time_step  # No, continue time
+    close = list(intersect.coords)[0]  # Get the close one
+    distance = geodesic(plane_position, close)  # Calculate the net distance
+    return distance.km / speed * 3600  # How long until we get there?
 
 
 def calculate_heading(previous, current):
@@ -306,35 +301,75 @@ def calculate_plane(plane: dict) -> None:
             geofence = zones[geofence_name]
 
             # Figure out the category that requires the most scanning within the zone.
-            max_time = max([geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_TIME]
-                            for level in geofence[CONFIG_ZONES_LEVELS]])
             eta = time_to_enter_geofence(current, final_heading, final_speed, geofence[CONFIG_ZONES_COORDINATES],
-                                         max_time)  # How long will it take?
+                                         10000)  # How long will it take?
+            # max_time's number doesn't technically matter, as long as it's large. This is because of the Shapely
+            # cartesian algorithm
             geofence_etas[geofence_name] = eta
-            # Determine the levels within the zone that qualify
 
-            valid_levels = [level for level in geofence[CONFIG_ZONES_LEVELS]
-                            if geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_TIME] >= eta]
+            # Determine the levels within the zone that qualify
+            valid_levels = []
+            for level in geofence[CONFIG_ZONES_LEVELS]:
+                component_failed = False
+                requirements = geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_REQUIREMENTS]
+                component_names = [node.id for node in ast.walk(ast.parse(requirements))
+                                   if type(node) is ast.Name]
+                components = {}
+                # Scan through and evaluate each component within the requirement
+                for component_name in component_names:
+                    component = configuration[CONFIG_COMPONENTS][component_name]  # The data within the component
+                    for data_type in component.keys():  # For each data type, find the piece of data that's relevant
+                        relevant_data = None
+
+                        if data_type in [STORE_LAT, STORE_LONG, STORE_ALT, STORE_VERT_SPEED]:  # Received data
+                            relevant_data = get_latest(STORE_RECV_DATA, data_type, plane).value
+                        elif data_type in [STORE_HORIZ_SPEED, STORE_HEADING]:  # Calculated data
+                            relevant_data = get_latest(STORE_CALC_DATA, data_type, plane).value
+                        elif data_type == ALERT_CAT_ETA:  # ETA
+                            relevant_data = eta
+                        elif data_type == STORE_DISTANCE:  # Distance
+                            points = nearest_points(Polygon(geofence[CONFIG_ZONES_COORDINATES]), Point(current))
+                            relevant_data = geodesic((points[0].latitude, points[0].longitude), current)
+
+                        if relevant_data is None:  # If there isn't valid data, fail the component
+                            component_failed = True
+                            break
+
+                        for comparison in component[data_type].keys():
+                            # Has our component failed?
+                            if not CONFIG_COMP_FUNCTIONS[comparison](relevant_data, component[data_type][comparison]):
+                                component_failed = True
+                                break
+                        if component_failed:
+                            break
+
+                    components[component_name] = not component_failed  # Did the component succeed?
+
+                if eval(requirements, components):  # Evaluate
+                    valid_levels.append(level)
+
             payload = {STORE_ALT: get_latest(STORE_RECV_DATA, STORE_ALT, plane).value,
                        STORE_LAT: get_latest(STORE_RECV_DATA, STORE_LAT, plane).value,
                        STORE_LONG: get_latest(STORE_RECV_DATA, STORE_LONG, plane).value}
 
             for level in valid_levels:  # Send alert messages to each of the categories that qualify
                 reason = {CONFIG_ZONES: geofence_etas, CONFIG_ZONES_LEVELS_CATEGORY:
-                          geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]}
+                    geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]}
 
                 meta_arguments = {ALERT_CAT_TYPE: level, STORE_ICAO: plane[STORE_INFO][STORE_ICAO],
                                   STORE_CALLSIGN: callsign,
                                   ALERT_CAT_REASON: reason, ALERT_CAT_ZONE: geofence_name,
                                   ALERT_CAT_ETA: eta}
 
-
                 category = geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]
                 if type(category) is str:  # Contain reference or actual category data?
                     category = categories[geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]]
 
-                method_arguments = category[CONFIG_CAT_ALERT_ARGUMENTS]\
+                # Compile method_arguments if we need them
+                method_arguments = category[CONFIG_CAT_ALERT_ARGUMENTS] \
                     if CONFIG_CAT_ALERT_ARGUMENTS in category.keys() else None
+
+                # Actually execute the method
                 execute_method(method=category[CONFIG_CAT_METHOD],
                                meta_arguments=meta_arguments,
                                method_arguments=method_arguments,
