@@ -103,7 +103,6 @@ class Saver:
                 category = levels[level][CONFIG_ZONES_LEVELS_CATEGORY]
                 if type(category) == str:
                     category = CONFIGURATION[CONFIG_CATEGORIES][category]
-                time = levels[level][CONFIG_ZONES_LEVELS_TIME]
                 minimum_eta = math.inf
 
                 for i, latitude_datum in enumerate(received_information[STORE_LAT]):
@@ -118,10 +117,10 @@ class Saver:
                                                               latest_speed.value,
                                                               CONFIGURATION[CONFIG_ZONES][zone][
                                                                   CONFIG_ZONES_COORDINATES],
-                                                              time)
+                                                              100000)
                     if eta < minimum_eta:
                         minimum_eta = eta
-                if minimum_eta <= time:  # Should we cache this level of this plane?
+                if minimum_eta <= 100000:  # Should we cache this level of this plane?
                     filtered_received_information = filter_packets(received_information,
                                                                    category[CONFIG_CAT_SAVE]
                                                                    [CONFIG_CAT_SAVE_TELEMETRY_METHOD])
