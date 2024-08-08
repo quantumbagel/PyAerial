@@ -309,13 +309,13 @@ def calculate_plane(plane: dict) -> None:
             # Determine the levels within the zone that qualify
             valid_levels = []
             for level in geofence[CONFIG_ZONES_LEVELS]:
-                component_failed = False
                 requirements = geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_REQUIREMENTS]
                 component_names = [node.id for node in ast.walk(ast.parse(requirements))
                                    if type(node) is ast.Name]
                 components = {}
                 # Scan through and evaluate each component within the requirement
                 for component_name in component_names:
+                    component_failed = False
                     component = configuration[CONFIG_COMPONENTS][component_name]  # The data within the component
                     for data_type in component.keys():  # For each data type, find the piece of data that's relevant
                         relevant_data = None

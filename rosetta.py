@@ -1,12 +1,15 @@
 """
 Rosetta is PyAerial's module for filtering and saving to the database.
 """
-
+import ast
 import logging
 import math
 
 import pymongo
+from geopy.distance import geodesic
 from pymongo.errors import NetworkTimeout, ConnectionFailure, ServerSelectionTimeoutError, AutoReconnect
+from shapely import Polygon, Point
+from shapely.ops import nearest_points
 
 import calculations
 from constants import *
@@ -104,8 +107,9 @@ class Saver:
                 if type(category) is str:
                     category = CONFIGURATION[CONFIG_CATEGORIES][category]
                 minimum_eta = math.inf
-
+                total_valid_ticks = 0
                 for i, latitude_datum in enumerate(received_information[STORE_LAT]):
+
                     longitude_datum = calculations.get_latest(STORE_RECV_DATA, STORE_LONG, plane,
                                                               latitude_datum.time)
                     latest_direction = calculations.get_latest(STORE_CALC_DATA, STORE_HEADING, plane,
@@ -120,7 +124,42 @@ class Saver:
                                                               100000)
                     if eta < minimum_eta:
                         minimum_eta = eta
-                if minimum_eta <= 100000:  # Should we cache this level of this plane?
+                    requirements = levels[level][CONFIG_ZONES_LEVELS_REQUIREMENTS]
+                    component_names = [node.id for node in ast.walk(ast.parse(requirements))
+                                       if type(node) is ast.Name]
+                    components = {}
+                    for component_name in component_names:
+                        component_failed = False
+                        component = CONFIGURATION[CONFIG_COMPONENTS][component_name]  # The data within the component
+                        for data_type in component.keys():  # For each data type, find the piece of data that's relevant
+                            relevant_data = None
+
+                            if data_type in [STORE_LAT, STORE_LONG, STORE_ALT, STORE_VERT_SPEED]:  # Received data
+                                relevant_data = calculations.get_latest(STORE_RECV_DATA, data_type, plane).value
+                            elif data_type in [STORE_HORIZ_SPEED, STORE_HEADING]:  # Calculated data
+                                relevant_data = calculations.get_latest(STORE_CALC_DATA, data_type, plane).value
+                            elif data_type == ALERT_CAT_ETA:  # ETA
+                                relevant_data = eta
+                            elif data_type == STORE_DISTANCE:  # Distance
+                                points = nearest_points(Polygon(zone[CONFIG_ZONES_COORDINATES]),
+                                                        Point([latitude_datum.value, longitude_datum.value]))
+                                relevant_data = geodesic((points[0].latitude, points[0].longitude),
+                                                         [latitude_datum.value, longitude_datum.value])
+
+                            if relevant_data is None:  # If there isn't valid data, fail the component
+                                component_failed = True
+                                break
+                            for comparison in component[data_type].keys():
+                                # Has our component failed?
+                                if not CONFIG_COMP_FUNCTIONS[comparison](relevant_data, component[data_type][comparison]):
+                                    component_failed = True
+                                    break
+                            if component_failed:
+                                break
+                        components[component_name] = not component_failed  # Did the component succeed?
+                    if eval(requirements, components):  # Evaluate
+                        total_valid_ticks += 1
+                if total_valid_ticks:  # Should we cache this level of this plane?
                     filtered_received_information = filter_packets(received_information,
                                                                    category[CONFIG_CAT_SAVE]
                                                                    [CONFIG_CAT_SAVE_TELEMETRY_METHOD])
