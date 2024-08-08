@@ -339,6 +339,7 @@ def calculate_plane(plane: dict) -> None:
                             if not CONFIG_COMP_FUNCTIONS[comparison](relevant_data, component[data_type][comparison]):
                                 component_failed = True
                                 break
+
                         if component_failed:
                             break
 

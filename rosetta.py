@@ -91,7 +91,8 @@ class Saver:
         calculated_information = plane[STORE_CALC_DATA]
         received_information = plane[STORE_RECV_DATA]
         internal_information = plane[STORE_INTERNAL]
-
+        first_time = plane[STORE_INTERNAL][STORE_FIRST_PACKET]
+        last_time = plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET]
         # Ensure importance
         if STORE_LAT not in received_information.keys() or STORE_HEADING not in calculated_information.keys():
             # Not important enough LMAO
@@ -108,14 +109,16 @@ class Saver:
                     category = CONFIGURATION[CONFIG_CATEGORIES][category]
                 minimum_eta = math.inf
                 total_valid_ticks = 0
-                for i, latitude_datum in enumerate(received_information[STORE_LAT]):
 
+                for time in range(int(first_time + 1), int(last_time) + 1):
+                    latitude_datum = calculations.get_latest(STORE_RECV_DATA, STORE_LONG, plane,
+                                                             time)
                     longitude_datum = calculations.get_latest(STORE_RECV_DATA, STORE_LONG, plane,
-                                                              latitude_datum.time)
+                                                              time)
                     latest_direction = calculations.get_latest(STORE_CALC_DATA, STORE_HEADING, plane,
-                                                               latitude_datum.time)
+                                                               time)
                     latest_speed = calculations.get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane,
-                                                           latitude_datum.time)
+                                                           time)
                     eta = calculations.time_to_enter_geofence([latitude_datum.value, longitude_datum.value],
                                                               latest_direction.value,
                                                               latest_speed.value,
@@ -135,9 +138,9 @@ class Saver:
                             relevant_data = None
 
                             if data_type in [STORE_LAT, STORE_LONG, STORE_ALT, STORE_VERT_SPEED]:  # Received data
-                                relevant_data = calculations.get_latest(STORE_RECV_DATA, data_type, plane).value
+                                relevant_data = calculations.get_latest(STORE_RECV_DATA, data_type, plane, time).value
                             elif data_type in [STORE_HORIZ_SPEED, STORE_HEADING]:  # Calculated data
-                                relevant_data = calculations.get_latest(STORE_CALC_DATA, data_type, plane).value
+                                relevant_data = calculations.get_latest(STORE_CALC_DATA, data_type, plane, time).value
                             elif data_type == ALERT_CAT_ETA:  # ETA
                                 relevant_data = eta
                             elif data_type == STORE_DISTANCE:  # Distance
@@ -151,15 +154,23 @@ class Saver:
                                 break
                             for comparison in component[data_type].keys():
                                 # Has our component failed?
-                                if not CONFIG_COMP_FUNCTIONS[comparison](relevant_data, component[data_type][comparison]):
+                                if not CONFIG_COMP_FUNCTIONS[comparison](relevant_data,
+                                                                         component[data_type][comparison]):
+                                    print("Failed!", relevant_data, component[data_type][comparison], data_type,
+                                          zone, level, latitude_datum.value, longitude_datum.value, time)
                                     component_failed = True
                                     break
+                                print("Success!", relevant_data, component[data_type][comparison], data_type,
+                                      zone,
+                                      level, latitude_datum.value, longitude_datum.value)
                             if component_failed:
                                 break
                         components[component_name] = not component_failed  # Did the component succeed?
                     if eval(requirements, components):  # Evaluate
                         total_valid_ticks += 1
-                if total_valid_ticks:  # Should we cache this level of this plane?
+                print(plane[STORE_INFO][STORE_ICAO], total_valid_ticks)
+                if total_valid_ticks >= levels[level][CONFIG_ZONES_LEVELS_SECONDS]:
+                    # Should we cache this level of this plane?
                     filtered_received_information = filter_packets(received_information,
                                                                    category[CONFIG_CAT_SAVE]
                                                                    [CONFIG_CAT_SAVE_TELEMETRY_METHOD])
