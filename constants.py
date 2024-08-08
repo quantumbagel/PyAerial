@@ -29,6 +29,18 @@ STORE_PACKET_TYPE = "packet_type"
 STORE_FIRST_PACKET = "first_packet"
 STORE_CALLSIGN = "callsign"
 STORE_PLANE_CATEGORY = "category"
+
+STORE_PLANE_CATEGORY_CONVERSION = {2: {1: "Surface Emergency Vehicle", 3: "Surface Service Vehicle",
+                                       4: "Ground Obstruction (4)", 5: "Ground Obstruction (5)",
+                                       6: "Ground Obstruction (6)", 7: "Ground Obstruction (7)"},
+                                   3: {1: "Glider/Sailplane", 2: "Lighter-than-air", 3: "Parachutist/Skydiver",
+                                       4: "Ultralight/Hang-glider/paraglider", 6: "UAV (unmanned aerial vehicle)",
+                                       7: "Space/transatmospheric vehicle"},
+                                   4: {1: "Light (<7000kg)", 2: "Medium 1 (7000 to 34000kg)",
+                                       3: "Medium 2 (34000 to 136000kg)",
+                                       4: "High vortex aircraft", 5: "Heavy (>13600kg)",
+                                       6: "High performance (>5g) and high speed (>740km/h)",
+                                       7: "Rotorcraft (helicopter)"}}
 # Configuration main categories
 CONFIG_ZONES = "zones"
 CONFIG_CATEGORIES = "categories"

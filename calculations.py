@@ -5,7 +5,6 @@ import ast
 import json
 import logging
 import math
-import operator
 import threading
 
 from geopy.distance import geodesic
@@ -354,7 +353,7 @@ def calculate_plane(plane: dict) -> None:
 
             for level in valid_levels:  # Send alert messages to each of the categories that qualify
                 reason = {CONFIG_ZONES: geofence_etas, CONFIG_ZONES_LEVELS_CATEGORY:
-                    geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]}
+                          geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]}
 
                 meta_arguments = {ALERT_CAT_TYPE: level, STORE_ICAO: plane[STORE_INFO][STORE_ICAO],
                                   STORE_CALLSIGN: callsign,

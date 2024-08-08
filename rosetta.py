@@ -101,7 +101,7 @@ class Saver:
             levels = CONFIGURATION[CONFIG_ZONES][zone][CONFIG_ZONES_LEVELS]
             for level in levels:
                 category = levels[level][CONFIG_ZONES_LEVELS_CATEGORY]
-                if type(category) == str:
+                if type(category) is str:
                     category = CONFIGURATION[CONFIG_CATEGORIES][category]
                 minimum_eta = math.inf
 

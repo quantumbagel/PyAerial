@@ -13,69 +13,66 @@ from helpers import Datum
 from constants import *
 import importlib
 
-logging.basicConfig(level=logging.DEBUG)
 
-
-def load_configuration():
+def load_configuration() -> dict:
+    """
+    Load the configuration from config.yaml (or constants.CONFIG_FILE).
+    :return: the data from the configuration file
+    Will crash if file does not exist. This is intentional
+    """
     yaml = ruamel.yaml.YAML()
     with open(CONFIG_FILE) as config:
         data = yaml.load(config)
-    logging.info(f"Loaded configuration from {CONFIG_FILE}.")
     return data
 
 
-configuration = load_configuration()
-
+configuration = load_configuration()  # Load the configuration
 
 logging.basicConfig(level=LOGGING_LEVELS[configuration[CONFIG_GENERAL][CONFIG_GENERAL_LOGGING_LEVEL]])
 
-constants.CONFIGURATION = configuration
+constants.CONFIGURATION = configuration  # Share configuration with constants.py
 
-# Now, import submodules that need configuration to function
+# Now, import submodules that need use constants.py's configuration variable to function
 import rosetta
 import calculations
 
-interface = importlib.import_module(INTERFACES_FOLDER
+interface = importlib.import_module(INTERFACES_FOLDER  # Import the interface defined in the configuration.
                                     + "." +
                                     CONFIG_GENERAL_PACKET_METHODS[
                                         configuration[CONFIG_GENERAL][CONFIG_GENERAL_PACKET_METHOD]])
 
 
-def initiate_generator():
-    signal_thread = threading.Thread(target=interface.run, daemon=True)
+def initiate_generator() -> threading.Thread:
+    """
+    Initiate the generator based on the interface module.
+    :return: the generator thread (threading.Thread) after it has been started.
+    """
+    signal_thread = threading.Thread(target=interface.run, daemon=True)  # Daemon so main thread can take it down
     signal_thread.start()
     return signal_thread
 
 
-generator_thread = initiate_generator()
-
-vehicle_categories = {2: {1: "Surface Emergency Vehicle", 3: "Surface Service Vehicle", 4: "Ground Obstruction (4)",
-                          5: "Ground Obstruction (5)", 6: "Ground Obstruction (6)", 7: "Ground Obstruction (7)"},
-                      3: {1: "Glider/Sailplane", 2: "Lighter-than-air", 3: "Parachutist/Skydiver",
-                          4: "Ultralight/Hang-glider/paraglider", 6: "UAV (unmanned aerial vehicle)",
-                          7: "Space/transatmospheric vehicle"},
-                      4: {1: "Light (<7000kg)", 2: "Medium 1 (7000 to 34000kg)", 3: "Medium 2 (34000 to 136000kg)",
-                          4: "High vortex aircraft", 5: "Heavy (>13600kg)",
-                          6: "High performance (>5g) and high speed (>740km/h)", 7: "Rotorcraft (helicopter)"}}
-
-main_logger = logging.getLogger("Main")
+generator_thread = initiate_generator()  # Start the signal generator
 
 
-def classify(msg):
+main_logger = logging.getLogger("Main")  # Main program logger
+
+
+def classify(msg) -> (dict, int):
     """
     Classify an ADS-B message
     ASSUMES downlink=17 or 18
     :param msg: the message to classify
     :return: some data ig
     """
-    typecode = pms.typecode(msg)
-    log = main_logger.getChild("classify")
-    if typecode == -1:
-        log.debug(f"Invalid ADS-B message, ignoring. {msg}. It is likely to be TC 0, not implemented yet.")
+    typecode = pms.typecode(msg)  # Get the typecode of the message
+    log = main_logger.getChild("classify")  # Logger
+    if typecode == -1:  # Message that pms can't handle yet, or message that dump1090 can that pms can't :/
         return
     data = None
-    icao = pms.icao(msg)
+    icao = pms.icao(msg)  # ICAO of message (every message shares this)
     typecode_category = "Unknown"
+
     if 1 <= typecode <= 4:  # Aircraft identification
         ca = pms.adsb.category(msg)
         data = {STORE_INFO: {STORE_ICAO: icao, STORE_CALLSIGN: pms.adsb.callsign(msg).replace("_", ""),
@@ -96,16 +93,18 @@ def classify(msg):
                                               configuration[CONFIG_HOME][CONFIG_HOME_LONGITUDE])
         alt = pms.adsb.altitude(msg) * 0.3048  # convert feet to meters
         data = {STORE_INFO: {STORE_ICAO: icao}, STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_ALT: alt}}
-        if 9 <= typecode <= 18:
+        if 9 <= typecode <= 18:  # 9-18 is barometric
             typecode_category = 3
-        else:
+        else:  # Others are GNSS
             typecode_category = 4
+
     elif typecode == 19:  # Airborne velocities
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
         data = {STORE_INFO: {STORE_ICAO: icao},
                 STORE_RECV_DATA: {STORE_HORIZ_SPEED: speed * 1.852, STORE_HEADING: angle,
                                   STORE_VERT_SPEED: vert_rate * 0.00508}}
         typecode_category = 5
+
     elif typecode == 28:  # Aircraft status
         return
     elif typecode == 29:  # Target state and status information
@@ -114,17 +113,25 @@ def classify(msg):
         return  # Not going to implement this type of message
     if data is not None:
         log.debug(f"Collected ADS-B message from typecode {typecode}: {data}")
-        data.update({STORE_CALC_DATA: {}})
+        data.update({STORE_CALC_DATA: {}})  # Ensure we have calculated data stub
     else:
-        print("wut", typecode, msg)
+        log.error(f"Received confusing typecode {typecode} (msg={msg})")
     return data, typecode_category
 
 
 def check_should_be_added(packets, new_packet):
+    """
+    A really simple function to determine if a new packet shares the value of the one directly preceding it.
+    :param packets: ALL of the packets
+    :param new_packet: the new packet we are planning to add
+    """
     return packets[-1].value != new_packet.value
 
 
-def check_generator_thread():
+def check_generator_thread() -> None:
+    """
+    Make sure our generator is still running. Will call initiate_generator() if not.
+    """
     log = main_logger.getChild("check_generator_thread")
     global generator_thread
     if not generator_thread.is_alive():
@@ -134,21 +141,25 @@ def check_generator_thread():
         generator_thread = initiate_generator()
 
 
-def process_messages(msgs):
+def process_messages(msgs) -> int:
+    """
+    Process every raw ADS-B message. Updates the planes variable.
+    :return: the messages processed
+    """
     global planes
     processed = 0
     for message in msgs:
         try:
-            message_data, typecode_cat = classify(message[0])
-        except TypeError:
+            message_data, typecode_cat = classify(message[0])  # Get the data out from the message
+        except TypeError:  # If it failed somehow, just continue
             continue
         processed += 1
-        icao = message_data[STORE_INFO][STORE_ICAO]
+        icao = message_data[STORE_INFO][STORE_ICAO]  # Get the ICAO
         if icao not in planes.keys():  # Do we have this plane in our current tracker?
             planes[icao] = message_data  # We don't, so just format the data and insert it
             for item in planes[icao][STORE_RECV_DATA]:
                 c_item = planes[icao][STORE_RECV_DATA][item]
-                planes[icao][STORE_RECV_DATA][item] = [Datum(c_item, message[1])]
+                planes[icao][STORE_RECV_DATA][item] = [Datum(c_item, message[1])]  # Save the received data as Datum
         else:  # We do, so find and replace (or update) data
             current_info = planes[icao][STORE_INFO]  # Current plane info
             my_info = message_data[STORE_INFO]
@@ -169,10 +180,11 @@ def process_messages(msgs):
                         current_data[datum].append(new_packet)
 
         if STORE_INTERNAL not in planes[icao].keys():  # Update internal metrics
+            # Base internal information for when we don't have it
             planes[icao].update({STORE_INTERNAL:
                                 {STORE_MOST_RECENT_PACKET: message[1], STORE_TOTAL_PACKETS: 1,
-                                 STORE_FIRST_PACKET: message[1], STORE_PACKET_TYPE: {typecode_cat: 1}}})
-        else:
+                                 STORE_FIRST_PACKET: message[1], STORE_PACKET_TYPE: {typecode_cat: 1}}})  #
+        else:  # Update internal information (we already have it)
             internal_data_storage = planes[icao][STORE_INTERNAL]
             internal_data_storage[STORE_MOST_RECENT_PACKET] = message[1]
             internal_data_storage[STORE_TOTAL_PACKETS] += 1
@@ -183,18 +195,25 @@ def process_messages(msgs):
     return processed
 
 
-def calculate():
+def calculate() -> None:
+    """
+    Run calculate_plane on each plane.
+    :return: None
+    """
     for plane in planes:
         calculations.calculate_plane(planes[plane])
 
 
-def check_for_old_planes(current_time):
+def check_for_old_planes(current_time) -> list:
+    """
+    Check if planes are old (haven't received information in a while).
+    """
     global planes
     old_planes = []
     for plane in planes:
         last_packet_relative_time_ago = current_time - planes[plane][STORE_INTERNAL][STORE_MOST_RECENT_PACKET]
-        if last_packet_relative_time_ago > configuration[CONFIG_GENERAL][CONFIG_GENERAL_REMEMBER]:
-            old_planes.append(plane)
+        if last_packet_relative_time_ago > configuration[CONFIG_GENERAL][CONFIG_GENERAL_REMEMBER]:  # Too old?
+            old_planes.append(plane)  # Yes
     return old_planes
 
 
@@ -222,24 +241,26 @@ def get_top_planes(current_planes: dict, top: int = None) -> str:
     :param current_planes: the current planes
     :param top: the top X planes to format
     """
+    # a dictionary of {plane_id: total_packets}
     planes_by_packets = {p: current_planes[p][STORE_INTERNAL][STORE_TOTAL_PACKETS] for p in current_planes.keys()}
+    # sorting these planes by their packets
     sorted_planes = dict(sorted(planes_by_packets.items(), key=lambda item: item[1], reverse=True))
     message = ""
-    if top:
+    if top:  # Are we even to display the top X planes (i.e. is top not 0)?
         for current_number, plane in enumerate(sorted_planes):
-            if current_number + 1 == top and top != -1:
+            if current_number + 1 == top and top != -1:  # Are we done?
                 break
-            message += f"{plane} ({sorted_planes[plane]}), "
+            message += f"{plane} ({sorted_planes[plane]}), "  # Add the plane to the message
     if not message:
         return ""
-    if top == -1:
+    if top == -1:  # Hold on to every plane
         return f"Top planes: " + message[:-2]
-    if top > len(sorted_planes):
+    if top > len(sorted_planes):  # Say "Top 4 planes: {4 planes} instead of Top 5 planes: {4 planes}
         top = len(sorted_planes)
     return f"Top {top} planes: " + message[:-2]
 
 
-planes = {}
+planes = {}  # Plane data
 processed_messages = 0
 saver = rosetta.MongoSaver(configuration[CONFIG_GENERAL][CONFIG_GENERAL_MONGODB])
 top_planes = configuration[CONFIG_GENERAL][CONFIG_GENERAL_TOP_PLANES]
@@ -256,4 +277,4 @@ while True:
     end_time = time.time()
     delta = 1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time - start_time)
     if delta > 0:
-        time.sleep(delta)
+        time.sleep(delta)  # Sleep the delta away
