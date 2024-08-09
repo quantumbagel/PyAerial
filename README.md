@@ -4,9 +4,9 @@ _scanning software for ADS-B / ModeS
 a.k.a. airstrik 2.0_
 
 
-## General Project Concept
+##  Project Concept
 
-PyAerial is the successor to airstrik.py.
+PyAerial is the successor to [the now archived airstrik.py](https://github.com/quantumbagel/airstrik.py). It has achieved full feature parity and more, offering ways to do everything its predecessor could, but better.
 
 PyAerial will scan for nearby planes using the ModeS/ADS-B protocol and provide an early-warning system for planes / helicopters that enter user-defined geofences, as well as programmable actions for the program to take (e.g. sending a POST request with data about the event or communicating with a Kafka server)
 
@@ -16,18 +16,24 @@ PyAerial will scan for nearby planes using the ModeS/ADS-B protocol and provide 
 ```
 general:
   mongodb: mongodb://localhost:27017
-  kafka: "localhost:12345"
   backdate_packets: 10
   remember_planes: 30
-  point_accuracy_threshold: 10  # degrees
   packet_method: dump1090
   status_message_top_planes: 5
+  advanced_status: true
   hz: 2
+  logs: info  # debug, info, warning, or error
 
 home:
   latitude: 36.6810752
   longitude: -78.8758528
 
+components:  # TODO: components
+  easy:
+    eta:
+      maximum: 120
+    altitude:
+      maximum: 10000
 
 zones:
   main:  # smaller area randomly picked out for testing
@@ -46,12 +52,12 @@ zones:
     levels:
       warn:
         category: really_high_priority
-        time: 45
-        send: true
+        requirements: easy
+        seconds: 60
       alert:
         category: really_high_priority
-        time: 0
-        send: true
+        requirements: easy
+        seconds: 60
 
   alternate: # Most of raleigh area
     coordinates:
@@ -69,34 +75,36 @@ zones:
       [36.325467, -78.929852],
       [36.343168, -79.259442]]
     levels:
-      warn:
+      not_inline_test:
         category: warn
-        time: 120
-      alert:
-        category: alert
-        time: 0
+        requirements: easy
+        seconds: 60
+      inline_test:
+        category:
+          method: print
+          save:
+            telemetry_method: all
+            calculated_method: all
+        requirements: easy
+        seconds: 60
 
 categories:
   really_high_priority:
-    priority: 1000000
     method: print
     save:
       telemetry_method: all
       calculated_method: all
   warn:
-    priority: 10
-    method: kafka
-    arguments:
-      server: "localhost:60403"
-    save:
-      telemetry_method: all
-      calculated_method: all
-  alert:
-    priority: -1
     method: print
     save:
       telemetry_method: all
       calculated_method: all
+  alert:
+    method: print
+    save:
+      telemetry_method: all
+      calculated_method: all
+
 ```
 
 All names for anything can be customized in the `constants.py` file.
@@ -118,45 +126,46 @@ All names for anything can be customized in the `constants.py` file.
 
 ##  Configuration Options
 
-| Configuration Option                           | What does it control?                                                                                                                                                            | constants.py variable               |
-|------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------|
-| `general`                                      | Contains options relative to the entire program's scope that didn't fit anywhere else.                                                                                           | `CONFIG_GENERAL`                    |
-| `general/mongodb`                              | The URI of the MongoDB instance to connect to if MongoDB is set as the method to save packets                                                                                    | `CONFIG_GENERAL_MONGODB`            |
-| `general/backdate_packets`                     | How many latitude/longitude packets back we look to perform a rough average when we calculate the heading. More = less variance, less = more variance.                           | `CONFIG_GENERAL_BACKDATE`           |
-| `general/remember_planes`                      | How many seconds since the last packet we should keep the plane in RAM before saving it to MongoDB                                                                               | `CONFIG_GENERAL_REMEMBER`           |
-| `general/point_accuracy_threshold`             | The degree accuracy used for determining if we should "chase" geofences. This is just an optimization.                                                                           | `CONFIG_GENERAL_PAT`                |
-| `general/packet_method`                        | How the program should gather packets. Options: `dump1090` or `python`. Dump1090 is significantly better, but requires `dump1090 --raw --net` to be running in another terminal. | `CONFIG_GENERAL_PACKET_METHOD`      |
-| `general/status_message_top_planes`            | How many of the "top planes" (most messages sent) to display in the status message sent every tick at the INFO logging level.                                                    | `CONFIG_GENERAL_TOP_PLANES`         |
-| `general/hz`                                   | How many ticks per second to attempt. This is a maximum, not a minimum.                                                                                                          | `CONFIG_GENERAL_HZ`                 |
-| `home`                                         | Contains the position of the ADS-B tracker. This is used to calculate globally accurate positions from the ADS-B packets.                                                        | `CONFIG_HOME`                       |
-| `home/latitude`                                | The latitude of the ADS-B tracker                                                                                                                                                | `CONFIG_HOME_LATITUDE`              |
-| `home/longitude`                               | The longitude of the ADS-B tracker                                                                                                                                               | `CONFIG_HOME_LONGITUDE`             |
-| `zones`                                        | Contains information about the geofences and their different warning levels                                                                                                      | `CONFIG_ZONES`                      |
-| `zones/[zone]/coordinates`                     | A list of lists containing the decimal lat/long coordinates that compose the geofence.                                                                                           | `CONFIG_ZONES_COORDINATES`          |
-| `zones/[zone]/levels`                          | Contains information about the levels of triggers the geofence has.                                                                                                              | `CONFIG_ZONES_LEVELS`               |
-| `zones/[zone]/levels/[level]/category`         | The category (information about how to save and alert) that this level of the geofence is tied to                                                                                | `CONFIG_ZONES_LEVELS_CATEGORY`      |
-| `zones/[zone]/levels/[level]/time`             | The maximum ETA the plane must have relative to the geofence to trigger this level.                                                                                              | `CONFIG_ZONES_LEVELS_TIME`          |
-| `categories`                                   | Stores the categories (information for how alerts and saving works). Categories will only be used if they are put in at least one geofence                                       | `CONFIG_CATEGORIES`                 |
-| `categories/[category]/method`                 | Which method to use when alerting. Current options: `print`, `kafka`                                                                                                             | `CONFIG_CAT_METHOD`                 |
-| `categories[category]/arguments`               | If applicable, put arguments for the method in here. The only option is `server` for the `kafka` method currently.                                                               | `CONFIG_CAT_ALERT_ARGUMENTS`        |
-| `categories/[category]/save`                   | Filters for saving to MongoDB. Existing methods: `all`, `none`, `decimate(X)`, `sdecimate(X,Y)`                                                                                  | `CONFIG_CAT_SAVE`                   |
-| `categories/[category]/save/telemetry_method`  | What method to use for the telemetry data (stuff received by the ADS-B receiver with no inference).                                                                              | `CONFIG_CAT_SAVE_TELEMETRY_METHOD`  |
-| `categories/[category]/save/calculated_method` | What method to use for the calculated data (stuff we inferred from the ADS-B information, including corrected versions of telemetry data we already receive).                    | `CONFIG_CAT_SAVE_CALCULATED_METHOD` |
+| Configuration Option                           | What does it control?                                                                                                                                                                                                                                                                                                                                                 | constants.py variable               |
+|------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------|
+| `general`                                      | Contains options relative to the entire program's scope that didn't fit anywhere else.                                                                                                                                                                                                                                                                                | `CONFIG_GENERAL`                    |
+| `general/mongodb`                              | The URI of the MongoDB instance to connect to if MongoDB is set as the method to save packets                                                                                                                                                                                                                                                                         | `CONFIG_GENERAL_MONGODB`            |
+| `general/backdate_packets`                     | How many latitude/longitude packets back we look to perform a rough average when we calculate the heading. More = less variance, less = more variance.                                                                                                                                                                                                                | `CONFIG_GENERAL_BACKDATE`           |
+| `general/remember_planes`                      | How many seconds since the last packet we should keep the plane in RAM before saving it to MongoDB                                                                                                                                                                                                                                                                    | `CONFIG_GENERAL_REMEMBER`           |
+| `general/point_accuracy_threshold`             | The degree accuracy used for determining if we should "chase" geofences. This is just an optimization.                                                                                                                                                                                                                                                                | `CONFIG_GENERAL_PAT`                |
+| `general/packet_method`                        | How the program should gather packets. Options: `dump1090` or `python`. Dump1090 is significantly better, but requires `dump1090 --raw --net` to be running in another terminal.                                                                                                                                                                                      | `CONFIG_GENERAL_PACKET_METHOD`      |
+| `general/status_message_top_planes`            | How many of the "top planes" (most messages sent) to display in the status message sent every tick at the INFO logging level.                                                                                                                                                                                                                                         | `CONFIG_GENERAL_TOP_PLANES`         |
+| `general/advanced_status`                      | Whether "advanced status" should be used. THis contains more data, with callsigns and packet type breakdowns. Example: `INFO:Main:Tracking 5 planes. Top 5: AB5DE1/WUP31 (358, {5: 50, 3: 51, 0: 253, 1: 4}), A3965C/FFT3373 (216, {0: 115, 5: 50, 3: 46, 1: 5}), A95A1C/AAL2349 (177, {0: 143, 3: 19, 5: 14, 1: 1}), A80D40/JBU2929 (21, {0: 13, 5: 3, 3: 4, 1: 1})` | `CONFIG_GENERAL_ADVANCED_STATUS`    |
+| `general/hz`                                   | How many ticks per second to attempt. This is a maximum, not a minimum.                                                                                                                                                                                                                                                                                               | `CONFIG_GENERAL_HZ`                 |
+| `home`                                         | Contains the position of the ADS-B tracker. This is used to calculate globally accurate positions from the ADS-B packets.                                                                                                                                                                                                                                             | `CONFIG_HOME`                       |
+| `home/latitude`                                | The latitude of the ADS-B tracker                                                                                                                                                                                                                                                                                                                                     | `CONFIG_HOME_LATITUDE`              |
+| `home/longitude`                               | The longitude of the ADS-B tracker                                                                                                                                                                                                                                                                                                                                    | `CONFIG_HOME_LONGITUDE`             |
+| `zones`                                        | Contains information about the geofences and their different warning levels                                                                                                                                                                                                                                                                                           | `CONFIG_ZONES`                      |
+| `zones/[zone]/coordinates`                     | A list of lists containing the decimal lat/long coordinates that compose the geofence.                                                                                                                                                                                                                                                                                | `CONFIG_ZONES_COORDINATES`          |
+| `zones/[zone]/levels`                          | Contains information about the levels of triggers the geofence has.                                                                                                                                                                                                                                                                                                   | `CONFIG_ZONES_LEVELS`               |
+| `zones/[zone]/levels/[level]/category`         | The category (information about how to save and alert) that this level of the geofence is tied to                                                                                                                                                                                                                                                                     | `CONFIG_ZONES_LEVELS_CATEGORY`      |
+| `zones/[zone]/levels/[level]/time`             | The maximum ETA the plane must have relative to the geofence to trigger this level.                                                                                                                                                                                                                                                                                   | `CONFIG_ZONES_LEVELS_TIME`          |
+| `categories`                                   | Stores the categories (information for how alerts and saving works). Categories will only be used if they are put in at least one geofence                                                                                                                                                                                                                            | `CONFIG_CATEGORIES`                 |
+| `categories/[category]/method`                 | Which method to use when alerting. Current options: `print`, `kafka`                                                                                                                                                                                                                                                                                                  | `CONFIG_CAT_METHOD`                 |
+| `categories[category]/arguments`               | If applicable, put arguments for the method in here. The only option is `server` for the `kafka` method currently.                                                                                                                                                                                                                                                    | `CONFIG_CAT_ALERT_ARGUMENTS`        |
+| `categories/[category]/save`                   | Filters for saving to MongoDB. Existing methods: `all`, `none`, `decimate(X)`, `sdecimate(X,Y)`                                                                                                                                                                                                                                                                       | `CONFIG_CAT_SAVE`                   |
+| `categories/[category]/save/telemetry_method`  | What method to use for the telemetry data (stuff received by the ADS-B receiver with no inference).                                                                                                                                                                                                                                                                   | `CONFIG_CAT_SAVE_TELEMETRY_METHOD`  |
+| `categories/[category]/save/calculated_method` | What method to use for the calculated data (stuff we inferred from the ADS-B information, including corrected versions of telemetry data we already receive).                                                                                                                                                                                                         | `CONFIG_CAT_SAVE_CALCULATED_METHOD` |
 
 
 ## Dependencies
 
 ```
-shapely
-geopy
-pymodes
-requests
-pyrtlsdr
-kafka-python
-pymongo
-ruamel.yaml
+shapely  # Other geographic math.
+geopy  # Some geographic math, mostly distance.
+pymodes  # some ADS-B decoding hex math
+requests  # hexdb.io's ICAO callsign API
+pyrtlsdr  # Pure-python ADS-B decoder
+kafka-python  # Using the Kafka alert method
+pymongo  # Interfacing with MongoDB
+ruamel.yaml  # For reading the configuration file
 ```
 
-`dump1090` is required for the `dump1090` packet method to function. You can also broadcast raw ADSB messages over TCP port `30002` and the interface will also work.
+`dump1090-fa` is required for the `dump1090` packet method to function. The command `dump1090 --net --raw` should work out-of-the-box. You can also broadcast raw ADSB messages over TCP port `30002` and the interface will also work.
 
 Feel free to report any bugs or issues you find. Happy tracking!

@@ -4,6 +4,7 @@ general:
   remember_planes: 30
   packet_method: dump1090
   status_message_top_planes: 5
+  advanced_status: true
   hz: 2
   logs: info  # debug, info, warning, or error
 

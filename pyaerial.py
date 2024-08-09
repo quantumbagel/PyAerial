@@ -57,6 +57,8 @@ generator_thread = initiate_generator()  # Start the signal generator
 
 main_logger = logging.getLogger("Main")  # Main program logger
 
+logging.info("Hi! PyAerial has successfully loaded all modules and is about to start.")
+
 
 def classify(msg) -> (dict, int):
     """
@@ -68,7 +70,9 @@ def classify(msg) -> (dict, int):
     typecode = pms.typecode(msg)  # Get the typecode of the message
     log = main_logger.getChild("classify")  # Logger
     if typecode == -1:  # Message that pms can't handle yet, or message that dump1090 can that pms can't :/
-        return
+        # This way we know that the plane is "still around"
+        data = {STORE_INFO: {STORE_ICAO: pms.icao(msg)}, STORE_RECV_DATA: {}, STORE_CALC_DATA: {}}
+        return data, 0
     data = None
     icao = pms.icao(msg)  # ICAO of message (every message shares this)
     typecode_category = "Unknown"
@@ -234,7 +238,7 @@ def process_old_planes(old_planes: list, defined_saver: rosetta.Saver) -> None:
         defined_saver.save()
 
 
-def get_top_planes(current_planes: dict, top: int = None) -> str:
+def get_top_planes(current_planes: dict, top: int = None, advanced: bool = False) -> str:
     """
     Return a formatted message containing the top X planes
 
@@ -250,14 +254,23 @@ def get_top_planes(current_planes: dict, top: int = None) -> str:
         for current_number, plane in enumerate(sorted_planes):
             if current_number + 1 == top and top != -1:  # Are we done?
                 break
-            message += f"{plane} ({sorted_planes[plane]}), "  # Add the plane to the message
+            if not advanced:
+                message += f"{plane} ({sorted_planes[plane]}), "  # Add the plane to the message
+            else:
+                if (STORE_CALLSIGN in current_planes[plane][STORE_INFO].keys() and
+                        current_planes[plane][STORE_INFO][STORE_CALLSIGN]):
+                    message += (f"{plane}/{current_planes[plane][STORE_INFO][STORE_CALLSIGN]} ({sorted_planes[plane]},"
+                                f" {current_planes[plane][STORE_INTERNAL][STORE_PACKET_TYPE]}), ")
+                else:
+                    message += (f"{plane}, ({sorted_planes[plane]},"
+                                f" {current_planes[plane][STORE_INTERNAL][STORE_PACKET_TYPE]}), ")
     if not message:
         return ""
     if top == -1:  # Hold on to every plane
-        return f"Top planes: " + message[:-2]
+        return message[:-2]
     if top > len(sorted_planes):  # Say "Top 4 planes: {4 planes} instead of Top 5 planes: {4 planes}
         top = len(sorted_planes)
-    return f"Top {top} planes: " + message[:-2]
+    return f"Top {top}: " + message[:-2]
 
 
 planes = {}  # Plane data
@@ -266,13 +279,20 @@ saver = rosetta.MongoSaver(configuration[CONFIG_GENERAL][CONFIG_GENERAL_MONGODB]
 top_planes = configuration[CONFIG_GENERAL][CONFIG_GENERAL_TOP_PLANES]
 while True:
     start_time = time.time()
+    status = ""  # Check if we are receiving new information, so we can log that.
+    if not generator_thread.is_alive():
+        status = "[PAUSED] "
     check_generator_thread()
     processed_messages += process_messages(interface.message_queue[:])
     calculate()
     interface.message_queue = []  # Reset the messages
     old = check_for_old_planes(time.time())
+
     # Print all generated plane data
-    main_logger.info(f"Tracking {len(planes.keys())} planes. {get_top_planes(planes, top_planes)}")
+    main_logger.info(f"{status}Tracking {len(planes.keys())} planes."
+                     f""" {get_top_planes(planes,
+                                          top_planes,
+                                          configuration[CONFIG_GENERAL][CONFIG_GENERAL_ADVANCED_STATUS])}""")
     process_old_planes(old, saver)
     end_time = time.time()
     delta = 1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time - start_time)

@@ -4,4 +4,3 @@ This is a quick listing of every calculated or received metric and its correspon
 
 - Altitude: `m` (converted from `ft`)
 - Velocity (horizontal or vertical): `m/s` (converted from `kt`)
-- 

@@ -14,12 +14,17 @@ def run():
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         client.connect((socket.gethostbyname("127.0.0.1"), 30002))
-    except ConnectionRefusedError as e:
+    except ConnectionRefusedError:
         log.fatal("Failed to connect to TCP stream")
-        raise e
+        return
     while True:
         try:
+
             data = client.recv(1024).decode('utf-8')[1:-2]
+            if len(data) == 0:
+                log.fatal("Socket connection has wedged. Going to exit now.")
+                client.close()
+                return
         except ConnectionResetError:
             log.fatal("Connection reset by peer!")
             continue
