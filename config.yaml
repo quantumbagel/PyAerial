@@ -16,7 +16,7 @@ components:  # TODO: components
     eta:
       maximum: 120
     altitude:
-      maximum: 1000
+      maximum: 10000
 
 zones:
   main:  # smaller area randomly picked out for testing

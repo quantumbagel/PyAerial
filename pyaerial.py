@@ -272,7 +272,7 @@ while True:
     interface.message_queue = []  # Reset the messages
     old = check_for_old_planes(time.time())
     # Print all generated plane data
-    main_logger.info(f"Currently tracking {len(planes.keys())} planes. {get_top_planes(planes, top_planes)}")
+    main_logger.info(f"Tracking {len(planes.keys())} planes. {get_top_planes(planes, top_planes)}")
     process_old_planes(old, saver)
     end_time = time.time()
     delta = 1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time - start_time)

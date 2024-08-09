@@ -111,7 +111,7 @@ class Saver:
                 total_valid_ticks = 0
 
                 for time in range(int(first_time + 1), int(last_time) + 1):
-                    latitude_datum = calculations.get_latest(STORE_RECV_DATA, STORE_LONG, plane,
+                    latitude_datum = calculations.get_latest(STORE_RECV_DATA, STORE_LAT, plane,
                                                              time)
                     longitude_datum = calculations.get_latest(STORE_RECV_DATA, STORE_LONG, plane,
                                                               time)
@@ -156,19 +156,14 @@ class Saver:
                                 # Has our component failed?
                                 if not CONFIG_COMP_FUNCTIONS[comparison](relevant_data,
                                                                          component[data_type][comparison]):
-                                    print("Failed!", relevant_data, component[data_type][comparison], data_type,
-                                          zone, level, latitude_datum.value, longitude_datum.value, time)
                                     component_failed = True
                                     break
-                                print("Success!", relevant_data, component[data_type][comparison], data_type,
-                                      zone,
-                                      level, latitude_datum.value, longitude_datum.value)
                             if component_failed:
                                 break
                         components[component_name] = not component_failed  # Did the component succeed?
                     if eval(requirements, components):  # Evaluate
                         total_valid_ticks += 1
-                print(plane[STORE_INFO][STORE_ICAO], total_valid_ticks)
+
                 if total_valid_ticks >= levels[level][CONFIG_ZONES_LEVELS_SECONDS]:
                     # Should we cache this level of this plane?
                     filtered_received_information = filter_packets(received_information,

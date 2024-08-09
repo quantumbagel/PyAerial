@@ -175,6 +175,7 @@ def get_latest(information_type: str, information_datum: str, plane_data: dict, 
         for item in data[information_datum][::-1]:
             if abs(item.time - after_time) < best:
                 datum = item
+                best = abs(item.time - after_time)
             else:
                 return datum
         return datum
