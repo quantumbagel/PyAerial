@@ -1,9 +1,20 @@
 Stat viewer stuff:
 
-Plane a3809r8s
+Plane: a3809r8s
+Callsign: AS9999
 Flown: 2 flights
 Storage: 390kb
-Callsign: AS9999
-Plane Category: Large (> 28999kg)
+Plane Category: (3/4) Large (> 28999kg)
+First Discovered: August 24, 2024 11:59 PM (EST)
+Last Updated: August 24, 2024 11:59 PM (EST)
+Most recent flight duration: 10 minutes 37 seconds (ongoing) / (completed)
+Packet breakdown (most recent flight):
+100 Information Packet
+83 Latitude/Longitude
+7 Speeds
+1 Velocities
 
-To display this plane's data, run "dump a3809r8s"
+Packet breakdown (overall):
+...etc...
+To display this plane's raw data, run "dump a3809r8s"
+To delete this plane, run "reset a3809r8s"
