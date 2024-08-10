@@ -1,0 +1,9 @@
+Stat viewer stuff:
+
+Plane a3809r8s
+Flown: 2 flights
+Storage: 390kb
+Callsign: AS9999
+Plane Category: Large (> 28999kg)
+
+To display this plane's data, run "dump a3809r8s"

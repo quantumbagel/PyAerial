@@ -75,6 +75,8 @@ def classify(msg) -> (dict, int):
         return data, 0
     data = None
     icao = pms.icao(msg)  # ICAO of message (every message shares this)
+    if len(icao) != 6 or icao == "000000":  # Invalid ICAO length or zero-icao
+        return
     typecode_category = "Unknown"
 
     if 1 <= typecode <= 4:  # Aircraft identification
