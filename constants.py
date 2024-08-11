@@ -23,6 +23,7 @@ STORE_HEADING = "direction"
 STORE_DISTANCE = "distance"
 # Information
 STORE_ICAO = "icao"
+STORE_OPENSKY = "opensky"
 STORE_MOST_RECENT_PACKET = "last_update"
 STORE_TOTAL_PACKETS = "packets"
 STORE_PACKET_TYPE = "packet_type"
@@ -41,6 +42,13 @@ STORE_PLANE_CATEGORY_CONVERSION = {2: {1: "Surface Emergency Vehicle", 3: "Surfa
                                        4: "High vortex aircraft", 5: "Heavy (>13600kg)",
                                        6: "High performance (>5g) and high speed (>740km/h)",
                                        7: "Rotorcraft (helicopter)"}}
+
+STORE_OPENSKY_HEADER = ["icao", "timestamp", "acars", "adsb", "built", "description", "country", "engines",
+                      "first_flight_date", "first_seen", "icao_aircraft_class", "line_number", "manufacturer_icao",
+                      "manufacturer_name", "model", "modes", "next_registration", "operator", "operator_callsign",
+                      "operator_data", "operator_iata", "owner", "previous_registration", "registered_until",
+                      "registered", "registration", "selective_calling_number", "serial_number", "status", "typecode",
+                      "vhf"]
 # Configuration main categories
 CONFIG_ZONES = "zones"
 CONFIG_CATEGORIES = "categories"

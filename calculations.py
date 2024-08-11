@@ -2,11 +2,12 @@
 Performs the data analysis / aggregation for PyAerial.
 """
 import ast
+import io
 import json
 import logging
 import math
 import threading
-
+import csv
 from geopy.distance import geodesic
 import kafka
 from kafka.errors import NoBrokersAvailable
@@ -44,6 +45,23 @@ def get_callsign(icao: str) -> str | None:
     json_request = resp.json()
     # Return response - if it's valid
     return json_request["Registration"] if "Registration" in json_request.keys() else None
+
+
+def get_airplane_info(icao: str) -> dict | None:
+    """
+    Attempts to use the OpenSky Network to get more information about the ICAO
+    :param icao: ICAO hex string
+    :return: OpenSky Network airplane information
+    """
+
+    for line in open("database.csv"):
+        if line.startswith(icao):
+            plane = list(csv.reader(io.StringIO(line), quotechar="'"))[0]
+            data = {}
+            for ind, thing in enumerate(plane):
+                data[STORE_OPENSKY_HEADER[ind]] = thing
+            return data
+    return None
 
 
 def time_to_enter_geofence(plane_position: list[float],
@@ -202,13 +220,15 @@ def execute_method(method: str = CONFIG_CAT_ALERT_METHOD_PRINT,
     message_type = meta_arguments[ALERT_CAT_TYPE]
     log.debug(f"going to run method {method} with severity {message_type} on plane {icao}")
     if method == CONFIG_CAT_ALERT_METHOD_PRINT:
-        print_me = {STORE_ICAO: icao, STORE_CALLSIGN: tag, ALERT_CAT_TYPE: message_type,
+        print_me = {STORE_ICAO: icao, STORE_CALLSIGN: tag, STORE_OPENSKY: meta_arguments[STORE_OPENSKY],
+                    ALERT_CAT_TYPE: message_type,
                     ALERT_CAT_PAYLOAD: payload, ALERT_CAT_ZONE: meta_arguments[ALERT_CAT_ZONE],
                     ALERT_CAT_ETA: meta_arguments[ALERT_CAT_ETA]}
         logger = logging.getLogger(f"{message_type}")
         logger.debug(print_me)
     elif method == CONFIG_CAT_ALERT_METHOD_KAFKA:
-        data = {STORE_CALLSIGN: tag, ALERT_CAT_TYPE: message_type, ALERT_CAT_PAYLOAD: payload,
+        data = {STORE_CALLSIGN: tag, STORE_OPENSKY: meta_arguments[STORE_OPENSKY], ALERT_CAT_TYPE: message_type,
+                ALERT_CAT_PAYLOAD: payload,
                 ALERT_CAT_ZONE: meta_arguments[ALERT_CAT_ZONE], ALERT_CAT_ETA: meta_arguments[ALERT_CAT_ETA]}
         try:
             producer = kafka.KafkaProducer(bootstrap_servers=[method_arguments[KAFKA_METHOD_ARGUMENT_SERVER]])
@@ -282,11 +302,11 @@ def calculate_plane(plane: dict) -> None:
             else:
                 final_heading = heading  # Not relevant
         patch_append(plane, STORE_CALC_DATA, STORE_HEADING, helpers.Datum(final_heading, speed_time))
+
+        # Callsign logic
         try:
             callsign = plane[STORE_INFO][STORE_CALLSIGN]
         except KeyError:
-            callsign_async = threading.Thread(target=get_callsign, args=(plane,))
-            callsign_async.start()
             callsign = get_callsign(plane[STORE_INFO][STORE_ICAO])  # Callsign might not always exist
             if callsign is not None:  # if we got it
                 plane[STORE_INFO][STORE_CALLSIGN] = callsign  # save it
@@ -294,6 +314,19 @@ def calculate_plane(plane: dict) -> None:
                 # save that we failed, so we don't keep requesting data, which would slow
                 # down the mainloop significantly
                 plane[STORE_INFO][STORE_CALLSIGN] = ''
+
+        # OpenSky logic
+        try:
+            opensky_information = plane[STORE_INFO][STORE_OPENSKY]
+        except KeyError:
+            opensky_information = get_airplane_info(plane[STORE_INFO][STORE_OPENSKY])
+            if opensky_information is not None:
+                if opensky_information is not None:  # if we got it
+                    plane[STORE_INFO][STORE_OPENSKY] = opensky_information  # save it
+                else:  # if we didn't
+                    # save that we failed, so we don't keep requesting data, which would slow
+                    # down the mainloop less significantly
+                    plane[STORE_INFO][STORE_OPENSKY] = None
 
         # This section of the code will take the information we've gathered and determine what alerts should be sent.
         geofence_etas = {}
@@ -360,7 +393,8 @@ def calculate_plane(plane: dict) -> None:
                 meta_arguments = {ALERT_CAT_TYPE: level, STORE_ICAO: plane[STORE_INFO][STORE_ICAO],
                                   STORE_CALLSIGN: callsign,
                                   ALERT_CAT_REASON: reason, ALERT_CAT_ZONE: geofence_name,
-                                  ALERT_CAT_ETA: eta}
+                                  ALERT_CAT_ETA: eta,
+                                  STORE_OPENSKY: opensky_information}
 
                 category = geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]
                 if type(category) is str:  # Contain reference or actual category data?
