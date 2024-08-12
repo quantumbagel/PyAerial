@@ -4,6 +4,7 @@ The main program. This contains the activation of most connections and the mainl
 (c) 2024 Julian Reder (quantumbagel)
 """
 import logging
+import sys
 import time
 import pyModeS as pms
 import constants
@@ -299,4 +300,8 @@ while True:
     end_time = time.time()
     delta = 1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time - start_time)
     if delta > 0:
-        time.sleep(delta)  # Sleep the delta away
+        try:
+            time.sleep(delta)  # Sleep the delta away
+        except KeyboardInterrupt:
+            main_logger.critical("Now quitting (keyboard interrupt)")
+            sys.exit(0)

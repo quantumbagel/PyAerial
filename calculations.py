@@ -153,14 +153,9 @@ def patch_append(plane: dict, category: str, message_type: str, message: helpers
     :param message: Message to add within the message type and category
     :return: if the message was added
     """
-    log = main_logger.getChild("patch_append")
     latest = get_latest(category, message_type, plane)
     if latest == message:  # duplicate
-        log.debug(f"turned aside message in category {category}/{message_type}"
-                  f" for plane id {plane[STORE_INFO][STORE_ICAO]}")
         return False
-    log.debug(f"allowed message in category {category}/{message_type}"
-              f" for plane id {plane[STORE_INFO][STORE_ICAO]}")
 
     if message_type in plane[category].keys():  # Ensure the location exists
         plane[category][message_type].append(message)
@@ -319,7 +314,7 @@ def calculate_plane(plane: dict) -> None:
         try:
             opensky_information = plane[STORE_INFO][STORE_OPENSKY]
         except KeyError:
-            opensky_information = get_airplane_info(plane[STORE_INFO][STORE_OPENSKY])
+            opensky_information = get_airplane_info(plane[STORE_INFO][STORE_ICAO].lower())
             if opensky_information is not None:
                 if opensky_information is not None:  # if we got it
                     plane[STORE_INFO][STORE_OPENSKY] = opensky_information  # save it

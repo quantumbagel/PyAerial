@@ -14,10 +14,8 @@ home:
 
 components:  # TODO: components
   easy:
-    eta:
-      maximum: 120
     altitude:
-      maximum: 10000
+      maximum: 1000000
 
 zones:
   main:  # smaller area randomly picked out for testing

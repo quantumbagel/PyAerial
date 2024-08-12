@@ -20,7 +20,7 @@ def run():
     while True:
         try:
 
-            data = client.recv(1024).decode('utf-8')[1:-2]
+            data = client.recv(1024).decode('utf-8').replace("*", "").replace(";", "")
             if len(data) == 0:
                 log.fatal("Socket connection has wedged. Going to exit now.")
                 client.close()

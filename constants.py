@@ -29,7 +29,7 @@ STORE_TOTAL_PACKETS = "packets"
 STORE_PACKET_TYPE = "packet_type"
 STORE_FIRST_PACKET = "first_packet"
 STORE_CALLSIGN = "callsign"
-STORE_PLANE_CATEGORY = "category"
+STORE_PLANE_CATEGORY = "plane_category"
 
 STORE_PLANE_CATEGORY_CONVERSION = {2: {1: "Surface Emergency Vehicle", 3: "Surface Service Vehicle",
                                        4: "Ground Obstruction (4)", 5: "Ground Obstruction (5)",
@@ -47,7 +47,7 @@ STORE_OPENSKY_HEADER = ["icao", "timestamp", "acars", "adsb", "built", "descript
                       "first_flight_date", "first_seen", "icao_aircraft_class", "line_number", "manufacturer_icao",
                       "manufacturer_name", "model", "modes", "next_registration", "operator", "operator_callsign",
                       "operator_data", "operator_iata", "owner", "previous_registration", "registered_until",
-                      "registered", "registration", "selective_calling_number", "serial_number", "status", "typecode",
+                      "registered", "callsign", "selective_calling_number", "serial_number", "status", "typecode",
                       "vhf"]
 # Configuration main categories
 CONFIG_ZONES = "zones"
