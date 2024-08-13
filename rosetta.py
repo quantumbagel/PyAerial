@@ -7,7 +7,7 @@ import math
 
 import pymongo
 from geopy.distance import geodesic
-from pymongo.errors import NetworkTimeout, ConnectionFailure, ServerSelectionTimeoutError, AutoReconnect
+from pymongo.errors import NetworkTimeout, ConnectionFailure, ServerSelectionTimeoutError, AutoReconnect, PyMongoError
 from shapely import Polygon, Point
 from shapely.ops import nearest_points
 
@@ -204,7 +204,7 @@ class MongoSaver(Saver):
         try:
             # The ismaster command is cheap and does not require auth.
             self.database.admin.command('ismaster')
-        except (NetworkTimeout, ConnectionFailure, ServerSelectionTimeoutError, AutoReconnect):
+        except PyMongoError:
             self.logger.error(f"Disconnected from MongoDB! Waiting to reconnect now... (uri={self.uri})")
             while True:
                 try:
@@ -212,7 +212,7 @@ class MongoSaver(Saver):
                     self.database = pymongo.MongoClient(self.uri, serverSelectionTimeoutMS=2000,
                                                         connectTimeoutMS=1000, socketTimeoutMS=1000)
                     self.database.admin.command('ismaster')
-                except (NetworkTimeout, ConnectionFailure, ServerSelectionTimeoutError, AutoReconnect):
+                except PyMongoError:
                     self.logger.warning(f"Failed to reconnect to MongoDB! (uri={self.uri})")
                     continue
                 self.logger.info("Successfully reconnected to MongoDB!")
@@ -235,7 +235,7 @@ class MongoSaver(Saver):
             try:
                 collection = database.get_collection(str(int(data[STORE_INTERNAL][STORE_FIRST_PACKET]))
                                                      + "-" + zone + "-" + level)
-            except ServerSelectionTimeoutError or AutoReconnect:
+            except PyMongoError:
                 self.connect_to_database()
                 collection = database.get_collection(str(int(data[STORE_INTERNAL][STORE_FIRST_PACKET]))
                                                      + "-" + zone + "-" + level)
@@ -248,7 +248,7 @@ class MongoSaver(Saver):
                                 STORAGE_DATA: [[datum.time, datum.value] for datum in data[data_type][item]]}
                     try:
                         collection.insert_one(document)
-                    except ServerSelectionTimeoutError or AutoReconnect:
+                    except PyMongoError:
                         self.connect_to_database()
 
             # Add plane information to database. This is done under the STORE_INFO variable
@@ -257,7 +257,7 @@ class MongoSaver(Saver):
                 document.update({str(i): data[info_type][i] for i in data[info_type]})
             try:
                 collection.insert_one(document)
-            except ServerSelectionTimeoutError or AutoReconnect:
+            except PyMongoError:
                 self.connect_to_database()
 
         # Reset cache
