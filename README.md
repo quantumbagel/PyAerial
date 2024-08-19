@@ -6,9 +6,18 @@ a.k.a. airstrik 2.0_
 
 ##  Project Concept
 
-PyAerial is the successor to [the now archived airstrik.py](https://github.com/quantumbagel/airstrik.py). It has achieved full feature parity and more, offering ways to do everything its predecessor could, but better.
+PyAerial is the successor to [the now archived airstrik.py](https://github.com/quantumbagel/airstrik.py). It has achieved full feature parity with its predecessor while also offering much more freedom for use cases.
 
 PyAerial will scan for nearby planes using the ModeS/ADS-B protocol and provide an early-warning system for planes / helicopters that enter user-defined geofences, as well as programmable actions for the program to take (e.g. sending a POST request with data about the event or communicating with a Kafka server)
+
+### Features
+
+- Can handle ADS-B messages for altitude, position, airborne/landing velocities, callsign/geodesic, and more! See Junzi Sun's [book "The 1090 Megahertz Riddle" for more information.](https://mode-s.org/decode)
+- [OpenSky Network](https://opensky-network.org/) integration for more information about plane ownership
+- Smart ETA position calculations
+- Alerts via Kafka that contain relevant information about the airplane (see example)
+- MongoDB support / modular saving framework if other databases are needed
+- Extremely versatile configuration with many different options for every possible use case
 
 
 ## Formatting
@@ -121,7 +130,7 @@ All names for anything can be customized in the `constants.py` file.
        'latitude': 35.767181396484375,
        'longitude': -78.92131805419922},
  'zone': 'main',
- 'eta': 52}
+ 'eta': 52}  # This plane didn't have OpenSky integration, which is inside the 'opensky' key.
 ```
 
 ##  Configuration Options
@@ -167,5 +176,14 @@ ruamel.yaml  # For reading the configuration file
 ```
 
 `dump1090-fa` is required for the `dump1090` packet method to function. The command `dump1090 --net --raw` should work out-of-the-box. You can also broadcast raw ADSB messages over TCP port `30002` and the interface will also work.
+
+## TODOS
+
+- Finish `statviewer.py`'s plane information 
+- Configuration validator
+- Explanation for MongoDB saving filters in README
+- Add potential ray calculation bugfix that could possibly cause problems
+- Add multireceiver support for packet redundancy
+
 
 Feel free to report any bugs or issues you find. Happy tracking!
