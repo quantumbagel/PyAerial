@@ -5,6 +5,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteract
 
 # Create workdir
 COPY ./* /opt/PyAerial
+WORKDIR /opt/PyAerial
 
 # Install requirements
 RUN python3 -m pip install -r requirements.txt --break-system-packages
