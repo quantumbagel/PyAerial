@@ -19,7 +19,7 @@ services:
     ports:
       - '27017:27017'
     volumes:
-      - /opt/data/db:/data/db
+      - /opt/PyAerial/db:/data/db
     networks:
       - bridge_network
 networks:
