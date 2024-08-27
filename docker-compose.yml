@@ -15,6 +15,7 @@ services:
       - bridge_network
   mongodb:
     image: mongo:latest
+    container_name: pyaerial_database
     restart: always
     ports:
       - '27017:27017'
