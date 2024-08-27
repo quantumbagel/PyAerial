@@ -1,0 +1,27 @@
+services:
+  pyaerial:
+    image: pyaerial:latest
+    container_name: pyaerial
+    restart: always
+    build:
+      context: .
+      network: host
+    privileged: true
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+    depends_on:
+      - mongodb
+    networks:
+      - bridge_network
+  mongodb:
+    image: mongo:latest
+    restart: always
+    ports:
+      - '27017:27017'
+    volumes:
+      - /opt/data/db:/data/db
+    networks:
+      - bridge_network
+networks:
+  bridge_network:
+    driver: bridge

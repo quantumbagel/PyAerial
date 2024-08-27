@@ -21,7 +21,7 @@ def load_configuration() -> dict:
     :return: the data from the configuration file
     Will crash if file does not exist. This is intentional
     """
-    yaml = ruamel.yaml.YAML()
+    yaml = ruamel.yaml.YAML(typ='safe')
     with open(CONFIG_FILE) as config:
         data = yaml.load(config)
     return data
