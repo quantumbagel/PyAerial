@@ -6,11 +6,11 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteract
 # Create workdir
 COPY ./* /opt/PyAerial
 
-# Prepare
-RUN python3 -m pip install -r requirements.txt
-RUN git clone https://github.com/flightaware/dump1090.git
-
 # Install requirements
+RUN python3 -m pip install -r requirements.txt --breal-system-packages
+
+# Build dump1090
+RUN git clone https://github.com/flightaware/dump1090.git
 RUN cd dump1090 && make RTLSDR=yes
 RUN cd ..
 
