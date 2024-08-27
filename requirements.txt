@@ -3,7 +3,7 @@ geopy
 pymodes
 requests
 pyrtlsdr
-kafka-python
+kafka-python @ git+https://github.com/dpkp/kafka-python.git
 pymongo
 ruamel.yaml
 numpy
