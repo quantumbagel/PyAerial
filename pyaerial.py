@@ -158,7 +158,7 @@ def process_messages(msgs) -> int:
     for message in msgs:
         try:
             message_data, typecode_cat = classify(message[0])  # Get the data out from the message
-        except TypeError:  # If it failed somehow, just continue
+        except:  # If it failed somehow, just continue
             continue
         processed += 1
         icao = message_data[STORE_INFO][STORE_ICAO]  # Get the ICAO

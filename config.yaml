@@ -13,10 +13,10 @@ home:
   longitude: -78.8758528
 
 components:  # TODO: components
-  1km:
+  lenient:
     altitude:
       maximum: 1000
-  500m:
+  critical:
     altitude:
       maximum: 500
 
@@ -53,11 +53,11 @@ zones:
     levels:
       warn:
         category: save_everything
-        requirements: 1000m
+        requirements: lenient
         seconds: 60
       alert:
         category: save_everything
-        requirements: 500m
+        requirements: critical
         seconds: 60
 
   phase2:
@@ -102,11 +102,11 @@ zones:
     levels:
       warn:
         category: save_everything
-        requirements: 1000m
+        requirements: lenient
         seconds: 60
       alert:
         category: save_everything
-        requirements: 500m
+        requirements: critical
         seconds: 60
 
 

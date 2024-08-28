@@ -184,6 +184,8 @@ ruamel.yaml  # For reading the configuration file
 - Explanation for MongoDB saving filters in README
 - Add potential ray calculation bugfix that could possibly cause problems
 - Add multireceiver support for packet redundancy
+- KML support for geofences
+- Fix bug with `ast` misparsing requirement names with numbers in them
 
 
 Feel free to report any bugs or issues you find. Happy tracking!
