@@ -59,11 +59,9 @@ zones:
         category: save_everything
         requirements: critical
         seconds: 60
-
   phase2:
     coordinates:
-      [[35.74244836285581, -78.70639079724923],
-        [35.74244836285581, -78.70639079724923],
+        [[35.74244836285581, -78.70639079724923],
         [35.74244836285581, -78.70639079724923],
         [35.74244836285581, -78.70639079724923],
         [35.74244836285581, -78.70639079724923],
@@ -115,4 +113,4 @@ categories:
     method: print
     save:
       telemetry_method: all
-      calculated_method: all
+      calculated_method: decimate(10)
