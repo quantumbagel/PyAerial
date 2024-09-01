@@ -3,30 +3,36 @@ Another interface that PyAerial can use that uses dump1090's networking to strea
 """
 
 import time
-import logging
 import socket
+from constants import *
 
-message_queue = []  # Stores (message, time), intercepted by the PyAerial main module
+def run(pipeline: dict, ip: str, port: str = "30002"):
+    """
+    Run the interface.
 
+    :param pipeline: Dictionary of pipeline information as specified by PyAerial
+    :param ip: IP address of the TCP server to connect to
+    :param port: Port of the TCP server to connect to
 
-def run():
-    log = logging.getLogger("dump1090_interface")
+    Will update the pipeline variable with information it generates.
+    """
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        client.connect((socket.gethostbyname("127.0.0.1"), 30002))
+        client.connect((socket.gethostbyname(ip), int(port)))
     except ConnectionRefusedError:
-        log.fatal("Failed to connect to TCP stream")
+        pipeline[STORE_PIPELINE_LAST_RETURN] = "Failed to connect to TCP stream"
         return
     while True:
         try:
 
             data = client.recv(1024).decode('utf-8').replace("*", "").replace(";", "")
             if len(data) == 0:
-                log.fatal("Socket connection has wedged. Going to exit now.")
+                pipeline[STORE_PIPELINE_LAST_RETURN] = "Socket connection has wedged."
                 client.close()
                 return
         except ConnectionResetError:
-            log.fatal("Connection reset by peer!")
             continue
         for item in data.split("\n"):
-            message_queue.append([item.replace("*", "").replace(";", ""), time.time()])
+            if item:
+                (pipeline[STORE_PIPELINE_MESSAGES]
+                 .append([item.replace("*", "").replace(";", ""), time.time()]))

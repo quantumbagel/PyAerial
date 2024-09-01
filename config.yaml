@@ -5,6 +5,7 @@ general:
   status_message_top_planes: 5
   advanced_status: true
   hz: 2
+  duplicate_packet_merging: 5
   logs: info  # debug, info, warning, or error
 
 home:
@@ -13,9 +14,10 @@ home:
 
 receivers:
   main:
-    method: py1090
+    method: dump1090
     arguments:
-      rtl_index: 0
+      tcp_connection_ip: localhost
+      tcp_connection_port: 30002
 
 components:  # TODO: components
   lenient:

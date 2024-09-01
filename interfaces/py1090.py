@@ -41,7 +41,6 @@ def initialize_sdr(address):
     serials = rtlsdr.RtlSdr.get_device_serial_addresses()
     if address in serials:
         address = rtlsdr.RtlSdr.get_default_input_device(address)
-
     try:
         sdr = rtlsdr.RtlSdr(address)
     except rtlsdr.rtlsdr.LibUSBError:
@@ -172,7 +171,7 @@ def check_msg(msg) -> bool:
     return False
 
 
-def read_callback(data, pipeline, worker_id) -> None:
+def read_callback(data, pipeline) -> None:
     """
     Read data, update the buffer, and process messages
     :param data: The new data
@@ -183,10 +182,10 @@ def read_callback(data, pipeline, worker_id) -> None:
 
     if len(signal_buffer) >= buffer_size:  # If we have enough to overflow normal buffer size, process data
         messages = process_buffer()
-        handle_messages(messages, pipeline, worker_id)  # Make sure to process the messages!
+        handle_messages(messages, pipeline)  # Make sure to process the messages!
 
 
-def handle_messages(messages, pipeline, worker_id) -> None:
+def handle_messages(messages, pipeline) -> None:
     """
     A dummy message handler.
     :param messages: The messages to process
@@ -195,23 +194,26 @@ def handle_messages(messages, pipeline, worker_id) -> None:
     for msg, t in messages:
         iden = pms.df(msg)
         if iden in [17, 18]:  # true ADS-B message
-            pipeline[STORE_PIPELINE_MESSAGES].append([msg, t, worker_id])
+            pipeline[STORE_PIPELINE_MESSAGES].append([msg, t])
 
 
-def run(pipeline, worker_id, rtl_index="0"):
+def run(pipeline, rtl_index="0"):
     """
     Run the message scanner!
+    :param pipeline: The pipeline to run
+    :param rtl_index: the rtl index or serial number of the dongle.
     :return: None
     """
 
-    sdr = initialize_sdr(rtl_index)
-    if sdr is None:
+    sdr = initialize_sdr(rtl_index)  # Start the SDR up
+    if sdr is None:  # failed
         pipeline[STORE_PIPELINE_LAST_RETURN] = "Couldn't initialize SDR. Is it connected?"
         return
+
     while True:
         try:
-            data = sdr.read_samples(read_size)
-        except rtlsdr.rtlsdr.LibUSBError:
+            data = sdr.read_samples(read_size)  # Get raw data
+        except rtlsdr.rtlsdr.LibUSBError:  # Crash, return
             pipeline[STORE_PIPELINE_LAST_RETURN] = "Lost connection to SDR. Was it disconnected?"
             return
-        read_callback(data, pipeline, worker_id)
+        read_callback(data, pipeline)  # Parse data
