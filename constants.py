@@ -49,6 +49,9 @@ STORE_OPENSKY_HEADER = ["icao", "timestamp", "acars", "adsb", "built", "descript
                       "operator_data", "operator_iata", "owner", "previous_registration", "registered_until",
                       "registered", "callsign", "selective_calling_number", "serial_number", "status", "typecode",
                       "vhf"]
+
+STORE_PIPELINE_LAST_RETURN = "last_return"
+STORE_PIPELINE_MESSAGES = "messages"
 # Configuration main categories
 CONFIG_ZONES = "zones"
 CONFIG_CATEGORIES = "categories"
@@ -60,9 +63,7 @@ CONFIG_COMPONENTS = "components"
 CONFIG_GENERAL_MONGODB = "mongodb"
 CONFIG_GENERAL_BACKDATE = "backdate_packets"
 CONFIG_GENERAL_REMEMBER = "remember_planes"
-CONFIG_GENERAL_PACKET_METHOD = "packet_method"
-CONFIG_GENERAL_PACKET_METHOD_TRADITIONAL = "python"
-CONFIG_GENERAL_PACKET_METHOD_DUMP1090 = "dump1090"
+
 CONFIG_GENERAL_TOP_PLANES = "status_message_top_planes"
 CONFIG_GENERAL_ADVANCED_STATUS = "advanced_status"
 CONFIG_GENERAL_HERTZ = "hz"
@@ -74,8 +75,7 @@ LOGGING_LEVELS = {"debug": 10,
                   "error": 40}
 
 INTERFACES_FOLDER = "interfaces"
-CONFIG_GENERAL_PACKET_METHODS = {CONFIG_GENERAL_PACKET_METHOD_TRADITIONAL: "py1090",
-                                 CONFIG_GENERAL_PACKET_METHOD_DUMP1090: "dump1090"}
+
 
 # Home
 CONFIG_HOME_LATITUDE = "latitude"
@@ -137,6 +137,16 @@ CONFIG_CAT_SAVE_METHODS = {CONFIG_CAT_SAVE_METHOD_DECIMATE: 1,
                            CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE: 2,
                            CONFIG_CAT_SAVE_METHOD_ALL: 0,
                            CONFIG_CAT_SAVE_METHOD_NONE: 0}
+
+# Receivers
+
+CONFIG_RECEIVERS = "receivers"
+CONFIG_RECV_METHOD = "method"
+CONFIG_RECV_METHOD_ARGUMENT_RTL_INDEX = "rtl_index"
+CONFIG_RECV_METHOD_ARGUMENT_TCP_CONNECTION_IP = "tcp_connection"
+CONFIG_RECV_ARGUMENTS = "arguments"
+CONFIG_RECV_METHODS = {"py1090": {CONFIG_RECV_METHOD_ARGUMENT_RTL_INDEX: int},
+                       "dump1090": {CONFIG_RECV_METHOD_ARGUMENT_TCP_CONNECTION_IP: str}}
 
 # Database
 

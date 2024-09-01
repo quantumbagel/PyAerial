@@ -10,6 +10,8 @@ import pyModeS as pms
 import constants
 import ruamel.yaml
 import threading
+
+import helpers
 from helpers import Datum
 from constants import *
 import importlib
@@ -22,8 +24,18 @@ def load_configuration() -> dict:
     Will crash if file does not exist. This is intentional
     """
     yaml = ruamel.yaml.YAML(typ='safe')
-    with open(CONFIG_FILE) as config:
-        data = yaml.load(config)
+    try:
+        with open(CONFIG_FILE) as config:
+            try:
+                data = yaml.load(config)
+            except ruamel.yaml.scanner.ScannerError:
+                print(f"[critical] PyAerial has failed to load its configuration due to a YAML parsing error."
+                      f" Please check the file \"{CONFIG_FILE}\" for errors.")
+                sys.exit(1)
+    except FileNotFoundError:
+        print(f"[critical] PyAerial could not find the configuration file \"{CONFIG_FILE}\"."
+              f" This means that it cannot run.")
+        sys.exit(1)
     return data
 
 
@@ -37,24 +49,44 @@ constants.CONFIGURATION = configuration  # Share configuration with constants.py
 import rosetta
 import calculations
 
-interface = importlib.import_module(INTERFACES_FOLDER  # Import the interface defined in the configuration.
-                                    + "." +
-                                    CONFIG_GENERAL_PACKET_METHODS[
-                                        configuration[CONFIG_GENERAL][CONFIG_GENERAL_PACKET_METHOD]])
+
+interfaces = {}
+
+receivers = {}
 
 
-def initiate_generator() -> threading.Thread:
-    """
-    Initiate the generator based on the interface module.
-    :return: the generator thread (threading.Thread) after it has been started.
-    """
-    signal_thread = threading.Thread(target=interface.run, daemon=True)  # Daemon so main thread can take it down
-    signal_thread.start()
-    return signal_thread
+def load_interfaces():
+    log = logging.getLogger('pyaerial.load_interfaces')
+    # interface = importlib.import_module(INTERFACES_FOLDER  # Import the interface defined in the configuration.
+    #                                     + "." +
+    #                                     CONFIG_GENERAL_PACKET_METHODS[
+    #                                         configuration[CONFIG_GENERAL][CONFIG_GENERAL_PACKET_METHOD]])
+    configuration_receivers = configuration[CONFIG_RECEIVERS]
+    for receiver_name in configuration_receivers:
+        receiver = configuration_receivers[receiver_name]
+        method = receiver[CONFIG_RECV_METHOD]
+        if method not in interfaces.keys():
+            try:
+                interfaces[method] = importlib.import_module(INTERFACES_FOLDER + "." + method)
+            except ModuleNotFoundError:
+                log.error(f"Failed to load module {INTERFACES_FOLDER + '.' + method} (from receiver {receiver_name})."
+                          f" PyAerial will not use this receiver.")
+                continue
+            pipeline = {STORE_PIPELINE_LAST_RETURN: "", STORE_PIPELINE_MESSAGES: []}
+            arguments = []
+            for argument in CONFIG_RECV_METHODS[method].keys():
+                arguments.append(receiver[CONFIG_RECV_ARGUMENTS][argument])
+            arguments.append(pipeline)
+            arguments.append(receiver_name)
+            receiver_thread = threading.Thread(target=interfaces[method].run, args=arguments)
+            receiver_thread.start()
+            receivers[receiver_name] = [receiver_thread, arguments, method]
+    if not len(receivers):
+        log.error(f"PyAerial was unable to find any valid receivers in the configuration. PyAerial will now stop.")
+        sys.exit(0)
 
 
-generator_thread = initiate_generator()  # Start the signal generator
-
+load_interfaces()
 
 main_logger = logging.getLogger("Main")  # Main program logger
 
@@ -135,17 +167,21 @@ def check_should_be_added(packets, new_packet):
     return packets[-1].value != new_packet.value
 
 
-def check_generator_thread() -> None:
+def check_receivers() -> None:
     """
     Make sure our generator is still running. Will call initiate_generator() if not.
     """
-    log = main_logger.getChild("check_generator_thread")
-    global generator_thread
-    if not generator_thread.is_alive():
-        log.warning("Generator thread has died! Waiting 3 seconds to restart...")
-        time.sleep(3)  # Wait it out
-        log.warning("Restarting generator thread...")
-        generator_thread = initiate_generator()
+    log = main_logger.getChild("check_receivers")
+    for receiver in receivers:
+        if not receivers[receiver][0].is_alive():
+            print(receivers[receiver][0])
+            log.warning(f"Receiver {receiver} has died! Restarting it...")
+            receiver_thread = threading.Thread(target=interfaces[receivers[receiver][2]].run, args=receivers[receiver][1])
+            receiver_thread.start()
+            receivers[receiver][0] = receiver_thread
+        # else:
+        #     print(interfaces[receivers[receiver][2]].message_queue)
+
 
 
 def process_messages(msgs) -> int:
@@ -275,7 +311,6 @@ def get_top_planes(current_planes: dict, top: int = None, advanced: bool = False
         top = len(sorted_planes)
     return f"Top {top}: " + message[:-2]
 
-
 planes = {}  # Plane data
 processed_messages = 0
 saver = rosetta.MongoSaver(configuration[CONFIG_GENERAL][CONFIG_GENERAL_MONGODB])
@@ -283,25 +318,23 @@ top_planes = configuration[CONFIG_GENERAL][CONFIG_GENERAL_TOP_PLANES]
 while True:
     start_time = time.time()
     status = ""  # Check if we are receiving new information, so we can log that.
-    if not generator_thread.is_alive():
-        status = "[PAUSED] "
-    check_generator_thread()
-    processed_messages += process_messages(interface.message_queue[:])
-    calculate()
-    interface.message_queue = []  # Reset the messages
-    old = check_for_old_planes(time.time())
-
-    # Print all generated plane data
-    main_logger.info(f"{status}Tracking {len(planes.keys())} planes."
-                     f""" {get_top_planes(planes,
-                                          top_planes,
-                                          configuration[CONFIG_GENERAL][CONFIG_GENERAL_ADVANCED_STATUS])}""")
-    process_old_planes(old, saver)
-    end_time = time.time()
-    delta = 1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time - start_time)
-    if delta > 0:
-        try:
-            time.sleep(delta)  # Sleep the delta away
-        except KeyboardInterrupt:
-            main_logger.critical("Now quitting (keyboard interrupt)")
-            sys.exit(0)
+    check_receivers()
+    # processed_messages += process_messages(interface.message_queue[:])
+    # calculate()
+    # interface.message_queue = []  # Reset the messages
+    # old = check_for_old_planes(time.time())
+    #
+    # # Print all generated plane data
+    # main_logger.info(f"{status}Tracking {len(planes.keys())} planes."
+    #                  f""" {get_top_planes(planes,
+    #                                       top_planes,
+    #                                       configuration[CONFIG_GENERAL][CONFIG_GENERAL_ADVANCED_STATUS])}""")
+    # process_old_planes(old, saver)
+    # end_time = time.time()
+    # delta = 1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time - start_time)
+    # if delta > 0:
+    #     try:
+    #         time.sleep(delta)  # Sleep the delta away
+    #     except KeyboardInterrupt:
+    #         main_logger.critical("Now quitting (keyboard interrupt)")
+    #         sys.exit(0)

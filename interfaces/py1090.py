@@ -6,6 +6,7 @@ import numpy as np
 import pyModeS as pms
 from typing import Any
 import warnings
+from constants import *
 warnings.filterwarnings("ignore", category=DeprecationWarning)  # IDK why they used pkg resources, this suppresses
 import rtlsdr
 
@@ -28,18 +29,21 @@ preamble = [1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0]  # Required beginnin
 th_amp_diff = 0.8  # signal amplitude threshold difference between 0 and 1 bit
 signal_buffer = []
 noise_floor = 1e6
-message_queue = []  # Stores (message, time), intercepted by the PyAerial main module
 exception_queue = None
-last_return = ""
 
 
-def initialize_sdr():
+def initialize_sdr(address):
     """
     Initialize the SDR
     :return: the object representing the SDR or None if failed
+
     """
+    serials = rtlsdr.RtlSdr.get_device_serial_addresses()
+    if address in serials:
+        address = rtlsdr.RtlSdr.get_default_input_device(address)
+
     try:
-        sdr = rtlsdr.RtlSdr()
+        sdr = rtlsdr.RtlSdr(address)
     except rtlsdr.rtlsdr.LibUSBError:
         return None
     sdr.sample_rate = sampling_rate
@@ -168,7 +172,7 @@ def check_msg(msg) -> bool:
     return False
 
 
-def read_callback(data) -> None:
+def read_callback(data, pipeline, worker_id) -> None:
     """
     Read data, update the buffer, and process messages
     :param data: The new data
@@ -179,10 +183,10 @@ def read_callback(data) -> None:
 
     if len(signal_buffer) >= buffer_size:  # If we have enough to overflow normal buffer size, process data
         messages = process_buffer()
-        handle_messages(messages)  # Make sure to process the messages!
+        handle_messages(messages, pipeline, worker_id)  # Make sure to process the messages!
 
 
-def handle_messages(messages) -> None:
+def handle_messages(messages, pipeline, worker_id) -> None:
     """
     A dummy message handler.
     :param messages: The messages to process
@@ -191,24 +195,23 @@ def handle_messages(messages) -> None:
     for msg, t in messages:
         iden = pms.df(msg)
         if iden in [17, 18]:  # true ADS-B message
-            message_queue.append([msg, t])
+            pipeline[STORE_PIPELINE_MESSAGES].append([msg, t, worker_id])
 
 
-def run() -> str:
+def run(pipeline, worker_id, rtl_index="0"):
     """
     Run the message scanner!
     :return: None
     """
-    global last_return
 
-    sdr = initialize_sdr()
+    sdr = initialize_sdr(rtl_index)
     if sdr is None:
-        last_return = "Couldn't initialize SDR. Is it connected?"
-        return last_return
+        pipeline[STORE_PIPELINE_LAST_RETURN] = "Couldn't initialize SDR. Is it connected?"
+        return
     while True:
         try:
             data = sdr.read_samples(read_size)
         except rtlsdr.rtlsdr.LibUSBError:
-            last_return = "Lost connection to SDR. Was it disconnected?"
-            return last_return
-        read_callback(data)
+            pipeline[STORE_PIPELINE_LAST_RETURN] = "Lost connection to SDR. Was it disconnected?"
+            return
+        read_callback(data, pipeline, worker_id)
