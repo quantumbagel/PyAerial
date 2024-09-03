@@ -311,19 +311,17 @@ def calculate_plane(plane: dict) -> None:
                 # down the mainloop significantly
                 plane[STORE_INFO][STORE_CALLSIGN] = ''
 
-
         # OpenSky logic
         try:
             opensky_information = plane[STORE_INFO][STORE_OPENSKY]
         except KeyError:
-            if plane[STORE_INFO][STORE_OPENSKY] is not None:
-                opensky_information = get_airplane_info(plane[STORE_INFO][STORE_ICAO].lower())
-                if opensky_information is not None:  # if we got it
-                    plane[STORE_INFO][STORE_OPENSKY] = opensky_information  # save it
-                else:  # if we didn't
-                    # save that we failed, so we don't keep requesting data, which would slow
-                    # down the mainloop less significantly
-                    plane[STORE_INFO][STORE_OPENSKY] = None
+            opensky_information = get_airplane_info(plane[STORE_INFO][STORE_ICAO].lower())
+            if opensky_information is not None:  # if we got it
+                plane[STORE_INFO][STORE_OPENSKY] = opensky_information  # save it
+            else:  # if we didn't
+                # save that we failed, so we don't keep requesting data, which would slow
+                # down the mainloop less significantly
+                plane[STORE_INFO][STORE_OPENSKY] = None
 
 
 
