@@ -154,6 +154,7 @@ def classify(msg) -> (dict, int):
         data.update({STORE_CALC_DATA: {}})  # Ensure we have calculated data stub
     else:
         log.error(f"Received confusing typecode {typecode} (msg={msg})")
+        return
     return data, typecode_category
 
 
