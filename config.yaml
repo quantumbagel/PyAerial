@@ -1,23 +1,16 @@
 general:
-  mongodb: mongodb://localhost:27017
+  mongodb: mongodb://localhost:27017 # 27016 because 27017 is already taken
   backdate_packets: 10
-  remember_planes: 30
+  remember_planes: 60
+  packet_method: dump1090
   status_message_top_planes: 5
   advanced_status: true
   hz: 2
-  duplicate_packet_merging: 5
   logs: info  # debug, info, warning, or error
 
 home:
   latitude: 36.6810752
   longitude: -78.8758528
-
-receivers:
-  main:
-    method: dump1090
-    arguments:
-      tcp_connection_ip: localhost
-      tcp_connection_port: 30002
 
 components:  # TODO: components
   lenient:
@@ -66,9 +59,11 @@ zones:
         category: save_everything
         requirements: critical
         seconds: 60
+
   phase2:
     coordinates:
-        [[35.74244836285581, -78.70639079724923],
+      [[35.74244836285581, -78.70639079724923],
+        [35.74244836285581, -78.70639079724923],
         [35.74244836285581, -78.70639079724923],
         [35.74244836285581, -78.70639079724923],
         [35.74244836285581, -78.70639079724923],
@@ -120,4 +115,4 @@ categories:
     method: print
     save:
       telemetry_method: all
-      calculated_method: decimate(10)
+      calculated_method: all

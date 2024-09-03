@@ -11,8 +11,7 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     depends_on:
       - mongodb
-    networks:
-      - bridge_network
+    network_mode: host
   mongodb:
     image: mongo:latest
     container_name: pyaerial_database
@@ -21,8 +20,4 @@ services:
       - '27017:27017'
     volumes:
       - /opt/PyAerial/db:/data/db
-    networks:
-      - bridge_network
-networks:
-  bridge_network:
-    driver: bridge
+    network_mode: host
