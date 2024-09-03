@@ -302,13 +302,14 @@ def calculate_plane(plane: dict) -> None:
         try:
             callsign = plane[STORE_INFO][STORE_CALLSIGN]
         except KeyError:
-            callsign = get_callsign(plane[STORE_INFO][STORE_ICAO])  # Callsign might not always exist
-            if callsign is not None:  # if we got it
-                plane[STORE_INFO][STORE_CALLSIGN] = callsign  # save it
-            else:  # if we didn't
-                # save that we failed, so we don't keep requesting data, which would slow
-                # down the mainloop significantly
-                plane[STORE_INFO][STORE_CALLSIGN] = ''
+            # callsign = get_callsign(plane[STORE_INFO][STORE_ICAO])  # Callsign might not always exist
+            # if callsign is not None:  # if we got it
+            #     plane[STORE_INFO][STORE_CALLSIGN] = callsign  # save it
+            # else:  # if we didn't
+            #     # save that we failed, so we don't keep requesting data, which would slow
+            #     # down the mainloop significantly
+            #     plane[STORE_INFO][STORE_CALLSIGN] = ''
+            plane[STORE_INFO][STORE_CALLSIGN] = ''
 
         # OpenSky logic
         try:

@@ -153,7 +153,7 @@ def classify(msg) -> (dict, int):
         log.debug(f"Collected ADS-B message from typecode {typecode}: {data}")
         data.update({STORE_CALC_DATA: {}})  # Ensure we have calculated data stub
     else:
-        log.error(f"Received confusing typecode {typecode} (msg={msg})")
+        log.warning(f"Received confusing typecode {typecode} (msg={msg})")
         return
     return data, typecode_category
 
@@ -434,5 +434,5 @@ while True:
             main_logger.critical("Now quitting (keyboard interrupt)")
             sys.exit(0)
     else:
-        main_logger.warning(f"Mainloop is behind by {-delta} seconds. ({end_time-start_time})"
-                            f" vs {1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ]}")
+        main_logger.warning(f"Mainloop is behind by {round(-delta, 2)} seconds. ({round(end_time-start_time, 2)}"
+                            f"/{1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ]})")
