@@ -8,6 +8,8 @@ import logging
 import math
 import threading
 import csv
+import time
+
 from geopy.distance import geodesic
 import kafka
 from kafka.errors import NoBrokersAvailable
@@ -242,6 +244,7 @@ def calculate_plane(plane: dict) -> None:
     :param plane: Plane data
     :return: None
     """
+    start = time.time()
     # Check for lat/long data, which is a requirement for all advanced calculations
     if STORE_LAT not in plane[STORE_RECV_DATA].keys():  # Haven't yet received latitude/longitude packet
         return
@@ -406,3 +409,4 @@ def calculate_plane(plane: dict) -> None:
                                meta_arguments=meta_arguments,
                                method_arguments=method_arguments,
                                payload=payload)
+    main_logger.error(f"RAN PLANE {plane[STORE_INFO][STORE_ICAO]} in {time.time()-start}")
