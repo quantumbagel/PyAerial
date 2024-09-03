@@ -33,12 +33,14 @@ def filter_packets(packets, method=CONFIG_CAT_SAVE_METHOD_ALL):
         return packets
     elif method.startswith(CONFIG_CAT_SAVE_METHOD_DECIMATE):
         return [p for i, p in enumerate(packets) if
-                i % int(method.replace(CONFIG_CAT_SAVE_METHOD_DECIMATE, "")) == 0]
+                i % int(method.replace(CONFIG_CAT_SAVE_METHOD_DECIMATE, "")
+                        .replace(' ', "").replace("(", "").replace(")", "")) == 0]
     elif method.startswith(CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE):
         arg = tuple([float(i) for i in method
                     .replace(CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE, "")
                     .replace("(", "")
                     .replace(")", "")
+                    .replace(' ', "")
                     .split(",")])
         reset_timestamp = packets[0][1] + arg[1]
         return_packets = []
