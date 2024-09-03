@@ -8,7 +8,6 @@ import logging
 import math
 import threading
 import csv
-import time
 
 from geopy.distance import geodesic
 import kafka
@@ -244,7 +243,6 @@ def calculate_plane(plane: dict) -> None:
     :param plane: Plane data
     :return: None
     """
-    start = time.time()
     # Check for lat/long data, which is a requirement for all advanced calculations
     if STORE_LAT not in plane[STORE_RECV_DATA].keys():  # Haven't yet received latitude/longitude packet
         return
@@ -305,28 +303,29 @@ def calculate_plane(plane: dict) -> None:
         try:
             callsign = plane[STORE_INFO][STORE_CALLSIGN]
         except KeyError:
-            # callsign = get_callsign(plane[STORE_INFO][STORE_ICAO])  # Callsign might not always exist
-            # if callsign is not None:  # if we got it
-            #     plane[STORE_INFO][STORE_CALLSIGN] = callsign  # save it
-            # else:  # if we didn't
-            #     # save that we failed, so we don't keep requesting data, which would slow
-            #     # down the mainloop significantly
-            #     plane[STORE_INFO][STORE_CALLSIGN] = ''
-            callsign = None
-            plane[STORE_INFO][STORE_CALLSIGN] = ''
+            callsign = get_callsign(plane[STORE_INFO][STORE_ICAO])  # Callsign might not always exist
+            if callsign is not None:  # if we got it
+                plane[STORE_INFO][STORE_CALLSIGN] = callsign  # save it
+            else:  # if we didn't
+                # save that we failed, so we don't keep requesting data, which would slow
+                # down the mainloop significantly
+                plane[STORE_INFO][STORE_CALLSIGN] = ''
+
 
         # OpenSky logic
         try:
             opensky_information = plane[STORE_INFO][STORE_OPENSKY]
         except KeyError:
-            opensky_information = get_airplane_info(plane[STORE_INFO][STORE_ICAO].lower())
-            if opensky_information is not None:
+            if plane[STORE_INFO][STORE_OPENSKY] is not None:
+                opensky_information = get_airplane_info(plane[STORE_INFO][STORE_ICAO].lower())
                 if opensky_information is not None:  # if we got it
                     plane[STORE_INFO][STORE_OPENSKY] = opensky_information  # save it
                 else:  # if we didn't
                     # save that we failed, so we don't keep requesting data, which would slow
                     # down the mainloop less significantly
                     plane[STORE_INFO][STORE_OPENSKY] = None
+
+
 
         # This section of the code will take the information we've gathered and determine what alerts should be sent.
         geofence_etas = {}
@@ -409,4 +408,3 @@ def calculate_plane(plane: dict) -> None:
                                meta_arguments=meta_arguments,
                                method_arguments=method_arguments,
                                payload=payload)
-    main_logger.error(f"RAN PLANE {plane[STORE_INFO][STORE_ICAO]} in {time.time()-start}")
