@@ -411,12 +411,18 @@ while True:
     status = ""  # Check if we are receiving new information, so we can log that.
     receiver_data = check_receivers()
 
+    ptime = time.time()
     messages = get_new_messages(receiver_data)
-
+    main_logger.info(f"GETIME {time.time()-ptime}")
+    ptime = time.time()
     process_messages(messages)
+    main_logger.info(f"PTIME {time.time()-ptime}")
+    ptime = time.time()
     reset_message_queue()
-
+    main_logger.info(f"RESET {time.time()-ptime}")
+    ptime = time.time()
     calculate()
+    main_logger.info(f"CALC {time.time()-ptime}")
     old = check_for_old_planes(time.time())
 
     # Print all generated plane data
@@ -424,7 +430,10 @@ while True:
                      f""" {get_top_planes(planes,
                                           top_planes,
                                           configuration[CONFIG_GENERAL][CONFIG_GENERAL_ADVANCED_STATUS])}""")
+
+    ptime = time.time()
     process_old_planes(old, saver)
+    main_logger.info(f"OLD {time.time()-ptime}")
     end_time = time.time()
     delta = 1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time - start_time)
     if delta > 0:
