@@ -309,6 +309,7 @@ def calculate_plane(plane: dict) -> None:
             #     # save that we failed, so we don't keep requesting data, which would slow
             #     # down the mainloop significantly
             #     plane[STORE_INFO][STORE_CALLSIGN] = ''
+            callsign = None
             plane[STORE_INFO][STORE_CALLSIGN] = ''
 
         # OpenSky logic
