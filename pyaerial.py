@@ -433,3 +433,6 @@ while True:
         except KeyboardInterrupt:
             main_logger.critical("Now quitting (keyboard interrupt)")
             sys.exit(0)
+    else:
+        main_logger.warning(f"Mainloop is behind by {-delta} seconds. ({end_time-start_time})"
+                            f" vs {1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ]}")
