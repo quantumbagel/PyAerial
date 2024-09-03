@@ -179,13 +179,13 @@ ruamel.yaml  # For reading the configuration file
 
 ## TODOS
 
-- Finish `statviewer.py`'s plane information 
-- Configuration validator
-- Explanation for MongoDB saving filters in README
-- Add potential ray calculation bugfix that could possibly cause problems
-- Add multireceiver support for packet redundancy
-- KML support for geofences
-- Fix bug with `ast` misparsing requirement names with numbers in them
-
+- [ ] Finish `statviewer.py`
+- [ ] Configuration validator
+- [ ] Explanation for MongoDB saving filters in README
+- [ ] Add potential ray calculation bugfix that could possibly cause problems
+- [x] Add multireceiver support for packet redundancy
+- [ ]KML support for geofences
+- [ ] Fix bug with `ast` misparsing requirement names with numbers in them
+- [ ] Update README with latest versioning requirements
 
 Feel free to report any bugs or issues you find. Happy tracking!
