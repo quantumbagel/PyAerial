@@ -101,8 +101,9 @@ class Saver:
             self.logger.getChild("cache_flight").warning(f"Plane {plane[STORE_INFO][STORE_ICAO]}"
                                                          f" did not have heading and/or position information,"
                                                          f" can't infer importance. Ignoring")
-            return
+            return False
 
+        saved = False
         for zone in CONFIGURATION[CONFIG_ZONES]:
             levels = CONFIGURATION[CONFIG_ZONES][zone][CONFIG_ZONES_LEVELS]
             for level in levels:
@@ -174,7 +175,7 @@ class Saver:
                         configuration_saving_category = STORE_DATA_CONFIG_NAMING[type_of_information]
                         for subcategory in STORE_DATA_TYPES[type_of_information]:
                             if subcategory in category[CONFIG_CAT_SAVE][configuration_saving_category].keys():
-                                 # saving method exists for this
+                                # saving method exists for this
                                 filtered = filter_packets(plane[type_of_information][subcategory],
                                                                            category[CONFIG_CAT_SAVE][configuration_saving_category][subcategory]
                                                                            )
@@ -186,6 +187,8 @@ class Saver:
 
                     self.add_plane_to_cache(plane[STORE_INFO][STORE_ICAO], zone, level,
                                             all_filtered_information)
+                    saved = True
+        return saved
 
 
 class PrintSaver(Saver):
@@ -231,7 +234,8 @@ class MongoSaver(Saver):
         """
         Save all the data to MongoDB.
         """
-        self.logger.info(f"Beginning to save cache of length {len(str(self._cache).encode('utf-8'))} bytes.")
+        self.logger.info(f"Beginning to save cache of length {len(str(self._cache).encode('utf-8'))} bytes"
+                         f" ({len(self._cache.keys())} flights).")
         for flight in self._cache:
             icao = flight[0]
             zone = flight[1]

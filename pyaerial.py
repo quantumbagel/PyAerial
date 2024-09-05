@@ -284,11 +284,15 @@ def process_old_planes(old_planes: list, defined_saver: rosetta.Saver) -> None:
     :param defined_saver: the Saver to save the old planes
     """
     log = main_logger.getChild("process_old_planes")
+    should_i_run_saver = False
     for plane in old_planes:
         log.debug(f"Caching plane of id \"{plane}\"...")
-        defined_saver.cache_flight(planes[plane])
+        actually_saved = defined_saver.cache_flight(planes[plane])
+        if actually_saved:
+            should_i_run_saver = True
         del planes[plane]
-    if len(old_planes):  # We actually removed planes
+
+    if should_i_run_saver:  # We actually removed planes
         log.critical(old_planes)
         defined_saver.save()
 
