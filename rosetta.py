@@ -14,6 +14,7 @@ from shapely.ops import nearest_points
 import calculations
 from constants import *
 from helpers import Datum
+from statviewer import configuration
 
 
 def filter_packets(packets, method=CONFIG_CAT_SAVE_METHOD_ALL):
@@ -33,8 +34,8 @@ def filter_packets(packets, method=CONFIG_CAT_SAVE_METHOD_ALL):
         return packets
     elif method.startswith(CONFIG_CAT_SAVE_METHOD_DECIMATE):
         return [p for i, p in enumerate(packets) if
-                i % int(method.replace(CONFIG_CAT_SAVE_METHOD_DECIMATE, "")
-                        .replace(' ', "").replace("(", "").replace(")", "")) == 0]
+                (i % int(method.replace(CONFIG_CAT_SAVE_METHOD_DECIMATE, "")
+                        .replace(' ', "").replace("(", "").replace(")", ""))) == 0]
     elif method.startswith(CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE):
         arg = tuple([float(i) for i in method
                     .replace(CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE, "")
@@ -168,17 +169,24 @@ class Saver:
 
                 if total_valid_ticks >= levels[level][CONFIG_ZONES_LEVELS_SECONDS]:
                     # Should we cache this level of this plane?
-                    filtered_received_information = filter_packets(received_information,
-                                                                   category[CONFIG_CAT_SAVE]
-                                                                   [CONFIG_CAT_SAVE_TELEMETRY_METHOD])
-                    filtered_calculated_information = filter_packets(calculated_information,
-                                                                     category[CONFIG_CAT_SAVE]
-                                                                     [CONFIG_CAT_SAVE_CALCULATED_METHOD])
+                    all_filtered_information = {STORE_INTERNAL: internal_information, STORE_INFO: information}
+                    for type_of_information in STORE_DATA_TYPES.keys():
+                        all_filtered_information[type_of_information] = {}
+                        configuration_saving_category = STORE_DATA_CONFIG_NAMING[type_of_information]
+                        for subcategory in STORE_DATA_TYPES[type_of_information]:
+                            if subcategory in category[CONFIG_CAT_SAVE][configuration_saving_category].keys():
+                                 # saving method exists for this
+                                filtered = filter_packets(plane[type_of_information][subcategory],
+                                                                           category[CONFIG_CAT_SAVE][configuration_saving_category][subcategory]
+                                                                           )
+                            else:
+                                filtered = filter_packets(plane[type_of_information][subcategory],
+                                                          category[CONFIG_CAT_SAVE][configuration_saving_category][CONFIG_CAT_DEFAULT_SAVE_METHOD])
+
+                            all_filtered_information[type_of_information][subcategory] = filtered
 
                     self.add_plane_to_cache(plane[STORE_INFO][STORE_ICAO], zone, level,
-                                            {STORE_CALC_DATA: filtered_calculated_information,
-                                             STORE_RECV_DATA: filtered_received_information,
-                                             STORE_INTERNAL: internal_information, STORE_INFO: information})
+                                            all_filtered_information)
 
 
 class PrintSaver(Saver):

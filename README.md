@@ -187,5 +187,5 @@ ruamel.yaml  # For reading the configuration file
 - [ ] KML support for geofences
 - [ ] Fix bug with `ast` misparsing requirement names with numbers in them
 - [ ] Update README with latest versioning requirements
-
+- [ ] Callsign hexdb multithreading
 Feel free to report any bugs or issues you find. Happy tracking!

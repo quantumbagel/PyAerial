@@ -216,14 +216,14 @@ def execute_method(method: str = CONFIG_CAT_ALERT_METHOD_PRINT,
     message_type = meta_arguments[ALERT_CAT_TYPE]
     log.debug(f"going to run method {method} with severity {message_type} on plane {icao}")
     if method == CONFIG_CAT_ALERT_METHOD_PRINT:
-        print_me = {STORE_ICAO: icao, STORE_CALLSIGN: tag, STORE_OPENSKY: meta_arguments[STORE_OPENSKY],
+        print_me = {STORE_ICAO: icao, STORE_CALLSIGN: tag,
                     ALERT_CAT_TYPE: message_type,
                     ALERT_CAT_PAYLOAD: payload, ALERT_CAT_ZONE: meta_arguments[ALERT_CAT_ZONE],
                     ALERT_CAT_ETA: meta_arguments[ALERT_CAT_ETA]}
         logger = logging.getLogger(f"{message_type}")
         logger.debug(print_me)
     elif method == CONFIG_CAT_ALERT_METHOD_KAFKA:
-        data = {STORE_CALLSIGN: tag, STORE_OPENSKY: meta_arguments[STORE_OPENSKY], ALERT_CAT_TYPE: message_type,
+        data = {STORE_CALLSIGN: tag,  ALERT_CAT_TYPE: message_type,
                 ALERT_CAT_PAYLOAD: payload,
                 ALERT_CAT_ZONE: meta_arguments[ALERT_CAT_ZONE], ALERT_CAT_ETA: meta_arguments[ALERT_CAT_ETA]}
         try:
@@ -311,17 +311,17 @@ def calculate_plane(plane: dict) -> None:
                 # down the mainloop significantly
                 plane[STORE_INFO][STORE_CALLSIGN] = ''
 
-        # OpenSky logic
-        try:
-            opensky_information = plane[STORE_INFO][STORE_OPENSKY]
-        except KeyError:
-            opensky_information = get_airplane_info(plane[STORE_INFO][STORE_ICAO].lower())
-            if opensky_information is not None:  # if we got it
-                plane[STORE_INFO][STORE_OPENSKY] = opensky_information  # save it
-            else:  # if we didn't
-                # save that we failed, so we don't keep requesting data, which would slow
-                # down the mainloop less significantly
-                plane[STORE_INFO][STORE_OPENSKY] = None
+        # # OpenSky logic
+        # try:
+        #     opensky_information = plane[STORE_INFO][STORE_OPENSKY]
+        # except KeyError:
+        #     opensky_information = get_airplane_info(plane[STORE_INFO][STORE_ICAO].lower())
+        #     if opensky_information is not None:  # if we got it
+        #         plane[STORE_INFO][STORE_OPENSKY] = opensky_information  # save it
+        #     else:  # if we didn't
+        #         # save that we failed, so we don't keep requesting data, which would slow
+        #         # down the mainloop less significantly
+        #         plane[STORE_INFO][STORE_OPENSKY] = None
 
 
 
@@ -390,8 +390,7 @@ def calculate_plane(plane: dict) -> None:
                 meta_arguments = {ALERT_CAT_TYPE: level, STORE_ICAO: plane[STORE_INFO][STORE_ICAO],
                                   STORE_CALLSIGN: callsign,
                                   ALERT_CAT_REASON: reason, ALERT_CAT_ZONE: geofence_name,
-                                  ALERT_CAT_ETA: eta,
-                                  STORE_OPENSKY: opensky_information}
+                                  ALERT_CAT_ETA: eta}
 
                 category = geofence[CONFIG_ZONES_LEVELS][level][CONFIG_ZONES_LEVELS_CATEGORY]
                 if type(category) is str:  # Contain reference or actual category data?

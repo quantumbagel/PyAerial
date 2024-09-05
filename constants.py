@@ -23,13 +23,17 @@ STORE_HEADING = "direction"
 STORE_DISTANCE = "distance"
 # Information
 STORE_ICAO = "icao"
-STORE_OPENSKY = "opensky"
 STORE_MOST_RECENT_PACKET = "last_update"
 STORE_TOTAL_PACKETS = "packets"
 STORE_PACKET_TYPE = "packet_type"
 STORE_FIRST_PACKET = "first_packet"
 STORE_CALLSIGN = "callsign"
 STORE_PLANE_CATEGORY = "plane_category"
+
+STORE_DATA_TYPES = {STORE_RECV_DATA: [STORE_LAT, STORE_ALT, STORE_LONG, STORE_VERT_SPEED, STORE_HORIZ_SPEED, STORE_HEADING],
+                    STORE_CALC_DATA: [STORE_HORIZ_SPEED, STORE_HEADING, STORE_DISTANCE]}
+
+STORE_DATA_CONFIG_NAMING = {STORE_RECV_DATA: "telemetry", STORE_CALC_DATA: "calculated"}
 
 STORE_PLANE_CATEGORY_CONVERSION = {2: {1: "Surface Emergency Vehicle", 3: "Surface Service Vehicle",
                                        4: "Ground Obstruction (4)", 5: "Ground Obstruction (5)",
@@ -89,7 +93,7 @@ CONFIG_ZONES_LEVELS_REQUIREMENTS = "requirements"
 CONFIG_ZONES_LEVELS_SECONDS = "seconds"
 
 # Categories
-CONFIG_CAT_METHOD = "method"
+CONFIG_CAT_METHOD = "alert_method"
 CONFIG_CAT_SAVE = "save"
 CONFIG_CAT_SAVE_TELEMETRY_METHOD = "telemetry_method"
 CONFIG_CAT_SAVE_CALCULATED_METHOD = "calculated_method"
@@ -132,6 +136,7 @@ CONFIG_CAT_SAVE_METHOD_DECIMATE = "decimate"
 CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE = "sdecimate"
 CONFIG_CAT_SAVE_METHOD_ALL = "all"
 CONFIG_CAT_SAVE_METHOD_NONE = "none"
+CONFIG_CAT_DEFAULT_SAVE_METHOD = "default"
 
 CONFIG_CAT_SAVE_METHODS = {CONFIG_CAT_SAVE_METHOD_DECIMATE: 1,
                            CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE: 2,

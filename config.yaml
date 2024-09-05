@@ -117,7 +117,10 @@ zones:
 
 categories:
   save_everything:
-    method: print
+    alert_method: print
     save:
-      telemetry_method: all
-      calculated_method: decimate(10)
+      telemetry:
+        default: all
+      calculated:
+        default: all
+
