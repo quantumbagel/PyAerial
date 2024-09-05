@@ -285,10 +285,11 @@ def process_old_planes(old_planes: list, defined_saver: rosetta.Saver) -> None:
     """
     log = main_logger.getChild("process_old_planes")
     for plane in old_planes:
-        log.debug(f"Old plane processed! {len(planes) - 1} {planes[plane]}")
+        log.debug(f"Caching plane of id \"{plane}\"...")
         defined_saver.cache_flight(planes[plane])
         del planes[plane]
     if len(old_planes):  # We actually removed planes
+        log.critical(old_planes)
         defined_saver.save()
 
 

@@ -231,7 +231,7 @@ class MongoSaver(Saver):
         """
         Save all the data to MongoDB.
         """
-        self.logger.info(f"Beginning to save cache of length {len(self._cache.encode('utf-8'))} bytes.")
+        self.logger.info(f"Beginning to save cache of length {len(str(self._cache).encode('utf-8'))} bytes.")
         for flight in self._cache:
             icao = flight[0]
             zone = flight[1]
