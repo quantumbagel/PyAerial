@@ -25,7 +25,7 @@ zones = configuration[CONFIG_ZONES]
 categories = configuration[CONFIG_CATEGORIES]
 backdate_packets = configuration[CONFIG_GENERAL][CONFIG_GENERAL_BACKDATE]
 
-main_logger = logging.getLogger("Calculation")
+main_logger = logging.getLogger("calculation")
 
 
 def get_callsign(icao: str) -> str | None:

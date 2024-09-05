@@ -190,7 +190,7 @@ class Saver:
 
 class PrintSaver(Saver):
     def __init__(self):
-        super().__init__(log_name="PrintSaver")
+        super().__init__(log_name="print")
 
     def save(self):
         self.logger.info(f"SAVING: {self._cache}")
@@ -199,7 +199,7 @@ class PrintSaver(Saver):
 
 class MongoSaver(Saver):
     def __init__(self, uri):
-        super().__init__(log_name="MongoSaver")
+        super().__init__(log_name="mongodb")
         self.database: pymongo.MongoClient | None = None
         self.uri = uri
         self.connect_to_database()
@@ -231,7 +231,7 @@ class MongoSaver(Saver):
         """
         Save all the data to MongoDB.
         """
-        self.logger.info(f"Beginning to save cache: {self._cache}")
+        self.logger.info(f"Beginning to save cache of length {len(self._cache.encode('utf-8'))} bytes.")
         for flight in self._cache:
             icao = flight[0]
             zone = flight[1]
