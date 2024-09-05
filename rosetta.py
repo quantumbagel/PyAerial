@@ -14,7 +14,6 @@ from shapely.ops import nearest_points
 import calculations
 from constants import *
 from helpers import Datum
-from statviewer import configuration
 
 
 def filter_packets(packets, method=CONFIG_CAT_SAVE_METHOD_ALL):
