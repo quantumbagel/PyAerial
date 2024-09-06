@@ -6,16 +6,16 @@ The main program. This contains the activation of most connections and the mainl
 import logging
 import sys
 import time
+import types
+
 import pyModeS as pms
 import constants
 import ruamel.yaml
 import threading
 
-import helpers
 from helpers import Datum
 from constants import *
 import importlib
-
 
 def load_configuration() -> dict:
     """
@@ -38,6 +38,8 @@ def load_configuration() -> dict:
         sys.exit(1)
     return data
 
+if __name__ != "__main__":
+    raise ImportError("PyAerial cannot be imported.")
 
 configuration = load_configuration()  # Load the configuration
 
@@ -121,9 +123,11 @@ def classify(msg) -> (dict, int):
         lat, lon = pms.adsb.position_with_ref(msg, configuration[CONFIG_HOME][CONFIG_HOME_LATITUDE],
                                               configuration[CONFIG_HOME][CONFIG_HOME_LONGITUDE])
         speed, angle, vert_rate, speed_type, angle_source, vert_rate_source = pms.adsb.velocity(msg, source=True)
+
         data = {STORE_INFO: {STORE_ICAO: icao},
                 STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_HORIZ_SPEED: speed * 1.852,
-                                  STORE_HEADING: angle, STORE_VERT_SPEED: vert_rate * 0.00508}}
+                                  STORE_HEADING: angle}}  # Don't save vertical speed - we're on the ground.
+
         typecode_category = 2
 
     elif 9 <= typecode <= 18 or 20 <= typecode <= 22:  # Airborne position (barometric alt/GNSS alt)
@@ -155,7 +159,16 @@ def classify(msg) -> (dict, int):
     else:
         log.warning(f"Received confusing typecode {typecode} (msg={msg})")
         return
-    return data, typecode_category
+
+    # Check for null data
+    checked_data = data.copy()  # Sever references
+
+    for message_type in data.keys():
+        for subcategory in message_type.keys():
+            if data[message_type][subcategory] is None:  # Only save safe data
+                del checked_data[message_type][subcategory]  # Remove from checked data
+
+    return checked_data, typecode_category
 
 
 def check_should_be_added(packets, new_packet):
@@ -186,7 +199,7 @@ def check_receivers() -> list:
                 pipeline[STORE_PIPELINE_LAST_RETURN] = "Crashed unexpectedly (unhandled exception)"
 
             # Inform the user about this
-            log.warning(f"Receiver {receiver} of type {packet_method} has died with error"
+            log.warning(f"Receiver \"{receiver}\" of type \"{packet_method}\" has died with error"
                         f" \"{pipeline[STORE_PIPELINE_LAST_RETURN]}\"! Restarting it...")
 
             # Restart the thread
@@ -411,32 +424,46 @@ def get_top_planes(current_planes: dict, top: int = None, advanced: bool = False
 planes = {}  # Plane data
 saver = rosetta.MongoSaver(configuration[CONFIG_GENERAL][CONFIG_GENERAL_MONGODB])
 top_planes = configuration[CONFIG_GENERAL][CONFIG_GENERAL_TOP_PLANES]
-while True:
-    start_time = time.time()
-    status = ""  # Check if we are receiving new information, so we can log that.
-    receiver_data = check_receivers()
 
-    messages = get_new_messages(receiver_data)
-    process_messages(messages)
-    reset_message_queue()
-    calculate()
-    old = check_for_old_planes(time.time())
+try:
+    while True:
 
-    # Print all generated plane data
-    main_logger.info(f"{status}Tracking {len(planes.keys())} planes."
-                     f""" {get_top_planes(planes,
-                                          top_planes,
-                                          configuration[CONFIG_GENERAL][CONFIG_GENERAL_ADVANCED_STATUS])}""")
+        start_time = time.time()
+        status = ""  # Check if we are receiving new information, so we can log that.
+        receiver_data = check_receivers()
 
-    process_old_planes(old, saver)
-    end_time = time.time()
-    delta = 1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time - start_time)
-    if delta > 0:
-        try:
-            time.sleep(delta)  # Sleep the delta away
-        except KeyboardInterrupt:
-            main_logger.critical("Now quitting (keyboard interrupt)")
-            sys.exit(0)
-    else:
-        main_logger.warning(f"Mainloop is behind by {round(-delta, 2)} seconds. ({round(end_time-start_time, 2)}"
-                            f"/{1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ]})")
+        messages = get_new_messages(receiver_data)
+        process_messages(messages)
+        reset_message_queue()
+        calculate()
+        old = check_for_old_planes(time.time())
+
+        # Print all generated plane data
+        main_logger.info(f"{status}Tracking {len(planes.keys())} planes."
+                         f""" {get_top_planes(planes,
+                                              top_planes,
+                                              configuration[CONFIG_GENERAL][CONFIG_GENERAL_ADVANCED_STATUS])}""")
+
+        process_old_planes(old, saver)
+        end_time = time.time()
+        delta = 1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ] - (end_time - start_time)
+        if delta > 0:
+            try:
+                time.sleep(delta)  # Sleep the delta away
+            except KeyboardInterrupt:
+                main_logger.critical("Now quitting (keyboard interrupt)")
+                sys.exit(0)
+        else:
+            main_logger.warning(f"Mainloop is behind by {round(-delta, 2)} seconds. ({round(end_time-start_time, 2)}"
+                                f"/{1 / configuration[CONFIG_GENERAL][CONFIG_GENERAL_HERTZ]})")
+
+except Exception as e:  # Catch a crash and print information
+    main_logger.critical("PyAerial has reached a critical state and will crash.")
+    main_logger.critical("Dump of global variables:")
+    variables = globals()
+    for variable in [i for i in variables.keys()
+                     if not (i.startswith("__")
+                             or (type(variables[i])
+                                 in [types.ModuleType, types.BuiltinFunctionType, types.FunctionType]))]:
+        main_logger.critical(f"{variable}: {variables[variable]}")
+    sys.exit(1)
