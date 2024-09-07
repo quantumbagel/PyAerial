@@ -164,7 +164,7 @@ def classify(msg) -> (dict, int):
     checked_data = data.copy()  # Sever references
 
     for message_type in data.keys():
-        for subcategory in message_type.keys():
+        for subcategory in data[message_type].keys():
             if data[message_type][subcategory] is None:  # Only save safe data
                 del checked_data[message_type][subcategory]  # Remove from checked data
 
