@@ -466,4 +466,5 @@ except Exception as e:  # Catch a crash and print information
                              or (type(variables[i])
                                  in [types.ModuleType, types.BuiltinFunctionType, types.FunctionType]))]:
         main_logger.critical(f"{variable}: {variables[variable]}")
-    sys.exit(1)
+
+    raise e
