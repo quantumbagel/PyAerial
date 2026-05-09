@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyaerial"
+version = "1.0.0"
+description = "Scanning software for ADS-B / ModeS - a successor to airstrik.py"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "quantumbagel"}
+]
+keywords = ["adsb", "modes", "aircraft", "tracking", "geofencing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "shapely",
+    "geopy",
+    "pymodes",
+    "requests",
+    "pyrtlsdr",
+    "kafka-python @ git+https://github.com/dpkp/kafka-python.git",
+    "pymongo",
+    "ruamel.yaml",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+
+[project.scripts]
+pyaerial = "pyaerial.__main__:main"
+pyaerial-statviewer = "pyaerial.statviewer:main"
+
+[project.urls]
+Homepage = "https://github.com/quantumbagel/PyAerial"
+Repository = "https://github.com/quantumbagel/PyAerial.git"
+Documentation = "https://github.com/quantumbagel/PyAerial#readme"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pyaerial*"]

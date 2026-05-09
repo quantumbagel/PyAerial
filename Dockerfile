@@ -7,8 +7,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteract
 COPY ./ /opt/PyAerial
 WORKDIR /opt/PyAerial
 
-# Install requirements
-RUN python3 -m pip install -r requirements.txt --break-system-packages
+# Install package (dependencies from pyproject.toml)
+RUN python3 -m pip install . --break-system-packages
 
 # Build dump1090
 RUN git clone https://github.com/flightaware/dump1090.git
@@ -16,4 +16,4 @@ RUN cd dump1090 && make RTLSDR=yes
 RUN cd ..
 
 # Run the program
-CMD ./dump1090/dump1090 --net --raw --quiet & python3 pyaerial.py
+CMD ./dump1090/dump1090 --net --raw --quiet & python3 -m pyaerial

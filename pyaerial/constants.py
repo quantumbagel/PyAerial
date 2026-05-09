@@ -4,6 +4,7 @@ Constants used by all PyAerial modules
 import operator
 
 CONFIG_FILE = "config.yaml"
+ENV_CONFIG_PATH = "PYAERIAL_CONFIG"
 
 # Data types
 STORE_INFO = "info"
@@ -78,7 +79,8 @@ LOGGING_LEVELS = {"debug": 10,
                   "warning": 30,
                   "error": 40}
 
-INTERFACES_FOLDER = "interfaces"
+# Receiver interface submodules live under pyaerial.interfaces
+INTERFACES_PACKAGE = "pyaerial.interfaces"
 
 
 # Home
@@ -95,10 +97,11 @@ CONFIG_ZONES_LEVELS_SECONDS = "seconds"
 # Categories
 CONFIG_CAT_METHOD = "alert_method"
 CONFIG_CAT_SAVE = "save"
-CONFIG_CAT_SAVE_TELEMETRY_METHOD = "telemetry_method"
-CONFIG_CAT_SAVE_CALCULATED_METHOD = "calculated_method"
+# Nested under save: telemetry / calculated, each a dict with per-field rules and "default"
+CONFIG_CAT_SAVE_TELEMETRY = "telemetry"
+CONFIG_CAT_SAVE_CALCULATED = "calculated"
 
-CONFIG_CAT_SAVE_METHOD_TYPES = [CONFIG_CAT_SAVE_TELEMETRY_METHOD, CONFIG_CAT_SAVE_CALCULATED_METHOD]
+CONFIG_CAT_SAVE_SECTIONS = [CONFIG_CAT_SAVE_TELEMETRY, CONFIG_CAT_SAVE_CALCULATED]
 
 # Alert messaging
 
@@ -116,9 +119,9 @@ CONFIG_COMP_TYPES = [STORE_LAT, STORE_LONG, STORE_ALT, STORE_VERT_SPEED, STORE_H
 # CTYPE = comparison type
 CONFIG_COMP_CTYPE_MINIMUM = "minimum"
 CONFIG_COMP_CTYPE_MAXIMUM = "maximum"
-CONFIG_COMP_CTYPES = {CONFIG_COMP_CTYPE_MAXIMUM: [STORE_LAT, STORE_LONG, STORE_VERT_SPEED, STORE_HORIZ_SPEED,
+CONFIG_COMP_CTYPES = {CONFIG_COMP_CTYPE_MAXIMUM: [STORE_LAT, STORE_LONG, STORE_ALT, STORE_VERT_SPEED, STORE_HORIZ_SPEED,
                                                   STORE_HEADING, STORE_DISTANCE, ALERT_CAT_ETA],
-                      CONFIG_COMP_CTYPE_MINIMUM: [STORE_LAT, STORE_LONG, STORE_VERT_SPEED, STORE_HORIZ_SPEED,
+                      CONFIG_COMP_CTYPE_MINIMUM: [STORE_LAT, STORE_LONG, STORE_ALT, STORE_VERT_SPEED, STORE_HORIZ_SPEED,
                                                   STORE_HEADING, STORE_DISTANCE, ALERT_CAT_ETA]}
 CONFIG_COMP_FUNCTIONS = {CONFIG_COMP_CTYPE_MAXIMUM: operator.le, CONFIG_COMP_CTYPE_MINIMUM: operator.ge}
 
@@ -166,4 +169,4 @@ STORAGE_ZONE = "zone"
 
 KAFKA_METHOD_ARGUMENT_SERVER = "server"
 
-CONFIGURATION = {}  # This configuration will be loaded by the main thread on startup
+CONFIGURATION = {}  # Loaded at startup before importing modules that snapshot it

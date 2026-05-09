@@ -1,7 +1,5 @@
 # PyAerial
 
-_scanning software for ADS-B / ModeS
-a.k.a. airstrik 2.0_
 
 
 ##  Project Concept
@@ -19,6 +17,32 @@ PyAerial will scan for nearby planes using the ModeS/ADS-B protocol and provide 
 - MongoDB support / modular saving framework if other databases are needed
 - Extremely versatile configuration with many different options for every possible use case
 
+## Running
+
+Install the package (from the repository root):
+
+```bash
+pip install -e .
+```
+
+Start the tracker (uses `./config.yaml`, or set `PYAERIAL_CONFIG` to another path):
+
+```bash
+python -m pyaerial
+# or
+pyaerial
+# optional:
+pyaerial --config /path/to/config.yaml
+```
+
+Configuration is validated on startup. The MongoDB stat viewer CLI:
+
+```bash
+pyaerial-statviewer
+```
+
+Optional: `PYAERIAL_OPENSKY_CSV` points to a CSV used for aircraft metadata (default: `./database.csv`).
+
 
 ## Formatting
 ### Configuration file example
@@ -27,7 +51,7 @@ general:
   mongodb: mongodb://localhost:27017
   backdate_packets: 10
   remember_planes: 30
-  packet_method: dump1090
+  duplicate_packet_merging: 5
   status_message_top_planes: 5
   advanced_status: true
   hz: 2
@@ -37,86 +61,49 @@ home:
   latitude: 36.6810752
   longitude: -78.8758528
 
-components:  # TODO: components
+receivers:
+  main:
+    method: dump1090
+    arguments:
+      tcp_connection_ip: localhost
+      tcp_connection_port: "30002"
+
+components:
   easy:
-    eta:
-      maximum: 120
     altitude:
       maximum: 10000
+    eta:
+      maximum: 120
 
 zones:
-  main:  # smaller area randomly picked out for testing
+  main:
     coordinates:
       [[35.753821, -78.909304],
       [35.755597, -78.904969],
-      [35.756642, -78.898232],
-      [35.755214, -78.892738],
-      [35.753333, -78.888490],
-      [35.749293, -78.889606],
-      [35.747343, -78.891494],
-      [35.746507, -78.895742],
-      [35.747482, -78.900806],
-      [35.748910, -78.906085],
-      [35.751348, -78.910205]]
+      [35.756642, -78.898232]]
     levels:
       warn:
         category: really_high_priority
         requirements: easy
         seconds: 60
-      alert:
-        category: really_high_priority
-        requirements: easy
-        seconds: 60
-
-  alternate: # Most of raleigh area
-    coordinates:
-      [[36.279595, -79.349321],
-      [35.943933, -79.534100],
-      [35.560548, -79.501141],
-      [35.058494, -79.138592],
-      [35.049501, -78.776043],
-      [35.184300, -78.248700],
-      [35.435327, -78.017987],
-      [35.801494, -77.963055],
-      [36.112746, -77.974041],
-      [36.254624, -78.226727],
-      [36.334318, -78.666180],
-      [36.325467, -78.929852],
-      [36.343168, -79.259442]]
-    levels:
-      not_inline_test:
-        category: warn
-        requirements: easy
-        seconds: 60
-      inline_test:
-        category:
-          method: print
-          save:
-            telemetry_method: all
-            calculated_method: all
-        requirements: easy
-        seconds: 60
 
 categories:
   really_high_priority:
-    method: print
+    alert_method: print
     save:
-      telemetry_method: all
-      calculated_method: all
-  warn:
-    method: print
-    save:
-      telemetry_method: all
-      calculated_method: all
-  alert:
-    method: print
-    save:
-      telemetry_method: all
-      calculated_method: all
+      telemetry:
+        default: all
+        # optional per-field overrides, e.g. latitude: decimate(5)
+      calculated:
+        default: all
 
 ```
 
-All names for anything can be customized in the `constants.py` file.
+Requirement strings under `zones/.../levels/.../requirements` are boolean expressions over **component** names, for example `lenient and critical`, using only `and`, `or`, `not`, and parentheses.
+
+Category `save` uses nested `telemetry` and `calculated` sections. Each section is a mapping that must include `default` (`all`, `none`, `decimate(N)`, `sdecimate(N,M)`) and may override individual fields (`latitude`, `altitude`, `horizontal_speed`, etc.).
+
+Key names for the YAML file are defined in [pyaerial/constants.py](pyaerial/constants.py).
 
 
 
@@ -141,8 +128,8 @@ All names for anything can be customized in the `constants.py` file.
 | `general/mongodb`                              | The URI of the MongoDB instance to connect to if MongoDB is set as the method to save packets                                                                                                                                                                                                                                                                         | `CONFIG_GENERAL_MONGODB`            |
 | `general/backdate_packets`                     | How many latitude/longitude packets back we look to perform a rough average when we calculate the heading. More = less variance, less = more variance.                                                                                                                                                                                                                | `CONFIG_GENERAL_BACKDATE`           |
 | `general/remember_planes`                      | How many seconds since the last packet we should keep the plane in RAM before saving it to MongoDB                                                                                                                                                                                                                                                                    | `CONFIG_GENERAL_REMEMBER`           |
-| `general/point_accuracy_threshold`             | The degree accuracy used for determining if we should "chase" geofences. This is just an optimization.                                                                                                                                                                                                                                                                | `CONFIG_GENERAL_PAT`                |
-| `general/packet_method`                        | How the program should gather packets. Options: `dump1090` or `python`. Dump1090 is significantly better, but requires `dump1090 --raw --net` to be running in another terminal.                                                                                                                                                                                      | `CONFIG_GENERAL_PACKET_METHOD`      |
+| `general/duplicate_packet_merging`           | Time window (seconds) for treating identical Mode S frames as duplicates across receivers.                                                                                                                                                                                                                | `CONFIG_GENERAL_MERGE_PACKETS`      |
+| `receivers`                                  | Named receiver entries. Each has `method` (`dump1090` or `py1090`) and `arguments` (TCP host/port or RTL index).                                                                                                                                                                                        | `CONFIG_RECEIVERS`                  |
 | `general/status_message_top_planes`            | How many of the "top planes" (most messages sent) to display in the status message sent every tick at the INFO logging level.                                                                                                                                                                                                                                         | `CONFIG_GENERAL_TOP_PLANES`         |
 | `general/advanced_status`                      | Whether "advanced status" should be used. THis contains more data, with callsigns and packet type breakdowns. Example: `INFO:Main:Tracking 5 planes. Top 5: AB5DE1/WUP31 (358, {5: 50, 3: 51, 0: 253, 1: 4}), A3965C/FFT3373 (216, {0: 115, 5: 50, 3: 46, 1: 5}), A95A1C/AAL2349 (177, {0: 143, 3: 19, 5: 14, 1: 1}), A80D40/JBU2929 (21, {0: 13, 5: 3, 3: 4, 1: 1})` | `CONFIG_GENERAL_ADVANCED_STATUS`    |
 | `general/hz`                                   | How many ticks per second to attempt. This is a maximum, not a minimum.                                                                                                                                                                                                                                                                                               | `CONFIG_GENERAL_HZ`                 |
@@ -153,13 +140,13 @@ All names for anything can be customized in the `constants.py` file.
 | `zones/[zone]/coordinates`                     | A list of lists containing the decimal lat/long coordinates that compose the geofence.                                                                                                                                                                                                                                                                                | `CONFIG_ZONES_COORDINATES`          |
 | `zones/[zone]/levels`                          | Contains information about the levels of triggers the geofence has.                                                                                                                                                                                                                                                                                                   | `CONFIG_ZONES_LEVELS`               |
 | `zones/[zone]/levels/[level]/category`         | The category (information about how to save and alert) that this level of the geofence is tied to                                                                                                                                                                                                                                                                     | `CONFIG_ZONES_LEVELS_CATEGORY`      |
-| `zones/[zone]/levels/[level]/time`             | The maximum ETA the plane must have relative to the geofence to trigger this level.                                                                                                                                                                                                                                                                                   | `CONFIG_ZONES_LEVELS_TIME`          |
-| `categories`                                   | Stores the categories (information for how alerts and saving works). Categories will only be used if they are put in at least one geofence                                                                                                                                                                                                                            | `CONFIG_CATEGORIES`                 |
-| `categories/[category]/method`                 | Which method to use when alerting. Current options: `print`, `kafka`                                                                                                                                                                                                                                                                                                  | `CONFIG_CAT_METHOD`                 |
-| `categories[category]/arguments`               | If applicable, put arguments for the method in here. The only option is `server` for the `kafka` method currently.                                                                                                                                                                                                                                                    | `CONFIG_CAT_ALERT_ARGUMENTS`        |
-| `categories/[category]/save`                   | Filters for saving to MongoDB. Existing methods: `all`, `none`, `decimate(X)`, `sdecimate(X,Y)`                                                                                                                                                                                                                                                                       | `CONFIG_CAT_SAVE`                   |
-| `categories/[category]/save/telemetry_method`  | What method to use for the telemetry data (stuff received by the ADS-B receiver with no inference).                                                                                                                                                                                                                                                                   | `CONFIG_CAT_SAVE_TELEMETRY_METHOD`  |
-| `categories/[category]/save/calculated_method` | What method to use for the calculated data (stuff we inferred from the ADS-B information, including corrected versions of telemetry data we already receive).                                                                                                                                                                                                         | `CONFIG_CAT_SAVE_CALCULATED_METHOD` |
+| `zones/[zone]/levels/[level]/seconds`          | Number of simulated seconds the requirement expression must hold to qualify for persistence for that level.                                                                                                                                                                                                                                                             | `CONFIG_ZONES_LEVELS_SECONDS`       |
+| `components`                                 | Named rule sets (e.g. altitude caps) referenced from zone level `requirements` expressions.                                                                                                                                                                                                                                                                            | `CONFIG_COMPONENTS`                 |
+| `categories`                                 | Named alert/save profiles referenced by zone levels (`category` field).                                                                                                                                                                                                                                                                                               | `CONFIG_CATEGORIES`                 |
+| `categories/[category]/alert_method`           | Which method to use when alerting. Current options: `print`, `kafka`                                                                                                                                                                                                                                                                                                  | `CONFIG_CAT_METHOD`                 |
+| `categories/[category]/arguments`               | If applicable, put arguments for the method in here. The only option is `server` for the `kafka` method currently.                                                                                                                                                                                                                                                    | `CONFIG_CAT_ALERT_ARGUMENTS`        |
+| `categories/[category]/save/telemetry`       | Save filters for raw receiver-derived fields. Must include `default`; optional per-field keys override `default` for that quantity.                                                                                                                                                                                                                                      | `CONFIG_CAT_SAVE` + `telemetry`     |
+| `categories/[category]/save/calculated`      | Save filters for derived fields (speed, heading, …). Same structure as `telemetry`.                                                                                                                                                                                                                                                                                  | `CONFIG_CAT_SAVE` + `calculated`    |
 
 
 ## Dependencies
@@ -179,13 +166,9 @@ ruamel.yaml  # For reading the configuration file
 
 ## TODOS
 
-- [ ] Finish `statviewer.py`
-- [ ] Configuration validator
-- [ ] Explanation for MongoDB saving filters in README
-- [ ] Add potential ray calculation bugfix that could possibly cause problems
-- [x] Add multireceiver support for packet redundancy
-- [ ] KML support for geofences
-- [ ] Fix bug with `ast` misparsing requirement names with numbers in them
-- [ ] Update README with latest versioning requirements
-- [ ] Callsign hexdb multithreading
+- [ ] KML import for geofence coordinates
+- [ ] Deeper stat viewer queries / `history` command
+- [ ] Optional live OpenSky API integration (CSV path is supported via `PYAERIAL_OPENSKY_CSV`)
+- [ ] Further ETA / ray intersection review and regression cases
+
 Feel free to report any bugs or issues you find. Happy tracking!
