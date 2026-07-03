@@ -7,6 +7,7 @@ general:
   hz: 2
   duplicate_packet_merging: 5
   logs: info  # debug, info, warning, or error
+  saver: mongo
 
 home:
   latitude: 36.6810752

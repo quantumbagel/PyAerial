@@ -12,12 +12,17 @@ services:
     depends_on:
       - mongodb
     network_mode: host
+    environment:
+      PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
   mongodb:
     image: mongo:latest
     container_name: pyaerial_database
     restart: always
     ports:
-      - '27017:27017'
+      - "27017:27017"
     volumes:
-      - /opt/PyAerial/db:/data/db
+      - pyaerial_mongo:/data/db
     network_mode: host
+
+volumes:
+  pyaerial_mongo:

@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyaerial"
+version = "2.0.0"
+description = "Scanning software for ADS-B / Mode S with geofence-based early warning, alerting, and persistence."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Julian Reder", email = "quantumbagel@example.com" }]
+license = { text = "MIT" }
+keywords = ["ads-b", "modes", "aviation", "geofence", "tracking"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+dependencies = [
+    "shapely>=2.0",
+    "geopy>=2.4",
+    "pyModeS>=2.18",
+    "requests>=2.31",
+    "pymongo>=4.6",
+    "ruamel.yaml>=0.18",
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+sdr = ["pyrtlsdr>=0.3", "numpy>=1.26"]
+kafka = ["kafka-python>=2.0.2"]
+all = ["pyrtlsdr>=0.3", "numpy>=1.26", "kafka-python>=2.0.2"]
+
+[project.urls]
+Homepage = "https://github.com/quantumbagel/PyAerial"
+Repository = "https://github.com/quantumbagel/PyAerial"
+
+[project.scripts]
+pyaerial = "pyaerial.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pyaerial = ["examples/*.yaml"]

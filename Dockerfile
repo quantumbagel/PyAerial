@@ -1,19 +1,19 @@
 FROM ubuntu:24.04
 
-# Install system dependencies
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt install -y git build-essential fakeroot sudo debhelper librtlsdr-dev pkg-config libncurses5-dev gnupg librtlsdr-dev libusb-dev python3 python3-dev python3-pip rtl-sdr
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    git build-essential pkg-config librtlsdr-dev libusb-dev python3 python3-pip python3-venv rtl-sdr && \
+    rm -rf /var/lib/apt/lists/*
 
-# Create workdir
-COPY ./ /opt/PyAerial
 WORKDIR /opt/PyAerial
+COPY . /opt/PyAerial
 
-# Install requirements
-RUN python3 -m pip install -r requirements.txt --break-system-packages
+RUN python3 -m pip install --break-system-packages ".[all]"
 
-# Build dump1090
-RUN git clone https://github.com/flightaware/dump1090.git
-RUN cd dump1090 && make RTLSDR=yes
-RUN cd ..
+# Build dump1090 for the dump1090 receiver
+RUN git clone --depth 1 https://github.com/flightaware/dump1090.git /opt/dump1090 && \
+    make -C /opt/dump1090 RTLSDR=yes
 
-# Run the program
-CMD ./dump1090/dump1090 --net --raw --quiet & python3 pyaerial.py
+ENV PYAERIAL_CONFIG=/opt/PyAerial/config.yaml
+
+CMD /opt/dump1090/dump1090 --net --raw --quiet & exec pyaerial run -c "$PYAERIAL_CONFIG"

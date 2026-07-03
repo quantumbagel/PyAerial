@@ -1,0 +1,28 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# JVM / dump1090 crash logs
+hs_err_pid*.log
+*.log
+
+# Runtime data
+data/
+*.sqlite
+*.sqlite3
+aircraft.db
+database.csv

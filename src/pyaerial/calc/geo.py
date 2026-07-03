@@ -1,0 +1,71 @@
+"""
+Geospatial math: heading, speed, distance, and geofence entry-time estimates.
+
+Geofences are passed in as prebuilt :class:`shapely.Polygon` objects so they can
+be computed once (see :func:`build_polygons`) rather than rebuilt every tick.
+"""
+from __future__ import annotations
+
+import math
+
+from geopy.distance import geodesic
+from shapely import LineString, Point, Polygon
+from shapely.ops import nearest_points
+
+
+def build_polygons(zones: dict) -> dict[str, Polygon]:
+    """Build a ``{zone_name: Polygon}`` map from the configured zones."""
+    return {name: Polygon(zone.coordinates) for name, zone in zones.items()}
+
+
+def calculate_heading(previous: tuple[float, float], current: tuple[float, float]) -> float:
+    """Great-circle initial bearing (degrees from true north) between two points."""
+    pi_c = math.pi / 180
+    first_lat, first_lon = previous[0] * pi_c, previous[1] * pi_c
+    second_lat, second_lon = current[0] * pi_c, current[1] * pi_c
+
+    y = math.sin(second_lon - first_lon) * math.cos(second_lat)
+    x = (math.cos(first_lat) * math.sin(second_lat)) - (
+        math.sin(first_lat) * math.cos(second_lat) * math.cos(second_lon - first_lon))
+    return ((math.atan2(y, x) * 180 / math.pi) + 360) % 360
+
+
+def calculate_speed(previous: tuple[float, float], current: tuple[float, float],
+                    previous_time: float, current_time: float) -> float:
+    """Average ground speed (km/h) implied by moving between two fixes."""
+    elapsed = current_time - previous_time
+    if elapsed <= 0:
+        return 0.0
+    return geodesic(previous, current).m / elapsed * 3.6
+
+
+def distance_to_polygon(polygon: Polygon, position: tuple[float, float]) -> float:
+    """Shortest distance (km) from ``position`` to the edge of ``polygon``."""
+    point = Point(position)
+    if polygon.contains(point):
+        return 0.0
+    nearest = nearest_points(polygon, point)[0]
+    return geodesic((nearest.x, nearest.y), position).km
+
+
+def time_to_enter_geofence(position: tuple[float, float], heading: float, speed: float,
+                           polygon: Polygon, max_time: int) -> float:
+    """
+    Estimate the seconds until a plane at ``position`` (heading/speed) enters the
+    geofence, or ``math.inf`` if the projected path never intersects it.
+    """
+    if speed <= 0:
+        return math.inf
+    if polygon.contains(Point(position)):
+        return 0.0
+
+    distance_approx = max_time * speed / 3600  # km travelled in max_time
+    destination = geodesic(kilometers=distance_approx).destination(position, heading)
+    ray = LineString([Point(position), Point(destination.latitude, destination.longitude)])
+
+    intersection = ray.intersection(polygon)
+    if intersection.is_empty or not list(intersection.coords):
+        return math.inf
+
+    entry = list(intersection.coords)[0]
+    return geodesic(position, entry).km / speed * 3600
