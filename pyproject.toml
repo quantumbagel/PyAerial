@@ -33,8 +33,8 @@ dependencies = [
 
 [project.optional-dependencies]
 sdr = ["pyrtlsdr>=0.3", "numpy>=1.26"]
-kafka = ["kafka-python>=2.0.2"]
-all = ["pyrtlsdr>=0.3", "numpy>=1.26", "kafka-python>=2.0.2"]
+kafka = ["kafka-python-ng>=2.2.2"]
+all = ["pyrtlsdr>=0.3", "numpy>=1.26", "kafka-python-ng>=2.2.2"]
 
 [project.urls]
 Homepage = "https://github.com/quantumbagel/PyAerial"

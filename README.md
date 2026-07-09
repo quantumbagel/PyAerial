@@ -32,7 +32,7 @@ Optional extras:
 | Extra | Packages | Enables |
 |-------|----------|---------|
 | `sdr` | `pyrtlsdr`, `numpy` | `py1090` RTL-SDR receiver |
-| `kafka` | `kafka-python` | Kafka alerter |
+| `kafka` | `kafka-python-ng` | Kafka alerter |
 | `all` | both | full feature set |
 
 Optional: build the aircraft metadata index (requires `database.csv` from OpenSky):
@@ -260,7 +260,7 @@ Core (from `pyproject.toml`, installed via `pip install -e .`):
 Optional extras (`pip install -e ".[sdr]"` / `".[kafka]"` / `".[all]"`):
 
 - pyrtlsdr, numpy — RTL-SDR receiver
-- kafka-python — Kafka alerter
+- kafka-python-ng — Kafka alerter
 
 External: `dump1090` (recommended) for the `dump1090` receiver.
 
