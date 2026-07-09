@@ -7,7 +7,10 @@ level requirements are satisfied.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
+import math
+import threading
 from typing import TYPE_CHECKING
 
 import requests
@@ -53,11 +56,16 @@ class PlaneCalculator:
         self.aircraft_db = aircraft_db
         self.backdate = config.general.backdate_packets
         self._alerters: dict[tuple[str, str], Alerter] = {}
+        # Concurrency for non-blocking API lookups of aircraft callsigns/registrations
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="callsign-lookup")
+        self._pending_lookups: set[str] = set()
+        self._lock = threading.Lock()
 
     def close(self) -> None:
         for alerter in self._alerters.values():
             alerter.close()
         self._alerters.clear()
+        self._executor.shutdown(wait=False)
 
     def calculate_all(self, planes: dict[str, dict]) -> None:
         for plane in planes.values():
@@ -94,6 +102,23 @@ class PlaneCalculator:
         final_speed, speed_time = self._choose_speed(plane, speed, current_time)
         final_heading = self._choose_heading(plane, heading, current_time)
 
+        # Smooth speed and heading using Exponential Moving Average (EMA) to filter out jitter/noise
+        prev_speed_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HORIZ_SPEED, [])
+        if prev_speed_series:
+            alpha = 0.3  # Higher values = faster response, lower values = more smoothing
+            final_speed = alpha * final_speed + (1.0 - alpha) * prev_speed_series[-1].value
+
+        prev_heading_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HEADING, [])
+        if prev_heading_series:
+            alpha = 0.3
+            prev_heading = prev_heading_series[-1].value
+            # Correctly handle angular wrap-around at 360/0 degrees by averaging unit vectors
+            rad_current = math.radians(final_heading)
+            rad_prev = math.radians(prev_heading)
+            sin_val = alpha * math.sin(rad_current) + (1.0 - alpha) * math.sin(rad_prev)
+            cos_val = alpha * math.cos(rad_current) + (1.0 - alpha) * math.cos(rad_prev)
+            final_heading = (math.degrees(math.atan2(sin_val, cos_val)) + 360.0) % 360.0
+
         patch_append(plane, STORE_CALC_DATA, STORE_HORIZ_SPEED,
                      Datum(final_speed, speed_time))
         patch_append(plane, STORE_CALC_DATA, STORE_HEADING,
@@ -126,13 +151,28 @@ class PlaneCalculator:
             return info[STORE_CALLSIGN] or ""
 
         icao = info[STORE_ICAO]
-        callsign = _lookup_callsign_hexdb(icao)
-        if callsign is None and self.aircraft_db and self.aircraft_db.available:
-            record = self.aircraft_db.lookup(icao)
-            if record:
-                callsign = record.get("callsign") or record.get("registration")
-        info[STORE_CALLSIGN] = callsign or ""
-        return info[STORE_CALLSIGN]
+        with self._lock:
+            if icao in self._pending_lookups:
+                return ""
+            self._pending_lookups.add(icao)
+
+        self._executor.submit(self._bg_lookup_callsign, plane, icao)
+        return ""
+
+    def _bg_lookup_callsign(self, plane: dict, icao: str) -> None:
+        try:
+            callsign = _lookup_callsign_hexdb(icao)
+            if callsign is None and self.aircraft_db and self.aircraft_db.available:
+                record = self.aircraft_db.lookup(icao)
+                if record:
+                    callsign = record.get("callsign") or record.get("registration")
+            plane[STORE_INFO][STORE_CALLSIGN] = callsign or ""
+        except Exception as exc:
+            log.debug("Background callsign lookup failed for %s: %s", icao, exc)
+            plane[STORE_INFO][STORE_CALLSIGN] = ""
+        finally:
+            with self._lock:
+                self._pending_lookups.discard(icao)
 
     def _check_alerts(self, plane: dict, position: tuple[float, float],
                       heading: float, speed: float, callsign: str) -> None:

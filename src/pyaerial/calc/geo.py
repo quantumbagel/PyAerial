@@ -59,13 +59,40 @@ def time_to_enter_geofence(position: tuple[float, float], heading: float, speed:
     if polygon.contains(Point(position)):
         return 0.0
 
-    distance_approx = max_time * speed / 3600  # km travelled in max_time
-    destination = geodesic(kilometers=distance_approx).destination(position, heading)
-    ray = LineString([Point(position), Point(destination.latitude, destination.longitude)])
+    # 1. Bounding box lower bound distance check (extremely fast early-return)
+    min_lat, min_lon, max_lat, max_lon = polygon.bounds
+    lat_diff = max(0.0, min_lat - position[0], position[0] - max_lat)
+    max_abs_lat = max(abs(position[0]), abs(min_lat), abs(max_lat))
+    if max_abs_lat < 89.0:
+        lon_diff = max(0.0, min_lon - position[1], position[1] - max_lon)
+        min_dist_lb = max(lat_diff * 110.5, lon_diff * 111.3 * math.cos(math.radians(max_abs_lat)))
+    else:
+        min_dist_lb = lat_diff * 110.5
 
-    intersection = ray.intersection(polygon)
-    if intersection.is_empty or not list(intersection.coords):
+    distance_approx = max_time * speed / 3600  # km
+    if min_dist_lb > distance_approx:
         return math.inf
 
-    entry = list(intersection.coords)[0]
+    # 2. Earth's curvature adaptive densification
+    if distance_approx <= 100.0:
+        dest = geodesic(kilometers=distance_approx).destination(position, heading)
+        ray = LineString([Point(position), Point(dest.latitude, dest.longitude)])
+    else:
+        step_km = 100.0
+        num_steps = max(2, min(int(distance_approx / step_km), 15))
+        points = [Point(position)]
+        for i in range(1, num_steps + 1):
+            fraction = i / num_steps
+            dest = geodesic(kilometers=distance_approx * fraction).destination(position, heading)
+            points.append(Point(dest.latitude, dest.longitude))
+        ray = LineString(points)
+
+    # 3. Robust entry calculation using nearest_points to support multi-part geometries
+    intersection = ray.intersection(polygon)
+    if intersection.is_empty:
+        return math.inf
+
+    _, entry_point = nearest_points(Point(position), intersection)
+    entry = (entry_point.x, entry_point.y)
     return geodesic(position, entry).km / speed * 3600
+
