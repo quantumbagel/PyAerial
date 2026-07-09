@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass
 
 import pyModeS as pms
+from pyModeS.util import typecode as pms_typecode, icao as pms_icao
 
 from pyaerial.config.schema import HomeConfig
 from pyaerial.constants import (
@@ -51,10 +52,16 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
   Assumes downlink format 17 or 18. Returns ``None`` for messages that should
   be ignored (invalid ICAO, unsupported typecode, etc.).
     """
-    typecode = pms.typecode(msg)
+    try:
+        typecode = pms_typecode(msg)
+    except Exception:
+        return None
 
     if typecode == -1:
-        icao = pms.icao(msg)
+        try:
+            icao = pms_icao(msg)
+        except Exception:
+            return None
         if not _valid_icao(icao):
             return None
         return ClassifiedMessage(
@@ -66,7 +73,10 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
             typecode_category=CAT_UNKNOWN,
         )
 
-    icao = pms.icao(msg)
+    try:
+        icao = pms_icao(msg)
+    except Exception:
+        return None
     if not _valid_icao(icao):
         return None
 
@@ -74,11 +84,18 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
     category = CAT_UNKNOWN
 
     if 1 <= typecode <= 4:
-        ca = pms.adsb.category(msg)
+        try:
+            decoded = pms.decode(msg)
+        except Exception:
+            return None
+        ca = decoded.get("category")
+        callsign = decoded.get("callsign", "")
+        if callsign:
+            callsign = callsign.replace("_", "")
         data = {
             STORE_INFO: {
                 STORE_ICAO: icao,
-                STORE_CALLSIGN: pms.adsb.callsign(msg).replace("_", ""),
+                STORE_CALLSIGN: callsign,
                 STORE_PLANE_CATEGORY: [typecode, ca],
             },
             STORE_RECV_DATA: {},
@@ -86,36 +103,57 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
         category = CAT_IDENT
 
     elif 5 <= typecode <= 8:
-        lat, lon = pms.adsb.position_with_ref(msg, home.latitude, home.longitude)
-        speed, angle, _, _, _, _ = pms.adsb.velocity(msg, source=True)
+        try:
+            decoded = pms.decode(msg, surface_ref=(home.latitude, home.longitude))
+        except Exception:
+            return None
+        lat = decoded.get("latitude")
+        lon = decoded.get("longitude")
+        speed = decoded.get("groundspeed")
+        angle = decoded.get("track")
         data = {
             STORE_INFO: {STORE_ICAO: icao},
             STORE_RECV_DATA: {
                 STORE_LAT: lat,
                 STORE_LONG: lon,
-                STORE_HORIZ_SPEED: speed * 1.852,
+                STORE_HORIZ_SPEED: speed * 1.852 if speed is not None else None,
                 STORE_HEADING: angle,
             },
         }
         category = CAT_SURFACE
 
     elif 9 <= typecode <= 18 or 20 <= typecode <= 22:
-        lat, lon = pms.adsb.position_with_ref(msg, home.latitude, home.longitude)
-        alt = pms.adsb.altitude(msg) * 0.3048
+        try:
+            decoded = pms.decode(msg, reference=(home.latitude, home.longitude))
+        except Exception:
+            return None
+        lat = decoded.get("latitude")
+        lon = decoded.get("longitude")
+        alt = decoded.get("altitude")
         data = {
             STORE_INFO: {STORE_ICAO: icao},
-            STORE_RECV_DATA: {STORE_LAT: lat, STORE_LONG: lon, STORE_ALT: alt},
+            STORE_RECV_DATA: {
+                STORE_LAT: lat,
+                STORE_LONG: lon,
+                STORE_ALT: alt * 0.3048 if alt is not None else None
+            },
         }
         category = CAT_AIRBORNE_BARO if typecode <= 18 else CAT_AIRBORNE_GNSS
 
     elif typecode == 19:
-        speed, angle, vert_rate, _, _, _ = pms.adsb.velocity(msg, source=True)
+        try:
+            decoded = pms.decode(msg)
+        except Exception:
+            return None
+        speed = decoded.get("groundspeed")
+        angle = decoded.get("track")
+        vert_rate = decoded.get("vertical_rate")
         data = {
             STORE_INFO: {STORE_ICAO: icao},
             STORE_RECV_DATA: {
-                STORE_HORIZ_SPEED: speed * 1.852,
+                STORE_HORIZ_SPEED: speed * 1.852 if speed is not None else None,
                 STORE_HEADING: angle,
-                STORE_VERT_SPEED: vert_rate * 0.00508,
+                STORE_VERT_SPEED: vert_rate * 0.00508 if vert_rate is not None else None,
             },
         }
         category = CAT_VELOCITY

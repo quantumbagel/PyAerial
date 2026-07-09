@@ -11,7 +11,7 @@ import warnings
 from typing import Any
 
 import numpy as np
-import pyModeS as pms
+from pyModeS.util import bin2hex, crc, df
 
 from pyaerial.receivers import Receiver, register_receiver
 
@@ -97,7 +97,7 @@ class Py1090Receiver(Receiver):
 
             i = frame_start + frame_index
             if bits:
-                msg_hex = pms.bin2hex("".join(str(b) for b in bits))
+                msg_hex = bin2hex("".join(str(b) for b in bits))
                 if _check_msg(msg_hex):
                     messages.append([msg_hex, time.time()])
 
@@ -119,7 +119,7 @@ class Py1090Receiver(Receiver):
                 self.signal_buffer.extend(np.absolute(data).tolist())
                 if len(self.signal_buffer) >= BUFFER_SIZE:
                     for msg, timestamp in self._process_buffer():
-                        if pms.df(msg) in (17, 18):  # true ADS-B
+                        if df(msg) in (17, 18):  # true ADS-B
                             self.emit(msg, timestamp)
         finally:
             try:
@@ -136,12 +136,12 @@ def _check_preamble(pulses) -> bool:
 
 
 def _check_msg(msg: str) -> bool:
-    df = pms.df(msg)
+    msg_df = df(msg)
     length = len(msg)
-    if df == 17 and length == 28:
-        return pms.crc(msg) == 0
-    if df in (20, 21) and length == 28:
+    if msg_df == 17 and length == 28:
+        return crc(msg) == 0
+    if msg_df in (20, 21) and length == 28:
         return True
-    if df in (4, 5, 11) and length == 14:
+    if msg_df in (4, 5, 11) and length == 14:
         return True
     return False
