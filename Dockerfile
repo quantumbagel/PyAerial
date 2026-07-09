@@ -2,7 +2,7 @@ FROM ubuntu:24.04
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    git build-essential pkg-config librtlsdr-dev libusb-dev python3 python3-pip python3-venv rtl-sdr && \
+    git build-essential pkg-config librtlsdr-dev libusb-dev libncurses-dev python3 python3-pip python3-venv rtl-sdr && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/PyAerial
