@@ -2,7 +2,7 @@
 
 _scanning software for ADS-B / Mode S — airstrik 2.0, rev 2_
 
-PyAerial listens for nearby aircraft using the Mode S / ADS-B protocol, tracks them in memory, evaluates user-defined geofences, fires alerts, and persists live flights, telemetry, and alert events to MongoDB for the web portal.
+PyAerial listens for nearby aircraft using the Mode S / ADS-B protocol, tracks them in memory, evaluates user-defined geofences, fires alerts, buffers live flights in Redis for the web portal, and persists retained completed flights to MongoDB.
 
 Version 2 is an installable Python package with typed configuration, plugin registries for receivers and alerters, centralized logging, and a CLI.
 
@@ -12,8 +12,9 @@ Version 2 is an installable Python package with typed configuration, plugin regi
 - Multiple simultaneous receivers (e.g. dump1090 TCP + RTL-SDR)
 - Geofence rules with field constraints and ETA-based alerting
 - Pluggable alerters (`print`, `kafka`)
-- Unified MongoDB store for live flights, completed tracks, and alert events
-- Web portal with live map, flight history, and alert timeline
+- Redis live store for in-flight flights, telemetry, and alert events
+- MongoDB history store for retained completed flights
+- Web portal with Live and Historical views
 - SQLite-backed aircraft metadata index (built from OpenSky `database.csv`)
 - Validated YAML configuration with `pyaerial validate`
 - Interactive MongoDB browser via `pyaerial statview`
@@ -46,7 +47,7 @@ pyaerial build-db --csv database.csv -o aircraft.db
 ## Quick start
 
 1. Edit `config.yaml` (see [Configuration](#configuration) below).
-2. Start MongoDB (or use `docker compose up`).
+2. Start MongoDB and Redis (or use `docker compose up`).
 3. Start a message source — for dump1090:
 
    ```bash
@@ -92,6 +93,7 @@ Environment overrides (applied on top of the config file):
 | Variable | Config key |
 |----------|------------|
 | `PYAERIAL_MONGODB` | `database.uri` |
+| `PYAERIAL_REDIS` | `database.redis_uri` |
 | `PYAERIAL_LOG_LEVEL` | `logging.level` |
 | `PYAERIAL_LOG_FILE` | `logging.file` |
 | `PYAERIAL_HZ` | `tracking.hz` |
@@ -104,7 +106,7 @@ See [`config.yaml`](config.yaml) and [`src/pyaerial/examples/config.yaml`](src/p
 
 | Section | Purpose |
 |---------|---------|
-| `database` | MongoDB connection URI (and optional database name) |
+| `database` | MongoDB and Redis connection URIs (optional MongoDB database name) |
 | `tracking` | Tick rate, plane retention, deduplication, status output |
 | `logging` | Log level and optional log file |
 | `home` | Receiver position for ADS-B position decoding |
@@ -116,6 +118,7 @@ See [`config.yaml`](config.yaml) and [`src/pyaerial/examples/config.yaml`](src/p
 ```yaml
 database:
   uri: mongodb://localhost:27017
+  redis_uri: redis://localhost:6379/0
   # name: pyaerial   # optional; defaults to URI path or pyaerial
 ```
 
@@ -166,11 +169,19 @@ zones:
 
 Field constraints use `min` / `max` on telemetry fields such as `altitude`, `horizontal_speed`, `direction`, `distance`, and `eta`.
 
-## Data model (MongoDB)
+## Data model
+
+### Redis (live)
+
+Live flights, telemetry points, and alert events are buffered in Redis while a flight is active. Keys are cleared when the flight expires.
+
+### MongoDB (historical)
+
+Retained flights are written once on flight end (when alerts fired or a `retain: true` rule matched).
 
 | Collection | Purpose |
 |------------|---------|
-| `flights` | One document per tracked flight (`status`: `live` or `completed`) |
+| `flights` | Retained completed flight documents |
 | `telemetry` | Track points keyed by `flight_id` + `timestamp` |
 | `alerts` | Alert event log with zone, level, position, and timestamp |
 
@@ -180,11 +191,11 @@ Flight IDs use the form `{icao}-{first_packet_timestamp}` for both live and hist
 
 | Route | Description |
 |-------|-------------|
-| `GET /api/flights` | Live + recent retained flights |
-| `GET /api/flight?flight_id=` | Flight metadata and raw messages |
-| `GET /api/telemetry?flight_id=` | Track points |
-| `GET /api/live?since=` | Incremental live telemetry |
-| `GET /api/alerts?since=&flight_id=&level=` | Alert events |
+| `GET /api/flights?view=live\|history` | Live flights (Redis) or retained history (MongoDB) |
+| `GET /api/flight?flight_id=&view=` | Flight metadata and raw messages |
+| `GET /api/telemetry?flight_id=&view=` | Track points |
+| `GET /api/live?since=` | Incremental live telemetry (Redis) |
+| `GET /api/alerts?since=&flight_id=&level=&view=` | Alert events |
 
 ## Package layout
 
@@ -193,7 +204,7 @@ src/pyaerial/
   cli.py              CLI entrypoint
   engine.py           Main loop and receiver orchestration
   tracker.py          Plane state and deduplication
-  store/              Unified MongoDB persistence
+  store/              Redis live store + MongoDB history persistence
   webapp.py           Portal server and UI
   config/             Typed schema and loader
   receivers/          Receiver plugin registry
@@ -208,7 +219,7 @@ src/pyaerial/
 docker compose up --build
 ```
 
-Runs the engine (`pyaerial`) and web portal (`pyaerial web`) against a shared MongoDB instance on host networking. No SQLite IPC file is required between processes.
+Runs the engine (`pyaerial`) and web portal (`pyaerial web`) against shared MongoDB and Redis instances on host networking.
 
 ## Dependencies
 
@@ -216,7 +227,8 @@ Core (from `pyproject.toml`, installed via `pip install -e .`):
 
 - shapely, geopy — geofence math
 - pyModeS — ADS-B decoding
-- pymongo — MongoDB persistence
+- pymongo — MongoDB historical persistence
+- redis — live flight buffer
 - pydantic, ruamel.yaml — configuration
 - requests — optional callsign lookup
 

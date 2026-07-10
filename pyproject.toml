@@ -27,6 +27,7 @@ dependencies = [
     "pyModeS>=3.0.0",
     "requests>=2.31",
     "pymongo>=4.6",
+    "redis>=5.0",
     "ruamel.yaml>=0.18",
     "pydantic>=2.5",
 ]

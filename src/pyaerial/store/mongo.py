@@ -1,4 +1,4 @@
-"""Unified MongoDB persistence for live flights, telemetry, and alert events."""
+"""MongoDB persistence for retained historical flights, telemetry, and alerts."""
 from __future__ import annotations
 
 import logging
@@ -13,11 +13,6 @@ from shapely import Polygon
 from pyaerial.calc import evaluate, geo
 from pyaerial.config.schema import Config
 from pyaerial.constants import (
-    ALERT_CAT_ETA,
-    ALERT_CAT_REASON,
-    ALERT_CAT_TYPE,
-    ALERT_CAT_ZONE,
-    STORE_ALT,
     STORE_CALC_DATA,
     STORE_CALLSIGN,
     STORE_FIRST_PACKET,
@@ -30,6 +25,7 @@ from pyaerial.constants import (
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
     STORE_RECV_DATA,
+    STORE_ALT,
 )
 from pyaerial.models import get_latest
 
@@ -37,7 +33,6 @@ log = logging.getLogger("pyaerial.store")
 
 _RECONNECT_DELAY = 2.0
 _ETA_HORIZON = 100_000
-_FLIGHT_STATUS_LIVE = "live"
 _FLIGHT_STATUS_COMPLETED = "completed"
 
 
@@ -47,8 +42,49 @@ def flight_id_for_plane(plane: dict) -> str:
     return f"{icao}-{int(first_packet)}"
 
 
+def build_telemetry_docs(plane: dict, flight_id: str, icao: str) -> list[dict[str, Any]]:
+    """Build telemetry documents from a plane's in-memory time series."""
+    lat_series = plane.get(STORE_RECV_DATA, {}).get(STORE_LAT, [])
+    if not lat_series:
+        return []
+
+    docs: list[dict[str, Any]] = []
+    for lat_datum in lat_series:
+        lon_datum = get_latest(STORE_RECV_DATA, STORE_LONG, plane, lat_datum.time)
+        if lon_datum is None:
+            continue
+        alt_datum = get_latest(STORE_RECV_DATA, STORE_ALT, plane, lat_datum.time)
+        speed_datum = (
+            get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
+            or get_latest(STORE_RECV_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
+        )
+        heading_datum = (
+            get_latest(STORE_CALC_DATA, STORE_HEADING, plane, lat_datum.time)
+            or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, lat_datum.time)
+        )
+        doc: dict[str, Any] = {
+            "flight_id": flight_id,
+            "icao": icao,
+            "timestamp": lat_datum.time,
+            "latitude": lat_datum.value,
+            "longitude": lon_datum.value,
+            "position": {
+                "type": "Point",
+                "coordinates": [lon_datum.value, lat_datum.value],
+            },
+        }
+        if alt_datum is not None:
+            doc["altitude"] = alt_datum.value
+        if speed_datum is not None:
+            doc["speed"] = speed_datum.value
+        if heading_datum is not None:
+            doc["heading"] = heading_datum.value
+        docs.append(doc)
+    return docs
+
+
 class MongoStore:
-    """Single MongoDB writer for engine live updates, alerts, and finalization."""
+    """MongoDB writer for retained completed flights only."""
 
     def __init__(self, config: Config, polygons: dict[str, Polygon]):
         self.config = config
@@ -56,26 +92,7 @@ class MongoStore:
         self.uri = config.database.uri
         self.client: pymongo.MongoClient | None = None
         self.db: pymongo.database.Database | None = None
-        self._last_telemetry_ts: dict[str, float] = {}
         self._connect()
-        self.recover_stale_live_flights()
-
-    def recover_stale_live_flights(self) -> None:
-        """Mark live flights from a previous engine session as completed."""
-        if not self._ensure_connected():
-            return
-        assert self.db is not None
-        cutoff = time.time() - self.config.tracking.remember_planes
-        try:
-            result = self.db.get_collection("flights").update_many(
-                {"status": _FLIGHT_STATUS_LIVE, "end_time": {"$lt": cutoff}},
-                {"$set": {"status": _FLIGHT_STATUS_COMPLETED}},
-            )
-            if result.modified_count:
-                log.info("Recovered %d stale live flight(s) from a previous session.",
-                         result.modified_count)
-        except PyMongoError as exc:
-            log.warning("Could not recover stale live flights: %s", exc)
 
     def _connect(self) -> None:
         self.client = pymongo.MongoClient(
@@ -105,6 +122,7 @@ class MongoStore:
         flights.create_index([("icao", pymongo.ASCENDING)])
         flights.create_index([("status", pymongo.ASCENDING)])
         flights.create_index([("end_time", pymongo.DESCENDING)])
+        flights.create_index([("retained", pymongo.ASCENDING)])
 
         telemetry = self.db.get_collection("telemetry")
         telemetry.create_index([("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)])
@@ -135,65 +153,19 @@ class MongoStore:
                 time.sleep(_RECONNECT_DELAY)
                 return False
 
-    def write_live_planes(self, planes: dict[str, dict]) -> None:
-        if not planes or not self._ensure_connected():
-            return
-        assert self.db is not None
-        for plane in planes.values():
-            self._upsert_live_flight(plane)
-
-    def record_alert(self, plane: dict, meta: dict[str, Any], payload: dict[str, Any],
-                     timestamp: float | None = None) -> None:
+    def finalize_plane(self, plane: dict, *, alerts: list[dict[str, Any]] | None = None) -> None:
+        """Persist a completed flight to Mongo if retention rules are met."""
         if not self._ensure_connected():
             return
         assert self.db is not None
         flight_id = flight_id_for_plane(plane)
-        event_time = timestamp or time.time()
-        doc = {
-            "flight_id": flight_id,
-            "icao": meta[STORE_ICAO].lower(),
-            "callsign": meta.get(STORE_CALLSIGN) or "",
-            "zone": meta.get(ALERT_CAT_ZONE, ""),
-            "level": meta.get(ALERT_CAT_TYPE, ""),
-            "eta": meta.get(ALERT_CAT_ETA),
-            "reason": meta.get(ALERT_CAT_REASON),
-            "timestamp": event_time,
-            "position": {
-                "type": "Point",
-                "coordinates": [payload.get(STORE_LONG), payload.get(STORE_LAT)],
-            },
-            "altitude": payload.get(STORE_ALT),
-        }
-        try:
-            self.db.get_collection("alerts").insert_one(doc)
-        except PyMongoError as exc:
-            log.error("Failed to record alert for %s: %s", flight_id, exc)
-
-    def finalize_plane(self, plane: dict) -> None:
-        if not self._ensure_connected():
-            return
-        assert self.db is not None
-        flight_id = flight_id_for_plane(plane)
-        retained = self._should_retain(plane, flight_id)
+        alert_docs = alerts or []
+        retained = self._should_retain(plane, alert_docs)
         if retained:
-            self._mark_completed(plane, flight_id, retained=True)
+            self._persist_completed_flight(plane, flight_id, alert_docs)
             log.debug("Retained completed flight %s", flight_id)
         else:
-            self._delete_flight_data(flight_id, plane[STORE_INFO][STORE_ICAO].lower())
             log.debug("Discarded uninteresting flight %s", flight_id)
-        self._last_telemetry_ts.pop(flight_id, None)
-
-    def finalize_all_live(self) -> None:
-        if not self._ensure_connected():
-            return
-        assert self.db is not None
-        cursor = self.db.get_collection("flights").find({"status": _FLIGHT_STATUS_LIVE}, {"_id": 1})
-        for doc in cursor:
-            flight_id = doc["_id"]
-            self.db.get_collection("flights").update_one(
-                {"_id": flight_id},
-                {"$set": {"status": _FLIGHT_STATUS_COMPLETED, "end_time": time.time()}},
-            )
 
     def close(self) -> None:
         if self.client is not None:
@@ -201,94 +173,8 @@ class MongoStore:
             self.client = None
             self.db = None
 
-    def _upsert_live_flight(self, plane: dict) -> None:
-        assert self.db is not None
-        info = plane.get(STORE_INFO, {})
-        internal = plane.get(STORE_INTERNAL, {})
-        flight_id = flight_id_for_plane(plane)
-        icao = info[STORE_ICAO].lower()
-        first_packet = internal[STORE_FIRST_PACKET]
-        last_packet = internal[STORE_MOST_RECENT_PACKET]
-
-        flight_doc = {
-            "_id": flight_id,
-            "icao": icao,
-            "status": _FLIGHT_STATUS_LIVE,
-            "zone": plane.get("zone") or "",
-            "level": plane.get("level") or "",
-            "start_time": first_packet,
-            "end_time": last_packet,
-            "retained": False,
-            "callsign": info.get(STORE_CALLSIGN) or "",
-            "model": info.get("model") or "",
-            "owner": info.get("owner") or "",
-            "country": info.get("country") or "",
-            "info": {str(k): v for k, v in info.items()},
-            "raw_messages": plane.get("raw_messages", []),
-        }
-        try:
-            self.db.get_collection("flights").replace_one({"_id": flight_id}, flight_doc, upsert=True)
-            self._write_telemetry_points(plane, flight_id, icao)
-        except PyMongoError as exc:
-            log.error("Failed to upsert live flight %s: %s", flight_id, exc)
-
-    def _write_telemetry_points(self, plane: dict, flight_id: str, icao: str) -> None:
-        assert self.db is not None
-        last_written = self._last_telemetry_ts.get(flight_id, 0.0)
-        lat_series = plane.get(STORE_RECV_DATA, {}).get(STORE_LAT, [])
-        if not lat_series:
-            return
-
-        docs: list[dict[str, Any]] = []
-        for lat_datum in lat_series:
-            if lat_datum.time <= last_written:
-                continue
-            lon_datum = get_latest(STORE_RECV_DATA, STORE_LONG, plane, lat_datum.time)
-            if lon_datum is None:
-                continue
-            alt_datum = get_latest(STORE_RECV_DATA, STORE_ALT, plane, lat_datum.time)
-            speed_datum = (
-                get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
-                or get_latest(STORE_RECV_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
-            )
-            heading_datum = (
-                get_latest(STORE_CALC_DATA, STORE_HEADING, plane, lat_datum.time)
-                or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, lat_datum.time)
-            )
-            doc: dict[str, Any] = {
-                "flight_id": flight_id,
-                "icao": icao,
-                "timestamp": lat_datum.time,
-                "latitude": lat_datum.value,
-                "longitude": lon_datum.value,
-                "position": {
-                    "type": "Point",
-                    "coordinates": [lon_datum.value, lat_datum.value],
-                },
-            }
-            if alt_datum is not None:
-                doc["altitude"] = alt_datum.value
-            if speed_datum is not None:
-                doc["speed"] = speed_datum.value
-            if heading_datum is not None:
-                doc["heading"] = heading_datum.value
-            docs.append(doc)
-            last_written = max(last_written, lat_datum.time)
-
-        if not docs:
-            return
-        try:
-            self.db.get_collection("telemetry").insert_many(docs, ordered=False)
-            self._last_telemetry_ts[flight_id] = last_written
-        except PyMongoError as exc:
-            if getattr(exc, "details", {}).get("writeErrors"):
-                self._last_telemetry_ts[flight_id] = last_written
-            else:
-                log.error("Failed to write telemetry for %s: %s", flight_id, exc)
-
-    def _should_retain(self, plane: dict, flight_id: str) -> bool:
-        assert self.db is not None
-        if self.db.get_collection("alerts").count_documents({"flight_id": flight_id}, limit=1):
+    def _should_retain(self, plane: dict, alerts: list[dict[str, Any]]) -> bool:
+        if alerts:
             return True
 
         recv = plane.get(STORE_RECV_DATA, {})
@@ -334,23 +220,56 @@ class MongoStore:
                 valid += 1
         return valid
 
-    def _mark_completed(self, plane: dict, flight_id: str, *, retained: bool) -> None:
+    def _persist_completed_flight(self, plane: dict, flight_id: str,
+                                  alerts: list[dict[str, Any]]) -> None:
         assert self.db is not None
+        info = plane.get(STORE_INFO, {})
         internal = plane[STORE_INTERNAL]
-        self.db.get_collection("flights").update_one(
-            {"_id": flight_id},
-            {"$set": {
-                "status": _FLIGHT_STATUS_COMPLETED,
-                "end_time": internal[STORE_MOST_RECENT_PACKET],
-                "retained": retained,
-                "zone": plane.get("zone") or "",
-                "level": plane.get("level") or "",
-                "raw_messages": plane.get("raw_messages", []),
-            }},
-        )
+        icao = info[STORE_ICAO].lower()
+        flight_doc = {
+            "_id": flight_id,
+            "icao": icao,
+            "status": _FLIGHT_STATUS_COMPLETED,
+            "zone": plane.get("zone") or "",
+            "level": plane.get("level") or "",
+            "start_time": internal[STORE_FIRST_PACKET],
+            "end_time": internal[STORE_MOST_RECENT_PACKET],
+            "retained": True,
+            "callsign": info.get(STORE_CALLSIGN) or "",
+            "model": info.get("model") or "",
+            "owner": info.get("owner") or "",
+            "country": info.get("country") or "",
+            "aircraft_type": info.get("aircraft_type") or info.get("typecode") or "",
+            "typecode": info.get("typecode") or "",
+            "info": {str(k): v for k, v in info.items()},
+            "raw_messages": plane.get("raw_messages", []),
+        }
+        telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
+        alert_docs = [
+            {
+                "flight_id": flight_id,
+                "icao": alert.get("icao", icao),
+                "callsign": alert.get("callsign") or info.get(STORE_CALLSIGN) or "",
+                "zone": alert.get("zone", ""),
+                "level": alert.get("level", ""),
+                "eta": alert.get("eta"),
+                "reason": alert.get("reason"),
+                "timestamp": alert.get("timestamp"),
+                "position": alert.get("position"),
+                "altitude": alert.get("altitude"),
+            }
+            for alert in alerts
+        ]
 
-    def _delete_flight_data(self, flight_id: str, icao: str) -> None:
-        assert self.db is not None
-        self.db.get_collection("flights").delete_one({"_id": flight_id})
-        self.db.get_collection("telemetry").delete_many({"flight_id": flight_id})
-        self.db.get_collection("alerts").delete_many({"flight_id": flight_id})
+        try:
+            self.db.get_collection("flights").replace_one(
+                {"_id": flight_id},
+                flight_doc,
+                upsert=True,
+            )
+            if telemetry_docs:
+                self.db.get_collection("telemetry").insert_many(telemetry_docs, ordered=False)
+            if alert_docs:
+                self.db.get_collection("alerts").insert_many(alert_docs, ordered=False)
+        except PyMongoError as exc:
+            log.error("Failed to persist completed flight %s: %s", flight_id, exc)

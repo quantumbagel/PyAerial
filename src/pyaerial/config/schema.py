@@ -19,6 +19,7 @@ class _Strict(BaseModel):
 class DatabaseConfig(_Strict):
     uri: str = "mongodb://localhost:27017"
     name: str | None = None
+    redis_uri: str = "redis://localhost:6379/0"
 
 
 class TrackingConfig(_Strict):

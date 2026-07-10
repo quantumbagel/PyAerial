@@ -20,7 +20,7 @@ from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 from pyaerial.logging_setup import setup_logging
 from pyaerial.receivers import Receiver, available_receivers, create_receiver
-from pyaerial.store import MongoStore
+from pyaerial.store import MongoStore, RedisLiveStore, flight_id_for_plane
 from pyaerial.tracker import Tracker
 
 log = logging.getLogger("pyaerial.engine")
@@ -43,8 +43,10 @@ class Engine:
         self.tracker = Tracker(config)
         self.polygons: dict[str, Polygon] = build_polygons(config.zones)
         self.aircraft_db = AircraftDB(aircraft_db_path)
-        self.store = MongoStore(config, self.polygons)
-        self.calculator = PlaneCalculator(config, self.polygons, self.aircraft_db, self.store)
+        self.live_store = RedisLiveStore(config.database.redis_uri)
+        self.live_store.clear_all()
+        self.mongo_store = MongoStore(config, self.polygons)
+        self.calculator = PlaneCalculator(config, self.polygons, self.aircraft_db, self.live_store)
         self._message_queue: queue.Queue[tuple[str, float, str]] = queue.Queue()
         self._receivers: dict[str, _ReceiverHandle] = {}
         self._running = False
@@ -122,7 +124,7 @@ class Engine:
         hz = self.config.tracking.hz
         tick_budget = 1.0 / hz
         log.info(
-            "PyAerial running at up to %.1f Hz with %d receiver(s), store=mongodb",
+            "PyAerial running at up to %.1f Hz with %d receiver(s), store=redis+mongodb",
             hz, len(self._receivers),
         )
         log.info("Receivers available: %s", available_receivers())
@@ -138,14 +140,14 @@ class Engine:
                 processed = self.tracker.ingest(new_messages)
 
                 self.calculator.calculate_all(self.tracker.planes)
-                self.store.write_live_planes(self.tracker.planes)
+                self.live_store.write_live_planes(self.tracker.planes)
 
                 now = time.time()
                 expired = self.tracker.expired_planes(now)
                 if expired:
                     removed = self.tracker.remove_planes(expired)
                     for plane in removed:
-                        self.store.finalize_plane(plane)
+                        self._finalize_plane(plane)
                     log.debug("Expired %d plane(s): %s", len(expired), expired)
 
                 summary = self.tracker.top_planes_summary()
@@ -182,14 +184,19 @@ class Engine:
             handle.thread.join(timeout=2.0)
 
         for plane in list(self.tracker.planes.values()):
-            self.store.finalize_plane(plane)
+            self._finalize_plane(plane)
         self.tracker.planes.clear()
-        self.store.finalize_all_live()
 
         self.calculator.close()
-        self.store.close()
+        self.live_store.close()
+        self.mongo_store.close()
         self.aircraft_db.close()
         log.info("Shutdown complete")
+
+    def _finalize_plane(self, plane: dict) -> None:
+        flight_id = flight_id_for_plane(plane)
+        redis_data = self.live_store.pop_flight(flight_id)
+        self.mongo_store.finalize_plane(plane, alerts=redis_data.get("alerts", []))
 
     def _install_signal_handlers(self) -> None:
         def _handler(signum, _frame):

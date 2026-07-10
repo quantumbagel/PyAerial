@@ -21,6 +21,7 @@ class ConfigError(Exception):
 
 _ENV_OVERRIDES = {
     "PYAERIAL_MONGODB": ("database", "uri"),
+    "PYAERIAL_REDIS": ("database", "redis_uri"),
     "PYAERIAL_LOG_LEVEL": ("logging", "level"),
     "PYAERIAL_LOG_FILE": ("logging", "file"),
     "PYAERIAL_HZ": ("tracking", "hz"),

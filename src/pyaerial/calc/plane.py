@@ -20,7 +20,7 @@ from pyaerial.alerters import Alerter, create_alerter
 from pyaerial.calc import evaluate, geo
 from pyaerial.calc.aircraft_db import AircraftDB
 from pyaerial.config.schema import Config
-from pyaerial.store.mongo import MongoStore
+from pyaerial.store.redis_live import RedisLiveStore
 from pyaerial.constants import (
     ALERT_CAT_ETA,
     ALERT_CAT_REASON,
@@ -52,7 +52,7 @@ class PlaneCalculator:
 
     def __init__(self, config: Config, polygons: dict[str, Polygon],
                  aircraft_db: AircraftDB | None = None,
-                 store: MongoStore | None = None):
+                 store: RedisLiveStore | None = None):
         self.config = config
         self.polygons = polygons
         self.aircraft_db = aircraft_db
@@ -150,29 +150,55 @@ class PlaneCalculator:
 
     def _resolve_callsign(self, plane: dict) -> str:
         info = plane[STORE_INFO]
-        if STORE_CALLSIGN in info:
-            return info[STORE_CALLSIGN] or ""
+        if info.get("metadata_resolved"):
+            return info.get(STORE_CALLSIGN) or ""
 
         icao = info[STORE_ICAO]
         with self._lock:
             if icao in self._pending_lookups:
-                return ""
+                return info.get(STORE_CALLSIGN) or ""
             self._pending_lookups.add(icao)
 
-        self._executor.submit(self._bg_lookup_callsign, plane, icao)
-        return ""
+        self._executor.submit(self._bg_lookup_metadata, plane, icao)
+        return info.get(STORE_CALLSIGN) or ""
 
-    def _bg_lookup_callsign(self, plane: dict, icao: str) -> None:
+    def _bg_lookup_metadata(self, plane: dict, icao: str) -> None:
         try:
-            callsign = _lookup_callsign_hexdb(icao)
-            if callsign is None and self.aircraft_db and self.aircraft_db.available:
+            callsign = plane[STORE_INFO].get(STORE_CALLSIGN)
+            if not callsign:
+                callsign = _lookup_callsign_hexdb(icao)
+
+            model = ""
+            owner = ""
+            country = ""
+            aircraft_type = ""
+
+            if self.aircraft_db and self.aircraft_db.available:
                 record = self.aircraft_db.lookup(icao)
                 if record:
-                    callsign = record.get("callsign") or record.get("registration")
+                    if not callsign:
+                        callsign = record.get("callsign") or record.get("registration")
+                    model = record.get("model") or ""
+                    owner = record.get("owner") or ""
+                    country = record.get("country") or ""
+                    aircraft_type = record.get("typecode") or ""
+
             plane[STORE_INFO][STORE_CALLSIGN] = callsign or ""
+            plane[STORE_INFO]["model"] = model
+            plane[STORE_INFO]["owner"] = owner
+            plane[STORE_INFO]["country"] = country
+            plane[STORE_INFO]["aircraft_type"] = aircraft_type
+            plane[STORE_INFO]["typecode"] = aircraft_type
+            plane[STORE_INFO]["metadata_resolved"] = True
         except Exception as exc:
-            log.debug("Background callsign lookup failed for %s: %s", icao, exc)
-            plane[STORE_INFO][STORE_CALLSIGN] = ""
+            log.debug("Background metadata lookup failed for %s: %s", icao, exc)
+            plane[STORE_INFO].setdefault(STORE_CALLSIGN, "")
+            plane[STORE_INFO].setdefault("model", "")
+            plane[STORE_INFO].setdefault("owner", "")
+            plane[STORE_INFO].setdefault("country", "")
+            plane[STORE_INFO].setdefault("aircraft_type", "")
+            plane[STORE_INFO].setdefault("typecode", "")
+            plane[STORE_INFO]["metadata_resolved"] = True
         finally:
             with self._lock:
                 self._pending_lookups.discard(icao)

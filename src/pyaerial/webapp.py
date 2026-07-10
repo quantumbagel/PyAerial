@@ -1,7 +1,7 @@
 """
 Lightweight webapp server for live flight tracking.
 
-Reads live flights, completed tracks, and alert events from MongoDB.
+Reads live flights from Redis and retained historical flights from MongoDB.
 """
 from __future__ import annotations
 
@@ -17,13 +17,14 @@ import pymongo
 from pyaerial.calc.aircraft_db import AircraftDB
 from pyaerial.config import load_config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
+from pyaerial.store.redis_live import RedisLiveStore
 
 log = logging.getLogger("pyaerial.webapp")
 
 _FLIGHT_STATUS_LIVE = "live"
 
 
-def _connect_db(config_path: str) -> tuple[pymongo.MongoClient, pymongo.database.Database]:
+def _connect_stores(config_path: str) -> tuple[pymongo.MongoClient, pymongo.database.Database, RedisLiveStore]:
     config = load_config(config_path)
     client = pymongo.MongoClient(config.database.uri)
     if config.database.name:
@@ -33,7 +34,14 @@ def _connect_db(config_path: str) -> tuple[pymongo.MongoClient, pymongo.database
             db = client.get_default_database()
         except Exception:
             db = client.get_database("pyaerial")
-    return client, db
+    live_store = RedisLiveStore(config.database.redis_uri)
+    return client, db, live_store
+
+
+def _view_from_query(query: dict[str, list[str]]) -> str:
+    values = query.get("view", ["live"])
+    view = values[0].lower()
+    return view if view in ("live", "history") else "live"
 
 
 def _enrich_from_aircraft_db(icao: str, aircraft_db: AircraftDB | None) -> dict[str, str | None]:
@@ -47,6 +55,8 @@ def _enrich_from_aircraft_db(icao: str, aircraft_db: AircraftDB | None) -> dict[
         "model": meta.get("model"),
         "owner": meta.get("owner"),
         "country": meta.get("country"),
+        "aircraft_type": meta.get("typecode"),
+        "typecode": meta.get("typecode"),
     }
 
 
@@ -65,6 +75,50 @@ def _telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
         point["longitude"] = coords[0]
         point["latitude"] = coords[1]
     return point
+
+
+def _format_alert(doc: dict[str, Any]) -> dict[str, Any]:
+    if "alert_id" in doc:
+        coords = doc.get("position", {}).get("coordinates", [None, None])
+        return {
+            "alert_id": doc["alert_id"],
+            "flight_id": doc.get("flight_id"),
+            "icao": doc.get("icao"),
+            "callsign": doc.get("callsign"),
+            "zone": doc.get("zone"),
+            "level": doc.get("level"),
+            "timestamp": doc.get("timestamp"),
+            "eta": doc.get("eta"),
+            "altitude": doc.get("altitude"),
+            "latitude": coords[1] if len(coords) > 1 else None,
+            "longitude": coords[0] if coords else None,
+        }
+    coords = doc.get("position", {}).get("coordinates", [None, None])
+    return {
+        "alert_id": str(doc["_id"]),
+        "flight_id": doc.get("flight_id"),
+        "icao": doc.get("icao"),
+        "callsign": doc.get("callsign"),
+        "zone": doc.get("zone"),
+        "level": doc.get("level"),
+        "timestamp": doc.get("timestamp"),
+        "eta": doc.get("eta"),
+        "altitude": doc.get("altitude"),
+        "latitude": coords[1] if len(coords) > 1 else None,
+        "longitude": coords[0] if coords else None,
+    }
+
+
+def _enrich_flight_summary(summary: dict[str, Any], aircraft_db: AircraftDB | None) -> dict[str, Any]:
+    enriched = _enrich_from_aircraft_db(summary.get("icao", ""), aircraft_db)
+    return {
+        **summary,
+        "callsign": summary.get("callsign") or enriched.get("callsign"),
+        "model": summary.get("model") or enriched.get("model"),
+        "owner": summary.get("owner") or enriched.get("owner"),
+        "country": summary.get("country") or enriched.get("country"),
+        "aircraft_type": summary.get("aircraft_type") or enriched.get("aircraft_type") or enriched.get("typecode"),
+    }
 
 
 def _flight_summary(doc: dict[str, Any], last_tel: dict[str, Any] | None,
@@ -92,6 +146,7 @@ def _flight_summary(doc: dict[str, Any], last_tel: dict[str, Any] | None,
         "model": doc.get("model") or info.get("model") or enriched.get("model"),
         "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
         "country": doc.get("country") or info.get("country") or enriched.get("country"),
+        "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type") or info.get("typecode") or enriched.get("aircraft_type") or enriched.get("typecode"),
         "latitude": lat,
         "longitude": lon,
         "altitude": alt,
@@ -112,6 +167,10 @@ class WebAppHandler(BaseHTTPRequestHandler):
         return self.server.db
 
     @property
+    def live_store(self) -> RedisLiveStore:
+        return self.server.live_store
+
+    @property
     def aircraft_db(self) -> AircraftDB | None:
         return self.server.aircraft_db
 
@@ -126,7 +185,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(HTML_TEMPLATE.encode("utf-8"))
         elif path == "/api/flights":
-            self.handle_api_flights()
+            self.handle_api_flights(query)
         elif path == "/api/flight":
             self.handle_api_flight(query)
         elif path == "/api/telemetry":
@@ -138,14 +197,20 @@ class WebAppHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404, "Not Found")
 
-    def handle_api_flights(self):
+    def handle_api_flights(self, query: dict[str, list[str]] | None = None):
+        view = _view_from_query(query or {})
         try:
+            if view == "live":
+                results = [
+                    _enrich_flight_summary(summary, self.aircraft_db)
+                    for summary in self.live_store.get_flights()
+                ]
+                self.send_json(results)
+                return
+
             flights_col = self.db.get_collection("flights")
             telemetry_col = self.db.get_collection("telemetry")
             alerts_col = self.db.get_collection("alerts")
-
-            live_docs = list(flights_col.find({"status": _FLIGHT_STATUS_LIVE}).sort("start_time", -1))
-            live_icaos = {doc.get("icao") for doc in live_docs}
 
             completed_cursor = flights_col.find({
                 "status": {"$ne": _FLIGHT_STATUS_LIVE},
@@ -154,15 +219,13 @@ class WebAppHandler(BaseHTTPRequestHandler):
 
             completed_docs = []
             for doc in completed_cursor:
-                if doc.get("icao") in live_icaos:
-                    continue
                 if doc.get("retained") or alerts_col.count_documents({"flight_id": doc["_id"]}, limit=1):
                     completed_docs.append(doc)
                 if len(completed_docs) >= 50:
                     break
 
             results = []
-            for doc in live_docs + completed_docs:
+            for doc in completed_docs:
                 last_tel = telemetry_col.find_one(
                     {"flight_id": doc["_id"]},
                     sort=[("timestamp", pymongo.DESCENDING)],
@@ -179,7 +242,26 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_error(400, "Missing flight_id parameter")
             return
         flight_id = flight_ids[0]
+        view = _view_from_query(query)
         try:
+            if view == "live":
+                flight_data = self.live_store.get_flight(flight_id)
+                if not flight_data:
+                    self.send_error(404, "Flight not found")
+                    return
+                icao = flight_data.get("icao", "")
+                enriched = _enrich_from_aircraft_db(icao, self.aircraft_db)
+                flight_data = {
+                    **flight_data,
+                    "callsign": flight_data.get("callsign") or enriched.get("callsign"),
+                    "model": flight_data.get("model") or enriched.get("model"),
+                    "owner": flight_data.get("owner") or enriched.get("owner"),
+                    "country": flight_data.get("country") or enriched.get("country"),
+                    "aircraft_type": flight_data.get("aircraft_type") or enriched.get("typecode"),
+                }
+                self.send_json(flight_data)
+                return
+
             doc = self.db.get_collection("flights").find_one({"_id": flight_id})
             if not doc:
                 self.send_error(404, "Flight not found")
@@ -198,8 +280,9 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 "model": doc.get("model") or info.get("model") or enriched.get("model"),
                 "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
                 "country": doc.get("country") or info.get("country") or enriched.get("country"),
+                "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type") or info.get("typecode") or enriched.get("aircraft_type") or enriched.get("typecode"),
                 "raw_messages": doc.get("raw_messages", []),
-                "is_live": doc.get("status") == _FLIGHT_STATUS_LIVE,
+                "is_live": False,
                 "status": doc.get("status", "completed"),
             }
             self.send_json(flight_data)
@@ -212,7 +295,13 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_error(400, "Missing flight_id parameter")
             return
         flight_id = flight_ids[0]
+        view = _view_from_query(query)
         try:
+            if view == "live":
+                points = self.live_store.get_telemetry(flight_id)
+                self.send_json(points)
+                return
+
             cursor = self.db.get_collection("telemetry").find({"flight_id": flight_id}).sort("timestamp", 1)
             points = [_telemetry_point(doc) for doc in cursor]
             self.send_json(points)
@@ -224,28 +313,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
         since = float(since_vals[0]) if since_vals else 0.0
         now = time.time()
         try:
-            live_ids = [
-                doc["_id"] for doc in self.db.get_collection("flights").find(
-                    {"status": _FLIGHT_STATUS_LIVE}, {"_id": 1},
-                )
-            ]
-            if not live_ids:
-                self.send_json({"telemetry": [], "timestamp": now})
-                return
-
-            cursor = self.db.get_collection("telemetry").find({
-                "flight_id": {"$in": live_ids},
-                "timestamp": {"$gt": since},
-            }).sort("timestamp", 1)
-
-            points = []
-            for doc in cursor:
-                tel = _telemetry_point(doc)
-                points.append({
-                    "flight_id": doc["flight_id"],
-                    "icao": doc.get("icao"),
-                    **tel,
-                })
+            points = self.live_store.get_live_telemetry(since)
             self.send_json({"telemetry": points, "timestamp": now})
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
@@ -257,8 +325,14 @@ class WebAppHandler(BaseHTTPRequestHandler):
         since = float(since_vals[0]) if since_vals else 0.0
         flight_id = flight_vals[0] if flight_vals else None
         level = level_vals[0] if level_vals else None
+        view = _view_from_query(query)
 
         try:
+            if view == "live":
+                alerts = self.live_store.get_alerts(since=since, flight_id=flight_id, level=level)
+                self.send_json([_format_alert(alert) for alert in alerts])
+                return
+
             filt: dict[str, Any] = {}
             if since:
                 filt["timestamp"] = {"$gt": since}
@@ -268,23 +342,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 filt["level"] = level
 
             cursor = self.db.get_collection("alerts").find(filt).sort("timestamp", -1).limit(100)
-            alerts = []
-            for doc in cursor:
-                coords = doc.get("position", {}).get("coordinates", [None, None])
-                alerts.append({
-                    "alert_id": str(doc["_id"]),
-                    "flight_id": doc.get("flight_id"),
-                    "icao": doc.get("icao"),
-                    "callsign": doc.get("callsign"),
-                    "zone": doc.get("zone"),
-                    "level": doc.get("level"),
-                    "timestamp": doc.get("timestamp"),
-                    "eta": doc.get("eta"),
-                    "altitude": doc.get("altitude"),
-                    "latitude": coords[1] if len(coords) > 1 else None,
-                    "longitude": coords[0] if coords else None,
-                })
-            self.send_json(alerts)
+            self.send_json([_format_alert(doc) for doc in cursor])
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
 
@@ -299,11 +357,12 @@ class WebAppHandler(BaseHTTPRequestHandler):
 def run_webapp(config_path: str = "config.yaml", *,
                aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
                host: str = "0.0.0.0", port: int = 10090) -> None:
-    client, db = _connect_db(config_path)
+    client, db, live_store = _connect_stores(config_path)
     aircraft_db = AircraftDB(aircraft_db_path) if aircraft_db_path else None
 
     server = ThreadingHTTPServer((host, port), WebAppHandler)
     server.db = db
+    server.live_store = live_store
     server.aircraft_db = aircraft_db
 
     actual_host, actual_port = server.server_address
@@ -315,6 +374,7 @@ def run_webapp(config_path: str = "config.yaml", *,
     finally:
         server.server_close()
         client.close()
+        live_store.close()
         if aircraft_db:
             aircraft_db.close()
 
@@ -738,13 +798,42 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .alert-timeline-item.warn { border-left-color: #f59e0b; }
         .alert-timeline-item.alert { border-left-color: #ef4444; }
+        #view-toggle {
+            display: flex;
+            gap: 8px;
+            padding: 12px 20px;
+            border-bottom: 1px solid #2d2d2d;
+            background-color: #151515;
+        }
+        .view-btn {
+            flex: 1;
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid #2d2d2d;
+            background: #222;
+            color: #94a3b8;
+            font-family: inherit;
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .view-btn.active {
+            background: #1e3a5f;
+            border-color: #3b82f6;
+            color: #dbeafe;
+        }
     </style>
 </head>
 <body>
     <div id="sidebar">
         <div id="sidebar-header">
             <h1>PyAerial Live Tracker</h1>
-            <p>Real-time Mode S & ADS-B aircraft flight analysis</p>
+            <p>See the data captured by your ADS-B receiver</p>
+        </div>
+        <div id="view-toggle">
+            <button class="view-btn active" id="view-live" onclick="switchPortalView('live')">Live</button>
+            <button class="view-btn" id="view-history" onclick="switchPortalView('history')">Historical</button>
         </div>
         <div id="search-container">
             <input type="text" id="search-input" placeholder="Search by callsign, ICAO, or model..." />
@@ -759,12 +848,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
         <div id="stats-panel">
             <div class="stat-card">
-                <span>Recent:</span>
-                <strong id="flight-count" style="color: #6366f1;">0</strong>
+                <span id="flight-stat-label">Live:</span>
+                <strong id="flight-count" style="color: #10b981;">0</strong>
             </div>
-            <div class="stat-card">
-                <span>Live:</span>
-                <strong id="live-count" style="color: #10b981;">0</strong>
+            <div class="stat-card" id="live-stat-card">
+                <span>Tracking:</span>
+                <strong id="live-count" style="color: #6366f1;">0</strong>
             </div>
             <div class="stat-card">
                 <span>Alerts:</span>
@@ -798,6 +887,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <div class="details-grid">
                         <span class="details-label">Model</span>
                         <span class="details-value" id="detail-model">N/A</span>
+                        <span class="details-label">Aircraft Type</span>
+                        <span class="details-value" id="detail-type">N/A</span>
                         <span class="details-label">Owner</span>
                         <span class="details-value" id="detail-owner">N/A</span>
                         <span class="details-label">Registration Country</span>
@@ -872,6 +963,56 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         let lastSeenTimestamp = 0;
         let searchQuery = '';
         let sidebarView = 'flights';
+        let portalView = 'live';
+        let livePollTimer = null;
+        let flightsPollTimer = null;
+        let alertsPollTimer = null;
+
+        function viewQuery() {
+            return `view=${portalView}`;
+        }
+
+        function switchPortalView(view) {
+            if (portalView === view) return;
+            portalView = view;
+            document.getElementById('view-live').classList.toggle('active', view === 'live');
+            document.getElementById('view-history').classList.toggle('active', view === 'history');
+            document.getElementById('flight-stat-label').innerText = view === 'live' ? 'Live:' : 'Retained:';
+            document.getElementById('live-stat-card').style.display = view === 'live' ? 'flex' : 'none';
+
+            activeFlightId = null;
+            activeAlertId = null;
+            lastSeenTimestamp = 0;
+            flightsData = [];
+            alertsData = [];
+            Object.values(planeMarkers).forEach(marker => map.removeLayer(marker));
+            Object.values(planePaths).forEach(path => map.removeLayer(path));
+            planeMarkers = {};
+            planePaths = {};
+            document.getElementById('details-drawer').classList.remove('open');
+            renderFlightList();
+            renderAlertList();
+            restartPolling();
+        }
+
+        function restartPolling() {
+            if (livePollTimer) clearInterval(livePollTimer);
+            if (flightsPollTimer) clearInterval(flightsPollTimer);
+            if (alertsPollTimer) clearInterval(alertsPollTimer);
+            livePollTimer = null;
+            flightsPollTimer = null;
+            alertsPollTimer = null;
+
+            fetchFlights();
+            fetchAlerts();
+            flightsPollTimer = setInterval(fetchFlights, 10000);
+            alertsPollTimer = setInterval(fetchAlerts, 10000);
+
+            if (portalView === 'live') {
+                pollLiveTelemetry();
+                livePollTimer = setInterval(pollLiveTelemetry, 2000);
+            }
+        }
 
         function switchSidebarTab(view) {
             sidebarView = view;
@@ -914,47 +1055,51 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         async function fetchFlights() {
             try {
-                const response = await fetch('/api/flights');
+                const response = await fetch(`/api/flights?${viewQuery()}`);
                 const data = await response.json();
-                
-                // Merge new metadata into existing live/recent list
-                data.forEach(newFlight => {
-                    const idx = flightsData.findIndex(f => f.flight_id === newFlight.flight_id);
-                    if (idx !== -1) {
-                        // Preserving live updates for lat/lon if they are newer
-                        if (isFlightLive(flightsData[idx])) {
-                            // keeps live coordinates but updates basic info
-                            flightsData[idx].callsign = newFlight.callsign || flightsData[idx].callsign;
-                            flightsData[idx].model = newFlight.model || flightsData[idx].model;
-                            flightsData[idx].owner = newFlight.owner || flightsData[idx].owner;
-                            flightsData[idx].country = newFlight.country || flightsData[idx].country;
-                            flightsData[idx].zone = newFlight.zone;
-                            flightsData[idx].level = newFlight.level;
+
+                if (portalView === 'live') {
+                    data.forEach(newFlight => {
+                        const idx = flightsData.findIndex(f => f.flight_id === newFlight.flight_id);
+                        if (idx !== -1) {
+                            if (isFlightLive(flightsData[idx])) {
+                                flightsData[idx].callsign = newFlight.callsign || flightsData[idx].callsign;
+                                flightsData[idx].model = newFlight.model || flightsData[idx].model;
+                                flightsData[idx].aircraft_type = newFlight.aircraft_type || flightsData[idx].aircraft_type;
+                                flightsData[idx].owner = newFlight.owner || flightsData[idx].owner;
+                                flightsData[idx].country = newFlight.country || flightsData[idx].country;
+                                flightsData[idx].zone = newFlight.zone;
+                                flightsData[idx].level = newFlight.level;
+                            } else {
+                                flightsData[idx] = newFlight;
+                            }
                         } else {
-                            flightsData[idx] = newFlight;
+                            flightsData.push(newFlight);
                         }
-                    } else {
-                        flightsData.push(newFlight);
-                    }
-                });
+                    });
 
-                // Clean up entries that are old and not live
-                const remoteFlightIds = new Set(data.map(f => f.flight_id));
-                flightsData = flightsData.filter(f => remoteFlightIds.has(f.flight_id) || isFlightLive(f) || f.flight_id === activeFlightId);
+                    const remoteFlightIds = new Set(data.map(f => f.flight_id));
+                    flightsData = flightsData.filter(f => remoteFlightIds.has(f.flight_id) || isFlightLive(f) || f.flight_id === activeFlightId);
+                } else {
+                    flightsData = data;
+                }
 
-                // Sort flights: live first, then by start time descending
                 flightsData.sort((a, b) => {
                     const aLive = isFlightLive(a);
                     const bLive = isFlightLive(b);
                     if (aLive && !bLive) return -1;
                     if (!aLive && bLive) return 1;
-                    return b.start_time - a.start_time;
+                    return (b.start_time || 0) - (a.start_time || 0);
                 });
 
-                document.getElementById('flight-count').innerText = data.filter(f => !f.is_live).length;
-                let liveCount = 0;
-                data.forEach(f => { if (f.is_live) liveCount++; });
-                document.getElementById('live-count').innerText = liveCount;
+                if (portalView === 'live') {
+                    document.getElementById('flight-count').innerText = data.filter(f => f.is_live).length;
+                    let liveCount = 0;
+                    data.forEach(f => { if (f.is_live) liveCount++; });
+                    document.getElementById('live-count').innerText = liveCount;
+                } else {
+                    document.getElementById('flight-count').innerText = data.length;
+                }
                 renderFlightList();
                 plotAllFlights();
             } catch (err) {
@@ -964,7 +1109,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         async function fetchAlerts() {
             try {
-                const response = await fetch('/api/alerts');
+                const response = await fetch(`/api/alerts?${viewQuery()}`);
                 alertsData = await response.json();
                 document.getElementById('alert-count').innerText = alertsData.length;
                 renderAlertList();
@@ -1012,7 +1157,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const container = document.getElementById('alert-timeline-list');
             container.innerHTML = '<div style="color:#64748b;">Loading alerts...</div>';
             try {
-                const response = await fetch(`/api/alerts?flight_id=${encodeURIComponent(flightId)}`);
+                const response = await fetch(`/api/alerts?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
                 const alerts = await response.json();
                 container.innerHTML = '';
                 if (!alerts.length) {
@@ -1043,7 +1188,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const callsign = (flight.callsign || '').toLowerCase();
                 const icao = (flight.icao || '').toLowerCase();
                 const model = (flight.model || '').toLowerCase();
-                const matchesSearch = callsign.includes(searchQuery) || icao.includes(searchQuery) || model.includes(searchQuery);
+                const aircraftType = (flight.aircraft_type || flight.typecode || '').toLowerCase();
+                const matchesSearch = callsign.includes(searchQuery) || icao.includes(searchQuery) || model.includes(searchQuery) || aircraftType.includes(searchQuery);
                 
                 let matchesWarning = true;
                 const level = (flight.level || '').toLowerCase();
@@ -1148,7 +1294,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             
             // Load detail data (including raw messages)
             try {
-                const response = await fetch(`/api/flight?flight_id=${encodeURIComponent(flightId)}`);
+                const response = await fetch(`/api/flight?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
                 if (response.ok) {
                     const flightDetail = await response.json();
                     showDetails(flightDetail);
@@ -1164,7 +1310,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             planePaths = {};
 
             try {
-                const response = await fetch(`/api/telemetry?flight_id=${encodeURIComponent(flightId)}`);
+                const response = await fetch(`/api/telemetry?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
                 const points = await response.json();
                 
                 if (points.length > 0) {
@@ -1189,6 +1335,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             document.getElementById('detail-callsign').innerText = flightDetail.callsign || 'UNKNOWN';
             document.getElementById('detail-icao').innerText = flightDetail.icao.toUpperCase();
             document.getElementById('detail-model').innerText = flightDetail.model || 'Unknown Model';
+            document.getElementById('detail-type').innerText = flightDetail.aircraft_type || flightDetail.typecode || 'Unknown Type';
             document.getElementById('detail-owner').innerText = flightDetail.owner || 'Unknown Owner';
             document.getElementById('detail-country').innerText = flightDetail.country || 'Unknown';
             document.getElementById('detail-zone-level').innerText = `${flightDetail.zone} / ${flightDetail.level}`;
@@ -1221,7 +1368,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         async function fetchTelemetryTable(flightId) {
             try {
-                const response = await fetch(`/api/telemetry?flight_id=${encodeURIComponent(flightId)}`);
+                const response = await fetch(`/api/telemetry?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
                 const points = await response.json();
                 
                 const tableBody = document.getElementById('telemetry-table-body');
@@ -1279,6 +1426,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         async function pollLiveTelemetry() {
+            if (portalView !== 'live') return;
             try {
                 const response = await fetch(`/api/live?since=${lastSeenTimestamp}`);
                 const data = await response.json();
@@ -1299,6 +1447,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                 icao: point.icao,
                                 callsign: null,
                                 model: null,
+                                aircraft_type: null,
                                 owner: null,
                                 country: null,
                                 zone: '',
@@ -1340,7 +1489,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                 planePaths[flightId].addLatLng(pos);
                             }
                             // Refresh detail drawer live
-                            fetch(`/api/flight?flight_id=${encodeURIComponent(flightId)}`)
+                            fetch(`/api/flight?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`)
                                 .then(res => res.json())
                                 .then(detail => showDetails(detail));
                         }
@@ -1383,12 +1532,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         });
 
         async function init() {
-            await fetchFlights();
-            await fetchAlerts();
-            setInterval(pollLiveTelemetry, 2000);
-            setInterval(fetchFlights, 10000);
-            setInterval(fetchAlerts, 10000);
-            pollLiveTelemetry();
+            restartPolling();
         }
 
         init();

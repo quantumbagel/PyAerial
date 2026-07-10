@@ -1,5 +1,6 @@
 database:
   uri: mongodb://localhost:27017
+  redis_uri: redis://localhost:6379/0
 
 tracking:
   hz: 2

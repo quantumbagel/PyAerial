@@ -11,6 +11,7 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     depends_on:
       - mongodb
+      - redis
     network_mode: host
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
@@ -21,6 +22,7 @@ services:
     network_mode: host
     depends_on:
       - mongodb
+      - redis
       - pyaerial
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
@@ -33,6 +35,13 @@ services:
       - "27017:27017"
     volumes:
       - pyaerial_mongo:/data/db
+    network_mode: host
+  redis:
+    image: redis:7-alpine
+    container_name: pyaerial_redis
+    restart: always
+    ports:
+      - "6379:6379"
     network_mode: host
 
 volumes:
