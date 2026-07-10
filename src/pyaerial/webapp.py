@@ -333,7 +333,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div id="sidebar">
         <div id="sidebar-header">
             <h1>PyAerial Live Tracker</h1>
-            <p>ADS-B Geofence Scanner Console</p>
+            <p>View live and recent planes as captured by your ADS-B receiver(s)</p>
         </div>
         <div id="stats-panel">
             <span>Recent Flights: <strong id="flight-count">0</strong></span>
