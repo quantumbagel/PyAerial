@@ -111,8 +111,6 @@ See [`config.yaml`](config.yaml) and [`src/pyaerial/examples/config.yaml`](src/p
 | `receivers` | Named receiver instances |
 | `zones` | Geofences and their alert/retain rules |
 
-Legacy configs using `general`, `components`, `categories`, and `zones.levels` are still accepted and auto-migrated with a deprecation warning.
-
 ### Database
 
 ```yaml
@@ -197,7 +195,7 @@ src/pyaerial/
   tracker.py          Plane state and deduplication
   store/              Unified MongoDB persistence
   webapp.py           Portal server and UI
-  config/             Typed schema, loader, legacy compat
+  config/             Typed schema and loader
   receivers/          Receiver plugin registry
   alerters/           Alert delivery plugin registry
   calc/               Geo math, requirement evaluation, aircraft DB

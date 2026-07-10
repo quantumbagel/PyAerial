@@ -10,7 +10,6 @@ from pathlib import Path
 import ruamel.yaml
 from pydantic import ValidationError
 
-from pyaerial.config.compat import is_legacy_config, migrate_legacy_config
 from pyaerial.config.schema import Config
 
 log = logging.getLogger("pyaerial.config")
@@ -65,9 +64,6 @@ def load_config(path: str | os.PathLike = "config.yaml", *,
         raise ConfigError(f"configuration file {config_path} is empty")
     if not isinstance(data, dict):
         raise ConfigError(f"configuration file {config_path} must contain a mapping at the top level")
-
-    if is_legacy_config(data):
-        data = migrate_legacy_config(data)
 
     data = _apply_overrides(data, overrides)
 
