@@ -1,9 +1,5 @@
 """
 Loading and validation of the PyAerial configuration file.
-
-Provides clear, actionable errors for missing files, YAML syntax problems, and
-schema violations, plus support for a handful of environment-variable and
-programmatic overrides.
 """
 from __future__ import annotations
 
@@ -14,6 +10,7 @@ from pathlib import Path
 import ruamel.yaml
 from pydantic import ValidationError
 
+from pyaerial.config.compat import is_legacy_config, migrate_legacy_config
 from pyaerial.config.schema import Config
 
 log = logging.getLogger("pyaerial.config")
@@ -23,12 +20,11 @@ class ConfigError(Exception):
     """Raised when configuration cannot be loaded or is invalid."""
 
 
-# Environment variable -> dotted config path override.
 _ENV_OVERRIDES = {
-    "PYAERIAL_MONGODB": ("general", "mongodb"),
-    "PYAERIAL_LOG_LEVEL": ("general", "logs"),
-    "PYAERIAL_LOG_FILE": ("general", "log_file"),
-    "PYAERIAL_HZ": ("general", "hz"),
+    "PYAERIAL_MONGODB": ("database", "uri"),
+    "PYAERIAL_LOG_LEVEL": ("logging", "level"),
+    "PYAERIAL_LOG_FILE": ("logging", "file"),
+    "PYAERIAL_HZ": ("tracking", "hz"),
 }
 
 
@@ -69,6 +65,9 @@ def load_config(path: str | os.PathLike = "config.yaml", *,
         raise ConfigError(f"configuration file {config_path} is empty")
     if not isinstance(data, dict):
         raise ConfigError(f"configuration file {config_path} must contain a mapping at the top level")
+
+    if is_legacy_config(data):
+        data = migrate_legacy_config(data)
 
     data = _apply_overrides(data, overrides)
 

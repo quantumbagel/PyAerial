@@ -1,8 +1,7 @@
 """
 Lightweight webapp server for live flight tracking.
 
-Serves an interactive map showing real-time aircraft positions and paths,
-polling telemetry from the consolidated MongoDB collections.
+Reads live flights, completed tracks, and alert events from MongoDB.
 """
 from __future__ import annotations
 
@@ -10,7 +9,9 @@ import json
 import logging
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 from urllib.parse import parse_qs, urlparse
+
 import pymongo
 
 from pyaerial.calc.aircraft_db import AircraftDB
@@ -19,10 +20,91 @@ from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 
 log = logging.getLogger("pyaerial.webapp")
 
+_FLIGHT_STATUS_LIVE = "live"
+
+
+def _connect_db(config_path: str) -> tuple[pymongo.MongoClient, pymongo.database.Database]:
+    config = load_config(config_path)
+    client = pymongo.MongoClient(config.database.uri)
+    if config.database.name:
+        db = client.get_database(config.database.name)
+    else:
+        try:
+            db = client.get_default_database()
+        except Exception:
+            db = client.get_database("pyaerial")
+    return client, db
+
+
+def _enrich_from_aircraft_db(icao: str, aircraft_db: AircraftDB | None) -> dict[str, str | None]:
+    if not aircraft_db:
+        return {}
+    meta = aircraft_db.lookup(icao)
+    if not meta:
+        return {}
+    return {
+        "callsign": meta.get("callsign"),
+        "model": meta.get("model"),
+        "owner": meta.get("owner"),
+        "country": meta.get("country"),
+    }
+
+
+def _telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
+    point: dict[str, Any] = {
+        "timestamp": doc["timestamp"],
+        "altitude": doc.get("altitude"),
+        "speed": doc.get("speed", doc.get("horizontal_speed")),
+        "heading": doc.get("heading", doc.get("direction")),
+    }
+    if "latitude" in doc and "longitude" in doc:
+        point["latitude"] = doc["latitude"]
+        point["longitude"] = doc["longitude"]
+    elif "position" in doc:
+        coords = doc["position"]["coordinates"]
+        point["longitude"] = coords[0]
+        point["latitude"] = coords[1]
+    return point
+
+
+def _flight_summary(doc: dict[str, Any], last_tel: dict[str, Any] | None,
+                    aircraft_db: AircraftDB | None) -> dict[str, Any]:
+    icao = doc.get("icao", "")
+    enriched = _enrich_from_aircraft_db(icao, aircraft_db)
+    info = doc.get("info", {})
+    lat = lon = alt = speed = heading = None
+    if last_tel:
+        tel = _telemetry_point(last_tel)
+        lat = tel.get("latitude")
+        lon = tel.get("longitude")
+        alt = tel.get("altitude")
+        speed = tel.get("speed")
+        heading = tel.get("heading")
+    is_live = doc.get("status") == _FLIGHT_STATUS_LIVE
+    return {
+        "flight_id": doc["_id"],
+        "icao": icao,
+        "zone": doc.get("zone"),
+        "level": doc.get("level"),
+        "start_time": doc.get("start_time"),
+        "end_time": doc.get("end_time"),
+        "callsign": doc.get("callsign") or info.get("callsign") or enriched.get("callsign"),
+        "model": doc.get("model") or info.get("model") or enriched.get("model"),
+        "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
+        "country": doc.get("country") or info.get("country") or enriched.get("country"),
+        "latitude": lat,
+        "longitude": lon,
+        "altitude": alt,
+        "speed": speed,
+        "heading": heading,
+        "is_live": is_live,
+        "status": doc.get("status", "completed"),
+        "retained": doc.get("retained", False),
+    }
+
 
 class WebAppHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        # Mute standard HTTP request logging in console unless in debug mode
         log.debug(format, *args)
 
     @property
@@ -32,10 +114,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
     @property
     def aircraft_db(self) -> AircraftDB | None:
         return self.server.aircraft_db
-
-    @property
-    def ipc_db(self):
-        return self.server.ipc_db
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -55,91 +133,43 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.handle_api_telemetry(query)
         elif path == "/api/live":
             self.handle_api_live(query)
+        elif path == "/api/alerts":
+            self.handle_api_alerts(query)
         else:
             self.send_error(404, "Not Found")
 
     def handle_api_flights(self):
         try:
-            # 1. Fetch live active flights from SQLite IpcDB
-            live_flights = []
-            try:
-                live_cursor = self.ipc_db._conn.execute("""
-                    SELECT f.flight_id, f.icao, f.callsign, f.model, f.owner, f.country, f.zone, f.level, f.start_time, f.end_time,
-                           t.latitude, t.longitude, t.altitude, t.speed, t.heading
-                    FROM live_flights f
-                    LEFT JOIN live_telemetry t ON f.flight_id = t.flight_id AND t.timestamp = (
-                        SELECT MAX(timestamp) FROM live_telemetry WHERE flight_id = f.flight_id
-                    )
-                """)
-                for row in live_cursor:
-                    live_flights.append({
-                        "flight_id": row[0],
-                        "icao": row[1],
-                        "zone": row[6],
-                        "level": row[7],
-                        "start_time": row[8],
-                        "end_time": row[9],
-                        "callsign": row[2],
-                        "model": row[3],
-                        "owner": row[4],
-                        "country": row[5],
-                        "latitude": row[10],
-                        "longitude": row[11],
-                        "altitude": row[12],
-                        "speed": row[13],
-                        "heading": row[14],
-                        "is_live": True,
-                    })
-            except Exception as e:
-                log.error("SQLite IPC read failed in handle_api_flights: %s", e)
+            flights_col = self.db.get_collection("flights")
+            telemetry_col = self.db.get_collection("telemetry")
+            alerts_col = self.db.get_collection("alerts")
 
-            # 2. Fetch completed flights from MongoDB
-            mongo_flights = []
-            cursor = self.db.get_collection("flights").find().sort("start_time", -1).limit(50)
-            for doc in cursor:
-                icao = doc.get("icao", "")
-                meta = self.aircraft_db.lookup(icao) if self.aircraft_db else None
-                
-                # Fetch latest telemetry point for this flight to get current/last position
-                last_tel = self.db.get_collection("telemetry").find_one(
+            live_docs = list(flights_col.find({"status": _FLIGHT_STATUS_LIVE}).sort("start_time", -1))
+            live_icaos = {doc.get("icao") for doc in live_docs}
+
+            completed_cursor = flights_col.find({
+                "status": {"$ne": _FLIGHT_STATUS_LIVE},
+                "$or": [{"retained": True}, {"retained": {"$exists": False}}],
+            }).sort("end_time", -1).limit(100)
+
+            completed_docs = []
+            for doc in completed_cursor:
+                if doc.get("icao") in live_icaos:
+                    continue
+                if doc.get("retained") or alerts_col.count_documents({"flight_id": doc["_id"]}, limit=1):
+                    completed_docs.append(doc)
+                if len(completed_docs) >= 50:
+                    break
+
+            results = []
+            for doc in live_docs + completed_docs:
+                last_tel = telemetry_col.find_one(
                     {"flight_id": doc["_id"]},
-                    sort=[("timestamp", pymongo.DESCENDING)]
+                    sort=[("timestamp", pymongo.DESCENDING)],
                 )
-                
-                lat, lon, alt, speed, heading = None, None, None, None, None
-                if last_tel:
-                    alt = last_tel.get("altitude")
-                    speed = last_tel.get("horizontal_speed")
-                    heading = last_tel.get("direction")
-                    if "position" in last_tel:
-                        coords = last_tel["position"]["coordinates"]
-                        lon = coords[0]
-                        lat = coords[1]
+                results.append(_flight_summary(doc, last_tel, self.aircraft_db))
 
-                mongo_flights.append({
-                    "flight_id": doc["_id"],
-                    "icao": icao,
-                    "zone": doc.get("zone"),
-                    "level": doc.get("level"),
-                    "start_time": doc.get("start_time"),
-                    "end_time": doc.get("end_time"),
-                    "callsign": doc.get("info", {}).get("callsign") or (meta.get("callsign") if meta else None),
-                    "model": doc.get("info", {}).get("model") or (meta.get("model") if meta else None),
-                    "owner": doc.get("info", {}).get("owner") or (meta.get("owner") if meta else None),
-                    "country": doc.get("info", {}).get("country") or (meta.get("country") if meta else None),
-                    "latitude": lat,
-                    "longitude": lon,
-                    "altitude": alt,
-                    "speed": speed,
-                    "heading": heading,
-                    "is_live": False,
-                })
-
-            # Filter out historical flights that are currently active in live_flights
-            active_icaos = {f["icao"] for f in live_flights}
-            filtered_mongo = [f for f in mongo_flights if f["icao"] not in active_icaos]
-            
-            self.send_json(live_flights + filtered_mongo)
+            self.send_json(results)
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
 
@@ -150,58 +180,28 @@ class WebAppHandler(BaseHTTPRequestHandler):
             return
         flight_id = flight_ids[0]
         try:
-            if flight_id.startswith("live-"):
-                # Fetch from SQLite IpcDB
-                row = self.ipc_db._conn.execute(
-                    "SELECT flight_id, icao, callsign, model, owner, country, zone, level, start_time, end_time FROM live_flights WHERE flight_id = ?",
-                    (flight_id,)
-                ).fetchone()
-                if not row:
-                    self.send_error(404, "Flight not found in live cache")
-                    return
-                
-                raw_cursor = self.ipc_db._conn.execute(
-                    "SELECT hex, timestamp FROM live_raw_messages WHERE flight_id = ? ORDER BY timestamp ASC",
-                    (flight_id,)
-                )
-                raw_messages = [{"hex": r[0], "timestamp": r[1]} for r in raw_cursor]
-                
-                flight_data = {
-                    "flight_id": row[0],
-                    "icao": row[1],
-                    "zone": row[6],
-                    "level": row[7],
-                    "start_time": row[8],
-                    "end_time": row[9],
-                    "callsign": row[2],
-                    "model": row[3],
-                    "owner": row[4],
-                    "country": row[5],
-                    "raw_messages": raw_messages,
-                    "is_live": True,
-                }
-            else:
-                # Fetch from MongoDB
-                doc = self.db.get_collection("flights").find_one({"_id": flight_id})
-                if not doc:
-                    self.send_error(404, "Flight not found")
-                    return
-                icao = doc.get("icao", "")
-                meta = self.aircraft_db.lookup(icao) if self.aircraft_db else None
-                flight_data = {
-                    "flight_id": doc["_id"],
-                    "icao": icao,
-                    "zone": doc.get("zone"),
-                    "level": doc.get("level"),
-                    "start_time": doc.get("start_time"),
-                    "end_time": doc.get("end_time"),
-                    "callsign": doc.get("info", {}).get("callsign") or (meta.get("callsign") if meta else None),
-                    "model": doc.get("info", {}).get("model") or (meta.get("model") if meta else None),
-                    "owner": doc.get("info", {}).get("owner") or (meta.get("owner") if meta else None),
-                    "country": doc.get("info", {}).get("country") or (meta.get("country") if meta else None),
-                    "raw_messages": doc.get("raw_messages", []),
-                    "is_live": False,
-                }
+            doc = self.db.get_collection("flights").find_one({"_id": flight_id})
+            if not doc:
+                self.send_error(404, "Flight not found")
+                return
+            icao = doc.get("icao", "")
+            enriched = _enrich_from_aircraft_db(icao, self.aircraft_db)
+            info = doc.get("info", {})
+            flight_data = {
+                "flight_id": doc["_id"],
+                "icao": icao,
+                "zone": doc.get("zone"),
+                "level": doc.get("level"),
+                "start_time": doc.get("start_time"),
+                "end_time": doc.get("end_time"),
+                "callsign": doc.get("callsign") or info.get("callsign") or enriched.get("callsign"),
+                "model": doc.get("model") or info.get("model") or enriched.get("model"),
+                "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
+                "country": doc.get("country") or info.get("country") or enriched.get("country"),
+                "raw_messages": doc.get("raw_messages", []),
+                "is_live": doc.get("status") == _FLIGHT_STATUS_LIVE,
+                "status": doc.get("status", "completed"),
+            }
             self.send_json(flight_data)
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
@@ -213,36 +213,8 @@ class WebAppHandler(BaseHTTPRequestHandler):
             return
         flight_id = flight_ids[0]
         try:
-            if flight_id.startswith("live-"):
-                cursor = self.ipc_db._conn.execute(
-                    "SELECT timestamp, altitude, speed, heading, latitude, longitude FROM live_telemetry WHERE flight_id = ? ORDER BY timestamp ASC",
-                    (flight_id,)
-                )
-                points = []
-                for row in cursor:
-                    points.append({
-                        "timestamp": row[0],
-                        "altitude": row[1],
-                        "speed": row[2],
-                        "heading": row[3],
-                        "longitude": row[5],
-                        "latitude": row[4],
-                    })
-            else:
-                cursor = self.db.get_collection("telemetry").find({"flight_id": flight_id}).sort("timestamp", 1)
-                points = []
-                for doc in cursor:
-                    point = {
-                        "timestamp": doc["timestamp"],
-                        "altitude": doc.get("altitude"),
-                        "speed": doc.get("horizontal_speed"),
-                        "heading": doc.get("direction"),
-                    }
-                    if "position" in doc:
-                        coords = doc["position"]["coordinates"]
-                        point["longitude"] = coords[0]
-                        point["latitude"] = coords[1]
-                    points.append(point)
+            cursor = self.db.get_collection("telemetry").find({"flight_id": flight_id}).sort("timestamp", 1)
+            points = [_telemetry_point(doc) for doc in cursor]
             self.send_json(points)
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
@@ -252,30 +224,71 @@ class WebAppHandler(BaseHTTPRequestHandler):
         since = float(since_vals[0]) if since_vals else 0.0
         now = time.time()
         try:
-            cursor = self.ipc_db._conn.execute(
-                "SELECT flight_id, icao, timestamp, altitude, speed, heading, latitude, longitude FROM live_telemetry WHERE timestamp > ? ORDER BY timestamp ASC",
-                (since,)
-            )
+            live_ids = [
+                doc["_id"] for doc in self.db.get_collection("flights").find(
+                    {"status": _FLIGHT_STATUS_LIVE}, {"_id": 1},
+                )
+            ]
+            if not live_ids:
+                self.send_json({"telemetry": [], "timestamp": now})
+                return
+
+            cursor = self.db.get_collection("telemetry").find({
+                "flight_id": {"$in": live_ids},
+                "timestamp": {"$gt": since},
+            }).sort("timestamp", 1)
+
             points = []
-            for row in cursor:
+            for doc in cursor:
+                tel = _telemetry_point(doc)
                 points.append({
-                    "flight_id": row[0],
-                    "icao": row[1],
-                    "timestamp": row[2],
-                    "altitude": row[3],
-                    "speed": row[4],
-                    "heading": row[5],
-                    "longitude": row[7],
-                    "latitude": row[6],
+                    "flight_id": doc["flight_id"],
+                    "icao": doc.get("icao"),
+                    **tel,
                 })
-            self.send_json({
-                "telemetry": points,
-                "timestamp": now
-            })
+            self.send_json({"telemetry": points, "timestamp": now})
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
 
-    def send_json(self, data: any):
+    def handle_api_alerts(self, query: dict[str, list[str]]):
+        since_vals = query.get("since", [])
+        flight_vals = query.get("flight_id", [])
+        level_vals = query.get("level", [])
+        since = float(since_vals[0]) if since_vals else 0.0
+        flight_id = flight_vals[0] if flight_vals else None
+        level = level_vals[0] if level_vals else None
+
+        try:
+            filt: dict[str, Any] = {}
+            if since:
+                filt["timestamp"] = {"$gt": since}
+            if flight_id:
+                filt["flight_id"] = flight_id
+            if level:
+                filt["level"] = level
+
+            cursor = self.db.get_collection("alerts").find(filt).sort("timestamp", -1).limit(100)
+            alerts = []
+            for doc in cursor:
+                coords = doc.get("position", {}).get("coordinates", [None, None])
+                alerts.append({
+                    "alert_id": str(doc["_id"]),
+                    "flight_id": doc.get("flight_id"),
+                    "icao": doc.get("icao"),
+                    "callsign": doc.get("callsign"),
+                    "zone": doc.get("zone"),
+                    "level": doc.get("level"),
+                    "timestamp": doc.get("timestamp"),
+                    "eta": doc.get("eta"),
+                    "altitude": doc.get("altitude"),
+                    "latitude": coords[1] if len(coords) > 1 else None,
+                    "longitude": coords[0] if coords else None,
+                })
+            self.send_json(alerts)
+        except Exception as exc:
+            self.send_error(500, f"Database error: {exc}")
+
+    def send_json(self, data: Any):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -286,27 +299,15 @@ class WebAppHandler(BaseHTTPRequestHandler):
 def run_webapp(config_path: str = "config.yaml", *,
                aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
                host: str = "0.0.0.0", port: int = 10090) -> None:
-    config = load_config(config_path)
-    client = pymongo.MongoClient(config.general.mongodb)
-
-    try:
-        db = client.get_default_database()
-    except Exception:
-        db = client.get_database("pyaerial")
-
+    client, db = _connect_db(config_path)
     aircraft_db = AircraftDB(aircraft_db_path) if aircraft_db_path else None
-    
-    from pyaerial.calc.ipc_db import IpcDB
-    ipc_db = IpcDB()
 
-    # ThreadingHTTPServer handles multiple concurrent HTTP queries asynchronously
     server = ThreadingHTTPServer((host, port), WebAppHandler)
     server.db = db
     server.aircraft_db = aircraft_db
-    server.ipc_db = ipc_db
 
     actual_host, actual_port = server.server_address
-    print(f"Starting PyAerial live web app on http://localhost:{actual_port}")
+    print(f"Starting PyAerial web portal on http://localhost:{actual_port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -316,7 +317,6 @@ def run_webapp(config_path: str = "config.yaml", *,
         client.close()
         if aircraft_db:
             aircraft_db.close()
-        ipc_db.close()
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -683,9 +683,61 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background: #333;
             border-radius: 3px;
         }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #444;
+        .level-badge {
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: #334155;
+            color: #cbd5e1;
         }
+        .level-badge.live { background: #064e3b; color: #6ee7b7; }
+        .level-badge.warn { background: #78350f; color: #fcd34d; }
+        .level-badge.alert { background: #7f1d1d; color: #fca5a5; }
+        .level-badge.done { background: #1e293b; color: #94a3b8; }
+        #sidebar-tabs {
+            display: flex;
+            border-bottom: 1px solid #2d2d2d;
+            background: #151515;
+        }
+        .sidebar-tab {
+            flex: 1;
+            padding: 10px 8px;
+            border: none;
+            background: transparent;
+            color: #888;
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+        .sidebar-tab.active {
+            color: #3b82f6;
+            border-bottom: 2px solid #3b82f6;
+        }
+        .sidebar-panel { display: none; flex-direction: column; flex-grow: 1; overflow: hidden; }
+        .sidebar-panel.active { display: flex; }
+        .alert-item {
+            padding: 12px 20px;
+            border-bottom: 1px solid #262626;
+            cursor: pointer;
+        }
+        .alert-item:hover { background: #222; }
+        .alert-item.active { background: #1e2638; border-left: 3px solid #f59e0b; }
+        .alert-meta { display: flex; justify-content: space-between; align-items: center; }
+        .alert-level-warn { color: #fcd34d; }
+        .alert-level-alert { color: #fca5a5; }
+        #alert-timeline-list { display: flex; flex-direction: column; gap: 8px; }
+        .alert-timeline-item {
+            padding: 10px 12px;
+            border-left: 3px solid #334155;
+            background: #0f1218;
+            border-radius: 0 6px 6px 0;
+            font-size: 0.85rem;
+        }
+        .alert-timeline-item.warn { border-left-color: #f59e0b; }
+        .alert-timeline-item.alert { border-left-color: #ef4444; }
     </style>
 </head>
 <body>
@@ -714,10 +766,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <span>Live:</span>
                 <strong id="live-count" style="color: #10b981;">0</strong>
             </div>
+            <div class="stat-card">
+                <span>Alerts:</span>
+                <strong id="alert-count" style="color: #f59e0b;">0</strong>
+            </div>
         </div>
-        <ul id="flight-list">
-            <!-- Loaded dynamically -->
-        </ul>
+        <div id="sidebar-tabs">
+            <button class="sidebar-tab active" id="tab-flights" onclick="switchSidebarTab('flights')">Flights</button>
+            <button class="sidebar-tab" id="tab-alerts" onclick="switchSidebarTab('alerts')">Alerts</button>
+        </div>
+        <div id="panel-flights" class="sidebar-panel active">
+            <ul id="flight-list"></ul>
+        </div>
+        <div id="panel-alerts" class="sidebar-panel">
+            <ul id="alert-list" style="list-style:none; overflow-y:auto; flex-grow:1;"></ul>
+        </div>
     </div>
     <div id="map-container">
         <div id="map"></div>
@@ -758,6 +821,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <div class="drawer-tabs">
                     <button class="tab-btn active" id="tab-btn-raw" onclick="switchTab('raw')">Raw Messages</button>
                     <button class="tab-btn" id="tab-btn-telemetry" onclick="switchTab('telemetry')">Telemetry Log</button>
+                    <button class="tab-btn" id="tab-btn-alerts" onclick="switchTab('alerts')">Alert Timeline</button>
                 </div>
                 
                 <div class="tab-content" id="tab-raw">
@@ -778,10 +842,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                 </tr>
                             </thead>
                             <tbody id="telemetry-table-body">
-                                <!-- Telemetry rows -->
                             </tbody>
                         </table>
                     </div>
+                </div>
+
+                <div class="tab-content" id="tab-alerts" style="display: none;">
+                    <div id="alert-timeline-list"></div>
                 </div>
             </div>
         </div>
@@ -798,10 +865,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         let planeMarkers = {}; 
         let planePaths = {};   
-        let flightsData = [];  
+        let flightsData = [];
+        let alertsData = [];
         let activeFlightId = null;
+        let activeAlertId = null;
         let lastSeenTimestamp = 0;
         let searchQuery = '';
+        let sidebarView = 'flights';
+
+        function switchSidebarTab(view) {
+            sidebarView = view;
+            document.getElementById('tab-flights').classList.toggle('active', view === 'flights');
+            document.getElementById('tab-alerts').classList.toggle('active', view === 'alerts');
+            document.getElementById('panel-flights').classList.toggle('active', view === 'flights');
+            document.getElementById('panel-alerts').classList.toggle('active', view === 'alerts');
+        }
+
+        function levelBadge(flight) {
+            if (flight.is_live) return '<span class="level-badge live">Live</span>';
+            const level = (flight.level || '').toLowerCase();
+            if (level === 'warn') return '<span class="level-badge warn">Warn</span>';
+            if (level === 'alert') return '<span class="level-badge alert">Alert</span>';
+            return '<span class="level-badge done">Done</span>';
+        }
+
+        function isFlightLive(flight) {
+            return !!flight.is_live;
+        }
 
         function createPlaneIcon(heading, isSelected, isLive) {
             const fill = isSelected ? '#f43f5e' : (isLive ? '#10b981' : '#64748b');
@@ -861,7 +951,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     return b.start_time - a.start_time;
                 });
 
-                document.getElementById('flight-count').innerText = data.length;
+                document.getElementById('flight-count').innerText = data.filter(f => !f.is_live).length;
+                let liveCount = 0;
+                data.forEach(f => { if (f.is_live) liveCount++; });
+                document.getElementById('live-count').innerText = liveCount;
                 renderFlightList();
                 plotAllFlights();
             } catch (err) {
@@ -869,9 +962,78 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
-        function isFlightLive(flight) {
-            const now = Date.now() / 1000;
-            return (now - flight.end_time) < 45;
+        async function fetchAlerts() {
+            try {
+                const response = await fetch('/api/alerts');
+                alertsData = await response.json();
+                document.getElementById('alert-count').innerText = alertsData.length;
+                renderAlertList();
+            } catch (err) {
+                console.error("Failed to fetch alerts", err);
+            }
+        }
+
+        function renderAlertList() {
+            const list = document.getElementById('alert-list');
+            list.innerHTML = '';
+            alertsData.forEach(alert => {
+                const item = document.createElement('li');
+                item.className = 'alert-item';
+                if (alert.alert_id === activeAlertId) item.className += ' active';
+                const timeStr = new Date(alert.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+                const levelClass = (alert.level || '').toLowerCase() === 'alert' ? 'alert-level-alert' : 'alert-level-warn';
+                item.innerHTML = `
+                    <div class="alert-meta">
+                        <span class="flight-callsign ${levelClass}">${(alert.level || 'event').toUpperCase()} · ${alert.zone || 'zone'}</span>
+                        <span class="flight-icao">${(alert.icao || '').toUpperCase()}</span>
+                    </div>
+                    <div class="flight-meta-row" style="margin-top:4px;">
+                        <span class="flight-desc">${alert.callsign || 'UNKNOWN'}</span>
+                        <span class="flight-time">${timeStr}</span>
+                    </div>
+                `;
+                item.addEventListener('click', () => selectAlert(alert));
+                list.appendChild(item);
+            });
+        }
+
+        async function selectAlert(alert) {
+            activeAlertId = alert.alert_id;
+            renderAlertList();
+            if (alert.latitude != null && alert.longitude != null) {
+                map.setView([alert.latitude, alert.longitude], Math.max(map.getZoom(), 10));
+            }
+            if (alert.flight_id) {
+                await selectFlight(alert.flight_id);
+            }
+        }
+
+        async function fetchFlightAlerts(flightId) {
+            const container = document.getElementById('alert-timeline-list');
+            container.innerHTML = '<div style="color:#64748b;">Loading alerts...</div>';
+            try {
+                const response = await fetch(`/api/alerts?flight_id=${encodeURIComponent(flightId)}`);
+                const alerts = await response.json();
+                container.innerHTML = '';
+                if (!alerts.length) {
+                    container.innerHTML = '<div style="color:#64748b;">No alert events for this flight.</div>';
+                    return;
+                }
+                alerts.reverse().forEach(alert => {
+                    const item = document.createElement('div');
+                    const level = (alert.level || '').toLowerCase();
+                    item.className = `alert-timeline-item ${level}`;
+                    const timeStr = new Date(alert.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+                    item.innerHTML = `
+                        <div><strong>${(alert.level || 'event').toUpperCase()}</strong> in ${alert.zone || 'zone'} at ${timeStr}</div>
+                        <div style="color:#94a3b8; margin-top:4px;">Alt ${alert.altitude != null ? Math.round(alert.altitude) + ' m' : 'N/A'} · ETA ${alert.eta != null ? Math.round(alert.eta) + ' s' : 'N/A'}</div>
+                    `;
+                    item.addEventListener('click', () => selectAlert(alert));
+                    container.appendChild(item);
+                });
+            } catch (err) {
+                container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
+            }
         }
 
         let warningFilter = 'all';
@@ -916,7 +1078,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 
                 item.innerHTML = `
                     <div class="flight-meta-row">
-                        <span class="flight-callsign">${statusDot} ${flight.callsign || 'UNKNOWN'}</span>
+                        <span class="flight-callsign">${statusDot} ${flight.callsign || 'UNKNOWN'} ${levelBadge(flight)}</span>
                         <span class="flight-icao">${flight.icao.toUpperCase()}</span>
                     </div>
                     <div class="flight-meta-row" style="margin-top: 4px;">
@@ -1052,8 +1214,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 rawList.scrollTop = rawList.scrollHeight;
             }
 
-            // Populate telemetry table log
+            // Populate telemetry table log and alert timeline
             fetchTelemetryTable(flightDetail.flight_id);
+            fetchFlightAlerts(flightDetail.flight_id);
         }
 
         async function fetchTelemetryTable(flightId) {
@@ -1138,15 +1301,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                 model: null,
                                 owner: null,
                                 country: null,
-                                zone: 'Live',
-                                level: 'Live',
+                                zone: '',
+                                level: '',
                                 start_time: point.timestamp,
                                 end_time: point.timestamp,
                                 latitude: point.latitude,
                                 longitude: point.longitude,
                                 heading: point.heading,
                                 altitude: point.altitude,
-                                speed: point.speed
+                                speed: point.speed,
+                                is_live: true
                             };
                             flightsData.push(flight);
                             renderFlightList();
@@ -1157,6 +1321,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             flight.speed = point.speed;
                             flight.heading = point.heading;
                             flight.end_time = point.timestamp;
+                            flight.is_live = true;
                         }
 
                         if (planeMarkers[flightId]) {
@@ -1219,8 +1384,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         async function init() {
             await fetchFlights();
+            await fetchAlerts();
             setInterval(pollLiveTelemetry, 2000);
             setInterval(fetchFlights, 10000);
+            setInterval(fetchAlerts, 10000);
             pollLiveTelemetry();
         }
 

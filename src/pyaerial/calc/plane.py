@@ -20,6 +20,7 @@ from pyaerial.alerters import Alerter, create_alerter
 from pyaerial.calc import evaluate, geo
 from pyaerial.calc.aircraft_db import AircraftDB
 from pyaerial.config.schema import Config
+from pyaerial.store.mongo import MongoStore
 from pyaerial.constants import (
     ALERT_CAT_ETA,
     ALERT_CAT_REASON,
@@ -50,11 +51,13 @@ class PlaneCalculator:
     """Stateful calculator with cached alerters and optional aircraft metadata."""
 
     def __init__(self, config: Config, polygons: dict[str, Polygon],
-                 aircraft_db: AircraftDB | None = None):
+                 aircraft_db: AircraftDB | None = None,
+                 store: MongoStore | None = None):
         self.config = config
         self.polygons = polygons
         self.aircraft_db = aircraft_db
-        self.backdate = config.general.backdate_packets
+        self.store = store
+        self.backdate = config.tracking.backdate_packets
         self._alerters: dict[tuple[str, str], Alerter] = {}
         # Concurrency for non-blocking API lookups of aircraft callsigns/registrations
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="callsign-lookup")
@@ -186,17 +189,15 @@ class PlaneCalculator:
             geofence_etas[zone_name] = eta
 
             resolver = evaluate.make_resolver(plane, eta, polygon, position)
-            for level_name, level in zone.levels.items():
-                if not evaluate.requirement_passes(
-                        level.requirements, self.config.components, resolver):
+            for rule in zone.rules:
+                if not evaluate.when_passes(rule.when, resolver):
                     continue
 
                 if plane.get("level") != "alert":
                     plane["zone"] = zone_name
-                    plane["level"] = level_name
+                    plane["level"] = rule.name
 
-                category = self.config.resolve_category(level.category)
-                alerter = self._get_alerter(category.alert_method, category.arguments)
+                alerter = self._get_alerter(rule.alert.method, rule.alert.options)
                 alt = get_latest(STORE_RECV_DATA, STORE_ALT, plane)
                 payload = {
                     STORE_LAT: position[0],
@@ -206,16 +207,17 @@ class PlaneCalculator:
                 meta = {
                     STORE_ICAO: plane[STORE_INFO][STORE_ICAO],
                     STORE_CALLSIGN: callsign,
-                    ALERT_CAT_TYPE: level_name,
+                    ALERT_CAT_TYPE: rule.name,
                     ALERT_CAT_ZONE: zone_name,
                     ALERT_CAT_ETA: eta,
                     ALERT_CAT_REASON: {
                         "zones": geofence_etas,
-                        "category": level.category if isinstance(level.category, str)
-                        else level.category.alert_method,
+                        "rule": rule.name,
                     },
                 }
                 alerter.alert(meta, payload)
+                if self.store is not None:
+                    self.store.record_alert(plane, meta, payload)
 
     def _get_alerter(self, method: str, arguments: dict) -> Alerter:
         key = (method, str(sorted(arguments.items())))

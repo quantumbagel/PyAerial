@@ -1,12 +1,5 @@
 """
-Requirement / component evaluation shared by live alerting and persistence.
-
-A "component" is a set of numeric constraints on data fields; a "requirement" is
-a boolean expression over component names. Both the live alert path
-(:mod:`pyaerial.calc.plane`) and the save-decision path
-(:class:`pyaerial.savers.Saver`) resolve field values differently (latest value
-vs. value at a historical timestamp), so this module accepts a ``resolver``
-callable that maps a data-field name to its value (or ``None`` if unavailable).
+Requirement / field-constraint evaluation shared by live alerting and persistence.
 """
 from __future__ import annotations
 
@@ -14,9 +7,8 @@ from typing import Callable
 
 from shapely import Polygon
 
-from pyaerial import expr
 from pyaerial.calc import geo
-from pyaerial.config.schema import ComparisonSpec
+from pyaerial.config.schema import FieldConstraint
 from pyaerial.constants import (
     ALERT_CAT_ETA,
     CONFIG_COMP_FUNCTIONS,
@@ -58,9 +50,9 @@ def make_resolver(plane: dict, eta: float, polygon: Polygon,
     return resolve
 
 
-def component_passes(component: dict[str, ComparisonSpec], resolver: Resolver) -> bool:
-    """Return whether every constraint in a component is satisfied."""
-    for field, spec in component.items():
+def when_passes(when: dict[str, FieldConstraint], resolver: Resolver) -> bool:
+    """Return whether every field constraint in a rule's ``when`` block is satisfied."""
+    for field, spec in when.items():
         value = resolver(field)
         if value is None:
             return False
@@ -68,12 +60,3 @@ def component_passes(component: dict[str, ComparisonSpec], resolver: Resolver) -
             if not CONFIG_COMP_FUNCTIONS[ctype](value, threshold):
                 return False
     return True
-
-
-def requirement_passes(requirement: str, components_cfg: dict, resolver: Resolver) -> bool:
-    """Evaluate a requirement expression over the configured components."""
-    results = {
-        name: component_passes(components_cfg[name], resolver)
-        for name in expr.extract_component_names(requirement)
-    }
-    return expr.evaluate(requirement, results)

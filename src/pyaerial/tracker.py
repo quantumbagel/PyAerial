@@ -59,7 +59,7 @@ class Tracker:
         A message is considered new if we have never seen its hex, or if the
         same hex was last seen longer ago than ``duplicate_packet_merging``.
         """
-        merge_window = self.config.general.duplicate_packet_merging
+        merge_window = self.config.tracking.duplicate_packet_merging
         to_process: list[tuple[str, float]] = []
         now = time.time()
 
@@ -77,7 +77,7 @@ class Tracker:
     def expired_planes(self, current_time: float | None = None) -> list[str]:
         """Return ICAO ids of planes not updated within ``remember_planes`` seconds."""
         now = current_time or time.time()
-        threshold = self.config.general.remember_planes
+        threshold = self.config.tracking.remember_planes
         expired = []
         for icao, plane in self.planes.items():
             last = plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET]
@@ -96,7 +96,7 @@ class Tracker:
 
     def top_planes_summary(self) -> str:
         """Format a status line listing the busiest tracked planes."""
-        top_n = self.config.general.status_message_top_planes
+        top_n = self.config.tracking.status_message_top_planes
         if not self.planes or top_n == 0:
             return ""
 
@@ -109,7 +109,7 @@ class Tracker:
             sorted_planes = sorted_planes[:top_n]
 
         parts = []
-        advanced = self.config.general.advanced_status
+        advanced = self.config.tracking.advanced_status
         for icao in sorted_planes:
             count = by_packets[icao]
             if not advanced:

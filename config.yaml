@@ -1,13 +1,16 @@
-general:
-  mongodb: mongodb://localhost:27017
-  backdate_packets: 10
+database:
+  uri: mongodb://localhost:27017
+
+tracking:
+  hz: 2
   remember_planes: 30
+  backdate_packets: 10
+  duplicate_packet_merging: 5
   status_message_top_planes: 5
   advanced_status: true
-  hz: 2
-  duplicate_packet_merging: 5
-  logs: info  # debug, info, warning, or error
-  saver: mongo
+
+logging:
+  level: info
 
 home:
   latitude: 36.6810752
@@ -15,21 +18,12 @@ home:
 
 receivers:
   main:
-    method: dump1090
-    arguments:
-      tcp_connection_ip: localhost
-      tcp_connection_port: 30002
-
-components:
-  lenient:
-    altitude:
-      maximum: 2000  # Increase to 20,000 meters to include cruising commercial flights
-  critical:
-    altitude:
-      maximum: 1500  # Increase to 15,000 meters
+    type: dump1090
+    host: localhost
+    port: 30002
 
 zones:
-  aerpaw:  # AERPAW Big Geofence
+  aerpaw:
     coordinates:
       [[35.72880524177751, -78.69547205552347],
        [35.73034893280391, -78.69655569423412],
@@ -58,23 +52,18 @@ zones:
        [35.72718139200785, -78.69620041234603],
        [35.72746953931985, -78.69612885574327],
        [35.72880524177751, -78.69547205552347]]
-    levels:
-      warn:
-        category: save_everything
-        requirements: lenient
-        seconds: 60
-      alert:
-        category: save_everything
-        requirements: critical
-        seconds: 60
-
-
-categories:
-  save_everything:
-    alert_method: print
-    save:
-      telemetry:
-        default: all
-      calculated:
-        default: all
-
+    rules:
+      - name: warn
+        when:
+          altitude: { max: 2000 }
+        dwell_seconds: 60
+        alert:
+          method: print
+        retain: true
+      - name: alert
+        when:
+          altitude: { max: 1500 }
+        dwell_seconds: 60
+        alert:
+          method: print
+        retain: true

@@ -41,7 +41,7 @@ status - database size summary
 def run_statview(config_path: str = "config.yaml", *,
                  aircraft_db_path: str = DEFAULT_AIRCRAFT_DB) -> None:
     config = load_config(config_path)
-    client = pymongo.MongoClient(config.general.mongodb)
+    client = pymongo.MongoClient(config.database.uri)
     aircraft_db = AircraftDB(aircraft_db_path)
 
     print("Ready for user input.")
@@ -194,9 +194,11 @@ def _cmd_reset(client: pymongo.MongoClient, parts: list[str],
             return True, ""
         db.drop_collection("flights")
         db.drop_collection("telemetry")
+        db.drop_collection("alerts")
         
         # Recreate indexes
         db.get_collection("flights").create_index([("icao", pymongo.ASCENDING)])
+        db.get_collection("flights").create_index([("status", pymongo.ASCENDING)])
         db.get_collection("telemetry").create_index([
             ("flight_id", pymongo.ASCENDING),
             ("timestamp", pymongo.ASCENDING)
@@ -206,6 +208,8 @@ def _cmd_reset(client: pymongo.MongoClient, parts: list[str],
             ("timestamp", pymongo.ASCENDING)
         ])
         db.get_collection("telemetry").create_index([("position", pymongo.GEOSPHERE)])
+        db.get_collection("alerts").create_index([("timestamp", pymongo.DESCENDING)])
+        db.get_collection("alerts").create_index([("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)])
         
         print("[success] Database reset. Dropped all planes and flights.")
         return False, ""
@@ -217,6 +221,7 @@ def _cmd_reset(client: pymongo.MongoClient, parts: list[str],
     
     db.get_collection("flights").delete_many({"icao": target})
     db.get_collection("telemetry").delete_many({"icao": target})
+    db.get_collection("alerts").delete_many({"icao": target})
     print(f"[success] Dropped plane {target}.")
     return False, ""
 
@@ -314,7 +319,12 @@ def _dump_flight(client: pymongo.MongoClient, plane_id: str, flight_id: str) -> 
         # Process other fields in the telemetry document
         for k, v in doc.items():
             if k not in ("_id", "flight_id", "icao", "timestamp", "position"):
-                series_data.setdefault(k, []).append([t, v])
+                field = k
+                if k == "horizontal_speed":
+                    field = "horizontal_speed"
+                elif k == "direction":
+                    field = "direction"
+                series_data.setdefault(field, []).append([t, v])
 
     result: dict = {}
     for field, data_points in series_data.items():

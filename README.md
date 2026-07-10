@@ -2,16 +2,18 @@
 
 _scanning software for ADS-B / Mode S — airstrik 2.0, rev 2_
 
-PyAerial listens for nearby aircraft using the Mode S / ADS-B protocol, tracks them in memory, evaluates user-defined geofences, fires alerts, and persists eligible flights to MongoDB.
+PyAerial listens for nearby aircraft using the Mode S / ADS-B protocol, tracks them in memory, evaluates user-defined geofences, fires alerts, and persists live flights, telemetry, and alert events to MongoDB for the web portal.
 
-Version 2 is a full restructure into an installable Python package with typed configuration, plugin registries for receivers / savers / alerters, centralized logging, and a CLI.
+Version 2 is an installable Python package with typed configuration, plugin registries for receivers and alerters, centralized logging, and a CLI.
 
 ## Features
 
 - ADS-B decoding for position, altitude, velocity, callsign, and more ([The 1090 Megahertz Riddle](https://mode-s.org/decode))
 - Multiple simultaneous receivers (e.g. dump1090 TCP + RTL-SDR)
-- Geofence levels with boolean component requirements and ETA-based alerting
-- Pluggable alerters (`print`, `kafka`) and savers (`mongo`, `print`)
+- Geofence rules with field constraints and ETA-based alerting
+- Pluggable alerters (`print`, `kafka`)
+- Unified MongoDB store for live flights, completed tracks, and alert events
+- Web portal with live map, flight history, and alert timeline
 - SQLite-backed aircraft metadata index (built from OpenSky `database.csv`)
 - Validated YAML configuration with `pyaerial validate`
 - Interactive MongoDB browser via `pyaerial statview`
@@ -23,7 +25,7 @@ Dependencies are declared in [`pyproject.toml`](pyproject.toml).
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .              # core (dump1090 receiver, mongo saver, print alerter)
+pip install -e .              # core (dump1090 receiver, print alerter)
 pip install -e ".[all]"       # + RTL-SDR receiver and Kafka alerter
 ```
 
@@ -44,16 +46,23 @@ pyaerial build-db --csv database.csv -o aircraft.db
 ## Quick start
 
 1. Edit `config.yaml` (see [Configuration](#configuration) below).
-2. Start a message source — for dump1090:
+2. Start MongoDB (or use `docker compose up`).
+3. Start a message source — for dump1090:
 
    ```bash
    dump1090 --net --raw
    ```
 
-3. Run PyAerial:
+4. Run PyAerial:
 
    ```bash
    pyaerial run -c config.yaml
+   ```
+
+5. Open the portal:
+
+   ```bash
+   pyaerial web -c config.yaml
    ```
 
 Validate a config without running:
@@ -62,7 +71,7 @@ Validate a config without running:
 pyaerial validate -c config.yaml
 ```
 
-Browse saved flights:
+Browse saved flights from the CLI:
 
 ```bash
 pyaerial statview -c config.yaml
@@ -73,6 +82,7 @@ pyaerial statview -c config.yaml
 | Command | Description |
 |---------|-------------|
 | `pyaerial run` | Start the tracking engine |
+| `pyaerial web` | Start the web portal |
 | `pyaerial validate` | Check configuration syntax and cross-references |
 | `pyaerial statview` | Interactive MongoDB flight browser |
 | `pyaerial build-db` | Build SQLite aircraft index from OpenSky CSV |
@@ -81,111 +91,102 @@ Environment overrides (applied on top of the config file):
 
 | Variable | Config key |
 |----------|------------|
-| `PYAERIAL_MONGODB` | `general.mongodb` |
-| `PYAERIAL_LOG_LEVEL` | `general.logs` |
-| `PYAERIAL_LOG_FILE` | `general.log_file` |
-| `PYAERIAL_HZ` | `general.hz` |
+| `PYAERIAL_MONGODB` | `database.uri` |
+| `PYAERIAL_LOG_LEVEL` | `logging.level` |
+| `PYAERIAL_LOG_FILE` | `logging.file` |
+| `PYAERIAL_HZ` | `tracking.hz` |
 
 ## Configuration
 
-See [`src/pyaerial/examples/config.yaml`](src/pyaerial/examples/config.yaml) for a clean reference config.
+See [`config.yaml`](config.yaml) and [`src/pyaerial/examples/config.yaml`](src/pyaerial/examples/config.yaml) for reference configs.
 
 ### Top-level sections
 
 | Section | Purpose |
 |---------|---------|
-| `general` | Global tuning (tick rate, MongoDB URI, saver name, logging) |
+| `database` | MongoDB connection URI (and optional database name) |
+| `tracking` | Tick rate, plane retention, deduplication, status output |
+| `logging` | Log level and optional log file |
 | `home` | Receiver position for ADS-B position decoding |
-| `receivers` | Named receiver instances and their arguments |
-| `components` | Reusable numeric constraint sets |
-| `zones` | Geofences and their alert/save levels |
-| `categories` | Alert method + save filters referenced by zone levels |
+| `receivers` | Named receiver instances |
+| `zones` | Geofences and their alert/retain rules |
 
-### General options
+Legacy configs using `general`, `components`, `categories`, and `zones.levels` are still accepted and auto-migrated with a deprecation warning.
+
+### Database
+
+```yaml
+database:
+  uri: mongodb://localhost:27017
+  # name: pyaerial   # optional; defaults to URI path or pyaerial
+```
+
+### Tracking and logging
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `mongodb` | `mongodb://localhost:27017` | MongoDB connection URI |
-| `saver` | `mongo` | Saver plugin name (`mongo`, `print`) |
-| `backdate_packets` | `10` | Position history depth for speed/heading |
-| `remember_planes` | `30` | Seconds to keep idle planes in RAM |
-| `duplicate_packet_merging` | `5` | Dedup window for identical message hex |
-| `hz` | `2` | Maximum main-loop tick rate |
-| `logs` | `info` | Log level (`debug`, `info`, `warning`, `error`) |
-| `log_file` | _(none)_ | Optional rotating log file path |
-| `status_message_top_planes` | `5` | Planes shown in status line (`-1` = all) |
-| `advanced_status` | `true` | Include callsigns and packet breakdown |
+| `tracking.hz` | `2` | Maximum main-loop tick rate |
+| `tracking.remember_planes` | `30` | Seconds to keep idle planes in RAM |
+| `tracking.backdate_packets` | `10` | Position history depth for speed/heading |
+| `tracking.duplicate_packet_merging` | `5` | Dedup window for identical message hex |
+| `logging.level` | `info` | Log level (`debug`, `info`, `warning`, `error`) |
+| `logging.file` | _(none)_ | Optional rotating log file path |
 
 ### Receivers
 
 ```yaml
 receivers:
   main:
-    method: dump1090
-    arguments:
-      tcp_connection_ip: localhost
-      tcp_connection_port: 30002
+    type: dump1090
+    host: localhost
+    port: 30002
   sdr:
-    method: py1090
-    arguments:
+    type: py1090
+    options:
       rtl_index: "0"
 ```
 
 Built-in receivers: `dump1090` (TCP stream), `py1090` (RTL-SDR, requires `pyrtlsdr`).
 
-### Components and requirements
+### Zones and rules
 
-Components define numeric constraints on telemetry fields. Zone levels reference them in boolean expressions using `&` (and), `|` (or), and `~` (not):
+Each zone defines a polygon and one or more rules. A rule fires alerts when its `when` constraints pass, and optionally retains the flight for the portal when `dwell_seconds` is satisfied or alerts were recorded.
 
 ```yaml
-components:
-  lenient:
-    altitude:
-      maximum: 1000
-  critical:
-    altitude:
-      maximum: 500
-
 zones:
   main:
     coordinates: [[35.75, -78.90], ...]
-    levels:
-      warn:
-        category: save_everything
-        requirements: lenient
-        seconds: 60
+    rules:
+      - name: warn
+        when:
+          altitude: { max: 1000 }
+        dwell_seconds: 60
+        alert:
+          method: print
+        retain: true
 ```
 
-`seconds` is how many consecutive evaluation ticks the requirement must hold before the flight is eligible for saving.
+Field constraints use `min` / `max` on telemetry fields such as `altitude`, `horizontal_speed`, `direction`, `distance`, and `eta`.
 
-### Categories (alert + save)
+## Data model (MongoDB)
 
-```yaml
-categories:
-  save_everything:
-    alert_method: print          # or kafka
-    arguments: {}                # kafka: {server: "localhost:9092"}
-    save:
-      telemetry:
-        default: all             # per-field overrides possible
-      calculated:
-        default: all
-```
+| Collection | Purpose |
+|------------|---------|
+| `flights` | One document per tracked flight (`status`: `live` or `completed`) |
+| `telemetry` | Track points keyed by `flight_id` + `timestamp` |
+| `alerts` | Alert event log with zone, level, position, and timestamp |
 
-Save methods: `all`, `none`, `decimate(n)`, `sdecimate(x,y)`.
+Flight IDs use the form `{icao}-{first_packet_timestamp}` for both live and historical records.
 
-### Alert payload example
+## Web portal API
 
-```json
-{
-  "icao": "AD61DE",
-  "callsign": "SWA1693",
-  "type": "warn",
-  "zone": "main",
-  "eta": 52,
-  "payload": {"latitude": 35.767, "longitude": -78.921, "altitude": 617.22}
-}
-```
+| Route | Description |
+|-------|-------------|
+| `GET /api/flights` | Live + recent retained flights |
+| `GET /api/flight?flight_id=` | Flight metadata and raw messages |
+| `GET /api/telemetry?flight_id=` | Track points |
+| `GET /api/live?since=` | Incremental live telemetry |
+| `GET /api/alerts?since=&flight_id=&level=` | Alert events |
 
 ## Package layout
 
@@ -194,50 +195,14 @@ src/pyaerial/
   cli.py              CLI entrypoint
   engine.py           Main loop and receiver orchestration
   tracker.py          Plane state and deduplication
-  classify.py         ADS-B message classification
-  models.py           Datum and data-access helpers
-  config/             Typed schema + loader
+  store/              Unified MongoDB persistence
+  webapp.py           Portal server and UI
+  config/             Typed schema, loader, legacy compat
   receivers/          Receiver plugin registry
-  savers/             Persistence plugin registry
-  alerters/           Alert plugin registry
+  alerters/           Alert delivery plugin registry
   calc/               Geo math, requirement evaluation, aircraft DB
   examples/config.yaml
 ```
-
-## Writing plugins
-
-### Receiver
-
-```python
-from pyaerial.receivers import Receiver, register_receiver
-
-@register_receiver("my_source")
-class MyReceiver(Receiver):
-    def configure(self, arguments: dict) -> None:
-        self.host = arguments["host"]
-
-    def run(self) -> str | None:
-        while not self.should_stop():
-            self.emit("8D4840D6202CC371C32CE0576098", time.time())
-        return None
-```
-
-Register the module by importing it from `pyaerial.receivers.__init__` or ensuring it is imported before receivers start.
-
-### Alerter
-
-```python
-from pyaerial.alerters import Alerter, register_alerter
-
-@register_alerter("webhook")
-class WebhookAlerter(Alerter):
-    def alert(self, meta: dict, payload: dict) -> None:
-        requests.post(self.arguments["url"], json={**meta, **payload})
-```
-
-### Saver
-
-Subclass `pyaerial.savers.Saver`, implement `save()`, and register with `@register_saver("name")`. The base class handles flight eligibility evaluation and packet filtering.
 
 ## Docker
 
@@ -245,7 +210,7 @@ Subclass `pyaerial.savers.Saver`, implement `save()`, and register with `@regist
 docker compose up --build
 ```
 
-The container builds dump1090, installs PyAerial, and runs `pyaerial run`.
+Runs the engine (`pyaerial`) and web portal (`pyaerial web`) against a shared MongoDB instance on host networking. No SQLite IPC file is required between processes.
 
 ## Dependencies
 

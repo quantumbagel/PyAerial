@@ -6,10 +6,9 @@ from __future__ import annotations
 import logging
 import queue
 import signal
-import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from shapely import Polygon
 
@@ -21,7 +20,7 @@ from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 from pyaerial.logging_setup import setup_logging
 from pyaerial.receivers import Receiver, available_receivers, create_receiver
-from pyaerial.savers import Saver, available_savers, create_saver
+from pyaerial.store import MongoStore
 from pyaerial.tracker import Tracker
 
 log = logging.getLogger("pyaerial.engine")
@@ -44,20 +43,16 @@ class Engine:
         self.tracker = Tracker(config)
         self.polygons: dict[str, Polygon] = build_polygons(config.zones)
         self.aircraft_db = AircraftDB(aircraft_db_path)
-        self.calculator = PlaneCalculator(config, self.polygons, self.aircraft_db)
-        self.saver: Saver = create_saver(config.general.saver, config, self.polygons)
+        self.store = MongoStore(config, self.polygons)
+        self.calculator = PlaneCalculator(config, self.polygons, self.aircraft_db, self.store)
         self._message_queue: queue.Queue[tuple[str, float, str]] = queue.Queue()
         self._receivers: dict[str, _ReceiverHandle] = {}
         self._running = False
         self._shutdown = threading.Event()
-        
-        from pyaerial.calc.ipc_db import IpcDB
-        self.ipc_db = IpcDB()
-        self.ipc_db.clear_all()
 
     def start_receivers(self) -> None:
         for name, receiver_cfg in self.config.receivers.items():
-            self._start_receiver(name, receiver_cfg.method, receiver_cfg.arguments)
+            self._start_receiver(name, receiver_cfg.type, receiver_cfg.receiver_arguments())
 
         if not self._receivers:
             raise RuntimeError("no receivers could be started")
@@ -106,7 +101,7 @@ class Engine:
             handle.receiver.stop()
             cfg = self.config.receivers[name]
             self._receivers.pop(name, None)
-            self._start_receiver(name, cfg.method, cfg.arguments)
+            self._start_receiver(name, cfg.type, cfg.receiver_arguments())
 
     def _drain_messages(self) -> list[tuple[str, float]]:
         batch: list[tuple[str, float]] = []
@@ -124,14 +119,13 @@ class Engine:
         self._install_signal_handlers()
         self.start_receivers()
 
-        hz = self.config.general.hz
+        hz = self.config.tracking.hz
         tick_budget = 1.0 / hz
         log.info(
-            "PyAerial running at up to %.1f Hz with %d receiver(s), saver=%s",
-            hz, len(self._receivers), self.config.general.saver,
+            "PyAerial running at up to %.1f Hz with %d receiver(s), store=mongodb",
+            hz, len(self._receivers),
         )
         log.info("Receivers available: %s", available_receivers())
-        log.info("Savers available: %s", available_savers())
         log.info("Alerters available: %s", available_alerters())
 
         try:
@@ -144,19 +138,14 @@ class Engine:
                 processed = self.tracker.ingest(new_messages)
 
                 self.calculator.calculate_all(self.tracker.planes)
-                self.ipc_db.write_active_planes(self.tracker.planes)
+                self.store.write_live_planes(self.tracker.planes)
 
                 now = time.time()
                 expired = self.tracker.expired_planes(now)
                 if expired:
                     removed = self.tracker.remove_planes(expired)
-                    self.ipc_db.remove_expired_planes(expired)
-                    should_save = False
                     for plane in removed:
-                        if self.saver.cache_flight(plane):
-                            should_save = True
-                    if should_save:
-                        self.saver.save()
+                        self.store.finalize_plane(plane)
                     log.debug("Expired %d plane(s): %s", len(expired), expired)
 
                 summary = self.tracker.top_planes_summary()
@@ -180,7 +169,7 @@ class Engine:
             self.shutdown()
 
     def shutdown(self) -> None:
-        """Stop receivers and flush any pending saves."""
+        """Stop receivers and finalize any remaining live flights."""
         if not self._running and self._shutdown.is_set():
             return
         self._running = False
@@ -192,14 +181,14 @@ class Engine:
         for handle in self._receivers.values():
             handle.thread.join(timeout=2.0)
 
-        if self.saver._cache:
-            log.info("Flushing %d cached flight-level(s) on shutdown", len(self.saver._cache))
-            self.saver.save()
+        for plane in list(self.tracker.planes.values()):
+            self.store.finalize_plane(plane)
+        self.tracker.planes.clear()
+        self.store.finalize_all_live()
 
         self.calculator.close()
-        self.saver.close()
+        self.store.close()
         self.aircraft_db.close()
-        self.ipc_db.close()
         log.info("Shutdown complete")
 
     def _install_signal_handlers(self) -> None:
@@ -211,11 +200,11 @@ class Engine:
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 signal.signal(sig, _handler)
-            except (ValueError, OSError):  # not available on all platforms/threads
+            except (ValueError, OSError):
                 pass
 
 
 def run_engine(config: Config, *, aircraft_db_path: str = DEFAULT_AIRCRAFT_DB) -> None:
     """Configure logging and run the engine until shutdown."""
-    setup_logging(config.general.logs, log_file=config.general.log_file)
+    setup_logging(config.logging.level, log_file=config.logging.file)
     Engine(config, aircraft_db_path=aircraft_db_path).run()
