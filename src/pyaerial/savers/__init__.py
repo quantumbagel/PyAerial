@@ -107,6 +107,7 @@ class Saver(abc.ABC):
         filtered = {
             STORE_INTERNAL: plane[STORE_INTERNAL],
             STORE_INFO: plane[STORE_INFO],
+            "raw_messages": plane.get("raw_messages", []),
         }
         for bucket, fields in STORE_DATA_TYPES.items():
             save_group = getattr(category.save, STORE_DATA_CONFIG_NAMING[bucket])

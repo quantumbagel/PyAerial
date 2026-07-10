@@ -121,7 +121,8 @@ class MongoSaver(Saver):
             "start_time": internal[STORE_FIRST_PACKET],
             "end_time": internal[STORE_MOST_RECENT_PACKET],
             "info": {str(k): v for k, v in data[STORE_INFO].items()},
-            "internal": {str(k): v for k, v in internal.items()}
+            "internal": {str(k): v for k, v in internal.items()},
+            "raw_messages": data.get("raw_messages", [])
         }
 
         # Group telemetry data by timestamp

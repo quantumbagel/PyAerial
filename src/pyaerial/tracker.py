@@ -48,7 +48,7 @@ class Tracker:
                 continue
             if classified is None:
                 continue
-            self._merge(classified, timestamp)
+            self._merge(classified, timestamp, msg_hex)
             processed += 1
         return processed
 
@@ -126,7 +126,7 @@ class Tracker:
         label = "All" if top_n == -1 else f"Top {min(top_n, len(sorted_planes))}"
         return f"{label}: {', '.join(parts)}"
 
-    def _merge(self, classified: ClassifiedMessage, timestamp: float) -> None:
+    def _merge(self, classified: ClassifiedMessage, timestamp: float, msg_hex: str) -> None:
         message_data = classified.data
         typecode_cat = classified.typecode_category
         icao = message_data[STORE_INFO][STORE_ICAO]
@@ -147,6 +147,12 @@ class Tracker:
                 series = recv.setdefault(field, [])
                 if not series or series[-1].value != datum.value:
                     series.append(datum)
+
+        if "raw_messages" not in plane:
+            plane["raw_messages"] = []
+        plane["raw_messages"].append({"hex": msg_hex, "timestamp": timestamp})
+        if len(plane["raw_messages"]) > 1000:
+            plane["raw_messages"].pop(0)
 
         internal = plane.setdefault(STORE_INTERNAL, {
             STORE_MOST_RECENT_PACKET: timestamp,

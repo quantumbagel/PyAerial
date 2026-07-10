@@ -70,17 +70,61 @@ def build_from_csv(csv_path: str | Path, db_path: str | Path, *,
     try:
         conn.execute("CREATE TABLE aircraft (icao TEXT PRIMARY KEY, data TEXT NOT NULL)")
         count = 0
-        with csv_path.open(newline="") as handle:
-            reader = csv.reader(handle, quotechar="'")
+        with csv_path.open(newline="", encoding="utf-8", errors="ignore") as handle:
+            reader = csv.reader(handle)
+            first_row = next(reader, None)
+            if not first_row:
+                return 0
+
+            # Determine the CSV header
+            first_col = first_row[0].strip().lower().lstrip('\ufeff').replace('"', '').replace("'", "")
+            if first_col in ("icao24", "icao"):
+                csv_header = [col.strip().lower().replace('"', '').replace("'", "") for col in first_row]
+                has_header = True
+            else:
+                csv_header = [col.lower() for col in header]
+                has_header = False
+
             batch: list[tuple[str, str]] = []
+
+            def get_icao_and_record(row_data):
+                record = {}
+                for i, val in enumerate(row_data):
+                    if i < len(csv_header):
+                        col = csv_header[i]
+                        record[col] = val.strip()
+
+                # Set unified key for icao
+                icao = record.get("icao") or record.get("icao24")
+                if icao:
+                    icao = icao.lower()
+                    record["icao"] = icao
+                else:
+                    return None
+
+                # Map database.csv fields to standard keys expected by the application:
+                # callsign, country, built, manufacturer_name, model, owner, registration
+                if "manufacturername" in record:
+                    record["manufacturer_name"] = record["manufacturername"]
+                
+                if "operatorcallsign" in record:
+                    record["operator_callsign"] = record["operatorcallsign"]
+                    if "callsign" not in record or not record["callsign"]:
+                        record["callsign"] = record["operatorcallsign"]
+
+                return icao, json.dumps(record)
+
+            if not has_header:
+                res = get_icao_and_record(first_row)
+                if res:
+                    batch.append(res)
+
             for row in reader:
                 if not row:
                     continue
-                record = {header[i]: value for i, value in enumerate(row) if i < len(header)}
-                icao = record.get("icao", "").strip().lower()
-                if not icao:
-                    continue
-                batch.append((icao, json.dumps(record)))
+                res = get_icao_and_record(row)
+                if res:
+                    batch.append(res)
                 if len(batch) >= 10_000:
                     conn.executemany(
                         "INSERT OR REPLACE INTO aircraft VALUES (?, ?)", batch)
@@ -95,3 +139,4 @@ def build_from_csv(csv_path: str | Path, db_path: str | Path, *,
 
     log.info("Indexed %d aircraft into %s", count, db_path)
     return count
+
