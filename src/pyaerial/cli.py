@@ -59,6 +59,15 @@ def _build_parser() -> argparse.ArgumentParser:
     sv_p.add_argument("--aircraft-db", default=DEFAULT_AIRCRAFT_DB)
     sv_p.set_defaults(func=_cmd_statview)
 
+    web_p = sub.add_parser("web", help="start the live flight tracker web application")
+    web_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE,
+                       help=f"configuration file (default: {DEFAULT_CONFIG_FILE})")
+    web_p.add_argument("--aircraft-db", default=DEFAULT_AIRCRAFT_DB,
+                       help=f"SQLite aircraft index (default: {DEFAULT_AIRCRAFT_DB})")
+    web_p.add_argument("--host", default="0.0.0.0", help="host to bind (default: 0.0.0.0)")
+    web_p.add_argument("-p", "--port", type=int, default=10090, help="port to bind (default: 10090)")
+    web_p.set_defaults(func=_cmd_web)
+
     db_p = sub.add_parser("build-db", help="build SQLite aircraft index from OpenSky CSV")
     db_p.add_argument("--csv", default=DEFAULT_AIRCRAFT_CSV,
                       help=f"OpenSky CSV export (default: {DEFAULT_AIRCRAFT_CSV})")
@@ -96,6 +105,12 @@ def _cmd_validate(args: argparse.Namespace) -> None:
 def _cmd_statview(args: argparse.Namespace) -> None:
     setup_logging("warning")
     run_statview(args.config, aircraft_db_path=args.aircraft_db)
+
+
+def _cmd_web(args: argparse.Namespace) -> None:
+    setup_logging("info")
+    from pyaerial.webapp import run_webapp
+    run_webapp(args.config, aircraft_db_path=args.aircraft_db, host=args.host, port=args.port)
 
 
 def _cmd_build_db(args: argparse.Namespace) -> None:

@@ -88,28 +88,45 @@ def run_statview(config_path: str = "config.yaml", *,
 
 
 def _cmd_status(client: pymongo.MongoClient) -> None:
-    size = client.admin.command("listDatabases")
-    planes = 0
-    flights = 0
-    for info in size["databases"]:
-        name = info["name"]
-        if name in EXCLUDED_DATABASES:
-            continue
-        planes += 1
-        flights += len(client.get_database(name).list_collection_names())
+    try:
+        db = client.get_default_database()
+    except Exception:
+        db = client.get_database("pyaerial")
+
+    planes = len(db.get_collection("flights").distinct("icao"))
+    flights = db.get_collection("flights").count_documents({})
+    
+    try:
+        stats = db.command("dbStats")
+        total_size = stats.get("dataSize", 0)
+    except Exception:
+        total_size = 0
+
     print(f"Saved {planes} plane(s) and {flights} flight(s). "
-          f"Total size: {size['totalSize']} bytes")
+          f"Total data size: {total_size} bytes")
 
 
 def _verify_plane(client: pymongo.MongoClient, plane_id: str) -> bool:
-    if plane_id in client.list_database_names():
+    try:
+        db = client.get_default_database()
+    except Exception:
+        db = client.get_database("pyaerial")
+
+    record = db.get_collection("flights").find_one({"icao": plane_id.lower()})
+    if record is not None:
         return True
     print(f"I don't know the plane {plane_id!r}!")
     return False
 
 
 def _verify_flight(client: pymongo.MongoClient, plane_id: str, flight_id: str) -> bool:
-    if flight_id in client.get_database(plane_id).list_collection_names():
+    try:
+        db = client.get_default_database()
+    except Exception:
+        db = client.get_database("pyaerial")
+
+    record = db.get_collection("flights").find_one({"icao": plane_id.lower(), "_id": flight_id})
+    if record is not None:
         return True
     print(f"I don't know the flight id {flight_id!r}")
     return False
@@ -121,9 +138,14 @@ def _cmd_list(client: pymongo.MongoClient, parts: list[str],
         print("[err] No argument supplied to command list!")
         return
 
+    try:
+        db = client.get_default_database()
+    except Exception:
+        db = client.get_database("pyaerial")
+
     arg = parts[1]
     if arg == "planes":
-        names = [d for d in client.list_database_names() if d not in EXCLUDED_DATABASES]
+        names = db.get_collection("flights").distinct("icao")
         print(f"Planes ({len(names)}): {' '.join(names)}")
     elif arg == "flights":
         if len(parts) < 3:
@@ -132,7 +154,8 @@ def _cmd_list(client: pymongo.MongoClient, parts: list[str],
         plane_id = parts[2]
         if not _verify_plane(client, plane_id):
             return
-        flights = client.get_database(plane_id).list_collection_names()
+        cursor = db.get_collection("flights").find({"icao": plane_id.lower()}, {"_id": 1})
+        flights = [doc["_id"] for doc in cursor]
         print(f"Flights for plane {plane_id} ({len(flights)}): {' '.join(flights)}")
     elif arg == "plane":
         if len(parts) < 3:
@@ -159,22 +182,41 @@ def _cmd_list(client: pymongo.MongoClient, parts: list[str],
 
 def _cmd_reset(client: pymongo.MongoClient, parts: list[str],
                last_reset: bool, reset_for: str) -> tuple[bool, str]:
+    try:
+        db = client.get_default_database()
+    except Exception:
+        db = client.get_database("pyaerial")
+
     if len(parts) == 1:
         if not last_reset or reset_for:
             print('[confirmation] Are you sure you want to reset the database? '
                   'Run "reset" again to confirm.')
             return True, ""
-        names = [d for d in client.list_database_names() if d not in EXCLUDED_DATABASES]
-        for database in names:
-            client.drop_database(database)
-        print(f"[success] Database reset. Dropped {len(names)} plane(s).")
+        db.drop_collection("flights")
+        db.drop_collection("telemetry")
+        
+        # Recreate indexes
+        db.get_collection("flights").create_index([("icao", pymongo.ASCENDING)])
+        db.get_collection("telemetry").create_index([
+            ("flight_id", pymongo.ASCENDING),
+            ("timestamp", pymongo.ASCENDING)
+        ])
+        db.get_collection("telemetry").create_index([
+            ("icao", pymongo.ASCENDING),
+            ("timestamp", pymongo.ASCENDING)
+        ])
+        db.get_collection("telemetry").create_index([("position", pymongo.GEOSPHERE)])
+        
+        print("[success] Database reset. Dropped all planes and flights.")
         return False, ""
 
-    target = parts[1]
+    target = parts[1].lower()
     if not last_reset or reset_for != target:
         print(f'[confirmation] Delete plane {target}? Run "reset {target}" again to confirm.')
         return True, target
-    client.drop_database(target)
+    
+    db.get_collection("flights").delete_many({"icao": target})
+    db.get_collection("telemetry").delete_many({"icao": target})
     print(f"[success] Dropped plane {target}.")
     return False, ""
 
@@ -191,18 +233,20 @@ def _cmd_dump(client: pymongo.MongoClient, parts: list[str],
             print("[err] dump opensky requires a plane id")
             return
         plane = parts[2]
-        if not _verify_plane(client, plane):
-            return
         record = aircraft_db.lookup(plane)
         print(json.dumps(record, indent=2) if record else "No record found.")
         return
 
     if arg == "all":
         print("Dumping all data (this may take a while)...")
+        try:
+            db = client.get_default_database()
+        except Exception:
+            db = client.get_database("pyaerial")
+        
         data = {}
-        for plane_id in client.list_database_names():
-            if plane_id in EXCLUDED_DATABASES:
-                continue
+        distinct_planes = db.get_collection("flights").distinct("icao")
+        for plane_id in distinct_planes:
             data[plane_id] = _dump_plane(client, plane_id)
         print(json.dumps(data, indent=2, default=str))
         return
@@ -232,19 +276,69 @@ def _cmd_dump(client: pymongo.MongoClient, parts: list[str],
 
 
 def _dump_plane(client: pymongo.MongoClient, plane_id: str) -> dict:
-    db = client.get_database(plane_id)
-    return {fid: _dump_flight(client, plane_id, fid) for fid in db.list_collection_names()}
+    try:
+        db = client.get_default_database()
+    except Exception:
+        db = client.get_database("pyaerial")
+
+    cursor = db.get_collection("flights").find({"icao": plane_id.lower()}, {"_id": 1})
+    flight_ids = [doc["_id"] for doc in cursor]
+    return {fid: _dump_flight(client, plane_id, fid) for fid in flight_ids}
 
 
 def _dump_flight(client: pymongo.MongoClient, plane_id: str, flight_id: str) -> dict:
-    flight = client.get_database(plane_id).get_collection(flight_id)
+    try:
+        db = client.get_default_database()
+    except Exception:
+        db = client.get_database("pyaerial")
+
+    flight_doc = db.get_collection("flights").find_one({"_id": flight_id})
+    if not flight_doc:
+        return {}
+
+    telemetry_cursor = db.get_collection("telemetry").find({"flight_id": flight_id}).sort("timestamp", pymongo.ASCENDING)
+    
+    from pyaerial.constants import STORE_LAT, STORE_LONG, STORE_RECV_DATA, STORE_CALC_DATA
+    
+    series_data = {}
+    for doc in telemetry_cursor:
+        t = doc["timestamp"]
+        
+        # If position GeoJSON exists, reconstruct latitude and longitude
+        if "position" in doc and doc["position"].get("type") == "Point":
+            coords = doc["position"].get("coordinates", [])
+            if len(coords) == 2:
+                series_data.setdefault("longitude", []).append([t, coords[0]])
+                series_data.setdefault("latitude", []).append([t, coords[1]])
+                
+        # Process other fields in the telemetry document
+        for k, v in doc.items():
+            if k not in ("_id", "flight_id", "icao", "timestamp", "position"):
+                series_data.setdefault(k, []).append([t, v])
+
     result: dict = {}
-    for doc in flight.find({}, {"_id": 0}):
-        category = doc[STORAGE_CATEGORY]
-        if category == STORE_INFO:
-            result[STORE_INFO] = doc
+    for field, data_points in series_data.items():
+        if field in ("latitude", "longitude", "altitude", "vertical_speed"):
+            category = STORE_RECV_DATA
         else:
-            data_type = doc[STORAGE_DATA_TYPE]
-            result.setdefault(category, {})
-            result[category][data_type] = doc
+            category = STORE_CALC_DATA
+            
+        result.setdefault(category, {})
+        result[category][field] = {
+            "category": category,
+            "type": field,
+            "data": data_points
+        }
+
+    info_doc = {
+        "category": "info",
+        "zone": flight_doc.get("zone"),
+        "level": flight_doc.get("level"),
+    }
+    if "info" in flight_doc:
+        info_doc.update(flight_doc["info"])
+    if "internal" in flight_doc:
+        info_doc.update(flight_doc["internal"])
+        
+    result[STORE_INFO] = info_doc
     return result
