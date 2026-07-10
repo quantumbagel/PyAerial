@@ -50,6 +50,10 @@ class Engine:
         self._receivers: dict[str, _ReceiverHandle] = {}
         self._running = False
         self._shutdown = threading.Event()
+        
+        from pyaerial.calc.ipc_db import IpcDB
+        self.ipc_db = IpcDB()
+        self.ipc_db.clear_all()
 
     def start_receivers(self) -> None:
         for name, receiver_cfg in self.config.receivers.items():
@@ -140,11 +144,13 @@ class Engine:
                 processed = self.tracker.ingest(new_messages)
 
                 self.calculator.calculate_all(self.tracker.planes)
+                self.ipc_db.write_active_planes(self.tracker.planes)
 
                 now = time.time()
                 expired = self.tracker.expired_planes(now)
                 if expired:
                     removed = self.tracker.remove_planes(expired)
+                    self.ipc_db.remove_expired_planes(expired)
                     should_save = False
                     for plane in removed:
                         if self.saver.cache_flight(plane):
@@ -193,6 +199,7 @@ class Engine:
         self.calculator.close()
         self.saver.close()
         self.aircraft_db.close()
+        self.ipc_db.close()
         log.info("Shutdown complete")
 
     def _install_signal_handlers(self) -> None:

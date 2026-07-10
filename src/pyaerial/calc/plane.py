@@ -176,6 +176,8 @@ class PlaneCalculator:
 
     def _check_alerts(self, plane: dict, position: tuple[float, float],
                       heading: float, speed: float, callsign: str) -> None:
+        plane["zone"] = ""
+        plane["level"] = ""
         geofence_etas: dict[str, float] = {}
 
         for zone_name, zone in self.config.zones.items():
@@ -188,6 +190,10 @@ class PlaneCalculator:
                 if not evaluate.requirement_passes(
                         level.requirements, self.config.components, resolver):
                     continue
+
+                if plane.get("level") != "alert":
+                    plane["zone"] = zone_name
+                    plane["level"] = level_name
 
                 category = self.config.resolve_category(level.category)
                 alerter = self._get_alerter(category.alert_method, category.arguments)

@@ -33,6 +33,10 @@ class WebAppHandler(BaseHTTPRequestHandler):
     def aircraft_db(self) -> AircraftDB | None:
         return self.server.aircraft_db
 
+    @property
+    def ipc_db(self):
+        return self.server.ipc_db
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -56,8 +60,42 @@ class WebAppHandler(BaseHTTPRequestHandler):
 
     def handle_api_flights(self):
         try:
+            # 1. Fetch live active flights from SQLite IpcDB
+            live_flights = []
+            try:
+                live_cursor = self.ipc_db._conn.execute("""
+                    SELECT f.flight_id, f.icao, f.callsign, f.model, f.owner, f.country, f.zone, f.level, f.start_time, f.end_time,
+                           t.latitude, t.longitude, t.altitude, t.speed, t.heading
+                    FROM live_flights f
+                    LEFT JOIN live_telemetry t ON f.flight_id = t.flight_id AND t.timestamp = (
+                        SELECT MAX(timestamp) FROM live_telemetry WHERE flight_id = f.flight_id
+                    )
+                """)
+                for row in live_cursor:
+                    live_flights.append({
+                        "flight_id": row[0],
+                        "icao": row[1],
+                        "zone": row[6],
+                        "level": row[7],
+                        "start_time": row[8],
+                        "end_time": row[9],
+                        "callsign": row[2],
+                        "model": row[3],
+                        "owner": row[4],
+                        "country": row[5],
+                        "latitude": row[10],
+                        "longitude": row[11],
+                        "altitude": row[12],
+                        "speed": row[13],
+                        "heading": row[14],
+                        "is_live": True,
+                    })
+            except Exception as e:
+                log.error("SQLite IPC read failed in handle_api_flights: %s", e)
+
+            # 2. Fetch completed flights from MongoDB
+            mongo_flights = []
             cursor = self.db.get_collection("flights").find().sort("start_time", -1).limit(50)
-            flights = []
             for doc in cursor:
                 icao = doc.get("icao", "")
                 meta = self.aircraft_db.lookup(icao) if self.aircraft_db else None
@@ -78,7 +116,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
                         lon = coords[0]
                         lat = coords[1]
 
-                flights.append({
+                mongo_flights.append({
                     "flight_id": doc["_id"],
                     "icao": icao,
                     "zone": doc.get("zone"),
@@ -94,8 +132,14 @@ class WebAppHandler(BaseHTTPRequestHandler):
                     "altitude": alt,
                     "speed": speed,
                     "heading": heading,
+                    "is_live": False,
                 })
-            self.send_json(flights)
+
+            # Filter out historical flights that are currently active in live_flights
+            active_icaos = {f["icao"] for f in live_flights}
+            filtered_mongo = [f for f in mongo_flights if f["icao"] not in active_icaos]
+            
+            self.send_json(live_flights + filtered_mongo)
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
 
@@ -106,25 +150,58 @@ class WebAppHandler(BaseHTTPRequestHandler):
             return
         flight_id = flight_ids[0]
         try:
-            doc = self.db.get_collection("flights").find_one({"_id": flight_id})
-            if not doc:
-                self.send_error(404, "Flight not found")
-                return
-            icao = doc.get("icao", "")
-            meta = self.aircraft_db.lookup(icao) if self.aircraft_db else None
-            flight_data = {
-                "flight_id": doc["_id"],
-                "icao": icao,
-                "zone": doc.get("zone"),
-                "level": doc.get("level"),
-                "start_time": doc.get("start_time"),
-                "end_time": doc.get("end_time"),
-                "callsign": doc.get("info", {}).get("callsign") or (meta.get("callsign") if meta else None),
-                "model": doc.get("info", {}).get("model") or (meta.get("model") if meta else None),
-                "owner": doc.get("info", {}).get("owner") or (meta.get("owner") if meta else None),
-                "country": doc.get("info", {}).get("country") or (meta.get("country") if meta else None),
-                "raw_messages": doc.get("raw_messages", []),
-            }
+            if flight_id.startswith("live-"):
+                # Fetch from SQLite IpcDB
+                row = self.ipc_db._conn.execute(
+                    "SELECT flight_id, icao, callsign, model, owner, country, zone, level, start_time, end_time FROM live_flights WHERE flight_id = ?",
+                    (flight_id,)
+                ).fetchone()
+                if not row:
+                    self.send_error(404, "Flight not found in live cache")
+                    return
+                
+                raw_cursor = self.ipc_db._conn.execute(
+                    "SELECT hex, timestamp FROM live_raw_messages WHERE flight_id = ? ORDER BY timestamp ASC",
+                    (flight_id,)
+                )
+                raw_messages = [{"hex": r[0], "timestamp": r[1]} for r in raw_cursor]
+                
+                flight_data = {
+                    "flight_id": row[0],
+                    "icao": row[1],
+                    "zone": row[6],
+                    "level": row[7],
+                    "start_time": row[8],
+                    "end_time": row[9],
+                    "callsign": row[2],
+                    "model": row[3],
+                    "owner": row[4],
+                    "country": row[5],
+                    "raw_messages": raw_messages,
+                    "is_live": True,
+                }
+            else:
+                # Fetch from MongoDB
+                doc = self.db.get_collection("flights").find_one({"_id": flight_id})
+                if not doc:
+                    self.send_error(404, "Flight not found")
+                    return
+                icao = doc.get("icao", "")
+                meta = self.aircraft_db.lookup(icao) if self.aircraft_db else None
+                flight_data = {
+                    "flight_id": doc["_id"],
+                    "icao": icao,
+                    "zone": doc.get("zone"),
+                    "level": doc.get("level"),
+                    "start_time": doc.get("start_time"),
+                    "end_time": doc.get("end_time"),
+                    "callsign": doc.get("info", {}).get("callsign") or (meta.get("callsign") if meta else None),
+                    "model": doc.get("info", {}).get("model") or (meta.get("model") if meta else None),
+                    "owner": doc.get("info", {}).get("owner") or (meta.get("owner") if meta else None),
+                    "country": doc.get("info", {}).get("country") or (meta.get("country") if meta else None),
+                    "raw_messages": doc.get("raw_messages", []),
+                    "is_live": False,
+                }
             self.send_json(flight_data)
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
@@ -136,20 +213,36 @@ class WebAppHandler(BaseHTTPRequestHandler):
             return
         flight_id = flight_ids[0]
         try:
-            cursor = self.db.get_collection("telemetry").find({"flight_id": flight_id}).sort("timestamp", 1)
-            points = []
-            for doc in cursor:
-                point = {
-                    "timestamp": doc["timestamp"],
-                    "altitude": doc.get("altitude"),
-                    "speed": doc.get("horizontal_speed"),
-                    "heading": doc.get("direction"),
-                }
-                if "position" in doc:
-                    coords = doc["position"]["coordinates"]
-                    point["longitude"] = coords[0]
-                    point["latitude"] = coords[1]
-                points.append(point)
+            if flight_id.startswith("live-"):
+                cursor = self.ipc_db._conn.execute(
+                    "SELECT timestamp, altitude, speed, heading, latitude, longitude FROM live_telemetry WHERE flight_id = ? ORDER BY timestamp ASC",
+                    (flight_id,)
+                )
+                points = []
+                for row in cursor:
+                    points.append({
+                        "timestamp": row[0],
+                        "altitude": row[1],
+                        "speed": row[2],
+                        "heading": row[3],
+                        "longitude": row[5],
+                        "latitude": row[4],
+                    })
+            else:
+                cursor = self.db.get_collection("telemetry").find({"flight_id": flight_id}).sort("timestamp", 1)
+                points = []
+                for doc in cursor:
+                    point = {
+                        "timestamp": doc["timestamp"],
+                        "altitude": doc.get("altitude"),
+                        "speed": doc.get("horizontal_speed"),
+                        "heading": doc.get("direction"),
+                    }
+                    if "position" in doc:
+                        coords = doc["position"]["coordinates"]
+                        point["longitude"] = coords[0]
+                        point["latitude"] = coords[1]
+                    points.append(point)
             self.send_json(points)
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
@@ -159,22 +252,22 @@ class WebAppHandler(BaseHTTPRequestHandler):
         since = float(since_vals[0]) if since_vals else 0.0
         now = time.time()
         try:
-            cursor = self.db.get_collection("telemetry").find({"timestamp": {"$gt": since}}).sort("timestamp", 1)
+            cursor = self.ipc_db._conn.execute(
+                "SELECT flight_id, icao, timestamp, altitude, speed, heading, latitude, longitude FROM live_telemetry WHERE timestamp > ? ORDER BY timestamp ASC",
+                (since,)
+            )
             points = []
-            for doc in cursor:
-                point = {
-                    "flight_id": doc["flight_id"],
-                    "icao": doc["icao"],
-                    "timestamp": doc["timestamp"],
-                    "altitude": doc.get("altitude"),
-                    "speed": doc.get("horizontal_speed"),
-                    "heading": doc.get("direction"),
-                }
-                if "position" in doc:
-                    coords = doc["position"]["coordinates"]
-                    point["longitude"] = coords[0]
-                    point["latitude"] = coords[1]
-                points.append(point)
+            for row in cursor:
+                points.append({
+                    "flight_id": row[0],
+                    "icao": row[1],
+                    "timestamp": row[2],
+                    "altitude": row[3],
+                    "speed": row[4],
+                    "heading": row[5],
+                    "longitude": row[7],
+                    "latitude": row[6],
+                })
             self.send_json({
                 "telemetry": points,
                 "timestamp": now
@@ -202,11 +295,15 @@ def run_webapp(config_path: str = "config.yaml", *,
         db = client.get_database("pyaerial")
 
     aircraft_db = AircraftDB(aircraft_db_path) if aircraft_db_path else None
+    
+    from pyaerial.calc.ipc_db import IpcDB
+    ipc_db = IpcDB()
 
     # ThreadingHTTPServer handles multiple concurrent HTTP queries asynchronously
     server = ThreadingHTTPServer((host, port), WebAppHandler)
     server.db = db
     server.aircraft_db = aircraft_db
+    server.ipc_db = ipc_db
 
     actual_host, actual_port = server.server_address
     print(f"Starting PyAerial live web app on http://localhost:{actual_port}")
@@ -219,6 +316,7 @@ def run_webapp(config_path: str = "config.yaml", *,
         client.close()
         if aircraft_db:
             aircraft_db.close()
+        ipc_db.close()
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -241,72 +339,89 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         body {
             font-family: 'Outfit', system-ui, -apple-system, sans-serif;
-            background-color: #0c0e12;
-            color: #f1f5f9;
+            background-color: #121212;
+            color: #e0e0e0;
             display: flex;
             height: 100vh;
             overflow: hidden;
         }
         #sidebar {
-            width: 380px;
-            background-color: #11141a;
-            border-right: 1px solid #1e293b;
+            width: 360px;
+            background-color: #1a1a1a;
+            border-right: 1px solid #2d2d2d;
             display: flex;
             flex-direction: column;
             height: 100%;
             z-index: 10;
         }
         #sidebar-header {
-            padding: 24px;
-            border-bottom: 1px solid #1e293b;
-            background: linear-gradient(135deg, #161a22 0%, #11141a 100%);
+            padding: 20px;
+            border-bottom: 1px solid #2d2d2d;
+            background-color: #151515;
         }
         #sidebar-header h1 {
-            font-size: 1.4rem;
-            font-weight: 700;
-            background: linear-gradient(90deg, #6366f1 0%, #a855f7 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 4px;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #3b82f6;
+            margin-bottom: 3px;
         }
         #sidebar-header p {
-            font-size: 0.8rem;
-            color: #94a3b8;
+            font-size: 0.75rem;
+            color: #888;
         }
         #search-container {
-            padding: 12px 24px;
-            border-bottom: 1px solid #1e293b;
-            background-color: #13171f;
+            padding: 12px 20px;
+            border-bottom: 1px solid #2d2d2d;
+            background-color: #151515;
         }
         #search-input {
             width: 100%;
-            padding: 10px 14px;
-            border-radius: 8px;
-            border: 1px solid #334155;
-            background-color: #0f1218;
-            color: #f1f5f9;
+            padding: 8px 12px;
+            border-radius: 4px;
+            border: 1px solid #2d2d2d;
+            background-color: #222;
+            color: #fff;
             font-family: inherit;
-            font-size: 0.85rem;
-            transition: all 0.2s;
+            font-size: 0.8rem;
+            outline: none;
         }
         #search-input:focus {
+            border-color: #3b82f6;
+        }
+        #filter-container {
+            padding: 0 20px 12px 20px;
+            background-color: #151515;
+            border-bottom: 1px solid #2d2d2d;
+            display: flex;
+        }
+        #warning-filter {
+            width: 100%;
+            padding: 8px 12px;
+            border-radius: 4px;
+            border: 1px solid #2d2d2d;
+            background-color: #222;
+            color: #fff;
+            font-family: inherit;
+            font-size: 0.8rem;
             outline: none;
-            border-color: #6366f1;
-            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+            cursor: pointer;
+        }
+        #warning-filter:focus {
+            border-color: #3b82f6;
         }
         #stats-panel {
-            padding: 14px 24px;
-            background-color: #13171f;
-            border-bottom: 1px solid #1e293b;
-            font-size: 0.85rem;
+            padding: 12px 20px;
+            background-color: #151515;
+            border-bottom: 1px solid #2d2d2d;
+            font-size: 0.8rem;
             display: flex;
             justify-content: space-between;
         }
         .stat-card {
-            background-color: #1a1f2c;
-            padding: 6px 12px;
-            border-radius: 6px;
-            border: 1px solid #334155;
+            background-color: #222;
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #2d2d2d;
             display: flex;
             align-items: center;
             gap: 6px;
@@ -315,26 +430,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             flex-grow: 1;
             overflow-y: auto;
             list-style: none;
-            padding: 12px;
         }
         .flight-item {
-            padding: 14px 16px;
-            border-radius: 10px;
-            margin-bottom: 8px;
-            border: 1px solid transparent;
-            background-color: #161a23;
+            padding: 12px 20px;
+            border-bottom: 1px solid #262626;
             cursor: pointer;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            background-color: transparent;
+            transition: background-color 0.15s;
         }
         .flight-item:hover {
-            background-color: #1e2433;
-            transform: translateX(4px);
-            border-color: #334155;
+            background-color: #222;
         }
         .flight-item.active {
-            background: linear-gradient(135deg, #1e2942 0%, #1a2235 100%);
-            border-color: #6366f1;
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
+            background-color: #1e2638;
+            border-left: 3px solid #3b82f6;
         }
         .flight-meta-row {
             display: flex;
@@ -343,7 +452,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .flight-callsign {
             font-weight: 600;
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             color: #fff;
             display: flex;
             align-items: center;
@@ -357,30 +466,30 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .status-dot.live {
             background-color: #10b981;
-            box-shadow: 0 0 8px #10b981;
+            box-shadow: 0 0 6px #10b981;
             animation: pulse 2s infinite;
         }
         @keyframes pulse {
             0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            70% { transform: scale(1); box-shadow: 0 0 0 4px rgba(16, 185, 129, 0); }
             100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
         }
         .flight-icao {
             font-family: 'JetBrains Mono', monospace;
-            background-color: #2e384e;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            color: #cbd5e1;
+            background-color: #2d2d2d;
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-size: 0.7rem;
+            color: #ccc;
             font-weight: 500;
         }
         .flight-desc {
-            font-size: 0.8rem;
-            color: #94a3b8;
+            font-size: 0.75rem;
+            color: #888;
         }
         .flight-time {
-            font-size: 0.75rem;
-            color: #64748b;
+            font-size: 0.7rem;
+            color: #555;
             text-align: right;
         }
         #map-container {
@@ -391,20 +500,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         #map {
             width: 100%;
             height: 100%;
-            background-color: #0b0d10;
+            background-color: #1a1a1a;
         }
         /* Details Drawer Styling */
         #details-drawer {
             position: absolute;
             top: 0;
-            right: -440px;
-            width: 440px;
+            right: -420px;
+            width: 420px;
             height: 100%;
-            background-color: #11141a;
-            border-left: 1px solid #1e293b;
-            box-shadow: -10px 0 30px rgba(0,0,0,0.6);
+            background-color: #1a1a1a;
+            border-left: 1px solid #2d2d2d;
             z-index: 1010;
-            transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: right 0.3s ease;
             display: flex;
             flex-direction: column;
         }
@@ -412,29 +520,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             right: 0;
         }
         #drawer-header {
-            padding: 24px;
-            border-bottom: 1px solid #1e293b;
-            background: linear-gradient(135deg, #161a22 0%, #11141a 100%);
+            padding: 20px;
+            border-bottom: 1px solid #2d2d2d;
+            background-color: #151515;
             position: relative;
         }
         #drawer-header h2 {
-            font-size: 1.3rem;
-            font-weight: 700;
+            font-size: 1.1rem;
+            font-weight: 600;
             color: #fff;
             display: flex;
             align-items: center;
-            gap: 10px;
-            margin-top: 8px;
+            gap: 8px;
+            margin-top: 6px;
         }
         .close-btn {
             background: none;
             border: none;
-            color: #64748b;
-            font-size: 1.8rem;
+            color: #888;
+            font-size: 1.5rem;
             cursor: pointer;
             position: absolute;
-            top: 16px;
-            right: 20px;
+            top: 12px;
+            right: 16px;
             transition: color 0.15s;
         }
         .close-btn:hover {
@@ -447,44 +555,44 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             flex-direction: column;
         }
         .info-section {
-            padding: 20px 24px;
-            border-bottom: 1px solid #1e293b;
+            padding: 16px 20px;
+            border-bottom: 1px solid #2d2d2d;
         }
         .info-section h3 {
-            font-size: 0.85rem;
+            font-size: 0.75rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            color: #6366f1;
-            margin-bottom: 12px;
+            color: #3b82f6;
+            margin-bottom: 10px;
             font-weight: 600;
         }
         .details-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            font-size: 0.85rem;
+            gap: 8px;
+            font-size: 0.75rem;
         }
         .details-label {
-            color: #94a3b8;
+            color: #888;
         }
         .details-value {
-            color: #f1f5f9;
+            color: #fff;
             text-align: right;
             font-weight: 500;
         }
         .drawer-tabs {
             display: flex;
-            border-bottom: 1px solid #1e293b;
-            background-color: #0f1218;
+            border-bottom: 1px solid #2d2d2d;
+            background-color: #151515;
         }
         .tab-btn {
             flex: 1;
-            padding: 14px;
+            padding: 12px;
             background: none;
             border: none;
             border-bottom: 2px solid transparent;
-            color: #94a3b8;
-            font-size: 0.85rem;
+            color: #888;
+            font-size: 0.8rem;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
@@ -492,34 +600,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .tab-btn:hover {
             color: #fff;
-            background-color: #141822;
+            background-color: #222;
         }
         .tab-btn.active {
-            color: #6366f1;
-            border-bottom-color: #6366f1;
-            background-color: #11141a;
+            color: #3b82f6;
+            border-bottom-color: #3b82f6;
+            background-color: #1a1a1a;
         }
         .tab-content {
-            padding: 20px;
+            padding: 16px;
             flex-grow: 1;
             overflow-y: auto;
-            background-color: #0d0f14;
+            background-color: #121212;
             display: flex;
             flex-direction: column;
         }
         .terminal-list {
-            background-color: #07080a;
-            border: 1px solid #1e293b;
-            border-radius: 8px;
+            background-color: #121212;
+            border: 1px solid #2d2d2d;
+            border-radius: 4px;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.8rem;
-            padding: 12px;
+            font-size: 0.75rem;
+            padding: 10px;
             flex-grow: 1;
-            min-height: 250px;
-            max-height: 380px;
+            min-height: 220px;
+            max-height: 340px;
             overflow-y: auto;
             color: #38bdf8;
-            box-shadow: inset 0 2px 8px rgba(0,0,0,0.8);
         }
         .terminal-line {
             display: flex;
@@ -527,8 +634,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             line-height: 1.4;
         }
         .terminal-time {
-            color: #475569;
-            margin-right: 12px;
+            color: #555;
+            margin-right: 10px;
             user-select: none;
         }
         .terminal-hex {
@@ -536,30 +643,30 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-weight: 500;
         }
         .table-container {
-            border: 1px solid #1e293b;
-            border-radius: 8px;
+            border: 1px solid #2d2d2d;
+            border-radius: 4px;
             overflow: hidden;
-            background-color: #07080a;
-            max-height: 380px;
+            background-color: #121212;
+            max-height: 340px;
             overflow-y: auto;
         }
         .tel-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             text-align: left;
         }
         .tel-table th, .tel-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid #1e293b;
+            padding: 8px 10px;
+            border-bottom: 1px solid #2d2d2d;
         }
         .tel-table th {
-            background-color: #0f1218;
-            color: #94a3b8;
+            background-color: #151515;
+            color: #888;
             font-weight: 600;
         }
         .tel-table td {
-            color: #cbd5e1;
+            color: #ccc;
         }
         .plane-icon-div {
             background: none;
@@ -567,17 +674,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         /* Custom scrollbar */
         ::-webkit-scrollbar {
-            width: 6px;
+            width: 5px;
         }
         ::-webkit-scrollbar-track {
-            background: #11141a;
+            background: #1a1a1a;
         }
         ::-webkit-scrollbar-thumb {
-            background: #334155;
+            background: #333;
             border-radius: 3px;
         }
         ::-webkit-scrollbar-thumb:hover {
-            background: #475569;
+            background: #444;
         }
     </style>
 </head>
@@ -589,6 +696,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
         <div id="search-container">
             <input type="text" id="search-input" placeholder="Search by callsign, ICAO, or model..." />
+        </div>
+        <div id="filter-container" style="padding: 0 24px 12px 24px; background-color: #13171f; display: flex; gap: 8px;">
+            <select id="warning-filter" style="width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid #334155; background-color: #0f1218; color: #f1f5f9; font-family: inherit; font-size: 0.85rem; cursor: pointer; transition: all 0.2s;">
+                <option value="all">All Flights</option>
+                <option value="warn">Warnings (Warn)</option>
+                <option value="alert">Alerts (Alert)</option>
+                <option value="any">Any Warning/Alert</option>
+            </select>
         </div>
         <div id="stats-panel">
             <div class="stat-card">
@@ -759,16 +874,34 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             return (now - flight.end_time) < 45;
         }
 
+        let warningFilter = 'all';
+
+        function getFilteredFlights() {
+            return flightsData.filter(flight => {
+                const callsign = (flight.callsign || '').toLowerCase();
+                const icao = (flight.icao || '').toLowerCase();
+                const model = (flight.model || '').toLowerCase();
+                const matchesSearch = callsign.includes(searchQuery) || icao.includes(searchQuery) || model.includes(searchQuery);
+                
+                let matchesWarning = true;
+                const level = (flight.level || '').toLowerCase();
+                if (warningFilter === 'warn') {
+                    matchesWarning = (level === 'warn');
+                } else if (warningFilter === 'alert') {
+                    matchesWarning = (level === 'alert');
+                } else if (warningFilter === 'any') {
+                    matchesWarning = (level === 'warn' || level === 'alert');
+                }
+                
+                return matchesSearch && matchesWarning;
+            });
+        }
+
         function renderFlightList() {
             const list = document.getElementById('flight-list');
             list.innerHTML = '';
             
-            const filtered = flightsData.filter(flight => {
-                const callsign = (flight.callsign || '').toLowerCase();
-                const icao = (flight.icao || '').toLowerCase();
-                const model = (flight.model || '').toLowerCase();
-                return callsign.includes(searchQuery) || icao.includes(searchQuery) || model.includes(searchQuery);
-            });
+            const filtered = getFilteredFlights();
             
             filtered.forEach(flight => {
                 const item = document.createElement('li');
@@ -797,18 +930,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         function plotAllFlights() {
-            const activeFlightIds = new Set(flightsData.map(f => f.flight_id));
+            const filtered = getFilteredFlights();
+            const filteredFlightIds = new Set(filtered.map(f => f.flight_id));
 
-            // Clean up markers for flights no longer in local storage and not selected
+            // Clean up markers for flights no longer in filtered list and not selected
             Object.keys(planeMarkers).forEach(flightId => {
-                if (!activeFlightIds.has(flightId) && flightId !== activeFlightId) {
+                if (!filteredFlightIds.has(flightId) && flightId !== activeFlightId) {
                     map.removeLayer(planeMarkers[flightId]);
                     delete planeMarkers[flightId];
                 }
             });
 
-            // Plot all planes
-            flightsData.forEach(flight => {
+            // Plot filtered planes
+            filtered.forEach(flight => {
                 if (flight.latitude !== null && flight.longitude !== null && flight.latitude !== undefined && flight.longitude !== undefined) {
                     const pos = [flight.latitude, flight.longitude];
                     const isSelected = flight.flight_id === activeFlightId;
@@ -1073,6 +1207,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         document.getElementById('search-input').addEventListener('input', (e) => {
             searchQuery = e.target.value.toLowerCase();
             renderFlightList();
+            plotAllFlights();
+        });
+
+        // Warning filter trigger
+        document.getElementById('warning-filter').addEventListener('change', (e) => {
+            warningFilter = e.target.value;
+            renderFlightList();
+            plotAllFlights();
         });
 
         async function init() {
