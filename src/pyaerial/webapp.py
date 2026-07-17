@@ -57,6 +57,10 @@ def _enrich_from_aircraft_db(icao: str, aircraft_db: AircraftDB | None) -> dict[
         "country": meta.get("country"),
         "aircraft_type": meta.get("typecode"),
         "typecode": meta.get("typecode"),
+        "registration": meta.get("registration"),
+        "photo_url": meta.get("photo_url"),
+        "photo_photographer": meta.get("photo_photographer"),
+        "photo_link": meta.get("photo_link"),
     }
 
 
@@ -258,6 +262,10 @@ class WebAppHandler(BaseHTTPRequestHandler):
                     "owner": flight_data.get("owner") or enriched.get("owner"),
                     "country": flight_data.get("country") or enriched.get("country"),
                     "aircraft_type": flight_data.get("aircraft_type") or enriched.get("typecode"),
+                    "registration": flight_data.get("registration") or enriched.get("registration"),
+                    "photo_url": enriched.get("photo_url"),
+                    "photo_photographer": enriched.get("photo_photographer"),
+                    "photo_link": enriched.get("photo_link"),
                 }
                 self.send_json(flight_data)
                 return
@@ -281,6 +289,10 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
                 "country": doc.get("country") or info.get("country") or enriched.get("country"),
                 "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type") or info.get("typecode") or enriched.get("aircraft_type") or enriched.get("typecode"),
+                "registration": doc.get("registration") or info.get("registration") or enriched.get("registration"),
+                "photo_url": enriched.get("photo_url"),
+                "photo_photographer": enriched.get("photo_photographer"),
+                "photo_link": enriched.get("photo_link"),
                 "raw_messages": doc.get("raw_messages", []),
                 "is_live": False,
                 "status": doc.get("status", "completed"),
@@ -882,9 +894,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <h2><span id="detail-callsign">N/A</span> <span id="detail-icao" class="flight-icao">N/A</span></h2>
             </div>
             <div class="drawer-content">
+                <!-- Aircraft Photo Card -->
+                <div id="detail-photo-container" style="display: none; padding: 0; border-bottom: 1px solid #2d2d2d; position: relative; background: #0c0f16; overflow: hidden; height: 180px;">
+                    <img id="detail-photo" src="" style="width: 100%; height: 100%; object-fit: cover; opacity: 0.85;" alt="Aircraft Photo">
+                    <div style="position: absolute; bottom: 0; left: 0; right: 0; padding: 10px 16px; background: linear-gradient(transparent, rgba(0,0,0,0.9)); font-size: 0.65rem; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; z-index: 5;">
+                        <span>Photo by <span id="detail-photo-photographer" style="color: #fff; font-weight: 500;">Unknown</span></span>
+                        <a id="detail-photo-link" href="#" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">View on Planespotters.net</a>
+                    </div>
+                </div>
+
                 <div class="info-section">
                     <h3>Aircraft Details</h3>
                     <div class="details-grid">
+                        <span class="details-label">Registration</span>
+                        <span class="details-value" id="detail-registration" style="font-weight: 600; color: #3b82f6;">N/A</span>
                         <span class="details-label">Model</span>
                         <span class="details-value" id="detail-model">N/A</span>
                         <span class="details-label">Aircraft Type</span>
@@ -1334,11 +1357,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function showDetails(flightDetail) {
             document.getElementById('detail-callsign').innerText = flightDetail.callsign || 'UNKNOWN';
             document.getElementById('detail-icao').innerText = flightDetail.icao.toUpperCase();
+            document.getElementById('detail-registration').innerText = flightDetail.registration || 'Unknown';
             document.getElementById('detail-model').innerText = flightDetail.model || 'Unknown Model';
             document.getElementById('detail-type').innerText = flightDetail.aircraft_type || flightDetail.typecode || 'Unknown Type';
             document.getElementById('detail-owner').innerText = flightDetail.owner || 'Unknown Owner';
             document.getElementById('detail-country').innerText = flightDetail.country || 'Unknown';
             document.getElementById('detail-zone-level').innerText = `${flightDetail.zone} / ${flightDetail.level}`;
+
+            // Render photo if available
+            const photoContainer = document.getElementById('detail-photo-container');
+            const photoImg = document.getElementById('detail-photo');
+            const photographerSpan = document.getElementById('detail-photo-photographer');
+            const photoLink = document.getElementById('detail-photo-link');
+
+            if (flightDetail.photo_url) {
+                photoImg.src = flightDetail.photo_url;
+                photographerSpan.innerText = flightDetail.photo_photographer || 'Unknown';
+                photoLink.href = flightDetail.photo_link || '#';
+                photoContainer.style.display = 'block';
+            } else {
+                photoImg.src = '';
+                photoContainer.style.display = 'none';
+            }
 
             // Render raw messages
             const rawList = document.getElementById('raw-messages-list');
