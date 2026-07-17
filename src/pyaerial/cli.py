@@ -6,7 +6,6 @@ Subcommands::
     run        Start the tracking engine
     validate   Check a configuration file without running
     statview   Interactive browser for saved MongoDB flights
-    build-db   Build the SQLite aircraft metadata index from database.csv
 """
 from __future__ import annotations
 
@@ -15,9 +14,8 @@ import logging
 import sys
 
 from pyaerial import __version__
-from pyaerial.calc.aircraft_db import build_from_csv
 from pyaerial.config import ConfigError, load_config
-from pyaerial.constants import DEFAULT_AIRCRAFT_CSV, DEFAULT_AIRCRAFT_DB, DEFAULT_CONFIG_FILE
+from pyaerial.constants import DEFAULT_AIRCRAFT_DB, DEFAULT_CONFIG_FILE
 from pyaerial.engine import run_engine
 from pyaerial.logging_setup import setup_logging
 from pyaerial.statview import run_statview
@@ -68,12 +66,7 @@ def _build_parser() -> argparse.ArgumentParser:
     web_p.add_argument("-p", "--port", type=int, default=10090, help="port to bind (default: 10090)")
     web_p.set_defaults(func=_cmd_web)
 
-    db_p = sub.add_parser("build-db", help="build SQLite aircraft index from OpenSky CSV")
-    db_p.add_argument("--csv", default=DEFAULT_AIRCRAFT_CSV,
-                      help=f"OpenSky CSV export (default: {DEFAULT_AIRCRAFT_CSV})")
-    db_p.add_argument("-o", "--output", default=DEFAULT_AIRCRAFT_DB,
-                      help=f"output SQLite database (default: {DEFAULT_AIRCRAFT_DB})")
-    db_p.set_defaults(func=_cmd_build_db)
+
 
     return parser
 
@@ -111,15 +104,6 @@ def _cmd_web(args: argparse.Namespace) -> None:
     from pyaerial.webapp import run_webapp
     run_webapp(args.config, aircraft_db_path=args.aircraft_db, host=args.host, port=args.port)
 
-
-def _cmd_build_db(args: argparse.Namespace) -> None:
-    setup_logging("info")
-    try:
-        count = build_from_csv(args.csv, args.output)
-    except FileNotFoundError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
-    print(f"Indexed {count} aircraft into {args.output}")
 
 
 if __name__ == "__main__":

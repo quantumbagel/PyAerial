@@ -15,7 +15,7 @@ Version 2 is an installable Python package with typed configuration, plugin regi
 - Redis live store for in-flight flights, telemetry, and alert events
 - MongoDB history store for retained completed flights
 - Web portal with Live and Historical views
-- SQLite-backed aircraft metadata index (built from OpenSky `database.csv`)
+- SQLite-backed aircraft metadata index with API lookup and caching
 - Validated YAML configuration with `pyaerial validate`
 - Interactive MongoDB browser via `pyaerial statview`
 
@@ -38,11 +38,6 @@ Optional extras:
 | `kafka` | `kafka-python-ng` | Kafka alerter |
 | `all` | both | full feature set |
 
-Optional: build the aircraft metadata index (requires `database.csv` from OpenSky):
-
-```bash
-pyaerial build-db --csv database.csv -o aircraft.db
-```
 
 ## Quick start
 
@@ -86,7 +81,7 @@ pyaerial statview -c config.yaml
 | `pyaerial web` | Start the web portal |
 | `pyaerial validate` | Check configuration syntax and cross-references |
 | `pyaerial statview` | Interactive MongoDB flight browser |
-| `pyaerial build-db` | Build SQLite aircraft index from OpenSky CSV |
+
 
 Environment overrides (applied on top of the config file):
 

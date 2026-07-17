@@ -65,16 +65,6 @@ STORE_PLANE_CATEGORY_CONVERSION = {
         7: "Rotorcraft (helicopter)"},
 }
 
-# Header for the OpenSky aircraft database CSV export.
-STORE_OPENSKY_HEADER = [
-    "icao", "timestamp", "acars", "adsb", "built", "description", "country",
-    "engines", "first_flight_date", "first_seen", "icao_aircraft_class",
-    "line_number", "manufacturer_icao", "manufacturer_name", "model", "modes",
-    "next_registration", "operator", "operator_callsign", "operator_data",
-    "operator_iata", "owner", "previous_registration", "registered_until",
-    "registered", "callsign", "selective_calling_number", "serial_number",
-    "status", "typecode", "vhf",
-]
 
 # --- Component comparison operators -------------------------------------------
 CONFIG_COMP_CTYPE_MINIMUM = "minimum"
@@ -116,4 +106,3 @@ LOGGING_LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
 # --- Defaults -----------------------------------------------------------------
 DEFAULT_CONFIG_FILE = "config.yaml"
 DEFAULT_AIRCRAFT_DB = "aircraft.db"
-DEFAULT_AIRCRAFT_CSV = "database.csv"
