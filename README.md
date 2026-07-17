@@ -182,15 +182,38 @@ Retained flights are written once on flight end (when alerts fired or a `retain:
 
 Flight IDs use the form `{icao}-{first_packet_timestamp}` for both live and historical records.
 
-## Web portal API
+## Web portal
+
+The portal is a React + Vite SPA (`web/`) served by a FastAPI app (`pyaerial web`, default port `10090`). Live view updates are pushed over WebSocket (`/ws/live`); historical data uses REST.
+
+### Development
+
+```bash
+# Terminal 1 — API + built static (or rebuild after UI changes)
+pip install -e .
+pyaerial web -c config.yaml
+
+# Terminal 2 — Vite dev server with /api and /ws proxy
+cd web && npm install && npm run dev
+```
+
+Production build (output lands in `src/pyaerial/static/`):
+
+```bash
+cd web && npm run build
+pyaerial web
+```
+
+### API
 
 | Route | Description |
 |-------|-------------|
 | `GET /api/flights?view=live\|history` | Live flights (Redis) or retained history (MongoDB) |
 | `GET /api/flight?flight_id=&view=` | Flight metadata and raw messages |
 | `GET /api/telemetry?flight_id=&view=` | Track points |
-| `GET /api/live?since=` | Incremental live telemetry (Redis) |
 | `GET /api/alerts?since=&flight_id=&level=&view=` | Alert events |
+| `GET /api/zones` | Home location and geofence polygons/rules |
+| `WS /ws/live` | Live flights, telemetry, and alerts (JSON messages) |
 
 ## Package layout
 
@@ -200,7 +223,7 @@ src/pyaerial/
   engine.py           Main loop and receiver orchestration
   tracker.py          Plane state and deduplication
   store/              Redis live store + MongoDB history persistence
-  webapp.py           Portal server and UI
+  webapp.py           FastAPI portal server (REST + WebSocket + static SPA)
   config/             Typed schema and loader
   receivers/          Receiver plugin registry
   alerters/           Alert delivery plugin registry
@@ -225,6 +248,7 @@ Core (from `pyproject.toml`, installed via `pip install -e .`):
 - pymongo — MongoDB historical persistence
 - redis — live flight buffer
 - pydantic, ruamel.yaml — configuration
+- fastapi, uvicorn — web portal (REST, WebSocket, static SPA)
 - requests — optional callsign lookup
 
 Optional extras (`pip install -e ".[sdr]"` / `".[kafka]"` / `".[all]"`):

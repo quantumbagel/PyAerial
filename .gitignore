@@ -25,3 +25,7 @@ data/
 *.sqlite
 *.sqlite3
 aircraft.db
+live_telemetry.db
+
+# Frontend
+web/node_modules/

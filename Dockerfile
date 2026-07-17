@@ -1,3 +1,10 @@
+FROM node:22-bookworm-slim AS webbuild
+WORKDIR /opt/PyAerial
+COPY web/package.json web/package-lock.json ./web/
+RUN cd web && npm ci
+COPY web/ ./web/
+RUN cd web && npm run build
+
 FROM ubuntu:24.04
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
@@ -7,6 +14,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
 
 WORKDIR /opt/PyAerial
 COPY . /opt/PyAerial
+COPY --from=webbuild /opt/PyAerial/src/pyaerial/static /opt/PyAerial/src/pyaerial/static
 
 RUN python3 -m pip install --break-system-packages ".[all]"
 

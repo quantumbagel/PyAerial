@@ -30,6 +30,8 @@ dependencies = [
     "redis>=5.0",
     "ruamel.yaml>=0.18",
     "pydantic>=2.5",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
 ]
 
 [project.optional-dependencies]
@@ -48,4 +50,4 @@ pyaerial = "pyaerial.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pyaerial = ["examples/*.yaml"]
+pyaerial = ["examples/*.yaml", "static/**/*"]
