@@ -129,6 +129,7 @@ export function PortalApp() {
   const portalViewRef = useRef<PortalView>('live');
   const showAllPathsRef = useRef(showAllPaths);
   const flightAlertsRef = useRef(flightAlerts);
+  const pathCoordsRef = useRef(pathCoords);
 
   useEffect(() => {
     activeFlightIdRef.current = activeFlightId;
@@ -142,6 +143,9 @@ export function PortalApp() {
   useEffect(() => {
     flightAlertsRef.current = flightAlerts;
   }, [flightAlerts]);
+  useEffect(() => {
+    pathCoordsRef.current = pathCoords;
+  }, [pathCoords]);
 
   const filteredFlights = useMemo(() => {
     const q = searchQuery.toLowerCase();
@@ -160,6 +164,11 @@ export function PortalApp() {
       return matchesSearch && matchesWarning;
     });
   }, [flightsData, searchQuery, warningFilter]);
+
+  const filteredFlightsRef = useRef(filteredFlights);
+  useEffect(() => {
+    filteredFlightsRef.current = filteredFlights;
+  }, [filteredFlights]);
 
   const liveCount = useMemo(
     () => flightsData.filter((f) => isFlightLive(f)).length,
@@ -219,9 +228,11 @@ export function PortalApp() {
   );
 
   const refreshFlightPaths = useCallback(
-    async (flightId: string | null, view: PortalView, fitSelected = false) => {
-      if (showAllPaths) {
-        const missing = filteredFlights.filter((f) => !pathCoords[f.flight_id]);
+    async (flightId: string | null, view: PortalView) => {
+      if (showAllPathsRef.current) {
+        const missing = filteredFlightsRef.current.filter(
+          (f) => !pathCoordsRef.current[f.flight_id],
+        );
         await Promise.all(missing.map((f) => fetchAndSetPath(f.flight_id, view)));
       } else if (flightId) {
         setPathCoords({});
@@ -231,11 +242,8 @@ export function PortalApp() {
         setPathCoords({});
         setPathAlerts({});
       }
-      if (fitSelected && flightId && pathCoords[flightId]) {
-        mapRef.current.fitPathBounds(flightId);
-      }
     },
-    [showAllPaths, filteredFlights, pathCoords, fetchAndSetPath],
+    [fetchAndSetPath],
   );
 
   const loadFlightAlerts = useCallback(async (flightId: string, view: PortalView, append = false) => {
@@ -484,19 +492,20 @@ export function PortalApp() {
   }, [portalView, loadFlightAlerts]);
 
   useEffect(() => {
-    if (!activeFlightId) return;
-    refreshFlightPaths(activeFlightId, portalView, true);
+    refreshFlightPaths(activeFlightId, portalView);
   }, [showAllPaths, activeFlightId, portalView, refreshFlightPaths]);
 
   useEffect(() => {
-    if (showAllPaths && portalView) {
-      filteredFlights.forEach((f) => {
-        if (!pathCoords[f.flight_id]) {
-          fetchAndSetPath(f.flight_id, portalView);
-        }
-      });
-    }
-  }, [showAllPaths, filteredFlights, portalView, pathCoords, fetchAndSetPath]);
+    if (!showAllPaths || !portalView) return;
+    filteredFlights.forEach((f) => {
+      if (
+        !pathCoordsRef.current[f.flight_id] &&
+        !pendingPathFetches.current.has(f.flight_id)
+      ) {
+        fetchAndSetPath(f.flight_id, portalView);
+      }
+    });
+  }, [showAllPaths, filteredFlights, portalView, fetchAndSetPath]);
 
   const handleAlertsScroll = useCallback(
     (el: HTMLDivElement) => {

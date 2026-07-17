@@ -100,6 +100,7 @@ export function MapView({
   const zoneLayers = useRef<L.Layer[]>([]);
   const onFollowDisabledRef = useRef(onFollowDisabled);
   const onSelectFlightRef = useRef(onSelectFlight);
+  const lastFollowPanRef = useRef<[number, number] | null>(null);
 
   onFollowDisabledRef.current = onFollowDisabled;
   onSelectFlightRef.current = onSelectFlight;
@@ -187,6 +188,10 @@ export function MapView({
     const map = mapInstance.current;
     if (!map) return;
 
+    if (!followSelectedPlane) {
+      lastFollowPanRef.current = null;
+    }
+
     const filteredIds = new Set(filteredFlights.map((f) => f.flight_id));
     Object.keys(planeMarkers.current).forEach((flightId) => {
       if (!filteredIds.has(flightId) && flightId !== activeFlightId) {
@@ -212,7 +217,13 @@ export function MapView({
         planeMarkers.current[flight.flight_id] = marker;
       }
       if (isSelected && followSelectedPlane) {
-        map.panTo(pos, { animate: true, duration: 0.5 });
+        const lat = flight.latitude!;
+        const lon = flight.longitude!;
+        const prev = lastFollowPanRef.current;
+        if (!prev || prev[0] !== lat || prev[1] !== lon) {
+          lastFollowPanRef.current = [lat, lon];
+          map.panTo(pos, { animate: false });
+        }
       }
     });
   }, [filteredFlights, activeFlightId, followSelectedPlane]);
