@@ -20,6 +20,30 @@ log = logging.getLogger("pyaerial.aircraft_db")
 
 import requests
 
+
+def normalize_photo_url(value: object) -> str | None:
+    """Return a thumbnail URL string from Planespotters API values (string or {src})."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    if isinstance(value, dict):
+        src = value.get("src")
+        if isinstance(src, str):
+            src = src.strip()
+            return src or None
+    return None
+
+
+def _photo_thumbnail_url(photo: dict) -> str | None:
+    for key in ("thumbnail_large", "thumbnail", "thumbnail_small"):
+        url = normalize_photo_url(photo.get(key))
+        if url:
+            return url
+    return None
+
+
 class AircraftDB:
     """Lookup of aircraft metadata by ICAO hex, backed by SQLite (local or dynamic API cache)."""
 
@@ -137,7 +161,7 @@ class AircraftDB:
                 photos = data.get("photos", [])
                 if photos:
                     photo = photos[0]
-                    photo_info["photo_url"] = photo.get("thumbnail_large") or photo.get("thumbnail_small")
+                    photo_info["photo_url"] = _photo_thumbnail_url(photo)
                     photo_info["photo_link"] = photo.get("link")
                     photo_info["photo_photographer"] = photo.get("photographer")
                     return photo_info
@@ -153,7 +177,7 @@ class AircraftDB:
                     photos = data.get("photos", [])
                     if photos:
                         photo = photos[0]
-                        photo_info["photo_url"] = photo.get("thumbnail_large") or photo.get("thumbnail_small")
+                        photo_info["photo_url"] = _photo_thumbnail_url(photo)
                         photo_info["photo_link"] = photo.get("link")
                         photo_info["photo_photographer"] = photo.get("photographer")
             except Exception as e:
