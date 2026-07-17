@@ -390,14 +390,22 @@ class WebAppHandler(BaseHTTPRequestHandler):
         since_vals = query.get("since", [])
         flight_vals = query.get("flight_id", [])
         level_vals = query.get("level", [])
+        limit_vals = query.get("limit", [])
+        skip_vals = query.get("skip", [])
         since = float(since_vals[0]) if since_vals else 0.0
         flight_id = flight_vals[0] if flight_vals else None
         level = level_vals[0] if level_vals else None
+        limit = int(limit_vals[0]) if limit_vals else 0
+        skip = int(skip_vals[0]) if skip_vals else 0
         view = _view_from_query(query)
 
         try:
             if view == "live":
                 alerts = self.live_store.get_alerts(since=since, flight_id=flight_id, level=level)
+                if skip:
+                    alerts = alerts[skip:]
+                if limit:
+                    alerts = alerts[:limit]
                 self.send_json([_format_alert(alert) for alert in alerts])
                 return
 
@@ -410,6 +418,10 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 filt["level"] = level
 
             cursor = self.db.get_collection("alerts").find(filt).sort("timestamp", -1)
+            if skip:
+                cursor = cursor.skip(skip)
+            if limit:
+                cursor = cursor.limit(limit)
             self.send_json([_format_alert(doc) for doc in cursor])
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
@@ -776,41 +788,102 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             white-space: nowrap;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
         }
-        .zone-popup {
-            font-family: 'Outfit', system-ui, sans-serif;
-            font-size: 0.8rem;
-            color: #e2e8f0;
+        .leaflet-popup-content-wrapper {
+            background: rgba(26, 26, 26, 0.95) !important;
+            backdrop-filter: blur(8px);
+            color: var(--text) !important;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg) !important;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5) !important;
+            padding: 4px 6px;
         }
-        .zone-popup h4 {
-            margin: 0 0 8px 0;
-            color: #fcd34d;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-size: 0.85rem;
-        }
-        .zone-popup .rule {
-            margin-top: 6px;
-            padding-top: 6px;
-            border-top: 1px solid #334155;
-            color: #cbd5e1;
-        }
-        .zone-popup .rule-name {
-            font-weight: 600;
-            text-transform: uppercase;
-            font-size: 0.72rem;
-            letter-spacing: 0.04em;
-        }
-        .zone-popup .rule-name.warn { color: #fcd34d; }
-        .zone-popup .rule-name.alert { color: #fca5a5; }
-        .leaflet-popup-content-wrapper,
         .leaflet-popup-tip {
-            background: #1a1a1a;
-            color: #e2e8f0;
-            border: 1px solid #334155;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+            background: rgba(26, 26, 26, 0.95) !important;
+            border-left: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            box-shadow: none !important;
         }
         .leaflet-popup-content {
-            margin: 12px 14px;
+            margin: 12px 14px !important;
+            font-family: 'Outfit', system-ui, sans-serif;
+            font-size: 0.8rem;
+            line-height: 1.4;
+        }
+        .leaflet-popup-close-button {
+            color: var(--text-muted) !important;
+            font-weight: normal !important;
+            font-size: 16px !important;
+            margin-top: 4px !important;
+            margin-right: 4px !important;
+        }
+        .leaflet-popup-close-button:hover {
+            color: var(--text) !important;
+            background: transparent !important;
+        }
+        
+        .zone-popup {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-width: 200px;
+        }
+        .zone-popup h4 {
+            margin: 0;
+            color: var(--text);
+            font-size: 0.95rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .zone-popup .subtitle {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+        }
+        .zone-popup .rule {
+            margin: 0;
+            padding: var(--space-2) 0 0 0;
+            border-top: 1px solid var(--border-subtle);
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        .zone-popup .rule-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .zone-popup .rule-name {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            font-weight: 500;
+            padding: 2px 6px;
+            border-radius: var(--radius-sm);
+            background: rgba(255, 255, 255, 0.05);
+            text-transform: uppercase;
+        }
+        .zone-popup .rule-name.warn {
+            color: var(--warn);
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+        }
+        .zone-popup .rule-name.alert {
+            color: var(--alert);
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+        .zone-popup .rule-constraint {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-secondary);
+            font-size: 0.7rem;
+            line-height: 1.3;
+        }
+        .zone-popup .rule-dwell {
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            display: flex;
+            align-items: center;
+            gap: 4px;
         }
         /* Details Drawer Styling */
         #details-drawer {
@@ -1112,6 +1185,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .alert-timeline-item.alert:hover {
             background: rgba(239, 68, 68, 0.07);
+        }
+        .alert-timeline-item.active {
+            border: 1px solid var(--accent) !important;
+            border-left-width: 4px !important;
+            background: rgba(59, 130, 246, 0.08) !important;
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.15);
+        }
+        @keyframes flashHighlight {
+            0% { background-color: rgba(59, 130, 246, 0.3); }
+            100% { }
+        }
+        .highlight-flash {
+            animation: flashHighlight 1.5s ease-out;
         }
         #view-toggle {
             display: flex;
@@ -1424,13 +1510,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const levelClass = level === 'alert' ? 'alert' : (level === 'warn' ? 'warn' : '');
                 return `
                     <div class="rule">
-                        <div class="rule-name ${levelClass}">${rule.name}</div>
-                        <div>${formatConstraint(rule.when)}</div>
-                        <div style="color:#94a3b8; margin-top:2px;">Dwell ${rule.dwell_seconds}s</div>
+                        <div class="rule-header">
+                            <span class="rule-name ${levelClass}">${rule.name}</span>
+                            <span class="rule-dwell">Dwell: ${rule.dwell_seconds}s</span>
+                        </div>
+                        <div class="rule-constraint">${formatConstraint(rule.when)}</div>
                     </div>
                 `;
             }).join('');
-            return `<div class="zone-popup"><h4>${zone.name}</h4>${rules || '<div>No rules configured.</div>'}</div>`;
+            return `<div class="zone-popup"><h4>${zone.name}</h4>${rules || '<div class="subtitle">No rules configured.</div>'}</div>`;
         }
 
         function clearZoneLayers() {
@@ -1455,7 +1543,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     fillOpacity: 0.95,
                     weight: 2,
                 }).addTo(map);
-                homeMarker.bindPopup('<div class="zone-popup"><h4>Home</h4><div>Receiver / reference location</div></div>');
+                homeMarker.bindPopup('<div class="zone-popup"><h4>Home</h4><div class="subtitle">Receiver / reference location</div></div>');
                 zoneLayers.push(homeMarker);
             }
 
@@ -1710,14 +1798,44 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
-        async function fetchAlerts() {
+        let alertsLimit = 50;
+        let isFetchingAlerts = false;
+        let hasMoreAlerts = true;
+
+        async function fetchAlerts({ append = false } = {}) {
+            if (isFetchingAlerts) return;
+            isFetchingAlerts = true;
             try {
-                const response = await fetch(`/api/alerts?${viewQuery()}`);
-                alertsData = await response.json();
+                let skip = append ? alertsData.length : 0;
+                let limit = alertsLimit;
+                if (!append) {
+                    skip = 0;
+                    limit = Math.max(alertsLimit, alertsData.length);
+                }
+                const response = await fetch(`/api/alerts?${viewQuery()}&limit=${limit}&skip=${skip}`);
+                const data = await response.json();
+                
+                if (append) {
+                    if (data.length < alertsLimit) {
+                        hasMoreAlerts = false;
+                    }
+                    const existingIds = new Set(alertsData.map(a => a.alert_id));
+                    data.forEach(a => {
+                        if (!existingIds.has(a.alert_id)) {
+                            alertsData.push(a);
+                        }
+                    });
+                } else {
+                    alertsData = data;
+                    hasMoreAlerts = data.length >= alertsLimit;
+                }
+                
                 document.getElementById('alert-count').innerText = alertsData.length;
                 renderAlertList();
             } catch (err) {
                 console.error("Failed to fetch alerts", err);
+            } finally {
+                isFetchingAlerts = false;
             }
         }
 
@@ -1729,6 +1847,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const level = (alert.level || 'event').toLowerCase();
                 item.className = `alert-item ${level}`;
                 if (alert.alert_id === activeAlertId) item.className += ' active';
+                
+                // Add rich hover tooltip details
+                const timeStrFull = new Date(alert.timestamp * 1000).toLocaleString();
+                const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
+                const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
+                const altVal = formatAlertAltitude(alert.altitude);
+                const etaVal = formatAlertEta(alert.eta);
+                item.title = `Triggered:\nTime: ${timeStrFull}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${altVal}\nETA: ${etaVal}`;
+
                 const timeStr = new Date(alert.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
                 const statusDot = `<span class="status-dot ${level}"></span>`;
                 const displayLvl = level.charAt(0).toUpperCase() + level.slice(1);
@@ -1752,10 +1879,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             activeAlertId = alert.alert_id;
             renderAlertList();
             if (alert.latitude != null && alert.longitude != null) {
-                map.setView([alert.latitude, alert.longitude], Math.max(map.getZoom(), 10));
+                map.setView([alert.latitude, alert.longitude], Math.max(map.getZoom(), 14));
             }
             if (alert.flight_id) {
                 await selectFlight(alert.flight_id);
+                switchTab('alerts');
+                
+                // Ensure alerts are loaded/refreshed
+                await fetchFlightAlerts(alert.flight_id);
+                
+                // Scroll to the timeline item
+                const container = document.getElementById('alert-timeline-list');
+                const targetElement = container.querySelector(`[data-alert-id="${alert.alert_id}"]`);
+                if (targetElement) {
+                    targetElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    // Highlight the target element briefly
+                    targetElement.classList.add('highlight-flash');
+                    setTimeout(() => {
+                        targetElement.classList.remove('highlight-flash');
+                    }, 2000);
+                }
             }
         }
 
@@ -1833,8 +1976,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 
                 sortedAlerts.forEach(alert => {
                     const item = document.createElement('div');
+                    item.dataset.alertId = alert.alert_id;
                     const level = formatAlertLevel(alert.level).toLowerCase();
                     item.className = `alert-timeline-item ${level}`;
+                    if (alert.alert_id === activeAlertId) item.className += ' active';
+                    
+                    // Add rich hover tooltip details
+                    const timeStrFull = new Date(alert.timestamp * 1000).toLocaleString();
+                    const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
+                    const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
+                    const altVal = formatAlertAltitude(alert.altitude);
+                    const etaVal = formatAlertEta(alert.eta);
+                    item.title = `Triggered:\nTime: ${timeStrFull}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${altVal}\nETA: ${etaVal}`;
+
                     const timeStr = new Date(Number(alert.timestamp) * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
                     
                     const badgeClass = level === 'alert' ? 'alert' : 'warn';
@@ -2621,6 +2775,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             updatePathsButton();
             await fetchZones();
             restartPolling();
+            
+            // Add scroll listener for infinite scrolling in Alerts panel
+            const panelAlerts = document.getElementById('panel-alerts');
+            if (panelAlerts) {
+                panelAlerts.addEventListener('scroll', () => {
+                    if (panelAlerts.scrollTop + panelAlerts.clientHeight >= panelAlerts.scrollHeight - 50) {
+                        if (hasMoreAlerts && !isFetchingAlerts) {
+                            fetchAlerts({ append: true });
+                        }
+                    }
+                });
+            }
         }
 
         init();

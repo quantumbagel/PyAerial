@@ -99,6 +99,7 @@ class RuleConfig(_Strict):
     name: str
     when: dict[str, FieldConstraint] = Field(min_length=1)
     dwell_seconds: int = Field(gt=0)
+    refire_seconds: int = Field(default=60, ge=0)
     alert: AlertConfig = Field(default_factory=AlertConfig)
     retain: bool = True
 

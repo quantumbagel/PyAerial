@@ -63,6 +63,7 @@ class PlaneCalculator:
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="callsign-lookup")
         self._pending_lookups: set[str] = set()
         self._lock = threading.Lock()
+        self._last_alert_times: dict[tuple[str, str, str], float] = {}
 
     def close(self) -> None:
         for alerter in self._alerters.values():
@@ -222,6 +223,14 @@ class PlaneCalculator:
                 if plane.get("level") != "alert":
                     plane["zone"] = zone_name
                     plane["level"] = rule.name
+
+                import time
+                icao = plane[STORE_INFO][STORE_ICAO]
+                last_time = self._last_alert_times.get((icao, zone_name, rule.name), 0.0)
+                now = time.time()
+                if now - last_time < rule.refire_seconds:
+                    continue
+                self._last_alert_times[(icao, zone_name, rule.name)] = now
 
                 alerter = self._get_alerter(rule.alert.method, rule.alert.options)
                 alt = get_latest(STORE_RECV_DATA, STORE_ALT, plane)
