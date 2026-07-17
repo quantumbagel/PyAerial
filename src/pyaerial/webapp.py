@@ -460,6 +460,42 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --bg: #121212;
+            --panel: #1a1a1a;
+            --panel-raised: #151515;
+            --panel-hover: #222;
+            --border: #2d2d2d;
+            --border-subtle: #262626;
+            --input-bg: #2a2a2a;
+            --input-border: #3f3f46;
+            --text: #fafafa;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --accent: #3b82f6;
+            --accent-soft: #dbeafe;
+            --accent-active-bg: #1e3a5f;
+            --status-live: #34d399;
+            --status-live-dark: #047857;
+            --status-live-bg: #064e3b;
+            --status-live-text: #6ee7b7;
+            --warn: #f59e0b;
+            --alert: #ef4444;
+            --space-1: 4px;
+            --space-2: 8px;
+            --space-3: 12px;
+            --space-4: 16px;
+            --space-5: 20px;
+            --space-6: 24px;
+            --space-8: 32px;
+            --radius-sm: 4px;
+            --radius-md: 6px;
+            --radius-lg: 8px;
+            --font-section: 0.75rem;
+            --font-title: 0.95rem;
+            --font-body: 0.8rem;
+            --font-meta: 0.75rem;
+        }
         * {
             box-sizing: border-box;
             margin: 0;
@@ -467,114 +503,109 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         body {
             font-family: 'Outfit', system-ui, -apple-system, sans-serif;
-            background-color: #121212;
-            color: #e0e0e0;
+            background-color: var(--bg);
+            color: var(--text);
             display: flex;
             height: 100vh;
             overflow: hidden;
         }
         #sidebar {
             width: 360px;
-            background-color: #1a1a1a;
-            border-right: 1px solid #2d2d2d;
+            background-color: var(--panel);
+            border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
             height: 100%;
             z-index: 10;
         }
         #sidebar-header {
-            padding: 20px;
-            border-bottom: 1px solid #2d2d2d;
-            background-color: #151515;
+            padding: var(--space-5);
+            border-bottom: 1px solid var(--border);
+            background-color: var(--panel-raised);
         }
         #sidebar-header h1 {
             font-size: 1.2rem;
             font-weight: 600;
-            color: #3b82f6;
-            margin-bottom: 3px;
+            color: var(--accent);
+            margin-bottom: var(--space-1);
         }
         #sidebar-header p {
-            font-size: 0.75rem;
-            color: #888;
+            font-size: var(--font-meta);
+            color: var(--text-secondary);
         }
         #search-container {
-            padding: 12px 20px;
-            border-bottom: 1px solid #2d2d2d;
-            background-color: #151515;
+            padding: var(--space-3) var(--space-5);
+            border-bottom: 1px solid var(--border);
+            background-color: var(--panel-raised);
         }
-        #search-input {
-            width: 100%;
-            padding: 8px 12px;
-            border-radius: 4px;
-            border: 1px solid #2d2d2d;
-            background-color: #222;
-            color: #fff;
-            font-family: inherit;
-            font-size: 0.8rem;
-            outline: none;
-        }
-        #search-input:focus {
-            border-color: #3b82f6;
-        }
-        #filter-container {
-            padding: 0 20px 12px 20px;
-            background-color: #151515;
-            border-bottom: 1px solid #2d2d2d;
-            display: flex;
-        }
+        #search-input,
         #warning-filter {
             width: 100%;
-            padding: 8px 12px;
-            border-radius: 4px;
-            border: 1px solid #2d2d2d;
-            background-color: #222;
-            color: #fff;
+            padding: var(--space-2) var(--space-3);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--input-border);
+            background-color: var(--input-bg);
+            color: var(--text);
             font-family: inherit;
-            font-size: 0.8rem;
+            font-size: var(--font-body);
             outline: none;
+            transition: border-color 0.15s;
+        }
+        #search-input:focus,
+        #warning-filter:focus {
+            border-color: var(--accent);
+        }
+        #warning-filter {
             cursor: pointer;
         }
-        #warning-filter:focus {
-            border-color: #3b82f6;
+        #filter-container {
+            padding: 0 var(--space-5) var(--space-3) var(--space-5);
+            background-color: var(--panel-raised);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: var(--space-2);
         }
         #stats-panel {
-            padding: 12px 20px;
-            background-color: #151515;
-            border-bottom: 1px solid #2d2d2d;
-            font-size: 0.8rem;
+            padding: var(--space-3) var(--space-5);
+            background-color: var(--panel-raised);
+            border-bottom: 1px solid var(--border);
+            font-size: var(--font-body);
             display: flex;
-            gap: 8px;
+            gap: var(--space-2);
         }
         .stat-card {
             flex: 1;
-            background-color: #222;
-            padding: 6px 10px;
-            border-radius: 6px;
-            border: 1px solid #2d2d2d;
+            background-color: var(--panel-hover);
+            padding: var(--space-2) var(--space-3);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border);
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 6px;
+            gap: var(--space-2);
             min-width: 0;
         }
+        .stat-live { color: var(--status-live); }
+        .stat-tracking { color: #6366f1; }
+        .stat-alerts { color: var(--warn); }
         #flight-list {
             flex-grow: 1;
             overflow-y: auto;
             list-style: none;
         }
         .flight-item {
-            padding: 12px 20px;
-            border-bottom: 1px solid #262626;
+            padding: var(--space-4) var(--space-6);
+            border-bottom: 1px solid var(--border-subtle);
             cursor: pointer;
             background-color: transparent;
             transition: background-color 0.15s;
         }
         .flight-item:hover {
-            background-color: #222;
+            background-color: var(--panel-hover);
         }
         .flight-item.active {
             background-color: #1a2744;
-            border-left: 4px solid #3b82f6;
+            border-left: 4px solid var(--accent);
             box-shadow: inset 4px 0 14px rgba(59, 130, 246, 0.12);
         }
         .flight-meta-row {
@@ -582,47 +613,57 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             justify-content: space-between;
             align-items: center;
         }
+        .flight-meta-row + .flight-meta-row {
+            margin-top: var(--space-2);
+        }
         .flight-callsign {
             font-weight: 600;
-            font-size: 0.9rem;
-            color: #fff;
+            font-size: var(--font-title);
+            color: var(--text);
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: var(--space-2);
         }
         .status-dot {
-            width: 8px;
-            height: 8px;
+            width: var(--space-2);
+            height: var(--space-2);
             border-radius: 50%;
             background-color: #64748b;
         }
         .status-dot.live {
-            background-color: #10b981;
-            box-shadow: 0 0 6px #10b981;
+            background-color: var(--status-live);
+            box-shadow: 0 0 4px rgba(52, 211, 153, 0.5);
             animation: pulse 2s infinite;
         }
         @keyframes pulse {
-            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-            70% { transform: scale(1); box-shadow: 0 0 0 4px rgba(16, 185, 129, 0); }
-            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); }
+            70% { transform: scale(1); box-shadow: 0 0 0 4px rgba(52, 211, 153, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
         }
         .flight-icao {
             font-family: 'JetBrains Mono', monospace;
-            background-color: #2d2d2d;
-            padding: 1px 4px;
-            border-radius: 3px;
+            background-color: var(--border);
+            padding: 2px var(--space-2);
+            border-radius: var(--radius-sm);
             font-size: 0.7rem;
-            color: #ccc;
+            color: var(--text-secondary);
             font-weight: 500;
         }
         .flight-desc {
-            font-size: 0.75rem;
-            color: #888;
+            font-size: var(--font-meta);
+            color: var(--text-secondary);
         }
         .flight-time {
             font-size: 0.7rem;
-            color: #555;
+            color: var(--text-muted);
             text-align: right;
+        }
+        .drawer-header-label {
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: var(--font-section);
         }
         #map-container {
             flex-grow: 1;
@@ -632,70 +673,68 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         #map {
             width: 100%;
             height: 100%;
-            background-color: #1a1a1a;
+            background-color: var(--panel);
         }
         #map-controls {
             position: absolute;
-            top: 12px;
-            left: 12px;
+            top: var(--space-3);
+            left: var(--space-3);
             z-index: 1005;
             display: flex;
             align-items: stretch;
             gap: 0;
             background: rgba(15, 18, 24, 0.9);
             border: 1px solid rgba(51, 65, 85, 0.8);
-            border-radius: 8px;
-            padding: 4px;
+            border-radius: var(--radius-lg);
+            padding: var(--space-1);
             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
             backdrop-filter: blur(8px);
         }
         .map-toolbar-group {
             display: flex;
-            gap: 2px;
+            gap: var(--space-1);
         }
         .map-toolbar-divider {
             width: 1px;
             background: rgba(51, 65, 85, 0.9);
-            margin: 4px 4px;
+            margin: var(--space-1);
             align-self: stretch;
         }
-        #follow-btn,
-        #zones-btn,
-        #paths-btn,
-        .map-zoom-btn {
-            padding: 8px 12px;
-            border-radius: 5px;
-            border: 1px solid transparent;
-            background-color: transparent;
-            color: #94a3b8;
+        .toolbar-btn,
+        .view-btn {
+            padding: var(--space-2) var(--space-3);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border);
+            background: var(--panel-hover);
+            color: var(--text-secondary);
             font-family: inherit;
-            font-size: 0.8rem;
-            font-weight: 600;
+            font-size: var(--font-body);
+            font-weight: 500;
             cursor: pointer;
             transition: all 0.15s;
             line-height: 1;
         }
+        .view-btn {
+            flex: 1;
+        }
         .map-zoom-btn {
-            padding: 8px 14px;
+            padding: var(--space-2) var(--space-4);
             font-size: 1.1rem;
             font-weight: 500;
         }
         #follow-btn {
             display: none;
         }
-        #follow-btn:hover,
-        #zones-btn:hover,
-        #paths-btn:hover,
-        .map-zoom-btn:hover {
-            background-color: rgba(34, 34, 34, 0.9);
-            color: #fff;
+        .toolbar-btn:hover,
+        .view-btn:hover {
+            background-color: #2a2a2a;
+            color: var(--text);
         }
-        #follow-btn.active,
-        #zones-btn.active,
-        #paths-btn.active {
-            background-color: #1e3a5f;
-            border-color: #3b82f6;
-            color: #dbeafe;
+        .toolbar-btn.active,
+        .view-btn.active {
+            background-color: var(--accent-active-bg);
+            border-color: var(--accent);
+            color: var(--accent-soft);
         }
         .zone-label {
             background: rgba(15, 18, 24, 0.88);
@@ -754,8 +793,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             right: -420px;
             width: 420px;
             height: 100%;
-            background-color: #1a1a1a;
-            border-left: 1px solid #2d2d2d;
+            background-color: var(--panel);
+            border-left: 1px solid var(--border);
             z-index: 1010;
             transition: right 0.3s ease;
             display: flex;
@@ -765,35 +804,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             right: 0;
         }
         #drawer-header {
-            padding: 20px;
-            border-bottom: 1px solid #2d2d2d;
-            background-color: #151515;
+            padding: var(--space-5);
+            border-bottom: 1px solid var(--border);
+            background-color: var(--panel-raised);
             position: relative;
         }
         #drawer-header h2 {
-            font-size: 1.1rem;
+            font-size: var(--font-title);
             font-weight: 600;
-            color: #fff;
+            color: var(--text);
             display: flex;
             align-items: center;
-            gap: 8px;
-            margin-top: 6px;
+            gap: var(--space-2);
+            margin-top: var(--space-2);
         }
         .close-btn {
             background: none;
             border: none;
-            color: #888;
+            color: var(--text-secondary);
             font-size: 1.5rem;
             cursor: pointer;
             position: absolute;
-            top: 12px;
-            right: 16px;
+            top: var(--space-3);
+            right: var(--space-4);
             z-index: 30;
             line-height: 1;
             transition: color 0.15s;
         }
         .close-btn:hover {
-            color: #ef4444;
+            color: var(--alert);
         }
         .flight-path {
             cursor: pointer;
@@ -805,31 +844,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             flex-direction: column;
         }
         .info-section {
-            padding: 16px 20px;
-            border-bottom: 1px solid #2d2d2d;
+            padding: var(--space-4) var(--space-5);
+            border-bottom: 1px solid var(--border);
         }
         .info-section h3 {
-            font-size: 0.75rem;
+            font-size: var(--font-section);
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            color: #3b82f6;
-            margin-bottom: 10px;
+            color: var(--accent);
+            margin-bottom: var(--space-3);
             font-weight: 600;
         }
         .details-grid {
             display: grid;
             grid-template-columns: 130px 1fr;
-            gap: 6px 20px;
-            font-size: 0.75rem;
+            gap: var(--space-2) var(--space-5);
+            font-size: var(--font-meta);
             max-width: 340px;
         }
         .details-label {
-            color: #888;
+            color: var(--text-secondary);
+            margin-bottom: var(--space-2);
         }
         .details-value {
-            color: #fff;
+            color: var(--text);
             text-align: left;
             font-weight: 500;
+            margin-bottom: var(--space-2);
         }
         .drawer-tabs {
             display: flex;
@@ -867,12 +908,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             flex-direction: column;
         }
         .terminal-list {
-            background-color: #121212;
-            border: 1px solid #2d2d2d;
-            border-radius: 4px;
+            background-color: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.75rem;
-            padding: 6px;
+            font-size: var(--font-meta);
+            padding: var(--space-2);
             flex-grow: 1;
             min-height: 220px;
             max-height: 340px;
@@ -881,10 +922,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .terminal-line {
             display: flex;
-            padding: 5px 8px;
+            padding: var(--space-1) var(--space-2);
             margin-bottom: 1px;
             line-height: 1.5;
-            border-radius: 3px;
+            border-radius: var(--radius-sm);
         }
         .terminal-line:nth-child(odd) {
             background-color: rgba(255, 255, 255, 0.03);
@@ -893,39 +934,45 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background-color: rgba(0, 0, 0, 0.15);
         }
         .terminal-time {
-            color: #555;
-            margin-right: 10px;
+            color: var(--text-muted);
+            margin-right: var(--space-3);
             user-select: none;
         }
         .terminal-hex {
-            color: #34d399;
+            color: var(--status-live);
             font-weight: 500;
         }
         .table-container {
-            border: 1px solid #2d2d2d;
-            border-radius: 4px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
             overflow: hidden;
-            background-color: #121212;
+            background-color: var(--bg);
             max-height: 340px;
             overflow-y: auto;
         }
         .tel-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.75rem;
+            font-size: var(--font-meta);
             text-align: left;
         }
         .tel-table th, .tel-table td {
-            padding: 8px 10px;
-            border-bottom: 1px solid #2d2d2d;
+            padding: var(--space-2) var(--space-3);
+            border-bottom: 1px solid var(--border);
         }
         .tel-table th {
-            background-color: #151515;
-            color: #888;
+            background-color: var(--panel-raised);
+            color: var(--text-secondary);
             font-weight: 600;
         }
         .tel-table td {
-            color: #ccc;
+            color: #d4d4d8;
+        }
+        .tel-table th.tel-num,
+        .tel-table td.tel-num {
+            font-family: 'JetBrains Mono', monospace;
+            font-variant-numeric: tabular-nums;
+            text-align: right;
         }
         .plane-icon-div {
             background: none;
@@ -940,19 +987,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         ::-webkit-scrollbar-thumb {
             background: #333;
-            border-radius: 3px;
+            border-radius: var(--radius-sm);
         }
         .level-badge {
             font-size: 0.65rem;
             font-weight: 600;
             letter-spacing: 0.04em;
             text-transform: uppercase;
-            padding: 2px 6px;
-            border-radius: 4px;
+            padding: 2px var(--space-2);
+            border-radius: var(--radius-sm);
             background: #334155;
             color: #cbd5e1;
         }
-        .level-badge.live { background: #064e3b; color: #6ee7b7; }
+        .level-badge.live { background: var(--status-live-bg); color: var(--status-live-text); }
         .level-badge.warn { background: #78350f; color: #fcd34d; }
         .level-badge.alert { background: #7f1d1d; color: #fca5a5; }
         .level-badge.done { background: #1e293b; color: #94a3b8; }
@@ -980,8 +1027,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .alert-badge {
             font-size: 0.65rem;
             font-weight: 700;
-            padding: 2px 6px;
-            border-radius: 4px;
+            padding: 2px var(--space-2);
+            border-radius: var(--radius-sm);
             text-transform: uppercase;
             letter-spacing: 0.05em;
             display: inline-block;
@@ -1044,33 +1091,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         #view-toggle {
             display: flex;
-            gap: 8px;
-            padding: 12px 20px;
-            border-bottom: 1px solid #2d2d2d;
-            background-color: #151515;
-        }
-        .view-btn {
-            flex: 1;
-            padding: 8px 10px;
-            border-radius: 6px;
-            border: 1px solid #2d2d2d;
-            background: #222;
-            color: #94a3b8;
-            font-family: inherit;
-            font-size: 0.8rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .view-btn.active {
-            background: #1e3a5f;
-            border-color: #3b82f6;
-            color: #dbeafe;
+            gap: var(--space-2);
+            padding: var(--space-3) var(--space-5);
+            border-bottom: 1px solid var(--border);
+            background-color: var(--panel-raised);
         }
         #detail-photo-container {
             display: none;
             padding: 0;
-            border-bottom: 1px solid #2d2d2d;
+            border-bottom: 1px solid var(--border);
             position: relative;
             background: #0c0f16;
             overflow: hidden;
@@ -1081,8 +1110,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             top: 0;
             left: 0;
             right: 0;
-            height: 80px;
-            background: linear-gradient(to bottom, rgba(0, 0, 0, 0.75) 0%, rgba(0, 0, 0, 0.35) 60%, transparent 100%);
+            height: 120px;
+            background: linear-gradient(to bottom, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.55) 50%, transparent 100%);
             z-index: 4;
             pointer-events: none;
         }
@@ -1091,32 +1120,52 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             top: 0;
             left: 0;
             right: 0;
-            padding: 14px 16px 10px;
+            padding: var(--space-4) var(--space-4) var(--space-3);
             z-index: 5;
         }
         .photo-title-overlay h2 {
-            font-size: 1.1rem;
+            font-size: var(--font-title);
             font-weight: 600;
-            color: #fff;
+            color: var(--text);
             display: flex;
             align-items: center;
-            gap: 8px;
-            margin-top: 4px;
-            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+            gap: var(--space-2);
+            margin-top: var(--space-1);
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
         }
         .photo-gradient-bottom {
             position: absolute;
             bottom: 0;
             left: 0;
             right: 0;
-            padding: 10px 16px;
+            padding: var(--space-3) var(--space-4);
             background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
             font-size: 0.65rem;
-            color: #94a3b8;
+            color: var(--text-secondary);
             display: flex;
             justify-content: space-between;
             align-items: center;
             z-index: 5;
+        }
+        .photo-credit-name {
+            color: var(--text);
+            font-weight: 500;
+        }
+        .photo-link {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 600;
+        }
+        #detail-photo {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0.85;
+        }
+        #alert-list {
+            list-style: none;
+            overflow-y: auto;
+            flex-grow: 1;
         }
         #drawer-header.no-photo h2 {
             margin-top: 6px;
@@ -1150,8 +1199,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div id="search-container">
             <input type="text" id="search-input" placeholder="Search by callsign, ICAO, or model..." />
         </div>
-        <div id="filter-container" style="padding: 0 24px 12px 24px; background-color: #13171f; display: flex; gap: 8px;">
-            <select id="warning-filter" style="width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid #334155; background-color: #0f1218; color: #f1f5f9; font-family: inherit; font-size: 0.85rem; cursor: pointer; transition: all 0.2s;">
+        <div id="filter-container">
+            <select id="warning-filter">
                 <option value="all">All Flights</option>
                 <option value="warn">Warnings (Warn)</option>
                 <option value="alert">Alerts (Alert)</option>
@@ -1161,15 +1210,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div id="stats-panel">
             <div class="stat-card">
                 <span id="flight-stat-label">Live:</span>
-                <strong id="flight-count" style="color: #10b981;">0</strong>
+                <strong id="flight-count" class="stat-live">0</strong>
             </div>
             <div class="stat-card" id="live-stat-card">
                 <span>Tracking:</span>
-                <strong id="live-count" style="color: #6366f1;">0</strong>
+                <strong id="live-count" class="stat-tracking">0</strong>
             </div>
             <div class="stat-card">
                 <span>Alerts:</span>
-                <strong id="alert-count" style="color: #f59e0b;">0</strong>
+                <strong id="alert-count" class="stat-alerts">0</strong>
             </div>
         </div>
         <div id="sidebar-tabs">
@@ -1180,20 +1229,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <ul id="flight-list"></ul>
         </div>
         <div id="panel-alerts" class="sidebar-panel">
-            <ul id="alert-list" style="list-style:none; overflow-y:auto; flex-grow:1;"></ul>
+            <ul id="alert-list"></ul>
         </div>
     </div>
     <div id="map-container">
         <div id="map-controls">
             <div class="map-toolbar-group">
-                <button id="follow-btn" type="button" title="Follow selected aircraft">Follow</button>
-                <button id="zones-btn" type="button" title="Show configured geofence zones">Zones</button>
-                <button id="paths-btn" type="button" title="Show flight paths for all visible aircraft">Paths</button>
+                <button id="follow-btn" class="toolbar-btn" type="button" title="Follow selected aircraft">Follow</button>
+                <button id="zones-btn" class="toolbar-btn" type="button" title="Show configured geofence zones">Zones</button>
+                <button id="paths-btn" class="toolbar-btn" type="button" title="Show flight paths for all visible aircraft">Paths</button>
             </div>
             <div class="map-toolbar-divider"></div>
             <div class="map-toolbar-group">
-                <button id="zoom-in-btn" class="map-zoom-btn" type="button" title="Zoom in">+</button>
-                <button id="zoom-out-btn" class="map-zoom-btn" type="button" title="Zoom out">−</button>
+                <button id="zoom-in-btn" class="toolbar-btn map-zoom-btn" type="button" title="Zoom in">+</button>
+                <button id="zoom-out-btn" class="toolbar-btn map-zoom-btn" type="button" title="Zoom out">−</button>
             </div>
         </div>
         <div id="map"></div>
@@ -1202,21 +1251,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div id="details-drawer">
             <button id="close-drawer-btn" class="close-btn" title="Close">&times;</button>
             <div id="drawer-header" class="no-photo">
-                <div class="flight-desc drawer-header-label" style="text-transform: uppercase; letter-spacing: 0.1em; color: #94a3b8; font-weight: 600; font-size: 0.75rem;">Selected Aircraft</div>
+                <div class="drawer-header-label">Selected Aircraft</div>
                 <h2><span id="detail-callsign">N/A</span> <span id="detail-icao" class="flight-icao">N/A</span></h2>
             </div>
             <div class="drawer-content">
                 <!-- Aircraft Photo Card -->
                 <div id="detail-photo-container">
-                    <img id="detail-photo" src="" style="width: 100%; height: 100%; object-fit: cover; opacity: 0.85;" alt="Aircraft Photo">
+                    <img id="detail-photo" src="" alt="Aircraft Photo">
                     <div class="photo-gradient-top"></div>
                     <div class="photo-title-overlay">
-                        <div class="flight-desc" style="text-transform: uppercase; letter-spacing: 0.1em; color: #cbd5e1; font-weight: 600; font-size: 0.75rem;">Selected Aircraft</div>
+                        <div class="drawer-header-label">Selected Aircraft</div>
                         <h2><span id="detail-callsign-photo">N/A</span> <span id="detail-icao-photo" class="flight-icao">N/A</span></h2>
                     </div>
                     <div class="photo-gradient-bottom">
-                        <span>Photo by <span id="detail-photo-photographer" style="color: #fff; font-weight: 500;">Unknown</span></span>
-                        <a id="detail-photo-link" href="#" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">View on Planespotters.net</a>
+                        <span>Photo by <span id="detail-photo-photographer" class="photo-credit-name">Unknown</span></span>
+                        <a id="detail-photo-link" class="photo-link" href="#" target="_blank">View on Planespotters.net</a>
                     </div>
                 </div>
 
@@ -1265,9 +1314,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             <thead>
                                 <tr>
                                     <th>Time</th>
-                                    <th>Altitude</th>
-                                    <th>Speed</th>
-                                    <th>Heading</th>
+                                    <th class="tel-num">Altitude</th>
+                                    <th class="tel-num">Speed</th>
+                                    <th class="tel-num">Heading</th>
                                 </tr>
                             </thead>
                             <tbody id="telemetry-table-body">
@@ -1548,8 +1597,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 size = 26;
                 opacity = 1.0;
             } else if (isLive) {
-                fill = '#10b981';
-                stroke = '#064e3b';
+                fill = '#34d399';
+                stroke = '#047857';
                 size = 24;
                 opacity = 1.0;
             } else {
@@ -1761,6 +1810,48 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             return `${z || 'N/A'} / ${l || 'N/A'}`;
         }
 
+        function isFiniteNumber(v) {
+            if (v === null || v === undefined || v === '') return false;
+            const n = typeof v === 'number' ? v : Number(v);
+            return Number.isFinite(n);
+        }
+
+        function formatInt(v, { unit = '', fallback = 'N/A' } = {}) {
+            if (!isFiniteNumber(v)) return fallback;
+            const n = Math.round(Number(v));
+            const formatted = n.toLocaleString('en-US');
+            return unit ? `${formatted} ${unit}` : formatted;
+        }
+
+        function formatAltitude(meters) {
+            if (!isFiniteNumber(meters)) return 'N/A';
+            const m = Math.round(Number(meters));
+            const ft = Math.round(m * 3.28084);
+            return `${m.toLocaleString('en-US')} m (${ft.toLocaleString('en-US')} ft)`;
+        }
+
+        function formatSpeed(kmh) {
+            if (!isFiniteNumber(kmh)) return 'N/A';
+            const speed = Math.round(Number(kmh));
+            const knots = Math.round(speed * 0.539957);
+            return `${speed.toLocaleString('en-US')} km/h (${knots.toLocaleString('en-US')} kt)`;
+        }
+
+        function formatHeading(degrees) {
+            if (!isFiniteNumber(degrees)) return 'N/A';
+            return `${Math.round(Number(degrees)).toLocaleString('en-US')}°`;
+        }
+
+        function formatAltitudeCell(meters) {
+            if (!isFiniteNumber(meters)) return 'N/A';
+            return `${Math.round(Number(meters)).toLocaleString('en-US')} m`;
+        }
+
+        function formatSpeedCell(kmh) {
+            if (!isFiniteNumber(kmh)) return 'N/A';
+            return `${Math.round(Number(kmh)).toLocaleString('en-US')} km/h`;
+        }
+
         function clearEventMarkers(flightId) {
             if (!planeEventMarkers[flightId]) return;
             planeEventMarkers[flightId].forEach(marker => map.removeLayer(marker));
@@ -1841,7 +1932,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         <span class="flight-callsign">${statusDot} ${flight.callsign || 'UNKNOWN'} ${levelBadge(flight)}</span>
                         <span class="flight-icao">${flight.icao.toUpperCase()}</span>
                     </div>
-                    <div class="flight-meta-row" style="margin-top: 4px;">
+                    <div class="flight-meta-row">
                         <span class="flight-desc">${flight.model || 'Unknown Model'}</span>
                         <span class="flight-time">${startTime}</span>
                     </div>
@@ -2131,24 +2222,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         const row = document.createElement('tr');
                         const timeStr = new Date(point.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
                         
-                        const altStr = point.altitude !== null ? `${Math.round(point.altitude)} m` : 'N/A';
-                        const speedStr = point.speed !== null ? `${Math.round(point.speed)} km/h` : 'N/A';
-                        const headingStr = point.heading !== null ? `${Math.round(point.heading)}°` : 'N/A';
-                        
                         row.innerHTML = `
                             <td>${timeStr}</td>
-                            <td>${altStr}</td>
-                            <td>${speedStr}</td>
-                            <td>${headingStr}</td>
+                            <td class="tel-num">${formatAltitudeCell(point.altitude)}</td>
+                            <td class="tel-num">${formatSpeedCell(point.speed)}</td>
+                            <td class="tel-num">${formatHeading(point.heading)}</td>
                         `;
                         tableBody.appendChild(row);
                     });
 
                     // Update drawer real-time telemetry details with the latest point
                     const lastPoint = points[points.length - 1];
-                    document.getElementById('detail-altitude').innerText = lastPoint.altitude !== null ? `${Math.round(lastPoint.altitude)} m (${Math.round(lastPoint.altitude * 3.28084)} ft)` : 'N/A';
-                    document.getElementById('detail-speed').innerText = lastPoint.speed !== null ? `${Math.round(lastPoint.speed)} km/h (${Math.round(lastPoint.speed * 0.539957)} kt)` : 'N/A';
-                    document.getElementById('detail-heading').innerText = lastPoint.heading !== null ? `${Math.round(lastPoint.heading)}°` : 'N/A';
+                    document.getElementById('detail-altitude').innerText = formatAltitude(lastPoint.altitude);
+                    document.getElementById('detail-speed').innerText = formatSpeed(lastPoint.speed);
+                    document.getElementById('detail-heading').innerText = formatHeading(lastPoint.heading);
                 }
             } catch (err) {
                 console.error("Failed to populate telemetry table log", err);
