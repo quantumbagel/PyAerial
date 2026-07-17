@@ -215,10 +215,16 @@ class RedisLiveStore:
         points: list[dict[str, Any]] = []
         try:
             for flight_id in self.client.smembers(_KEY_FLIGHTS):
+                raw_flight = self.client.get(_KEY_FLIGHT.format(flight_id=flight_id))
+                flight_doc = json.loads(raw_flight) if raw_flight else {}
+                zone = flight_doc.get("zone") or ""
+                level = flight_doc.get("level") or ""
                 for point in self.get_telemetry(flight_id, since=since):
                     points.append({
                         "flight_id": flight_id,
                         "icao": point.get("icao"),
+                        "zone": zone,
+                        "level": level,
                         **point,
                     })
         except RedisError as exc:

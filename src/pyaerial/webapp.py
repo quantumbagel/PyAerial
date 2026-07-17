@@ -359,13 +359,18 @@ class WebAppHandler(BaseHTTPRequestHandler):
             return
         flight_id = flight_ids[0]
         view = _view_from_query(query)
+        since_vals = query.get("since", [])
+        since = float(since_vals[0]) if since_vals else 0.0
         try:
             if view == "live":
-                points = self.live_store.get_telemetry(flight_id)
+                points = self.live_store.get_telemetry(flight_id, since=since)
                 self.send_json(points)
                 return
 
-            cursor = self.db.get_collection("telemetry").find({"flight_id": flight_id}).sort("timestamp", 1)
+            filt = {"flight_id": flight_id}
+            if since > 0:
+                filt["timestamp"] = {"$gt": since}
+            cursor = self.db.get_collection("telemetry").find(filt).sort("timestamp", 1)
             points = [_telemetry_point(doc) for doc in cursor]
             self.send_json(points)
         except Exception as exc:
@@ -1508,6 +1513,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         let flightsData = [];
         let alertsData = [];
         let activeFlightId = null;
+        let activeFlightAlerts = [];
+        let activeFlightTelemetry = [];
+        let pendingPathFetches = new Set();
+        let flightDetailsPollTimer = null;
         let activeAlertId = null;
         let lastSeenTimestamp = 0;
         let searchQuery = '';
@@ -1767,7 +1776,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             return `${m} m (${ft} ft)`;
         }
 
-        async function fetchFlightAlerts(flightId) {
+        async function fetchFlightAlerts(flightId, { append = false } = {}) {
             const requestId = ++flightAlertsRequestId;
             const container = document.getElementById('alert-timeline-list');
             
@@ -1775,30 +1784,54 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (container.dataset.flightId !== flightId) {
                 container.innerHTML = '<div style="color:#64748b;">Loading alerts...</div>';
                 container.dataset.flightId = flightId;
+                activeFlightAlerts = [];
             }
+
+            let url = `/api/alerts?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`;
+            if (append && activeFlightAlerts.length > 0) {
+                const maxTs = Math.max(...activeFlightAlerts.map(a => a.timestamp || 0));
+                url += `&since=${maxTs}`;
+            }
+
             try {
-                const response = await fetch(`/api/alerts?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
+                const response = await fetch(url);
                 if (requestId !== flightAlertsRequestId) return [];
                 if (!response.ok) {
-                    container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
+                    if (!append) container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
                     return [];
                 }
-                const alerts = await response.json();
+                const newAlerts = await response.json();
                 if (requestId !== flightAlertsRequestId) return [];
-                if (!Array.isArray(alerts)) {
-                    container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
+                if (!Array.isArray(newAlerts)) {
+                    if (!append) container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
                     return [];
                 }
                 
-                // Clear container and reset dataset.flightId
+                if (!append) {
+                    container.innerHTML = '';
+                    activeFlightAlerts = newAlerts;
+                } else {
+                    const existingIds = new Set(activeFlightAlerts.map(a => a.alert_id));
+                    newAlerts.forEach(a => {
+                        if (!existingIds.has(a.alert_id)) {
+                            activeFlightAlerts.push(a);
+                        }
+                    });
+                }
+                
+                // Reset/refresh container contents
                 container.innerHTML = '';
                 container.dataset.flightId = flightId;
                 
-                if (!alerts.length) {
+                if (!activeFlightAlerts.length) {
                     container.innerHTML = '<div style="color:#64748b;">No alert events for this flight.</div>';
                     return [];
                 }
-                alerts.slice().reverse().forEach(alert => {
+                
+                // Sort activeFlightAlerts chronologically (earliest to latest) so the timeline matches the original reverse loop ordering
+                const sortedAlerts = activeFlightAlerts.slice().sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+                
+                sortedAlerts.forEach(alert => {
                     const item = document.createElement('div');
                     const level = formatAlertLevel(alert.level).toLowerCase();
                     item.className = `alert-timeline-item ${level}`;
@@ -1823,11 +1856,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     item.addEventListener('click', () => selectAlert(alert));
                     container.appendChild(item);
                 });
-                return alerts;
+                return activeFlightAlerts;
             } catch (err) {
                 if (requestId !== flightAlertsRequestId) return [];
                 console.error('Failed to load flight alerts', err);
-                container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
+                if (!append) container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
                 return [];
             }
         }
@@ -2022,6 +2055,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         async function selectFlight(flightId) {
+            if (flightDetailsPollTimer) {
+                clearInterval(flightDetailsPollTimer);
+                flightDetailsPollTimer = null;
+            }
             activeFlightId = flightId;
             followSelectedPlane = true;
             renderFlightList();
@@ -2041,6 +2078,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 if (response.ok) {
                     const flightDetail = await response.json();
                     showDetails(flightDetail);
+                    
+                    if (portalView === 'live' && flightDetail.is_live) {
+                        flightDetailsPollTimer = setInterval(fetchActiveFlightDetails, 10000);
+                    }
                 }
             } catch (err) {
                 console.error("Failed to fetch flight details", err);
@@ -2083,6 +2124,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         async function fetchAndSetPath(flightId, { isSelected = false } = {}) {
+            if (pendingPathFetches.has(flightId)) return null;
+            pendingPathFetches.add(flightId);
             try {
                 const [telemetryResponse, alertsResponse] = await Promise.all([
                     fetch(`/api/telemetry?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`),
@@ -2125,6 +2168,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             } catch (err) {
                 console.error('Failed to fetch flight path', flightId, err);
                 return null;
+            } finally {
+                pendingPathFetches.delete(flightId);
             }
         }
 
@@ -2238,15 +2283,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             });
         }
 
-        async function fetchTelemetryTable(flightId) {
+        async function fetchTelemetryTable(flightId, { append = false } = {}) {
+            if (activeFlightId !== flightId) {
+                activeFlightTelemetry = [];
+            }
+            let url = `/api/telemetry?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`;
+            if (append && activeFlightTelemetry.length > 0) {
+                const maxTs = Math.max(...activeFlightTelemetry.map(t => t.timestamp || 0));
+                url += `&since=${maxTs}`;
+            }
+
             try {
-                const response = await fetch(`/api/telemetry?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
+                const response = await fetch(url);
                 const points = await response.json();
                 
                 const tableBody = document.getElementById('telemetry-table-body');
-                tableBody.innerHTML = '';
+                
+                if (!append) {
+                    tableBody.innerHTML = '';
+                    activeFlightTelemetry = points;
+                } else {
+                    const existingTimestamps = new Set(activeFlightTelemetry.map(t => t.timestamp));
+                    points.forEach(p => {
+                        if (!existingTimestamps.has(p.timestamp)) {
+                            activeFlightTelemetry.push(p);
+                        }
+                    });
+                }
 
-                if (points.length === 0) {
+                if (activeFlightTelemetry.length === 0) {
                     tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #64748b;">No telemetry data.</td></tr>';
                     document.getElementById('detail-altitude').innerText = 'N/A';
                     document.getElementById('detail-speed').innerText = 'N/A';
@@ -2254,7 +2319,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     document.getElementById('detail-latitude').innerText = 'N/A';
                     document.getElementById('detail-longitude').innerText = 'N/A';
                 } else {
-                    points.forEach(point => {
+                    // Sort activeFlightTelemetry ascending by timestamp
+                    activeFlightTelemetry.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+                    tableBody.innerHTML = '';
+                    activeFlightTelemetry.forEach(point => {
                         const row = document.createElement('tr');
                         const timeStr = new Date(point.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
                         const latVal = point.latitude != null ? point.latitude.toFixed(4) : 'N/A';
@@ -2272,7 +2341,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     });
 
                     // Update drawer real-time telemetry details with the latest point
-                    const lastPoint = points[points.length - 1];
+                    const lastPoint = activeFlightTelemetry[activeFlightTelemetry.length - 1];
                     document.getElementById('detail-altitude').innerText = formatAltitude(lastPoint.altitude);
                     document.getElementById('detail-speed').innerText = formatSpeed(lastPoint.speed);
                     document.getElementById('detail-heading').innerText = formatHeading(lastPoint.heading);
@@ -2304,6 +2373,80 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             });
         }
 
+        async function fetchActiveFlightDetails() {
+            if (!activeFlightId || portalView !== 'live') return;
+            try {
+                const response = await fetch(`/api/flight?${viewQuery()}&flight_id=${encodeURIComponent(activeFlightId)}`);
+                if (response.ok) {
+                    const flightDetail = await response.json();
+                    
+                    // Update static info and raw messages (do not call showDetails to avoid reloading full alerts and telemetry)
+                    const callsign = flightDetail.callsign || 'UNKNOWN';
+                    const icao = flightDetail.icao.toUpperCase();
+                    document.getElementById('detail-callsign').innerText = callsign;
+                    document.getElementById('detail-icao').innerText = icao;
+                    document.getElementById('detail-callsign-photo').innerText = callsign;
+                    document.getElementById('detail-icao-photo').innerText = icao;
+                    document.getElementById('detail-registration').innerText = flightDetail.registration || 'Unknown';
+                    document.getElementById('detail-model').innerText = flightDetail.model || 'Unknown Model';
+                    document.getElementById('detail-type').innerText = flightDetail.aircraft_type || flightDetail.typecode || 'Unknown Type';
+                    document.getElementById('detail-owner').innerText = flightDetail.owner || 'Unknown Owner';
+                    document.getElementById('detail-country').innerText = flightDetail.country || 'Unknown';
+                    
+                    // Photo update
+                    const photoContainer = document.getElementById('detail-photo-container');
+                    const photoImg = document.getElementById('detail-photo');
+                    const photographerSpan = document.getElementById('detail-photo-photographer');
+                    const photoLink = document.getElementById('detail-photo-link');
+                    const photoUrl = typeof flightDetail.photo_url === 'string'
+                        ? flightDetail.photo_url
+                        : (flightDetail.photo_url && flightDetail.photo_url.src) || null;
+                    const drawerHeader = document.getElementById('drawer-header');
+                    const detailsDrawer = document.getElementById('details-drawer');
+                    if (photoUrl) {
+                        photoImg.src = photoUrl;
+                        photographerSpan.innerText = flightDetail.photo_photographer || 'Unknown';
+                        photoLink.href = flightDetail.photo_link || '#';
+                        photoContainer.style.display = 'block';
+                        drawerHeader.classList.add('has-photo');
+                        drawerHeader.classList.remove('no-photo');
+                        detailsDrawer.classList.add('has-photo-drawer');
+                    } else {
+                        photoImg.src = '';
+                        photoContainer.style.display = 'none';
+                        drawerHeader.classList.remove('has-photo');
+                        drawerHeader.classList.add('no-photo');
+                        detailsDrawer.classList.remove('has-photo-drawer');
+                    }
+
+                    // Render raw messages
+                    const rawList = document.getElementById('raw-messages-list');
+                    const rawMsgs = flightDetail.raw_messages || [];
+                    const currentCount = rawList.querySelectorAll('.terminal-line').length;
+                    if (rawMsgs.length !== currentCount) {
+                        rawList.innerHTML = '';
+                        if (rawMsgs.length === 0) {
+                            rawList.innerHTML = '<div class="terminal-line" style="color: #64748b;">No raw messages captured yet.</div>';
+                        } else {
+                            rawMsgs.forEach(msg => {
+                                const line = document.createElement('div');
+                                line.className = 'terminal-line';
+                                const msgTime = new Date(msg.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+                                line.innerHTML = `
+                                    <span class="terminal-time">[${msgTime}]</span>
+                                    <span class="terminal-hex">${msg.hex.toUpperCase()}</span>
+                                `;
+                                rawList.appendChild(line);
+                            });
+                            rawList.scrollTop = rawList.scrollHeight;
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to fetch active flight details", err);
+            }
+        }
+
         async function pollLiveTelemetry() {
             if (portalView !== 'live') return;
             try {
@@ -2329,8 +2472,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                 aircraft_type: null,
                                 owner: null,
                                 country: null,
-                                zone: '',
-                                level: '',
+                                zone: point.zone || '',
+                                level: point.level || '',
                                 start_time: point.timestamp,
                                 end_time: point.timestamp,
                                 latitude: point.latitude,
@@ -2349,6 +2492,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             flight.speed = point.speed;
                             flight.heading = point.heading;
                             flight.end_time = point.timestamp;
+                            flight.zone = point.zone || '';
+                            flight.level = point.level || '';
                             flight.is_live = true;
                         }
 
@@ -2366,17 +2511,36 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         if (planePaths[flightId]) {
                             planePaths[flightId].addLatLng(pos);
                         } else if (showAllPaths) {
-                            fetchAndSetPath(flightId, { isSelected });
+                            const isFiltered = getFilteredFlights().some(f => f.flight_id === flightId);
+                            if (isFiltered) {
+                                fetchAndSetPath(flightId, { isSelected });
+                            }
                         }
 
                         if (isSelected) {
                             if (followSelectedPlane) {
                                 followPlaneOnMap(point.latitude, point.longitude);
                             }
-                            fetch(`/api/flight?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`)
-                                .then(res => res.json())
-                                .then(detail => showDetails(detail));
-                            fetchTelemetryTable(flightId);
+                            
+                            // Update dynamic details directly from the live telemetry point
+                            document.getElementById('detail-altitude').innerText = formatAltitude(point.altitude);
+                            document.getElementById('detail-speed').innerText = formatSpeed(point.speed);
+                            document.getElementById('detail-heading').innerText = formatHeading(point.heading);
+                            document.getElementById('detail-latitude').innerText = point.latitude != null ? point.latitude.toFixed(5) : 'N/A';
+                            document.getElementById('detail-longitude').innerText = point.longitude != null ? point.longitude.toFixed(5) : 'N/A';
+                            
+                            const zoneLevelEl = document.getElementById('detail-zone-level');
+                            zoneLevelEl.innerText = formatZoneLevel(point.zone, point.level);
+                            const hasAlert = Boolean((point.zone || '').trim() || (point.level || '').trim());
+                            zoneLevelEl.style.color = hasAlert ? '#f59e0b' : '#94a3b8';
+                            
+                            // Incrementally fetch and append telemetry & alerts
+                            fetchTelemetryTable(flightId, { append: true });
+                            fetchFlightAlerts(flightId, { append: true }).then(alerts => {
+                                if (planePaths[flightId]) {
+                                    setEventMarkers(flightId, alerts);
+                                }
+                            });
                         }
                     }
                 });
@@ -2394,6 +2558,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         // Close drawer trigger
         document.getElementById('close-drawer-btn').addEventListener('click', () => {
+            if (flightDetailsPollTimer) {
+                clearInterval(flightDetailsPollTimer);
+                flightDetailsPollTimer = null;
+            }
             document.getElementById('details-drawer').classList.remove('open');
             activeFlightId = null;
             followSelectedPlane = false;
