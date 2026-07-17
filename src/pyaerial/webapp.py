@@ -16,6 +16,7 @@ import pymongo
 
 from pyaerial.calc.aircraft_db import AircraftDB
 from pyaerial.config import load_config
+from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 from pyaerial.store.redis_live import RedisLiveStore
 
@@ -24,7 +25,7 @@ log = logging.getLogger("pyaerial.webapp")
 _FLIGHT_STATUS_LIVE = "live"
 
 
-def _connect_stores(config_path: str) -> tuple[pymongo.MongoClient, pymongo.database.Database, RedisLiveStore]:
+def _connect_stores(config_path: str) -> tuple[Config, pymongo.MongoClient, pymongo.database.Database, RedisLiveStore]:
     config = load_config(config_path)
     client = pymongo.MongoClient(config.database.uri)
     if config.database.name:
@@ -35,7 +36,39 @@ def _connect_stores(config_path: str) -> tuple[pymongo.MongoClient, pymongo.data
         except Exception:
             db = client.get_database("pyaerial")
     live_store = RedisLiveStore(config.database.redis_uri)
-    return client, db, live_store
+    return config, client, db, live_store
+
+
+def _zones_payload(config: Config) -> dict[str, Any]:
+    zones = []
+    for name, zone in config.zones.items():
+        rules = []
+        for rule in zone.rules:
+            when: dict[str, dict[str, float]] = {}
+            for field_name, constraint in rule.when.items():
+                entry: dict[str, float] = {}
+                if constraint.minimum is not None:
+                    entry["min"] = constraint.minimum
+                if constraint.maximum is not None:
+                    entry["max"] = constraint.maximum
+                when[field_name] = entry
+            rules.append({
+                "name": rule.name,
+                "when": when,
+                "dwell_seconds": rule.dwell_seconds,
+            })
+        zones.append({
+            "name": name,
+            "coordinates": zone.coordinates,
+            "rules": rules,
+        })
+    return {
+        "home": {
+            "latitude": config.home.latitude,
+            "longitude": config.home.longitude,
+        },
+        "zones": zones,
+    }
 
 
 def _view_from_query(query: dict[str, list[str]]) -> str:
@@ -178,6 +211,10 @@ class WebAppHandler(BaseHTTPRequestHandler):
     def aircraft_db(self) -> AircraftDB | None:
         return self.server.aircraft_db
 
+    @property
+    def config(self) -> Config:
+        return self.server.config
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -198,6 +235,8 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.handle_api_live(query)
         elif path == "/api/alerts":
             self.handle_api_alerts(query)
+        elif path == "/api/zones":
+            self.handle_api_zones()
         else:
             self.send_error(404, "Not Found")
 
@@ -358,6 +397,12 @@ class WebAppHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
 
+    def handle_api_zones(self):
+        try:
+            self.send_json(_zones_payload(self.config))
+        except Exception as exc:
+            self.send_error(500, f"Configuration error: {exc}")
+
     def send_json(self, data: Any):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -369,10 +414,11 @@ class WebAppHandler(BaseHTTPRequestHandler):
 def run_webapp(config_path: str = "config.yaml", *,
                aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
                host: str = "0.0.0.0", port: int = 10090) -> None:
-    client, db, live_store = _connect_stores(config_path)
+    config, client, db, live_store = _connect_stores(config_path)
     aircraft_db = AircraftDB(aircraft_db_path) if aircraft_db_path else None
 
     server = ThreadingHTTPServer((host, port), WebAppHandler)
+    server.config = config
     server.db = db
     server.live_store = live_store
     server.aircraft_db = aircraft_db
@@ -574,11 +620,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             height: 100%;
             background-color: #1a1a1a;
         }
-        #follow-btn {
+        #follow-btn.active {
+            background-color: #1e3a5f;
+            border-color: #3b82f6;
+            color: #dbeafe;
+        }
+        #map-controls {
             position: absolute;
             top: 12px;
             left: 12px;
             z-index: 1005;
+            display: flex;
+            gap: 8px;
+        }
+        #follow-btn,
+        #zones-btn {
             padding: 8px 12px;
             border-radius: 6px;
             border: 1px solid #2d2d2d;
@@ -588,18 +644,72 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-size: 0.8rem;
             font-weight: 600;
             cursor: pointer;
-            display: none;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
             transition: all 0.15s;
         }
-        #follow-btn:hover {
+        #follow-btn {
+            display: none;
+        }
+        #follow-btn:hover,
+        #zones-btn:hover {
             background-color: #222;
             color: #fff;
         }
-        #follow-btn.active {
+        #follow-btn.active,
+        #zones-btn.active {
             background-color: #1e3a5f;
             border-color: #3b82f6;
             color: #dbeafe;
+        }
+        .zone-label {
+            background: rgba(15, 18, 24, 0.88);
+            border: 1px solid rgba(245, 158, 11, 0.45);
+            color: #fcd34d;
+            font-family: 'Outfit', system-ui, sans-serif;
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            padding: 2px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+        }
+        .zone-popup {
+            font-family: 'Outfit', system-ui, sans-serif;
+            font-size: 0.8rem;
+            color: #e2e8f0;
+        }
+        .zone-popup h4 {
+            margin: 0 0 8px 0;
+            color: #fcd34d;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-size: 0.85rem;
+        }
+        .zone-popup .rule {
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px solid #334155;
+            color: #cbd5e1;
+        }
+        .zone-popup .rule-name {
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.72rem;
+            letter-spacing: 0.04em;
+        }
+        .zone-popup .rule-name.warn { color: #fcd34d; }
+        .zone-popup .rule-name.alert { color: #fca5a5; }
+        .leaflet-popup-content-wrapper,
+        .leaflet-popup-tip {
+            background: #1a1a1a;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+        }
+        .leaflet-popup-content {
+            margin: 12px 14px;
         }
         /* Details Drawer Styling */
         #details-drawer {
@@ -911,7 +1021,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
     </div>
     <div id="map-container">
-        <button id="follow-btn" type="button" title="Follow selected aircraft">Follow</button>
+        <div id="map-controls">
+            <button id="follow-btn" type="button" title="Follow selected aircraft">Follow</button>
+            <button id="zones-btn" type="button" title="Show configured geofence zones">Zones</button>
+        </div>
         <div id="map"></div>
         
         <!-- Sliding Details Drawer -->
@@ -1041,6 +1154,98 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
+        function formatConstraint(when) {
+            return Object.entries(when).map(([field, bounds]) => {
+                const parts = [];
+                if (bounds.min != null) parts.push(`min ${bounds.min}`);
+                if (bounds.max != null) parts.push(`max ${bounds.max}`);
+                return `${field}: ${parts.join(', ')}`;
+            }).join(' · ');
+        }
+
+        function buildZonePopup(zone) {
+            const rules = (zone.rules || []).map(rule => {
+                const level = (rule.name || '').toLowerCase();
+                const levelClass = level === 'alert' ? 'alert' : (level === 'warn' ? 'warn' : '');
+                return `
+                    <div class="rule">
+                        <div class="rule-name ${levelClass}">${rule.name}</div>
+                        <div>${formatConstraint(rule.when)}</div>
+                        <div style="color:#94a3b8; margin-top:2px;">Dwell ${rule.dwell_seconds}s</div>
+                    </div>
+                `;
+            }).join('');
+            return `<div class="zone-popup"><h4>${zone.name}</h4>${rules || '<div>No rules configured.</div>'}</div>`;
+        }
+
+        function clearZoneLayers() {
+            zoneLayers.forEach(layer => map.removeLayer(layer));
+            zoneLayers = [];
+            if (homeMarker) {
+                map.removeLayer(homeMarker);
+                homeMarker = null;
+            }
+        }
+
+        function renderZones(zonesData) {
+            clearZoneLayers();
+            if (!zonesVisible) return;
+
+            const home = zonesData.home;
+            if (home && home.latitude != null && home.longitude != null) {
+                homeMarker = L.circleMarker([home.latitude, home.longitude], {
+                    radius: 6,
+                    color: '#38bdf8',
+                    fillColor: '#38bdf8',
+                    fillOpacity: 0.95,
+                    weight: 2,
+                }).addTo(map);
+                homeMarker.bindPopup('<div class="zone-popup"><h4>Home</h4><div>Receiver / reference location</div></div>');
+                zoneLayers.push(homeMarker);
+            }
+
+            (zonesData.zones || []).forEach((zone, index) => {
+                const colors = ZONE_COLORS[index % ZONE_COLORS.length];
+                const polygon = L.polygon(zone.coordinates, {
+                    color: colors.stroke,
+                    fillColor: colors.fill,
+                    fillOpacity: 0.14,
+                    weight: 2,
+                    opacity: 0.9,
+                }).addTo(map);
+                polygon.bindPopup(buildZonePopup(zone));
+
+                const center = polygon.getBounds().getCenter();
+                const label = L.marker(center, {
+                    interactive: false,
+                    icon: L.divIcon({
+                        className: 'zone-label-marker',
+                        html: `<div class="zone-label">${zone.name}</div>`,
+                        iconSize: [0, 0],
+                    }),
+                }).addTo(map);
+
+                zoneLayers.push(polygon, label);
+            });
+        }
+
+        function updateZonesButton() {
+            const btn = document.getElementById('zones-btn');
+            btn.classList.toggle('active', zonesVisible);
+            btn.innerText = zonesVisible ? 'Zones On' : 'Zones Off';
+        }
+
+        async function fetchZones() {
+            try {
+                const response = await fetch('/api/zones');
+                if (!response.ok) return;
+                const data = await response.json();
+                renderZones(data);
+            } catch (err) {
+                console.error('Failed to fetch zones', err);
+            }
+        }
+
         let planeMarkers = {}; 
         let planePaths = {};   
         let flightsData = [];
@@ -1055,6 +1260,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         let flightsPollTimer = null;
         let alertsPollTimer = null;
         let followSelectedPlane = false;
+        let zonesVisible = true;
+        let zoneLayers = [];
+        let homeMarker = null;
+        const ZONE_COLORS = [
+            { stroke: '#f59e0b', fill: '#f59e0b' },
+            { stroke: '#3b82f6', fill: '#3b82f6' },
+            { stroke: '#a855f7', fill: '#a855f7' },
+            { stroke: '#14b8a6', fill: '#14b8a6' },
+        ];
 
         function viewQuery() {
             return `view=${portalView}`;
@@ -1651,6 +1865,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             updateFollowButton();
         });
 
+        document.getElementById('zones-btn').addEventListener('click', async () => {
+            zonesVisible = !zonesVisible;
+            updateZonesButton();
+            if (zonesVisible) {
+                await fetchZones();
+            } else {
+                clearZoneLayers();
+            }
+        });
+
         // Search trigger
         document.getElementById('search-input').addEventListener('input', (e) => {
             searchQuery = e.target.value.toLowerCase();
@@ -1666,6 +1890,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         });
 
         async function init() {
+            updateZonesButton();
+            await fetchZones();
             restartPolling();
         }
 
