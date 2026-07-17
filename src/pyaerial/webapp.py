@@ -402,7 +402,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
             if level:
                 filt["level"] = level
 
-            cursor = self.db.get_collection("alerts").find(filt).sort("timestamp", -1).limit(100)
+            cursor = self.db.get_collection("alerts").find(filt).sort("timestamp", -1)
             self.send_json([_format_alert(doc) for doc in cursor])
         except Exception as exc:
             self.send_error(500, f"Database error: {exc}")
@@ -977,26 +977,71 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .sidebar-panel { display: none; flex-direction: column; flex-grow: 1; overflow: hidden; }
         .sidebar-panel.active { display: flex; }
-        .alert-item {
-            padding: 12px 20px;
-            border-bottom: 1px solid #262626;
-            cursor: pointer;
+        .alert-badge {
+            font-size: 0.65rem;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: inline-block;
         }
-        .alert-item:hover { background: #222; }
-        .alert-item.active { background: #1e2638; border-left: 3px solid #f59e0b; }
+        .alert-badge.warn {
+            background-color: rgba(245, 158, 11, 0.15);
+            color: #f59e0b;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+        .alert-badge.alert {
+            background-color: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        .alert-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid #222;
+            cursor: pointer;
+            border-left: 4px solid transparent;
+            transition: all 0.2s ease;
+        }
+        .alert-item:hover { background: #1a1e28; }
+        .alert-item.active { background: #1e2638; border-left-color: #3b82f6; }
+        .alert-item.warn { border-left-color: #f59e0b; }
+        .alert-item.alert { border-left-color: #ef4444; }
+        .alert-item.active.warn { background: #262118; border-left-color: #f59e0b; }
+        .alert-item.active.alert { background: #2b1a1a; border-left-color: #ef4444; }
         .alert-meta { display: flex; justify-content: space-between; align-items: center; }
-        .alert-level-warn { color: #fcd34d; }
-        .alert-level-alert { color: #fca5a5; }
         #alert-timeline-list { display: flex; flex-direction: column; gap: 8px; }
         .alert-timeline-item {
-            padding: 10px 12px;
-            border-left: 3px solid #334155;
-            background: #0f1218;
-            border-radius: 0 6px 6px 0;
+            padding: 12px 14px;
+            border-left: 4px solid #334155;
+            background: #11141a;
+            border-radius: 4px;
             font-size: 0.85rem;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            border: 1px solid transparent;
         }
-        .alert-timeline-item.warn { border-left-color: #f59e0b; }
-        .alert-timeline-item.alert { border-left-color: #ef4444; }
+        .alert-timeline-item:hover {
+            background: #1c212b;
+        }
+        .alert-timeline-item.warn {
+            border-left-color: #f59e0b;
+            background: rgba(245, 158, 11, 0.03);
+            border: 1px solid rgba(245, 158, 11, 0.1);
+            border-left-width: 4px;
+        }
+        .alert-timeline-item.warn:hover {
+            background: rgba(245, 158, 11, 0.07);
+        }
+        .alert-timeline-item.alert {
+            border-left-color: #ef4444;
+            background: rgba(239, 68, 68, 0.03);
+            border: 1px solid rgba(239, 68, 68, 0.1);
+            border-left-width: 4px;
+        }
+        .alert-timeline-item.alert:hover {
+            background: rgba(239, 68, 68, 0.07);
+        }
         #view-toggle {
             display: flex;
             gap: 8px;
@@ -1598,18 +1643,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             list.innerHTML = '';
             alertsData.forEach(alert => {
                 const item = document.createElement('li');
-                item.className = 'alert-item';
+                const level = (alert.level || 'event').toLowerCase();
+                item.className = `alert-item ${level}`;
                 if (alert.alert_id === activeAlertId) item.className += ' active';
                 const timeStr = new Date(alert.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-                const levelClass = (alert.level || '').toLowerCase() === 'alert' ? 'alert-level-alert' : 'alert-level-warn';
+                const badgeClass = level === 'alert' ? 'alert' : 'warn';
                 item.innerHTML = `
                     <div class="alert-meta">
-                        <span class="flight-callsign ${levelClass}">${(alert.level || 'event').toUpperCase()} · ${alert.zone || 'zone'}</span>
-                        <span class="flight-icao">${(alert.icao || '').toUpperCase()}</span>
+                        <span class="alert-badge ${badgeClass}">${(alert.level || 'event').toUpperCase()}</span>
+                        <span class="flight-icao" style="color: #64748b; font-size: 0.75rem; font-family: monospace;">${(alert.icao || '').toUpperCase()}</span>
                     </div>
-                    <div class="flight-meta-row" style="margin-top:4px;">
-                        <span class="flight-desc">${alert.callsign || 'UNKNOWN'}</span>
-                        <span class="flight-time">${timeStr}</span>
+                    <div class="flight-meta-row" style="margin-top:8px; display:flex; justify-content:space-between; align-items:center;">
+                        <span class="flight-desc" style="color:#e2e8f0; font-weight:500; font-size:0.85rem;">${alert.callsign || 'UNKNOWN'} (${alert.zone || 'zone'})</span>
+                        <span class="flight-time" style="color:#64748b; font-size:0.75rem;">${timeStr}</span>
                     </div>
                 `;
                 item.addEventListener('click', () => selectAlert(alert));
@@ -1639,13 +1685,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         function formatAlertAltitude(altitude) {
-            return (altitude != null && Number.isFinite(Number(altitude))) ? `${Math.round(Number(altitude))} m` : 'N/A';
+            if (altitude == null || !Number.isFinite(Number(altitude))) return 'N/A';
+            const m = Math.round(Number(altitude));
+            const ft = Math.round(m * 3.28084);
+            return `${m} m (${ft} ft)`;
         }
 
         async function fetchFlightAlerts(flightId) {
             const requestId = ++flightAlertsRequestId;
             const container = document.getElementById('alert-timeline-list');
-            container.innerHTML = '<div style="color:#64748b;">Loading alerts...</div>';
+            
+            // Only clear/show loading if we are switching flights
+            if (container.dataset.flightId !== flightId) {
+                container.innerHTML = '<div style="color:#64748b;">Loading alerts...</div>';
+                container.dataset.flightId = flightId;
+            }
             try {
                 const response = await fetch(`/api/alerts?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
                 if (requestId !== flightAlertsRequestId) return [];
@@ -1659,7 +1713,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
                     return [];
                 }
+                
+                // Clear container and reset dataset.flightId
                 container.innerHTML = '';
+                container.dataset.flightId = flightId;
+                
                 if (!alerts.length) {
                     container.innerHTML = '<div style="color:#64748b;">No alert events for this flight.</div>';
                     return [];
@@ -1669,9 +1727,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     const level = formatAlertLevel(alert.level).toLowerCase();
                     item.className = `alert-timeline-item ${level}`;
                     const timeStr = new Date(Number(alert.timestamp) * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+                    
+                    const badgeClass = level === 'alert' ? 'alert' : 'warn';
                     item.innerHTML = `
-                        <div><strong>${formatAlertLevel(alert.level).toUpperCase()}</strong> in ${alert.zone || 'zone'} at ${timeStr}</div>
-                        <div style="color:#94a3b8; margin-top:4px;">Alt ${formatAlertAltitude(alert.altitude)} · ETA ${formatAlertEta(alert.eta)}</div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span class="alert-badge ${badgeClass}">${formatAlertLevel(alert.level).toUpperCase()}</span>
+                            <span style="color:#64748b; font-size:0.75rem;">${timeStr}</span>
+                        </div>
+                        <div style="color:#f1f5f9; font-weight:500; margin-top:8px; font-size:0.85rem;">
+                            Entered Zone: <span style="color:#3b82f6;">${alert.zone || 'zone'}</span>
+                        </div>
+                        <div style="color:#94a3b8; margin-top:6px; font-size:0.75rem; display:flex; gap:12px;">
+                            <span><strong>Alt:</strong> ${formatAlertAltitude(alert.altitude)}</span>
+                            <span><strong>ETA:</strong> ${formatAlertEta(alert.eta)}</span>
+                        </div>
                     `;
                     item.addEventListener('click', () => selectAlert(alert));
                     container.appendChild(item);

@@ -38,7 +38,6 @@ _KEY_FLIGHT = "live:flight:{flight_id}"
 _KEY_TELEMETRY = "live:telemetry:{flight_id}"
 _KEY_ALERTS = "live:alerts:{flight_id}"
 _KEY_ALERTS_RECENT = "live:alerts:recent"
-_RECENT_ALERTS_CAP = 100
 _RECONNECT_DELAY = 2.0
 
 
@@ -141,7 +140,6 @@ class RedisLiveStore:
             pipe = self.client.pipeline()
             pipe.rpush(_KEY_ALERTS.format(flight_id=flight_id), encoded)
             pipe.lpush(_KEY_ALERTS_RECENT, encoded)
-            pipe.ltrim(_KEY_ALERTS_RECENT, 0, _RECENT_ALERTS_CAP - 1)
             pipe.execute()
         except RedisError as exc:
             log.error("Failed to record live alert for %s: %s", flight_id, exc)
@@ -237,14 +235,14 @@ class RedisLiveStore:
             if flight_id:
                 raw_alerts = self.client.lrange(_KEY_ALERTS.format(flight_id=flight_id), 0, -1)
             else:
-                raw_alerts = self.client.lrange(_KEY_ALERTS_RECENT, 0, _RECENT_ALERTS_CAP - 1)
+                raw_alerts = self.client.lrange(_KEY_ALERTS_RECENT, 0, -1)
             alerts = [json.loads(raw) for raw in raw_alerts]
             if since:
                 alerts = [alert for alert in alerts if alert.get("timestamp", 0) > since]
             if level:
                 alerts = [alert for alert in alerts if alert.get("level") == level]
             alerts.sort(key=lambda item: item.get("timestamp") or 0, reverse=True)
-            return alerts[:_RECENT_ALERTS_CAP]
+            return alerts
         except RedisError as exc:
             log.error("Failed to read live alerts: %s", exc)
             return []
