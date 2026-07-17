@@ -651,6 +651,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         #follow-btn,
         #zones-btn,
+        #paths-btn,
         .map-zoom-btn {
             padding: 8px 12px;
             border-radius: 5px;
@@ -674,12 +675,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         #follow-btn:hover,
         #zones-btn:hover,
+        #paths-btn:hover,
         .map-zoom-btn:hover {
             background-color: rgba(34, 34, 34, 0.9);
             color: #fff;
         }
         #follow-btn.active,
-        #zones-btn.active {
+        #zones-btn.active,
+        #paths-btn.active {
             background-color: #1e3a5f;
             border-color: #3b82f6;
             color: #dbeafe;
@@ -1118,6 +1121,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <div class="map-toolbar-group">
                 <button id="follow-btn" type="button" title="Follow selected aircraft">Follow</button>
                 <button id="zones-btn" type="button" title="Show configured geofence zones">Zones</button>
+                <button id="paths-btn" type="button" title="Show flight paths for all visible aircraft">Paths</button>
             </div>
             <div class="map-toolbar-divider"></div>
             <div class="map-toolbar-group">
@@ -1340,6 +1344,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             btn.innerText = zonesVisible ? 'Zones On' : 'Zones Off';
         }
 
+        function updatePathsButton() {
+            const btn = document.getElementById('paths-btn');
+            btn.classList.toggle('active', showAllPaths);
+            btn.innerText = showAllPaths ? 'Paths On' : 'Paths Off';
+        }
+
         async function fetchZones() {
             try {
                 const response = await fetch('/api/zones');
@@ -1366,6 +1376,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         let alertsPollTimer = null;
         let followSelectedPlane = false;
         let zonesVisible = true;
+        let showAllPaths = false;
         let zoneLayers = [];
         let homeMarker = null;
         const ZONE_COLORS = [
@@ -1540,6 +1551,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 }
                 renderFlightList();
                 plotAllFlights();
+                if (showAllPaths) syncPathsForFilteredFlights();
             } catch (err) {
                 console.error("Failed to fetch flights", err);
             }
@@ -1730,8 +1742,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             updateMarkerIcons();
             updateFollowButton();
             
-            // Draw Flight Path
-            drawFlightPath(flightId);
+            // Draw or refresh flight path(s)
+            await refreshFlightPaths({ fitSelected: true });
 
             // Open Drawer
             document.getElementById('details-drawer').classList.add('open');
@@ -1748,38 +1760,97 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
-        async function drawFlightPath(flightId) {
-            // Remove previous paths
+        function pathStyleForFlight(flight, isSelected) {
+            const alertLevel = (flight && flight.level || '').toLowerCase();
+            let color = '#64748b';
+            if (alertLevel === 'alert') color = '#ef4444';
+            else if (alertLevel === 'warn') color = '#f59e0b';
+            if (isSelected) color = '#3b82f6';
+            return {
+                color,
+                weight: isSelected ? 3 : 2,
+                opacity: isSelected ? 0.85 : 0.4,
+            };
+        }
+
+        function removeFlightPath(flightId) {
+            if (planePaths[flightId]) {
+                map.removeLayer(planePaths[flightId]);
+                delete planePaths[flightId];
+            }
+        }
+
+        function clearAllFlightPaths() {
             Object.values(planePaths).forEach(path => map.removeLayer(path));
             planePaths = {};
+        }
 
+        function updatePathStyles() {
+            Object.keys(planePaths).forEach(flightId => {
+                const flight = flightsData.find(f => f.flight_id === flightId);
+                planePaths[flightId].setStyle(pathStyleForFlight(flight, flightId === activeFlightId));
+            });
+        }
+
+        async function fetchAndSetPath(flightId, { isSelected = false } = {}) {
             try {
                 const response = await fetch(`/api/telemetry?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
                 const points = await response.json();
-                
-                if (points.length > 0) {
-                    const latlngs = points
-                        .filter(p => p.latitude !== undefined && p.longitude !== undefined)
-                        .map(p => [p.latitude, p.longitude]);
-                    
-                    if (latlngs.length > 0) {
-                        const flight = flightsData.find(f => f.flight_id === flightId);
-                        const alertLevel = (flight && flight.level || '').toLowerCase();
-                        const pathColor = alertLevel === 'alert' ? '#ef4444' : '#3b82f6';
-                        const path = L.polyline(latlngs, {color: pathColor, weight: 3, opacity: 0.85}).addTo(map);
-                        planePaths[flightId] = path;
-
-                        const isLive = flight && isFlightLive(flight);
-                        if (followSelectedPlane && portalView === 'live' && isLive) {
-                            const last = latlngs[latlngs.length - 1];
-                            followPlaneOnMap(last[0], last[1], { initial: true });
-                        } else {
-                            map.fitBounds(path.getBounds(), {padding: [50, 50]});
-                        }
-                    }
+                const latlngs = points
+                    .filter(p => p.latitude !== undefined && p.longitude !== undefined)
+                    .map(p => [p.latitude, p.longitude]);
+                if (latlngs.length === 0) {
+                    removeFlightPath(flightId);
+                    return null;
                 }
+                const flight = flightsData.find(f => f.flight_id === flightId);
+                const style = pathStyleForFlight(flight, isSelected);
+                if (planePaths[flightId]) {
+                    planePaths[flightId].setLatLngs(latlngs);
+                    planePaths[flightId].setStyle(style);
+                } else {
+                    planePaths[flightId] = L.polyline(latlngs, style).addTo(map);
+                }
+                return planePaths[flightId];
             } catch (err) {
-                console.error("Failed to fetch flight path telemetry", err);
+                console.error('Failed to fetch flight path', flightId, err);
+                return null;
+            }
+        }
+
+        async function syncPathsForFilteredFlights() {
+            const filtered = getFilteredFlights();
+            const visibleIds = new Set(filtered.map(f => f.flight_id));
+            Object.keys(planePaths).forEach(id => {
+                if (!visibleIds.has(id)) removeFlightPath(id);
+            });
+            const missing = filtered.filter(f => !planePaths[f.flight_id]);
+            await Promise.all(missing.map(f =>
+                fetchAndSetPath(f.flight_id, { isSelected: f.flight_id === activeFlightId })
+            ));
+            updatePathStyles();
+        }
+
+        async function refreshFlightPaths({ fitSelected = false } = {}) {
+            if (showAllPaths) {
+                await syncPathsForFilteredFlights();
+            } else if (activeFlightId) {
+                clearAllFlightPaths();
+                await fetchAndSetPath(activeFlightId, { isSelected: true });
+            } else {
+                clearAllFlightPaths();
+            }
+
+            if (!fitSelected || !activeFlightId || !planePaths[activeFlightId]) return;
+
+            const flight = flightsData.find(f => f.flight_id === activeFlightId);
+            const isLive = flight && isFlightLive(flight);
+            const latlngs = planePaths[activeFlightId].getLatLngs();
+            const last = latlngs[latlngs.length - 1];
+            if (followSelectedPlane && portalView === 'live' && isLive) {
+                followPlaneOnMap(last.lat, last.lng, { initial: true });
+            } else {
+                map.fitBounds(planePaths[activeFlightId].getBounds(), { padding: [50, 50] });
             }
         }
 
@@ -1965,14 +2036,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             planeMarkers[flightId] = marker;
                         }
 
+                        if (planePaths[flightId]) {
+                            planePaths[flightId].addLatLng(pos);
+                        } else if (showAllPaths) {
+                            fetchAndSetPath(flightId, { isSelected });
+                        }
+
                         if (isSelected) {
-                            if (planePaths[flightId]) {
-                                planePaths[flightId].addLatLng(pos);
-                            }
                             if (followSelectedPlane) {
                                 followPlaneOnMap(point.latitude, point.longitude);
                             }
-                            // Refresh detail drawer live
                             fetch(`/api/flight?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`)
                                 .then(res => res.json())
                                 .then(detail => showDetails(detail));
@@ -1999,8 +2072,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             updateFollowButton();
             renderFlightList();
             updateMarkerIcons();
-            Object.values(planePaths).forEach(path => map.removeLayer(path));
-            planePaths = {};
+            refreshFlightPaths();
         });
 
         document.getElementById('follow-btn').addEventListener('click', () => {
@@ -2023,6 +2095,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         });
 
+        document.getElementById('paths-btn').addEventListener('click', async () => {
+            showAllPaths = !showAllPaths;
+            updatePathsButton();
+            await refreshFlightPaths({ fitSelected: !!activeFlightId });
+        });
+
         document.getElementById('zoom-in-btn').addEventListener('click', () => map.zoomIn());
         document.getElementById('zoom-out-btn').addEventListener('click', () => map.zoomOut());
 
@@ -2031,6 +2109,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             searchQuery = e.target.value.toLowerCase();
             renderFlightList();
             plotAllFlights();
+            if (showAllPaths) syncPathsForFilteredFlights();
         });
 
         // Warning filter trigger
@@ -2038,10 +2117,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             warningFilter = e.target.value;
             renderFlightList();
             plotAllFlights();
+            if (showAllPaths) syncPathsForFilteredFlights();
         });
 
         async function init() {
             updateZonesButton();
+            updatePathsButton();
             await fetchZones();
             restartPolling();
         }
