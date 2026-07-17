@@ -127,6 +127,8 @@ export function PortalApp() {
   const flightDetailsPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeFlightIdRef = useRef<string | null>(null);
   const portalViewRef = useRef<PortalView>('live');
+  const showAllPathsRef = useRef(showAllPaths);
+  const flightAlertsRef = useRef(flightAlerts);
 
   useEffect(() => {
     activeFlightIdRef.current = activeFlightId;
@@ -134,6 +136,12 @@ export function PortalApp() {
   useEffect(() => {
     portalViewRef.current = portalView;
   }, [portalView]);
+  useEffect(() => {
+    showAllPathsRef.current = showAllPaths;
+  }, [showAllPaths]);
+  useEffect(() => {
+    flightAlertsRef.current = flightAlerts;
+  }, [flightAlerts]);
 
   const filteredFlights = useMemo(() => {
     const q = searchQuery.toLowerCase();
@@ -232,8 +240,9 @@ export function PortalApp() {
 
   const loadFlightAlerts = useCallback(async (flightId: string, view: PortalView, append = false) => {
     let since = 0;
-    if (append && flightAlerts.length > 0) {
-      since = Math.max(...flightAlerts.map((a) => a.timestamp || 0));
+    const currentAlerts = flightAlertsRef.current;
+    if (append && currentAlerts.length > 0) {
+      since = Math.max(...currentAlerts.map((a) => a.timestamp || 0));
     }
     const alerts = await api.fetchAlerts(view, { flightId, since: append ? since : 0 });
     if (append) {
@@ -245,7 +254,7 @@ export function PortalApp() {
       setFlightAlerts(alerts);
     }
     return alerts;
-  }, [flightAlerts]);
+  }, []);
 
   const loadFlightTelemetry = useCallback(
     async (flightId: string, view: PortalView, append = false) => {
@@ -451,7 +460,7 @@ export function PortalApp() {
               loadFlightAlerts(flightId, 'live', true);
             }
           }
-          if (showAllPaths) {
+          if (showAllPathsRef.current) {
             message.telemetry.forEach((point) => {
               if (!point.flight_id) return;
               setPathCoords((prev) => {
@@ -472,7 +481,7 @@ export function PortalApp() {
         }
       },
     });
-  }, [portalView, showAllPaths, loadFlightAlerts]);
+  }, [portalView, loadFlightAlerts]);
 
   useEffect(() => {
     if (!activeFlightId) return;
@@ -500,6 +509,8 @@ export function PortalApp() {
     },
     [portalView, fetchHistoryAlerts],
   );
+
+  const disableFollow = useCallback(() => setFollowSelectedPlane(false), []);
 
   return (
     <>
@@ -533,7 +544,7 @@ export function PortalApp() {
         pathCoords={pathCoords}
         pathAlerts={pathAlerts}
         onSelectFlight={selectFlight}
-        onFollowDisabled={() => setFollowSelectedPlane(false)}
+        onFollowDisabled={disableFollow}
         onToggleFollow={() => {
           if (!activeFlightId) return;
           if (followSelectedPlane) {

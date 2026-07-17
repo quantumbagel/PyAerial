@@ -98,6 +98,11 @@ export function MapView({
   const planePaths = useRef<Record<string, L.Polyline>>({});
   const planeEventMarkers = useRef<Record<string, L.CircleMarker[]>>({});
   const zoneLayers = useRef<L.Layer[]>([]);
+  const onFollowDisabledRef = useRef(onFollowDisabled);
+  const onSelectFlightRef = useRef(onSelectFlight);
+
+  onFollowDisabledRef.current = onFollowDisabled;
+  onSelectFlightRef.current = onSelectFlight;
 
   useEffect(() => {
     if (!containerRef.current || mapInstance.current) return;
@@ -105,7 +110,7 @@ export function MapView({
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; OpenStreetMap &copy; CARTO',
     }).addTo(map);
-    map.on('dragstart', () => onFollowDisabled());
+    map.on('dragstart', () => onFollowDisabledRef.current());
     mapInstance.current = map;
     mapRef.current = {
       map,
@@ -117,12 +122,21 @@ export function MapView({
         map.setView([lat, lon], Math.max(map.getZoom(), 14));
       },
     };
+    const resizeObserver = new ResizeObserver(() => {
+      map.invalidateSize();
+    });
+    resizeObserver.observe(containerRef.current);
     return () => {
+      resizeObserver.disconnect();
       map.remove();
       mapInstance.current = null;
+      planeMarkers.current = {};
+      planePaths.current = {};
+      planeEventMarkers.current = {};
+      zoneLayers.current = [];
       mapRef.current = { map: null, fitPathBounds: () => {}, panToAlert: () => {} };
     };
-  }, [mapRef, onFollowDisabled]);
+  }, [mapRef]);
 
   useEffect(() => {
     const map = mapInstance.current;
@@ -194,14 +208,14 @@ export function MapView({
         const marker = L.marker(pos, {
           icon: createPlaneIcon(flight.heading, isSelected, isLive, flight.level),
         }).addTo(map);
-        marker.on('click', () => onSelectFlight(flight.flight_id));
+        marker.on('click', () => onSelectFlightRef.current(flight.flight_id));
         planeMarkers.current[flight.flight_id] = marker;
       }
       if (isSelected && followSelectedPlane) {
         map.panTo(pos, { animate: true, duration: 0.5 });
       }
     });
-  }, [filteredFlights, activeFlightId, followSelectedPlane, onSelectFlight]);
+  }, [filteredFlights, activeFlightId, followSelectedPlane]);
 
   useEffect(() => {
     const map = mapInstance.current;
@@ -235,7 +249,7 @@ export function MapView({
         planePaths.current[flightId].setStyle(style);
       } else {
         const path = L.polyline(latlngs, style).addTo(map);
-        path.on('click', () => onSelectFlight(flightId));
+        path.on('click', () => onSelectFlightRef.current(flightId));
         planePaths.current[flightId] = path;
       }
 
@@ -256,12 +270,12 @@ export function MapView({
           fillOpacity: 0.95,
         }).addTo(map);
         marker.bindTooltip(`${(alert.level || 'event').toUpperCase()} · ${alert.zone || 'zone'}`);
-        marker.on('click', () => onSelectFlight(flightId));
+        marker.on('click', () => onSelectFlightRef.current(flightId));
         markers.push(marker);
       });
       if (markers.length) planeEventMarkers.current[flightId] = markers;
     });
-  }, [pathCoords, pathAlerts, showAllPaths, filteredFlights, activeFlightId, flights, onSelectFlight]);
+  }, [pathCoords, pathAlerts, showAllPaths, filteredFlights, activeFlightId, flights]);
 
   return (
     <div id="map-container">
