@@ -533,16 +533,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-bottom: 1px solid #2d2d2d;
             font-size: 0.8rem;
             display: flex;
-            justify-content: space-between;
+            gap: 8px;
         }
         .stat-card {
+            flex: 1;
             background-color: #222;
-            padding: 4px 8px;
-            border-radius: 4px;
+            padding: 6px 10px;
+            border-radius: 6px;
             border: 1px solid #2d2d2d;
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 6px;
+            min-width: 0;
         }
         #flight-list {
             flex-grow: 1;
@@ -560,8 +563,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background-color: #222;
         }
         .flight-item.active {
-            background-color: #1e2638;
-            border-left: 3px solid #3b82f6;
+            background-color: #1a2744;
+            border-left: 4px solid #3b82f6;
+            box-shadow: inset 4px 0 14px rgba(59, 130, 246, 0.12);
         }
         .flight-meta-row {
             display: flex;
@@ -620,39 +624,58 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             height: 100%;
             background-color: #1a1a1a;
         }
-        #follow-btn.active {
-            background-color: #1e3a5f;
-            border-color: #3b82f6;
-            color: #dbeafe;
-        }
         #map-controls {
             position: absolute;
             top: 12px;
             left: 12px;
             z-index: 1005;
             display: flex;
-            gap: 8px;
+            align-items: stretch;
+            gap: 0;
+            background: rgba(15, 18, 24, 0.9);
+            border: 1px solid rgba(51, 65, 85, 0.8);
+            border-radius: 8px;
+            padding: 4px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(8px);
+        }
+        .map-toolbar-group {
+            display: flex;
+            gap: 2px;
+        }
+        .map-toolbar-divider {
+            width: 1px;
+            background: rgba(51, 65, 85, 0.9);
+            margin: 4px 4px;
+            align-self: stretch;
         }
         #follow-btn,
-        #zones-btn {
+        #zones-btn,
+        .map-zoom-btn {
             padding: 8px 12px;
-            border-radius: 6px;
-            border: 1px solid #2d2d2d;
-            background-color: #1a1a1a;
+            border-radius: 5px;
+            border: 1px solid transparent;
+            background-color: transparent;
             color: #94a3b8;
             font-family: inherit;
             font-size: 0.8rem;
             font-weight: 600;
             cursor: pointer;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
             transition: all 0.15s;
+            line-height: 1;
+        }
+        .map-zoom-btn {
+            padding: 8px 14px;
+            font-size: 1.1rem;
+            font-weight: 500;
         }
         #follow-btn {
             display: none;
         }
         #follow-btn:hover,
-        #zones-btn:hover {
-            background-color: #222;
+        #zones-btn:hover,
+        .map-zoom-btn:hover {
+            background-color: rgba(34, 34, 34, 0.9);
             color: #fff;
         }
         #follow-btn.active,
@@ -777,16 +800,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .details-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
+            grid-template-columns: 130px 1fr;
+            gap: 6px 20px;
             font-size: 0.75rem;
+            max-width: 340px;
         }
         .details-label {
             color: #888;
         }
         .details-value {
             color: #fff;
-            text-align: right;
+            text-align: left;
             font-weight: 500;
         }
         .drawer-tabs {
@@ -830,7 +854,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 4px;
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.75rem;
-            padding: 10px;
+            padding: 6px;
             flex-grow: 1;
             min-height: 220px;
             max-height: 340px;
@@ -839,8 +863,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .terminal-line {
             display: flex;
-            margin-bottom: 4px;
-            line-height: 1.4;
+            padding: 5px 8px;
+            margin-bottom: 1px;
+            line-height: 1.5;
+            border-radius: 3px;
+        }
+        .terminal-line:nth-child(odd) {
+            background-color: rgba(255, 255, 255, 0.03);
+        }
+        .terminal-line:nth-child(even) {
+            background-color: rgba(0, 0, 0, 0.15);
         }
         .terminal-time {
             color: #555;
@@ -972,6 +1004,67 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-color: #3b82f6;
             color: #dbeafe;
         }
+        #detail-photo-container {
+            display: none;
+            padding: 0;
+            border-bottom: 1px solid #2d2d2d;
+            position: relative;
+            background: #0c0f16;
+            overflow: hidden;
+            height: 180px;
+        }
+        .photo-gradient-top {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 80px;
+            background: linear-gradient(to bottom, rgba(0, 0, 0, 0.75) 0%, rgba(0, 0, 0, 0.35) 60%, transparent 100%);
+            z-index: 4;
+            pointer-events: none;
+        }
+        .photo-title-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 14px 16px 10px;
+            z-index: 5;
+        }
+        .photo-title-overlay h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+        }
+        .photo-gradient-bottom {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 10px 16px;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
+            font-size: 0.65rem;
+            color: #94a3b8;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 5;
+        }
+        #drawer-header.no-photo h2 {
+            margin-top: 6px;
+        }
+        #drawer-header.has-photo {
+            padding: 12px 20px;
+        }
+        #drawer-header.has-photo h2,
+        #drawer-header.has-photo .drawer-header-label {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -1022,23 +1115,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
     <div id="map-container">
         <div id="map-controls">
-            <button id="follow-btn" type="button" title="Follow selected aircraft">Follow</button>
-            <button id="zones-btn" type="button" title="Show configured geofence zones">Zones</button>
+            <div class="map-toolbar-group">
+                <button id="follow-btn" type="button" title="Follow selected aircraft">Follow</button>
+                <button id="zones-btn" type="button" title="Show configured geofence zones">Zones</button>
+            </div>
+            <div class="map-toolbar-divider"></div>
+            <div class="map-toolbar-group">
+                <button id="zoom-in-btn" class="map-zoom-btn" type="button" title="Zoom in">+</button>
+                <button id="zoom-out-btn" class="map-zoom-btn" type="button" title="Zoom out">−</button>
+            </div>
         </div>
         <div id="map"></div>
         
         <!-- Sliding Details Drawer -->
         <div id="details-drawer">
-            <div id="drawer-header">
+            <div id="drawer-header" class="no-photo">
                 <button id="close-drawer-btn" class="close-btn">&times;</button>
-                <div class="flight-desc" style="text-transform: uppercase; letter-spacing: 0.1em; color: #94a3b8; font-weight: 600; font-size: 0.75rem;">Selected Aircraft</div>
+                <div class="flight-desc drawer-header-label" style="text-transform: uppercase; letter-spacing: 0.1em; color: #94a3b8; font-weight: 600; font-size: 0.75rem;">Selected Aircraft</div>
                 <h2><span id="detail-callsign">N/A</span> <span id="detail-icao" class="flight-icao">N/A</span></h2>
             </div>
             <div class="drawer-content">
                 <!-- Aircraft Photo Card -->
-                <div id="detail-photo-container" style="display: none; padding: 0; border-bottom: 1px solid #2d2d2d; position: relative; background: #0c0f16; overflow: hidden; height: 180px;">
+                <div id="detail-photo-container">
                     <img id="detail-photo" src="" style="width: 100%; height: 100%; object-fit: cover; opacity: 0.85;" alt="Aircraft Photo">
-                    <div style="position: absolute; bottom: 0; left: 0; right: 0; padding: 10px 16px; background: linear-gradient(transparent, rgba(0,0,0,0.9)); font-size: 0.65rem; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; z-index: 5;">
+                    <div class="photo-gradient-top"></div>
+                    <div class="photo-title-overlay">
+                        <div class="flight-desc" style="text-transform: uppercase; letter-spacing: 0.1em; color: #cbd5e1; font-weight: 600; font-size: 0.75rem;">Selected Aircraft</div>
+                        <h2><span id="detail-callsign-photo">N/A</span> <span id="detail-icao-photo" class="flight-icao">N/A</span></h2>
+                    </div>
+                    <div class="photo-gradient-bottom">
                         <span>Photo by <span id="detail-photo-photographer" style="color: #fff; font-weight: 500;">Unknown</span></span>
                         <a id="detail-photo-link" href="#" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">View on Planespotters.net</a>
                     </div>
@@ -1112,7 +1217,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        const map = L.map('map').setView([36.681, -78.875], 8);
+        const map = L.map('map', { zoomControl: false }).setView([36.681, -78.875], 8);
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; OpenStreetMap &copy; CARTO'
@@ -1338,14 +1443,43 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             return !!flight.is_live;
         }
 
-        function createPlaneIcon(heading, isSelected, isLive) {
-            const fill = isSelected ? '#f43f5e' : (isLive ? '#10b981' : '#64748b');
-            const stroke = isSelected ? '#9f1239' : (isLive ? '#064e3b' : '#334155');
-            const size = isSelected ? 30 : 24;
-            const opacity = isLive ? 1.0 : 0.65;
-            
+        function createPlaneIcon(heading, isSelected, isLive, level) {
+            const alertLevel = (level || '').toLowerCase();
+            let fill, stroke, size, opacity, extraStyle = '';
+
+            if (alertLevel === 'alert') {
+                fill = '#ef4444';
+                stroke = '#7f1d1d';
+                size = isSelected ? 30 : 28;
+                opacity = 1.0;
+                if (isSelected) {
+                    extraStyle = 'filter: drop-shadow(0 0 4px #ef4444) drop-shadow(0 0 8px rgba(239, 68, 68, 0.5));';
+                }
+            } else if (isSelected) {
+                fill = '#ffffff';
+                stroke = '#3b82f6';
+                size = 30;
+                opacity = 1.0;
+                extraStyle = 'filter: drop-shadow(0 0 4px #3b82f6) drop-shadow(0 0 10px rgba(59, 130, 246, 0.55));';
+            } else if (alertLevel === 'warn') {
+                fill = '#f59e0b';
+                stroke = '#78350f';
+                size = 26;
+                opacity = 1.0;
+            } else if (isLive) {
+                fill = '#10b981';
+                stroke = '#064e3b';
+                size = 24;
+                opacity = 1.0;
+            } else {
+                fill = '#64748b';
+                stroke = '#334155';
+                size = 24;
+                opacity = 0.65;
+            }
+
             const svg = `
-                <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${fill}" stroke="${stroke}" stroke-width="1" xmlns="http://www.w3.org/2000/svg" style="transform: rotate(${heading || 0}deg); transform-origin: center; opacity: ${opacity}; transition: transform 0.2s;">
+                <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${fill}" stroke="${stroke}" stroke-width="1" xmlns="http://www.w3.org/2000/svg" style="transform: rotate(${heading || 0}deg); transform-origin: center; opacity: ${opacity}; transition: transform 0.2s; ${extraStyle}">
                     <path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L14 19v-5.5L21 16z"/>
                 </svg>
             `;
@@ -1562,10 +1696,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                     if (planeMarkers[flight.flight_id]) {
                         planeMarkers[flight.flight_id].setLatLng(pos);
-                        planeMarkers[flight.flight_id].setIcon(createPlaneIcon(flight.heading, isSelected, isLive));
+                        planeMarkers[flight.flight_id].setIcon(createPlaneIcon(flight.heading, isSelected, isLive, flight.level));
                     } else {
                         const marker = L.marker(pos, {
-                            icon: createPlaneIcon(flight.heading, isSelected, isLive)
+                            icon: createPlaneIcon(flight.heading, isSelected, isLive, flight.level)
                         }).addTo(map);
                         marker.on('click', () => selectFlight(flight.flight_id));
                         planeMarkers[flight.flight_id] = marker;
@@ -1584,7 +1718,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 if (marker) {
                     const isSelected = flight.flight_id === activeFlightId;
                     const isLive = isFlightLive(flight);
-                    marker.setIcon(createPlaneIcon(flight.heading, isSelected, isLive));
+                    marker.setIcon(createPlaneIcon(flight.heading, isSelected, isLive, flight.level));
                 }
             });
         }
@@ -1629,10 +1763,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         .map(p => [p.latitude, p.longitude]);
                     
                     if (latlngs.length > 0) {
-                        const path = L.polyline(latlngs, {color: '#f43f5e', weight: 3, opacity: 0.85}).addTo(map);
+                        const flight = flightsData.find(f => f.flight_id === flightId);
+                        const alertLevel = (flight && flight.level || '').toLowerCase();
+                        const pathColor = alertLevel === 'alert' ? '#ef4444' : '#3b82f6';
+                        const path = L.polyline(latlngs, {color: pathColor, weight: 3, opacity: 0.85}).addTo(map);
                         planePaths[flightId] = path;
 
-                        const flight = flightsData.find(f => f.flight_id === flightId);
                         const isLive = flight && isFlightLive(flight);
                         if (followSelectedPlane && portalView === 'live' && isLive) {
                             const last = latlngs[latlngs.length - 1];
@@ -1648,8 +1784,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         function showDetails(flightDetail) {
-            document.getElementById('detail-callsign').innerText = flightDetail.callsign || 'UNKNOWN';
-            document.getElementById('detail-icao').innerText = flightDetail.icao.toUpperCase();
+            const callsign = flightDetail.callsign || 'UNKNOWN';
+            const icao = flightDetail.icao.toUpperCase();
+            document.getElementById('detail-callsign').innerText = callsign;
+            document.getElementById('detail-icao').innerText = icao;
+            document.getElementById('detail-callsign-photo').innerText = callsign;
+            document.getElementById('detail-icao-photo').innerText = icao;
             document.getElementById('detail-registration').innerText = flightDetail.registration || 'Unknown';
             document.getElementById('detail-model').innerText = flightDetail.model || 'Unknown Model';
             document.getElementById('detail-type').innerText = flightDetail.aircraft_type || flightDetail.typecode || 'Unknown Type';
@@ -1666,14 +1806,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const photoUrl = typeof flightDetail.photo_url === 'string'
                 ? flightDetail.photo_url
                 : (flightDetail.photo_url && flightDetail.photo_url.src) || null;
+            const drawerHeader = document.getElementById('drawer-header');
             if (photoUrl) {
                 photoImg.src = photoUrl;
                 photographerSpan.innerText = flightDetail.photo_photographer || 'Unknown';
                 photoLink.href = flightDetail.photo_link || '#';
                 photoContainer.style.display = 'block';
+                drawerHeader.classList.add('has-photo');
+                drawerHeader.classList.remove('no-photo');
             } else {
                 photoImg.src = '';
                 photoContainer.style.display = 'none';
+                drawerHeader.classList.remove('has-photo');
+                drawerHeader.classList.add('no-photo');
             }
 
             // Render raw messages
@@ -1811,10 +1956,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                         if (planeMarkers[flightId]) {
                             planeMarkers[flightId].setLatLng(pos);
-                            planeMarkers[flightId].setIcon(createPlaneIcon(point.heading, isSelected, true));
+                            planeMarkers[flightId].setIcon(createPlaneIcon(point.heading, isSelected, true, flight.level));
                         } else {
                             const marker = L.marker(pos, {
-                                icon: createPlaneIcon(point.heading, isSelected, true)
+                                icon: createPlaneIcon(point.heading, isSelected, true, flight.level)
                             }).addTo(map);
                             marker.on('click', () => selectFlight(flightId));
                             planeMarkers[flightId] = marker;
@@ -1877,6 +2022,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 clearZoneLayers();
             }
         });
+
+        document.getElementById('zoom-in-btn').addEventListener('click', () => map.zoomIn());
+        document.getElementById('zoom-out-btn').addEventListener('click', () => map.zoomOut());
 
         // Search trigger
         document.getElementById('search-input').addEventListener('input', (e) => {
