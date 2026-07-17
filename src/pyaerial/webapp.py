@@ -574,6 +574,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             height: 100%;
             background-color: #1a1a1a;
         }
+        #follow-btn {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 1005;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #2d2d2d;
+            background-color: #1a1a1a;
+            color: #94a3b8;
+            font-family: inherit;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: none;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+            transition: all 0.15s;
+        }
+        #follow-btn:hover {
+            background-color: #222;
+            color: #fff;
+        }
+        #follow-btn.active {
+            background-color: #1e3a5f;
+            border-color: #3b82f6;
+            color: #dbeafe;
+        }
         /* Details Drawer Styling */
         #details-drawer {
             position: absolute;
@@ -884,6 +911,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
     </div>
     <div id="map-container">
+        <button id="follow-btn" type="button" title="Follow selected aircraft">Follow</button>
         <div id="map"></div>
         
         <!-- Sliding Details Drawer -->
@@ -977,6 +1005,42 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             attribution: '&copy; OpenStreetMap &copy; CARTO'
         }).addTo(map);
 
+        map.on('dragstart', () => {
+            if (followSelectedPlane) {
+                followSelectedPlane = false;
+                updateFollowButton();
+            }
+        });
+
+        function updateFollowButton() {
+            const btn = document.getElementById('follow-btn');
+            if (!activeFlightId) {
+                btn.style.display = 'none';
+                return;
+            }
+            btn.style.display = 'block';
+            btn.classList.toggle('active', followSelectedPlane);
+            btn.innerText = followSelectedPlane ? 'Following' : 'Follow';
+        }
+
+        function followPlaneOnMap(lat, lon, { initial = false } = {}) {
+            if (lat == null || lon == null) return;
+            if (initial) {
+                map.setView([lat, lon], Math.max(map.getZoom(), 11));
+            } else {
+                map.panTo([lat, lon], { animate: true, duration: 0.5 });
+            }
+        }
+
+        function enableFollowPlane() {
+            followSelectedPlane = true;
+            updateFollowButton();
+            const flight = flightsData.find(f => f.flight_id === activeFlightId);
+            if (flight && flight.latitude != null && flight.longitude != null) {
+                followPlaneOnMap(flight.latitude, flight.longitude, { initial: true });
+            }
+        }
+
         let planeMarkers = {}; 
         let planePaths = {};   
         let flightsData = [];
@@ -990,6 +1054,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         let livePollTimer = null;
         let flightsPollTimer = null;
         let alertsPollTimer = null;
+        let followSelectedPlane = false;
 
         function viewQuery() {
             return `view=${portalView}`;
@@ -1005,6 +1070,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
             activeFlightId = null;
             activeAlertId = null;
+            followSelectedPlane = false;
             lastSeenTimestamp = 0;
             flightsData = [];
             alertsData = [];
@@ -1013,6 +1079,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             planeMarkers = {};
             planePaths = {};
             document.getElementById('details-drawer').classList.remove('open');
+            updateFollowButton();
             renderFlightList();
             renderAlertList();
             restartPolling();
@@ -1289,6 +1356,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         marker.on('click', () => selectFlight(flight.flight_id));
                         planeMarkers[flight.flight_id] = marker;
                     }
+
+                    if (isSelected && followSelectedPlane) {
+                        followPlaneOnMap(flight.latitude, flight.longitude);
+                    }
                 }
             });
         }
@@ -1306,8 +1377,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         async function selectFlight(flightId) {
             activeFlightId = flightId;
+            followSelectedPlane = true;
             renderFlightList();
             updateMarkerIcons();
+            updateFollowButton();
             
             // Draw Flight Path
             drawFlightPath(flightId);
@@ -1344,9 +1417,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     if (latlngs.length > 0) {
                         const path = L.polyline(latlngs, {color: '#f43f5e', weight: 3, opacity: 0.85}).addTo(map);
                         planePaths[flightId] = path;
-                        
-                        // Center map on path
-                        map.fitBounds(path.getBounds(), {padding: [50, 50]});
+
+                        const flight = flightsData.find(f => f.flight_id === flightId);
+                        const isLive = flight && isFlightLive(flight);
+                        if (followSelectedPlane && portalView === 'live' && isLive) {
+                            const last = latlngs[latlngs.length - 1];
+                            followPlaneOnMap(last[0], last[1], { initial: true });
+                        } else {
+                            map.fitBounds(path.getBounds(), {padding: [50, 50]});
+                        }
                     }
                 }
             } catch (err) {
@@ -1528,6 +1607,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             if (planePaths[flightId]) {
                                 planePaths[flightId].addLatLng(pos);
                             }
+                            if (followSelectedPlane) {
+                                followPlaneOnMap(point.latitude, point.longitude);
+                            }
                             // Refresh detail drawer live
                             fetch(`/api/flight?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`)
                                 .then(res => res.json())
@@ -1551,10 +1633,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         document.getElementById('close-drawer-btn').addEventListener('click', () => {
             document.getElementById('details-drawer').classList.remove('open');
             activeFlightId = null;
+            followSelectedPlane = false;
+            updateFollowButton();
             renderFlightList();
             updateMarkerIcons();
             Object.values(planePaths).forEach(path => map.removeLayer(path));
             planePaths = {};
+        });
+
+        document.getElementById('follow-btn').addEventListener('click', () => {
+            if (!activeFlightId) return;
+            if (followSelectedPlane) {
+                followSelectedPlane = false;
+            } else {
+                enableFollowPlane();
+            }
+            updateFollowButton();
         });
 
         // Search trigger
