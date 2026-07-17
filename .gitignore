@@ -25,4 +25,3 @@ data/
 *.sqlite
 *.sqlite3
 aircraft.db
-database.csv
