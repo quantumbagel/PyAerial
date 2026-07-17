@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -114,6 +115,19 @@ def _telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
             point["longitude"] = coords[0]
             point["latitude"] = coords[1]
     return point
+
+
+def _sanitize_for_json(data: Any) -> Any:
+    """Convert non-finite floats to null so responses are valid JSON."""
+    if isinstance(data, float):
+        return data if math.isfinite(data) else None
+    if isinstance(data, dict):
+        return {key: _sanitize_for_json(value) for key, value in data.items()}
+    if isinstance(data, list):
+        return [_sanitize_for_json(value) for value in data]
+    if isinstance(data, tuple):
+        return [_sanitize_for_json(value) for value in data]
+    return data
 
 
 def _alert_coords(doc: dict[str, Any]) -> tuple[Any, Any]:
@@ -404,7 +418,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode("utf-8"))
+        self.wfile.write(json.dumps(_sanitize_for_json(data)).encode("utf-8"))
 
 
 def run_webapp(config_path: str = "config.yaml", *,
@@ -1614,16 +1628,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
+        let flightAlertsRequestId = 0;
+
+        function formatAlertLevel(level) {
+            return String(level || 'event');
+        }
+
+        function formatAlertEta(eta) {
+            return (eta != null && Number.isFinite(Number(eta))) ? `${Math.round(Number(eta))} s` : 'N/A';
+        }
+
+        function formatAlertAltitude(altitude) {
+            return (altitude != null && Number.isFinite(Number(altitude))) ? `${Math.round(Number(altitude))} m` : 'N/A';
+        }
+
         async function fetchFlightAlerts(flightId) {
+            const requestId = ++flightAlertsRequestId;
             const container = document.getElementById('alert-timeline-list');
             container.innerHTML = '<div style="color:#64748b;">Loading alerts...</div>';
             try {
                 const response = await fetch(`/api/alerts?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
+                if (requestId !== flightAlertsRequestId) return [];
                 if (!response.ok) {
                     container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
                     return [];
                 }
                 const alerts = await response.json();
+                if (requestId !== flightAlertsRequestId) return [];
                 if (!Array.isArray(alerts)) {
                     container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
                     return [];
@@ -1635,18 +1666,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 }
                 alerts.slice().reverse().forEach(alert => {
                     const item = document.createElement('div');
-                    const level = (alert.level || '').toLowerCase();
+                    const level = formatAlertLevel(alert.level).toLowerCase();
                     item.className = `alert-timeline-item ${level}`;
-                    const timeStr = new Date(alert.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+                    const timeStr = new Date(Number(alert.timestamp) * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
                     item.innerHTML = `
-                        <div><strong>${(alert.level || 'event').toUpperCase()}</strong> in ${alert.zone || 'zone'} at ${timeStr}</div>
-                        <div style="color:#94a3b8; margin-top:4px;">Alt ${alert.altitude != null ? Math.round(alert.altitude) + ' m' : 'N/A'} · ETA ${alert.eta != null ? Math.round(alert.eta) + ' s' : 'N/A'}</div>
+                        <div><strong>${formatAlertLevel(alert.level).toUpperCase()}</strong> in ${alert.zone || 'zone'} at ${timeStr}</div>
+                        <div style="color:#94a3b8; margin-top:4px;">Alt ${formatAlertAltitude(alert.altitude)} · ETA ${formatAlertEta(alert.eta)}</div>
                     `;
                     item.addEventListener('click', () => selectAlert(alert));
                     container.appendChild(item);
                 });
                 return alerts;
             } catch (err) {
+                if (requestId !== flightAlertsRequestId) return [];
                 console.error('Failed to load flight alerts', err);
                 container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
                 return [];
