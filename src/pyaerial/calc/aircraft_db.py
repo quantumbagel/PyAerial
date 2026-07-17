@@ -44,6 +44,15 @@ def _photo_thumbnail_url(photo: dict) -> str | None:
     return None
 
 
+def normalize_record_photos(record: dict) -> dict:
+    """Ensure photo_url is a URL string, not a Planespotters thumbnail object."""
+    raw_url = record.get("photo_url")
+    normalized = normalize_photo_url(raw_url)
+    if normalized != raw_url:
+        record["photo_url"] = normalized
+    return record
+
+
 class AircraftDB:
     """Lookup of aircraft metadata by ICAO hex, backed by SQLite (local or dynamic API cache)."""
 
@@ -91,14 +100,14 @@ class AircraftDB:
                 if record is not None:
                     # If we already checked Planespotters.net, return the cached result
                     if "photo_checked" in record:
-                        return record
+                        return self._return_normalized_record(icao, record)
 
                     # Otherwise, attempt to enrich with a photo and save
                     photo_info = self._fetch_photo_from_planespotters(icao, record.get("registration"))
                     record.update(photo_info)
                     record["photo_checked"] = True
                     self._update_cache(icao, record)
-                    return record
+                    return normalize_record_photos(record)
             except Exception as e:
                 log.warning("Error parsing cached record for %s: %s", icao, e)
 
@@ -108,7 +117,14 @@ class AircraftDB:
 
         # Cache results (even if None/empty, to prevent spamming APIs for invalid ICAOs)
         self._update_cache(icao, record)
-        return record
+        return normalize_record_photos(record) if record is not None else None
+
+    def _return_normalized_record(self, icao: str, record: dict) -> dict:
+        raw_url = record.get("photo_url")
+        normalized = normalize_record_photos(record)
+        if normalized.get("photo_url") != raw_url:
+            self._update_cache(icao, normalized)
+        return normalized
 
     def _fetch_from_apis(self, icao: str) -> dict | None:
         headers = {"User-Agent": "PyAerial/2.0 (https://github.com/quantumbagel/PyAerial)"}

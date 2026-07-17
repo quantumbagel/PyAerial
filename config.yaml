@@ -14,8 +14,8 @@ logging:
   level: info
 
 home:
-  latitude: 36.6810752
-  longitude: -78.8758528
+  latitude: 35.72748800696312
+  longitude: -78.69594225530933
 
 receivers:
   main:

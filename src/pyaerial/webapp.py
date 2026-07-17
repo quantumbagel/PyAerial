@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pymongo
 
-from pyaerial.calc.aircraft_db import AircraftDB
+from pyaerial.calc.aircraft_db import AircraftDB, normalize_photo_url
 from pyaerial.config import load_config
 from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
@@ -91,7 +91,7 @@ def _enrich_from_aircraft_db(icao: str, aircraft_db: AircraftDB | None) -> dict[
         "aircraft_type": meta.get("typecode"),
         "typecode": meta.get("typecode"),
         "registration": meta.get("registration"),
-        "photo_url": meta.get("photo_url"),
+        "photo_url": normalize_photo_url(meta.get("photo_url")),
         "photo_photographer": meta.get("photo_photographer"),
         "photo_link": meta.get("photo_link"),
     }
@@ -1663,8 +1663,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const photographerSpan = document.getElementById('detail-photo-photographer');
             const photoLink = document.getElementById('detail-photo-link');
 
-            if (flightDetail.photo_url) {
-                photoImg.src = flightDetail.photo_url;
+            const photoUrl = typeof flightDetail.photo_url === 'string'
+                ? flightDetail.photo_url
+                : (flightDetail.photo_url && flightDetail.photo_url.src) || null;
+            if (photoUrl) {
+                photoImg.src = photoUrl;
                 photographerSpan.innerText = flightDetail.photo_photographer || 'Unknown';
                 photoLink.href = flightDetail.photo_link || '#';
                 photoContainer.style.display = 'block';
