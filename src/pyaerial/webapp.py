@@ -853,25 +853,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             justify-content: space-between;
             align-items: center;
         }
-        .zone-popup .rule-name {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.7rem;
-            font-weight: 500;
-            padding: 2px 6px;
-            border-radius: var(--radius-sm);
-            background: rgba(255, 255, 255, 0.05);
-            text-transform: uppercase;
-        }
-        .zone-popup .rule-name.warn {
-            color: var(--warn);
-            background: rgba(245, 158, 11, 0.1);
-            border: 1px solid rgba(245, 158, 11, 0.2);
-        }
-        .zone-popup .rule-name.alert {
-            color: var(--alert);
-            background: rgba(239, 68, 68, 0.1);
-            border: 1px solid rgba(239, 68, 68, 0.2);
-        }
         .zone-popup .rule-constraint {
             font-family: 'JetBrains Mono', monospace;
             color: var(--text-secondary);
@@ -1043,13 +1024,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .table-container {
             border: 1px solid var(--border);
             border-radius: var(--radius-sm);
-            overflow: hidden;
             background-color: var(--bg);
             max-height: 340px;
             overflow-y: auto;
+            overflow-x: auto;
         }
         .tel-table {
             width: 100%;
+            min-width: 520px;
             border-collapse: collapse;
             font-size: var(--font-meta);
             text-align: left;
@@ -1057,6 +1039,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .tel-table th, .tel-table td {
             padding: var(--space-2) var(--space-3);
             border-bottom: 1px solid var(--border);
+            white-space: nowrap;
         }
         .tel-table th {
             background-color: var(--panel-raised);
@@ -1508,10 +1491,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const rules = (zone.rules || []).map(rule => {
                 const level = (rule.name || '').toLowerCase();
                 const levelClass = level === 'alert' ? 'alert' : (level === 'warn' ? 'warn' : '');
+                const displayLvl = level.charAt(0).toUpperCase() + level.slice(1);
                 return `
                     <div class="rule">
                         <div class="rule-header">
-                            <span class="rule-name ${levelClass}">${rule.name}</span>
+                            <span class="level-badge ${levelClass}">${displayLvl}</span>
                             <span class="rule-dwell">Dwell: ${rule.dwell_seconds}s</span>
                         </div>
                         <div class="rule-constraint">${formatConstraint(rule.when)}</div>
