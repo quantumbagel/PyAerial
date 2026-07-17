@@ -287,13 +287,14 @@ class RedisLiveStore:
 
     def _flight_summary(self, doc: dict[str, Any], last_tel: dict[str, Any] | None) -> dict[str, Any]:
         info = doc.get("info", {})
-        lat = lon = alt = speed = heading = None
+        lat = lon = alt = speed = heading = timestamp = None
         if last_tel:
             lat = last_tel.get("latitude")
             lon = last_tel.get("longitude")
             alt = last_tel.get("altitude")
             speed = last_tel.get("speed")
             heading = last_tel.get("heading")
+            timestamp = last_tel.get("timestamp")
         flight_id = doc.get("flight_id") or doc.get("_id")
         return {
             "flight_id": flight_id,
@@ -315,6 +316,7 @@ class RedisLiveStore:
             "is_live": True,
             "status": "live",
             "retained": False,
+            "timestamp": timestamp,
         }
 
     def _upsert_live_flight(self, plane: dict) -> None:

@@ -173,7 +173,7 @@ def _flight_summary(doc: dict[str, Any], last_tel: dict[str, Any] | None,
     icao = doc.get("icao", "")
     enriched = _enrich_from_aircraft_db(icao, aircraft_db)
     info = doc.get("info", {})
-    lat = lon = alt = speed = heading = None
+    lat = lon = alt = speed = heading = timestamp = None
     if last_tel:
         tel = _telemetry_point(last_tel)
         lat = tel.get("latitude")
@@ -181,6 +181,7 @@ def _flight_summary(doc: dict[str, Any], last_tel: dict[str, Any] | None,
         alt = tel.get("altitude")
         speed = tel.get("speed")
         heading = tel.get("heading")
+        timestamp = tel.get("timestamp")
     is_live = doc.get("status") == _FLIGHT_STATUS_LIVE
     return {
         "flight_id": doc["_id"],
@@ -202,6 +203,7 @@ def _flight_summary(doc: dict[str, Any], last_tel: dict[str, Any] | None,
         "is_live": is_live,
         "status": doc.get("status", "completed"),
         "retained": doc.get("retained", False),
+        "timestamp": timestamp,
     }
 
 
@@ -635,10 +637,30 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             box-shadow: 0 0 4px rgba(52, 211, 153, 0.5);
             animation: pulse 2s infinite;
         }
+        .status-dot.warn {
+            background-color: var(--warn);
+            box-shadow: 0 0 4px rgba(245, 158, 11, 0.5);
+            animation: pulse-warn 2s infinite;
+        }
+        .status-dot.alert {
+            background-color: var(--alert);
+            box-shadow: 0 0 4px rgba(239, 68, 68, 0.5);
+            animation: pulse-alert 2s infinite;
+        }
         @keyframes pulse {
             0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); }
             70% { transform: scale(1); box-shadow: 0 0 0 4px rgba(52, 211, 153, 0); }
             100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+        }
+        @keyframes pulse-warn {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); }
+            70% { transform: scale(1); box-shadow: 0 0 0 4px rgba(245, 158, 11, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+        }
+        @keyframes pulse-alert {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+            70% { transform: scale(1); box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
         }
         .flight-icao {
             font-family: 'JetBrains Mono', monospace;
@@ -659,9 +681,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             text-align: right;
         }
         .drawer-header-label {
-            text-transform: uppercase;
             letter-spacing: 0.1em;
-            color: var(--text-secondary);
+            color: var(--text);
             font-weight: 600;
             font-size: var(--font-section);
         }
@@ -849,9 +870,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .info-section h3 {
             font-size: var(--font-section);
-            text-transform: uppercase;
             letter-spacing: 0.05em;
-            color: var(--accent);
+            color: var(--text);
             margin-bottom: var(--space-3);
             font-weight: 600;
         }
@@ -993,16 +1013,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-size: 0.65rem;
             font-weight: 600;
             letter-spacing: 0.04em;
-            text-transform: uppercase;
             padding: 2px var(--space-2);
             border-radius: var(--radius-sm);
             background: #334155;
-            color: #cbd5e1;
+            color: var(--text);
         }
-        .level-badge.live { background: var(--status-live-bg); color: var(--status-live-text); }
-        .level-badge.warn { background: #78350f; color: #fcd34d; }
-        .level-badge.alert { background: #7f1d1d; color: #fca5a5; }
-        .level-badge.done { background: #1e293b; color: #94a3b8; }
+        .level-badge.live { background: var(--status-live-bg); }
+        .level-badge.warn { background: #78350f; }
+        .level-badge.alert { background: #7f1d1d; }
+        .level-badge.done { background: #1e293b; }
         #sidebar-tabs {
             display: flex;
             border-bottom: 1px solid #2d2d2d;
@@ -1029,33 +1048,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-weight: 700;
             padding: 2px var(--space-2);
             border-radius: var(--radius-sm);
-            text-transform: uppercase;
             letter-spacing: 0.05em;
             display: inline-block;
+            color: var(--text);
         }
         .alert-badge.warn {
-            background-color: rgba(245, 158, 11, 0.15);
-            color: #f59e0b;
-            border: 1px solid rgba(245, 158, 11, 0.3);
+            background-color: rgba(245, 158, 11, 0.25);
+            border: 1px solid rgba(245, 158, 11, 0.4);
         }
         .alert-badge.alert {
-            background-color: rgba(239, 68, 68, 0.15);
-            color: #ef4444;
-            border: 1px solid rgba(239, 68, 68, 0.3);
+            background-color: rgba(239, 68, 68, 0.25);
+            border: 1px solid rgba(239, 68, 68, 0.4);
         }
         .alert-item {
-            padding: 12px 16px;
-            border-bottom: 1px solid #222;
+            padding: var(--space-4) var(--space-6);
+            border-bottom: 1px solid var(--border-subtle);
             cursor: pointer;
-            border-left: 4px solid transparent;
-            transition: all 0.2s ease;
+            background-color: transparent;
+            transition: background-color 0.15s;
         }
-        .alert-item:hover { background: #1a1e28; }
-        .alert-item.active { background: #1e2638; border-left-color: #3b82f6; }
-        .alert-item.warn { border-left-color: #f59e0b; }
-        .alert-item.alert { border-left-color: #ef4444; }
-        .alert-item.active.warn { background: #262118; border-left-color: #f59e0b; }
-        .alert-item.active.alert { background: #2b1a1a; border-left-color: #ef4444; }
+        .alert-item:hover {
+            background-color: var(--panel-hover);
+        }
+        .alert-item.active {
+            background-color: #1a2744;
+            border-left: 4px solid var(--accent);
+            box-shadow: inset 4px 0 14px rgba(59, 130, 246, 0.12);
+        }
         .alert-meta { display: flex; justify-content: space-between; align-items: center; }
         #alert-timeline-list { display: flex; flex-direction: column; gap: 8px; }
         .alert-timeline-item {
@@ -1295,6 +1314,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         <span class="details-value" id="detail-speed">N/A</span>
                         <span class="details-label">Heading</span>
                         <span class="details-value" id="detail-heading">N/A</span>
+                        <span class="details-label">Latitude</span>
+                        <span class="details-value" id="detail-latitude">N/A</span>
+                        <span class="details-label">Longitude</span>
+                        <span class="details-value" id="detail-longitude">N/A</span>
                     </div>
                 </div>
                 
@@ -1317,6 +1340,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                     <th class="tel-num">Altitude</th>
                                     <th class="tel-num">Speed</th>
                                     <th class="tel-num">Heading</th>
+                                    <th class="tel-num">Latitude</th>
+                                    <th class="tel-num">Longitude</th>
                                 </tr>
                             </thead>
                             <tbody id="telemetry-table-body">
@@ -1696,15 +1721,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 item.className = `alert-item ${level}`;
                 if (alert.alert_id === activeAlertId) item.className += ' active';
                 const timeStr = new Date(alert.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-                const badgeClass = level === 'alert' ? 'alert' : 'warn';
+                const statusDot = `<span class="status-dot ${level}"></span>`;
+                const displayLvl = level.charAt(0).toUpperCase() + level.slice(1);
+                const badge = `<span class="level-badge ${level}">${displayLvl}</span>`;
                 item.innerHTML = `
-                    <div class="alert-meta">
-                        <span class="alert-badge ${badgeClass}">${(alert.level || 'event').toUpperCase()}</span>
-                        <span class="flight-icao" style="color: #64748b; font-size: 0.75rem; font-family: monospace;">${(alert.icao || '').toUpperCase()}</span>
+                    <div class="flight-meta-row">
+                        <span class="flight-callsign">${statusDot} ${alert.callsign || 'UNKNOWN'} ${badge}</span>
+                        <span class="flight-icao">${(alert.icao || '').toUpperCase()}</span>
                     </div>
-                    <div class="flight-meta-row" style="margin-top:8px; display:flex; justify-content:space-between; align-items:center;">
-                        <span class="flight-desc" style="color:#e2e8f0; font-weight:500; font-size:0.85rem;">${alert.callsign || 'UNKNOWN'} (${alert.zone || 'zone'})</span>
-                        <span class="flight-time" style="color:#64748b; font-size:0.75rem;">${timeStr}</span>
+                    <div class="flight-meta-row">
+                        <span class="flight-desc">${alert.zone || 'Zone'}</span>
+                        <span class="flight-time">${timeStr}</span>
                     </div>
                 `;
                 item.addEventListener('click', () => selectAlert(alert));
@@ -1778,9 +1805,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     const timeStr = new Date(Number(alert.timestamp) * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
                     
                     const badgeClass = level === 'alert' ? 'alert' : 'warn';
+                    const alertLvl = formatAlertLevel(alert.level);
+                    const displayLvl = alertLvl.charAt(0).toUpperCase() + alertLvl.slice(1);
                     item.innerHTML = `
                         <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <span class="alert-badge ${badgeClass}">${formatAlertLevel(alert.level).toUpperCase()}</span>
+                            <span class="alert-badge ${badgeClass}">${displayLvl}</span>
                             <span style="color:#64748b; font-size:0.75rem;">${timeStr}</span>
                         </div>
                         <div style="color:#f1f5f9; font-weight:500; margin-top:8px; font-size:0.85rem;">
@@ -1923,9 +1952,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     item.className += ' active';
                 }
                 
-                const startTime = new Date(flight.start_time * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                 const isLive = isFlightLive(flight);
                 const statusDot = isLive ? '<span class="status-dot live"></span>' : '<span class="status-dot"></span>';
+                const timeStr = isLive && flight.timestamp 
+                    ? new Date(flight.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})
+                    : new Date(flight.start_time * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
                 
                 item.innerHTML = `
                     <div class="flight-meta-row">
@@ -1934,7 +1965,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     </div>
                     <div class="flight-meta-row">
                         <span class="flight-desc">${flight.model || 'Unknown Model'}</span>
-                        <span class="flight-time">${startTime}</span>
+                        <span class="flight-time">${timeStr}</span>
                     </div>
                 `;
                 item.addEventListener('click', () => selectFlight(flight.flight_id));
@@ -2216,17 +2247,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 tableBody.innerHTML = '';
 
                 if (points.length === 0) {
-                    tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #64748b;">No telemetry data.</td></tr>';
+                    tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #64748b;">No telemetry data.</td></tr>';
+                    document.getElementById('detail-altitude').innerText = 'N/A';
+                    document.getElementById('detail-speed').innerText = 'N/A';
+                    document.getElementById('detail-heading').innerText = 'N/A';
+                    document.getElementById('detail-latitude').innerText = 'N/A';
+                    document.getElementById('detail-longitude').innerText = 'N/A';
                 } else {
                     points.forEach(point => {
                         const row = document.createElement('tr');
                         const timeStr = new Date(point.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+                        const latVal = point.latitude != null ? point.latitude.toFixed(4) : 'N/A';
+                        const lonVal = point.longitude != null ? point.longitude.toFixed(4) : 'N/A';
                         
                         row.innerHTML = `
                             <td>${timeStr}</td>
                             <td class="tel-num">${formatAltitudeCell(point.altitude)}</td>
                             <td class="tel-num">${formatSpeedCell(point.speed)}</td>
                             <td class="tel-num">${formatHeading(point.heading)}</td>
+                            <td class="tel-num">${latVal}</td>
+                            <td class="tel-num">${lonVal}</td>
                         `;
                         tableBody.appendChild(row);
                     });
@@ -2236,6 +2276,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     document.getElementById('detail-altitude').innerText = formatAltitude(lastPoint.altitude);
                     document.getElementById('detail-speed').innerText = formatSpeed(lastPoint.speed);
                     document.getElementById('detail-heading').innerText = formatHeading(lastPoint.heading);
+                    document.getElementById('detail-latitude').innerText = lastPoint.latitude != null ? lastPoint.latitude.toFixed(5) : 'N/A';
+                    document.getElementById('detail-longitude').innerText = lastPoint.longitude != null ? lastPoint.longitude.toFixed(5) : 'N/A';
                 }
             } catch (err) {
                 console.error("Failed to populate telemetry table log", err);
@@ -2334,6 +2376,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             fetch(`/api/flight?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`)
                                 .then(res => res.json())
                                 .then(detail => showDetails(detail));
+                            fetchTelemetryTable(flightId);
                         }
                     }
                 });
