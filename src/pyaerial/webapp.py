@@ -108,31 +108,27 @@ def _telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
         point["latitude"] = doc["latitude"]
         point["longitude"] = doc["longitude"]
     elif "position" in doc:
-        coords = doc["position"]["coordinates"]
-        point["longitude"] = coords[0]
-        point["latitude"] = coords[1]
+        position = doc.get("position") or {}
+        coords = position.get("coordinates") or [None, None]
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            point["longitude"] = coords[0]
+            point["latitude"] = coords[1]
     return point
 
 
+def _alert_coords(doc: dict[str, Any]) -> tuple[Any, Any]:
+    position = doc.get("position") or {}
+    coords = position.get("coordinates") or [None, None]
+    if not isinstance(coords, (list, tuple)) or len(coords) < 2:
+        return None, None
+    return coords[1], coords[0]
+
+
 def _format_alert(doc: dict[str, Any]) -> dict[str, Any]:
-    if "alert_id" in doc:
-        coords = doc.get("position", {}).get("coordinates", [None, None])
-        return {
-            "alert_id": doc["alert_id"],
-            "flight_id": doc.get("flight_id"),
-            "icao": doc.get("icao"),
-            "callsign": doc.get("callsign"),
-            "zone": doc.get("zone"),
-            "level": doc.get("level"),
-            "timestamp": doc.get("timestamp"),
-            "eta": doc.get("eta"),
-            "altitude": doc.get("altitude"),
-            "latitude": coords[1] if len(coords) > 1 else None,
-            "longitude": coords[0] if coords else None,
-        }
-    coords = doc.get("position", {}).get("coordinates", [None, None])
+    latitude, longitude = _alert_coords(doc)
+    alert_id = doc["alert_id"] if "alert_id" in doc else str(doc["_id"])
     return {
-        "alert_id": str(doc["_id"]),
+        "alert_id": alert_id,
         "flight_id": doc.get("flight_id"),
         "icao": doc.get("icao"),
         "callsign": doc.get("callsign"),
@@ -141,8 +137,8 @@ def _format_alert(doc: dict[str, Any]) -> dict[str, Any]:
         "timestamp": doc.get("timestamp"),
         "eta": doc.get("eta"),
         "altitude": doc.get("altitude"),
-        "latitude": coords[1] if len(coords) > 1 else None,
-        "longitude": coords[0] if coords else None,
+        "latitude": latitude,
+        "longitude": longitude,
     }
 
 
@@ -778,10 +774,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             position: absolute;
             top: 12px;
             right: 16px;
+            z-index: 30;
+            line-height: 1;
             transition: color 0.15s;
         }
         .close-btn:hover {
             color: #ef4444;
+        }
+        .flight-path {
+            cursor: pointer;
         }
         .drawer-content {
             flex-grow: 1;
@@ -1068,6 +1069,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         #drawer-header.has-photo .drawer-header-label {
             display: none;
         }
+        #details-drawer.has-photo-drawer .close-btn {
+            color: #fff;
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+        }
+        #details-drawer.has-photo-drawer .close-btn:hover {
+            color: #fca5a5;
+        }
     </style>
 </head>
 <body>
@@ -1133,8 +1141,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         
         <!-- Sliding Details Drawer -->
         <div id="details-drawer">
+            <button id="close-drawer-btn" class="close-btn" title="Close">&times;</button>
             <div id="drawer-header" class="no-photo">
-                <button id="close-drawer-btn" class="close-btn">&times;</button>
                 <div class="flight-desc drawer-header-label" style="text-transform: uppercase; letter-spacing: 0.1em; color: #94a3b8; font-weight: 600; font-size: 0.75rem;">Selected Aircraft</div>
                 <h2><span id="detail-callsign">N/A</span> <span id="detail-icao" class="flight-icao">N/A</span></h2>
             </div>
@@ -1183,17 +1191,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 </div>
                 
                 <div class="drawer-tabs">
-                    <button class="tab-btn active" id="tab-btn-raw" onclick="switchTab('raw')">Raw Messages</button>
-                    <button class="tab-btn" id="tab-btn-telemetry" onclick="switchTab('telemetry')">Telemetry Log</button>
-                    <button class="tab-btn" id="tab-btn-alerts" onclick="switchTab('alerts')">Alert Timeline</button>
+                    <button class="tab-btn active" id="tab-btn-alerts" onclick="switchTab('alerts')">Alerts</button>
+                    <button class="tab-btn" id="tab-btn-telemetry" onclick="switchTab('telemetry')">Telemetry</button>
+                    <button class="tab-btn" id="tab-btn-raw" onclick="switchTab('raw')">Raw</button>
                 </div>
                 
-                <div class="tab-content" id="tab-raw">
-                    <div id="raw-messages-list" class="terminal-list">
-                        <!-- Dynamic terminal hex rows -->
-                    </div>
+                <div class="tab-content" id="tab-alerts">
+                    <div id="alert-timeline-list"></div>
                 </div>
-                
+
                 <div class="tab-content" id="tab-telemetry" style="display: none;">
                     <div class="table-container">
                         <table class="tel-table">
@@ -1210,9 +1216,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         </table>
                     </div>
                 </div>
-
-                <div class="tab-content" id="tab-alerts" style="display: none;">
-                    <div id="alert-timeline-list"></div>
+                
+                <div class="tab-content" id="tab-raw" style="display: none;">
+                    <div id="raw-messages-list" class="terminal-list">
+                        <!-- Dynamic terminal hex rows -->
+                    </div>
                 </div>
             </div>
         </div>
@@ -1362,7 +1370,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         let planeMarkers = {}; 
-        let planePaths = {};   
+        let planePaths = {};
+        let planeEventMarkers = {};   
         let flightsData = [];
         let alertsData = [];
         let activeFlightId = null;
@@ -1406,8 +1415,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             alertsData = [];
             Object.values(planeMarkers).forEach(marker => map.removeLayer(marker));
             Object.values(planePaths).forEach(path => map.removeLayer(path));
+            Object.values(planeEventMarkers).forEach(markers => markers.forEach(marker => map.removeLayer(marker)));
             planeMarkers = {};
             planePaths = {};
+            planeEventMarkers = {};
             document.getElementById('details-drawer').classList.remove('open');
             updateFollowButton();
             renderFlightList();
@@ -1608,13 +1619,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             container.innerHTML = '<div style="color:#64748b;">Loading alerts...</div>';
             try {
                 const response = await fetch(`/api/alerts?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
+                if (!response.ok) {
+                    container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
+                    return [];
+                }
                 const alerts = await response.json();
+                if (!Array.isArray(alerts)) {
+                    container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
+                    return [];
+                }
                 container.innerHTML = '';
                 if (!alerts.length) {
                     container.innerHTML = '<div style="color:#64748b;">No alert events for this flight.</div>';
-                    return;
+                    return [];
                 }
-                alerts.reverse().forEach(alert => {
+                alerts.slice().reverse().forEach(alert => {
                     const item = document.createElement('div');
                     const level = (alert.level || '').toLowerCase();
                     item.className = `alert-timeline-item ${level}`;
@@ -1626,9 +1645,53 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     item.addEventListener('click', () => selectAlert(alert));
                     container.appendChild(item);
                 });
+                return alerts;
             } catch (err) {
+                console.error('Failed to load flight alerts', err);
                 container.innerHTML = '<div style="color:#64748b;">Failed to load alerts.</div>';
+                return [];
             }
+        }
+
+        function formatZoneLevel(zone, level) {
+            const z = (zone || '').trim();
+            const l = (level || '').trim();
+            if (!z && !l) return 'N/A';
+            return `${z || 'N/A'} / ${l || 'N/A'}`;
+        }
+
+        function clearEventMarkers(flightId) {
+            if (!planeEventMarkers[flightId]) return;
+            planeEventMarkers[flightId].forEach(marker => map.removeLayer(marker));
+            delete planeEventMarkers[flightId];
+        }
+
+        function setEventMarkers(flightId, alerts) {
+            clearEventMarkers(flightId);
+            const markers = [];
+            (alerts || []).forEach(alert => {
+                if (alert.latitude == null || alert.longitude == null) return;
+                const level = (alert.level || '').toLowerCase();
+                const fillColor = level === 'alert' ? '#ef4444' : '#f59e0b';
+                const marker = L.circleMarker([alert.latitude, alert.longitude], {
+                    radius: 6,
+                    color: '#fff',
+                    weight: 2,
+                    fillColor,
+                    fillOpacity: 0.95,
+                }).addTo(map);
+                marker.bindTooltip(`${(alert.level || 'event').toUpperCase()} · ${alert.zone || 'zone'}`);
+                marker.on('click', () => selectFlight(flightId));
+                markers.push(marker);
+            });
+            if (markers.length) {
+                planeEventMarkers[flightId] = markers;
+            }
+        }
+
+        function bindPathClick(path, flightId) {
+            path.off('click');
+            path.on('click', () => selectFlight(flightId));
         }
 
         let warningFilter = 'all';
@@ -1747,6 +1810,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
             // Open Drawer
             document.getElementById('details-drawer').classList.add('open');
+            switchTab('alerts');
             
             // Load detail data (including raw messages)
             try {
@@ -1778,11 +1842,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 map.removeLayer(planePaths[flightId]);
                 delete planePaths[flightId];
             }
+            clearEventMarkers(flightId);
         }
 
         function clearAllFlightPaths() {
             Object.values(planePaths).forEach(path => map.removeLayer(path));
+            Object.values(planeEventMarkers).forEach(markers => markers.forEach(marker => map.removeLayer(marker)));
             planePaths = {};
+            planeEventMarkers = {};
         }
 
         function updatePathStyles() {
@@ -1794,8 +1861,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         async function fetchAndSetPath(flightId, { isSelected = false } = {}) {
             try {
-                const response = await fetch(`/api/telemetry?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`);
-                const points = await response.json();
+                const [telemetryResponse, alertsResponse] = await Promise.all([
+                    fetch(`/api/telemetry?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`),
+                    fetch(`/api/alerts?${viewQuery()}&flight_id=${encodeURIComponent(flightId)}`),
+                ]);
+                if (!telemetryResponse.ok) {
+                    removeFlightPath(flightId);
+                    return null;
+                }
+                const points = await telemetryResponse.json();
                 const latlngs = points
                     .filter(p => p.latitude !== undefined && p.longitude !== undefined)
                     .map(p => [p.latitude, p.longitude]);
@@ -1804,12 +1878,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     return null;
                 }
                 const flight = flightsData.find(f => f.flight_id === flightId);
-                const style = pathStyleForFlight(flight, isSelected);
+                const style = {
+                    ...pathStyleForFlight(flight, isSelected),
+                    className: 'flight-path',
+                };
                 if (planePaths[flightId]) {
                     planePaths[flightId].setLatLngs(latlngs);
                     planePaths[flightId].setStyle(style);
                 } else {
                     planePaths[flightId] = L.polyline(latlngs, style).addTo(map);
+                }
+                bindPathClick(planePaths[flightId], flightId);
+
+                if (alertsResponse.ok) {
+                    const alerts = await alertsResponse.json();
+                    if (Array.isArray(alerts)) {
+                        setEventMarkers(flightId, alerts);
+                    }
+                } else {
+                    clearEventMarkers(flightId);
                 }
                 return planePaths[flightId];
             } catch (err) {
@@ -1866,7 +1953,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             document.getElementById('detail-type').innerText = flightDetail.aircraft_type || flightDetail.typecode || 'Unknown Type';
             document.getElementById('detail-owner').innerText = flightDetail.owner || 'Unknown Owner';
             document.getElementById('detail-country').innerText = flightDetail.country || 'Unknown';
-            document.getElementById('detail-zone-level').innerText = `${flightDetail.zone} / ${flightDetail.level}`;
+            document.getElementById('detail-zone-level').innerText = formatZoneLevel(flightDetail.zone, flightDetail.level);
+            const zoneLevelEl = document.getElementById('detail-zone-level');
+            const hasAlert = Boolean((flightDetail.zone || '').trim() || (flightDetail.level || '').trim());
+            zoneLevelEl.style.color = hasAlert ? '#f59e0b' : '#94a3b8';
 
             // Render photo if available
             const photoContainer = document.getElementById('detail-photo-container');
@@ -1878,6 +1968,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 ? flightDetail.photo_url
                 : (flightDetail.photo_url && flightDetail.photo_url.src) || null;
             const drawerHeader = document.getElementById('drawer-header');
+            const detailsDrawer = document.getElementById('details-drawer');
             if (photoUrl) {
                 photoImg.src = photoUrl;
                 photographerSpan.innerText = flightDetail.photo_photographer || 'Unknown';
@@ -1885,11 +1976,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 photoContainer.style.display = 'block';
                 drawerHeader.classList.add('has-photo');
                 drawerHeader.classList.remove('no-photo');
+                detailsDrawer.classList.add('has-photo-drawer');
             } else {
                 photoImg.src = '';
                 photoContainer.style.display = 'none';
                 drawerHeader.classList.remove('has-photo');
                 drawerHeader.classList.add('no-photo');
+                detailsDrawer.classList.remove('has-photo-drawer');
             }
 
             // Render raw messages
@@ -1915,7 +2008,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
             // Populate telemetry table log and alert timeline
             fetchTelemetryTable(flightDetail.flight_id);
-            fetchFlightAlerts(flightDetail.flight_id);
+            fetchFlightAlerts(flightDetail.flight_id).then(alerts => {
+                if (planePaths[flightDetail.flight_id]) {
+                    setEventMarkers(flightDetail.flight_id, alerts);
+                }
+            });
         }
 
         async function fetchTelemetryTable(flightId) {
