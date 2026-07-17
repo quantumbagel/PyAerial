@@ -24,6 +24,13 @@ function mergeLiveFlights(existing: FlightSummary[], incoming: FlightSummary[]):
           country: newFlight.country || next[idx].country,
           zone: newFlight.zone,
           level: newFlight.level,
+          latitude: newFlight.latitude ?? next[idx].latitude,
+          longitude: newFlight.longitude ?? next[idx].longitude,
+          altitude: newFlight.altitude ?? next[idx].altitude,
+          speed: newFlight.speed ?? next[idx].speed,
+          heading: newFlight.heading ?? next[idx].heading,
+          timestamp: newFlight.timestamp ?? next[idx].timestamp,
+          end_time: newFlight.end_time ?? next[idx].end_time,
         };
       } else {
         next[idx] = newFlight;
@@ -59,6 +66,7 @@ function applyTelemetryPoint(
       level: point.level || '',
       start_time: point.timestamp,
       end_time: point.timestamp,
+      timestamp: point.timestamp,
       latitude: point.latitude,
       longitude: point.longitude,
       heading: point.heading,
@@ -76,6 +84,7 @@ function applyTelemetryPoint(
       altitude: point.altitude,
       speed: point.speed,
       heading: point.heading,
+      timestamp: point.timestamp,
       end_time: point.timestamp,
       zone: point.zone || flight.zone,
       level: point.level || flight.level,

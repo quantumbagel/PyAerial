@@ -17,14 +17,11 @@ export function AlertLevelBadge({ level }: { level?: string }) {
   return <span className={`level-badge ${normalized}`}>{display}</span>;
 }
 
-export function StatusDot({ live }: { live?: boolean }) {
-  return <span className={`status-dot${live ? ' live' : ''}`} />;
-}
-
 export function flightTimeLabel(flight: FlightSummary): string {
   const isLive = isFlightLive(flight);
-  if (isLive && flight.timestamp) {
-    return new Date(flight.timestamp * 1000).toLocaleTimeString([], {
+  const liveTime = flight.timestamp ?? flight.end_time;
+  if (isLive && liveTime) {
+    return new Date(liveTime * 1000).toLocaleTimeString([], {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',

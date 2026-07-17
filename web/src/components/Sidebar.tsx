@@ -1,5 +1,5 @@
 import type { Alert, FlightSummary } from '../api/types';
-import { AlertLevelBadge, flightTimeLabel, LevelBadge, StatusDot } from './LevelBadge';
+import { AlertLevelBadge, flightTimeLabel, LevelBadge } from './LevelBadge';
 
 type SidebarTab = 'flights' | 'alerts';
 type WarningFilter = 'all' | 'warn' | 'alert' | 'any';
@@ -140,7 +140,7 @@ export function Sidebar({
             >
               <div className="flight-meta-row">
                 <span className="flight-callsign">
-                  <StatusDot live={flight.is_live} /> {flight.callsign || 'UNKNOWN'}{' '}
+                  {flight.callsign || 'UNKNOWN'}{' '}
                   <LevelBadge flight={flight} />
                 </span>
                 <span className="flight-icao">{flight.icao.toUpperCase()}</span>
@@ -180,7 +180,7 @@ export function Sidebar({
               >
                 <div className="flight-meta-row">
                   <span className="flight-callsign">
-                    <StatusDot /> {alert.callsign || 'UNKNOWN'}{' '}
+                    {alert.callsign || 'UNKNOWN'}{' '}
                     <AlertLevelBadge level={alert.level} />
                   </span>
                   <span className="flight-icao">{(alert.icao || '').toUpperCase()}</span>
