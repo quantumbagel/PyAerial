@@ -499,7 +499,7 @@ def create_app(*, config: Config, db: pymongo.database.Database,
             return _get_history_flights(db, aircraft_db)
 
         elif action == "fetchFlight":
-            flight_id = params.get("flight_id")
+            flight_id = params.get("flight_id") or params.get("flightId")
             if not flight_id:
                 raise ValueError("Missing flight_id")
             if view == "live":
@@ -547,12 +547,13 @@ def create_app(*, config: Config, db: pymongo.database.Database,
                     "is_live": False,
                     "status": doc.get("status", "completed"),
                 }
-
+ 
         elif action == "fetchTelemetry":
-            flight_id = params.get("flight_id")
+            flight_id = params.get("flight_id") or params.get("flightId")
             if not flight_id:
                 raise ValueError("Missing flight_id")
-            since = float(params.get("since", 0.0))
+            since_val = params.get("since")
+            since = float(since_val) if since_val is not None else 0.0
             if view == "live":
                 return live_store.get_telemetry(flight_id, since=since)
             filt: dict[str, Any] = {"flight_id": flight_id}
@@ -560,13 +561,16 @@ def create_app(*, config: Config, db: pymongo.database.Database,
                 filt["timestamp"] = {"$gt": since}
             cursor = db.get_collection("telemetry").find(filt).sort("timestamp", 1)
             return [_telemetry_point(doc) for doc in cursor]
-
+ 
         elif action == "fetchAlerts":
-            since = float(params.get("since", 0.0))
-            flight_id = params.get("flight_id")
+            since_val = params.get("since")
+            since = float(since_val) if since_val is not None else 0.0
+            flight_id = params.get("flight_id") or params.get("flightId")
             level = params.get("level")
-            limit = int(params.get("limit", 0))
-            skip = int(params.get("skip", 0))
+            limit_val = params.get("limit")
+            limit = int(limit_val) if limit_val is not None else 0
+            skip_val = params.get("skip")
+            skip = int(skip_val) if skip_val is not None else 0
             if view == "live":
                 return _get_live_alerts(
                     live_store, since=since, flight_id=flight_id, level=level, limit=limit, skip=skip,
