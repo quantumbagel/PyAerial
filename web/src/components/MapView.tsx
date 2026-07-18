@@ -116,7 +116,8 @@ export function MapView({
     const map = L.map(containerRef.current, {
       zoomControl: false,
       zoomSnap: 0,
-      zoomDelta: 0.25,
+      zoomDelta: 1.0,
+      wheelPxPerZoomLevel: 40,
     }).setView([35.727, -78.696], 8);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; OpenStreetMap &copy; CARTO',
