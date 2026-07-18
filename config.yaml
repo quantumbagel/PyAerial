@@ -4,7 +4,7 @@ database:
 
 tracking:
   hz: 2
-  remember_planes: 30
+  remember_planes: 120
   backdate_packets: 10
   duplicate_packet_merging: 5
   status_message_top_planes: 5
