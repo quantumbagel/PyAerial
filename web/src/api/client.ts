@@ -1,5 +1,5 @@
 import { sendWsRequest } from './liveSocket';
-import type { Alert, FlightDetail, FlightSummary, PortalView, TelemetryPoint, ZonesData } from './types';
+import type { Alert, AppConfig, FlightDetail, FlightSummary, PortalView, TelemetryPoint, ZonesData } from './types';
 
 export function fetchFlights(view: PortalView): Promise<FlightSummary[]> {
   return sendWsRequest<FlightSummary[]>('fetchFlights', { view });
@@ -26,4 +26,8 @@ export function fetchAlerts(
 
 export function fetchZones(): Promise<ZonesData> {
   return sendWsRequest<ZonesData>('fetchZones');
+}
+
+export function fetchConfig(): Promise<AppConfig> {
+  return sendWsRequest<AppConfig>('fetchConfig');
 }

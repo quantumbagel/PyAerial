@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from './api/client';
 import { connectLiveSocket } from './api/liveSocket';
-import type { Alert, FlightDetail, FlightSummary, PortalView, TelemetryPoint, ZonesData } from './api/types';
+import type { Alert, AppConfig, FlightDetail, FlightSummary, PortalView, TelemetryPoint, ZonesData } from './api/types';
 import { DetailsDrawer, type DrawerTab } from './components/DetailsDrawer';
 import { MapView, type MapViewHandle } from './components/MapView';
-import { Sidebar, type SidebarTab, type WarningFilter } from './components/Sidebar';
+import { Sidebar, type SidebarTab } from './components/Sidebar';
 import { isFlightLive } from './utils/format';
 import { COLOR_CONFIG } from './utils/colors';
 
@@ -106,10 +106,16 @@ function sortFlights(flights: FlightSummary[]): FlightSummary[] {
 }
 
 export function PortalApp() {
-  const [portalView, setPortalView] = useState<PortalView>('live');
+  const [portalView, setPortalView] = useState<PortalView>(() => {
+    const saved = localStorage.getItem('portalView');
+    return (saved === 'live' || saved === 'history') ? saved : 'live';
+  });
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('flights');
   const [searchQuery, setSearchQuery] = useState('');
-  const [warningFilter, setWarningFilter] = useState<WarningFilter>('all');
+
+  useEffect(() => {
+    localStorage.setItem('portalView', portalView);
+  }, [portalView]);
   const [flightsData, setFlightsData] = useState<FlightSummary[]>([]);
   const [alertsData, setAlertsData] = useState<Alert[]>([]);
   const [activeFlightId, setActiveFlightId] = useState<string | null>(null);
@@ -123,6 +129,7 @@ export function PortalApp() {
   const [zonesVisible, setZonesVisible] = useState(true);
   const [showAllPaths, setShowAllPaths] = useState(false);
   const [zonesData, setZonesData] = useState<ZonesData | null>(null);
+  const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [pathCoords, setPathCoords] = useState<Record<string, [number, number][]>>({});
   const [pathAlerts, setPathAlerts] = useState<Record<string, Alert[]>>({});
   const [selectedTelemetryPoint, setSelectedTelemetryPoint] = useState<TelemetryPoint | null>(null);
@@ -172,16 +179,32 @@ export function PortalApp() {
       const icao = (flight.icao || '').toLowerCase();
       const model = (flight.model || '').toLowerCase();
       const aircraftType = (flight.aircraft_type || flight.typecode || '').toLowerCase();
+      const zone = (flight.zone || '').toLowerCase();
       const matchesSearch =
-        callsign.includes(q) || icao.includes(q) || model.includes(q) || aircraftType.includes(q);
-      const level = (flight.level || '').toLowerCase();
-      let matchesWarning = true;
-      if (warningFilter === 'warn') matchesWarning = level === 'warn';
-      else if (warningFilter === 'alert') matchesWarning = level === 'alert';
-      else if (warningFilter === 'any') matchesWarning = level === 'warn' || level === 'alert';
-      return matchesSearch && matchesWarning;
+        callsign.includes(q) ||
+        icao.includes(q) ||
+        model.includes(q) ||
+        aircraftType.includes(q) ||
+        zone.includes(q);
+      return matchesSearch;
     });
-  }, [flightsData, searchQuery, warningFilter]);
+  }, [flightsData, searchQuery]);
+
+  const filteredAlerts = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return alertsData.filter((alert) => {
+      const callsign = (alert.callsign || '').toLowerCase();
+      const icao = (alert.icao || '').toLowerCase();
+      const zone = (alert.zone || '').toLowerCase();
+      const level = (alert.level || '').toLowerCase();
+      return (
+        callsign.includes(q) ||
+        icao.includes(q) ||
+        zone.includes(q) ||
+        level.includes(q)
+      );
+    });
+  }, [alertsData, searchQuery]);
 
   const filteredFlightsRef = useRef(filteredFlights);
   useEffect(() => {
@@ -203,6 +226,15 @@ export function PortalApp() {
       setZonesData(data);
     } catch (err) {
       console.error('Failed to fetch zones', err);
+    }
+  }, []);
+
+  const loadConfig = useCallback(async () => {
+    try {
+      const data = await api.fetchConfig();
+      setAppConfig(data);
+    } catch (err) {
+      console.error('Failed to fetch config', err);
     }
   }, []);
 
@@ -436,27 +468,18 @@ export function PortalApp() {
   );
 
   useEffect(() => {
+    loadConfig();
     loadZones();
-  }, [loadZones]);
+  }, [loadConfig, loadZones]);
 
   useEffect(() => {
-    if (portalView !== 'live') return undefined;
-    const interval = setInterval(() => {
-      const cutoff = Date.now() / 1000 - 30; // 30 seconds inactivity
-      setFlightsData((prev) => {
-        const next = prev.filter((f) => !f.is_live || (f.timestamp && f.timestamp >= cutoff));
-        if (next.length !== prev.length) {
-          const activeId = activeFlightIdRef.current;
-          if (activeId && !next.some((f) => f.flight_id === activeId)) {
-            closeDrawer();
-          }
-          return next;
-        }
-        return prev;
-      });
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [portalView, closeDrawer]);
+    if (portalView === 'live' && activeFlightId) {
+      const exists = flightsData.some((f) => f.flight_id === activeFlightId);
+      if (!exists) {
+        closeDrawer();
+      }
+    }
+  }, [flightsData, activeFlightId, portalView, closeDrawer]);
 
   useEffect(() => {
     if (portalView === 'history') {
@@ -564,16 +587,14 @@ export function PortalApp() {
         portalView={portalView}
         sidebarTab={sidebarTab}
         searchQuery={searchQuery}
-        warningFilter={warningFilter}
         flights={filteredFlights}
-        alerts={alertsData}
+        alerts={filteredAlerts}
         activeFlightId={activeFlightId}
         activeAlertId={activeAlertId}
         flightCount={flightCount}
         onSwitchPortalView={switchPortalView}
         onSwitchSidebarTab={setSidebarTab}
         onSearchChange={setSearchQuery}
-        onWarningFilterChange={setWarningFilter}
         onSelectFlight={selectFlight}
         onSelectAlert={selectAlert}
         onAlertsScroll={handleAlertsScroll}
@@ -587,6 +608,7 @@ export function PortalApp() {
         zonesVisible={zonesVisible}
         showAllPaths={showAllPaths}
         zonesData={zonesData}
+        appConfig={appConfig}
         pathCoords={pathCoords}
         pathAlerts={pathAlerts}
         onSelectFlight={selectFlight}

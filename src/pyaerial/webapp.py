@@ -491,6 +491,21 @@ def create_app(*, config: Config, db: pymongo.database.Database,
         except Exception as exc:
             raise HTTPException(500, f"Configuration error: {exc}") from exc
 
+    @app.get("/api/config")
+    def api_config():
+        try:
+            return _json_response({
+                "home": {
+                    "latitude": config.home.latitude,
+                    "longitude": config.home.longitude,
+                },
+                "remember_planes": config.tracking.remember_planes,
+                "hz": config.tracking.hz,
+                "duplicate_packet_merging": config.tracking.duplicate_packet_merging,
+            })
+        except Exception as exc:
+            raise HTTPException(500, f"Configuration error: {exc}") from exc
+
     async def handle_ws_request(action: str, params: dict[str, Any]) -> Any:
         view = _view_param(params.get("view", "live"))
         if action == "fetchFlights":
@@ -591,6 +606,17 @@ def create_app(*, config: Config, db: pymongo.database.Database,
 
         elif action == "fetchZones":
             return _zones_payload(config)
+
+        elif action == "fetchConfig":
+            return {
+                "home": {
+                    "latitude": config.home.latitude,
+                    "longitude": config.home.longitude,
+                },
+                "remember_planes": config.tracking.remember_planes,
+                "hz": config.tracking.hz,
+                "duplicate_packet_merging": config.tracking.duplicate_packet_merging,
+            }
 
         else:
             raise ValueError(f"Unknown action: {action}")

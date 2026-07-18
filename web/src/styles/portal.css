@@ -76,8 +76,7 @@ body {
     border-bottom: 1px solid var(--border);
     background-color: var(--panel-raised);
 }
-#search-input,
-#warning-filter {
+#search-input {
     width: 100%;
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
@@ -89,19 +88,8 @@ body {
     outline: none;
     transition: border-color 0.15s;
 }
-#search-input:focus,
-#warning-filter:focus {
+#search-input:focus {
     border-color: var(--accent);
-}
-#warning-filter {
-    cursor: pointer;
-}
-#filter-container {
-    padding: 0 var(--space-5) var(--space-3) var(--space-5);
-    background-color: var(--panel-raised);
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    gap: var(--space-2);
 }
 #stats-panel {
     padding: var(--space-3) var(--space-5);

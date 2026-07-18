@@ -85,3 +85,10 @@ export type LiveMessage =
   | { type: 'flights'; flights: FlightSummary[] }
   | { type: 'telemetry'; telemetry: TelemetryPoint[]; timestamp: number }
   | { type: 'alerts'; alerts: Alert[] };
+
+export interface AppConfig {
+  home: { latitude: number; longitude: number };
+  remember_planes: number;
+  hz: number;
+  duplicate_packet_merging: number;
+}

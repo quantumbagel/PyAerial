@@ -3,13 +3,11 @@ import type { Alert, FlightSummary } from '../api/types';
 import { AlertLevelBadge, flightTimeLabel, LevelBadge } from './LevelBadge';
 
 type SidebarTab = 'flights' | 'alerts';
-type WarningFilter = 'all' | 'warn' | 'alert' | 'any';
 
 interface SidebarProps {
   portalView: 'live' | 'history';
   sidebarTab: SidebarTab;
   searchQuery: string;
-  warningFilter: WarningFilter;
   flights: FlightSummary[];
   alerts: Alert[];
   activeFlightId: string | null;
@@ -18,7 +16,6 @@ interface SidebarProps {
   onSwitchPortalView: (view: 'live' | 'history') => void;
   onSwitchSidebarTab: (tab: SidebarTab) => void;
   onSearchChange: (query: string) => void;
-  onWarningFilterChange: (filter: WarningFilter) => void;
   onSelectFlight: (flightId: string) => void;
   onSelectAlert: (alert: Alert) => void;
   onAlertsScroll: (el: HTMLDivElement) => void;
@@ -28,7 +25,6 @@ export function Sidebar({
   portalView,
   sidebarTab,
   searchQuery,
-  warningFilter,
   flights,
   alerts,
   activeFlightId,
@@ -37,7 +33,6 @@ export function Sidebar({
   onSwitchPortalView,
   onSwitchSidebarTab,
   onSearchChange,
-  onWarningFilterChange,
   onSelectFlight,
   onSelectAlert,
   onAlertsScroll,
@@ -78,22 +73,10 @@ export function Sidebar({
         <input
           type="text"
           id="search-input"
-          placeholder="Search by callsign, ICAO, or model..."
+          placeholder="Search by callsign, ICAO, model, or zone..."
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
         />
-      </div>
-      <div id="filter-container">
-        <select
-          id="warning-filter"
-          value={warningFilter}
-          onChange={(e) => onWarningFilterChange(e.target.value as WarningFilter)}
-        >
-          <option value="all">All Flights</option>
-          <option value="warn">Warnings (Warn)</option>
-          <option value="alert">Alerts (Alert)</option>
-          <option value="any">Any Warning/Alert</option>
-        </select>
       </div>
       <div id="stats-panel">
         <div className="stat-card">
@@ -195,4 +178,4 @@ export function Sidebar({
   );
 }
 
-export type { WarningFilter, SidebarTab };
+export type { SidebarTab };

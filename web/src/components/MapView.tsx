@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
-import type { Alert, FlightSummary, ZonesData, TelemetryPoint } from '../api/types';
+import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
 import { isFlightLive } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight, ZONE_COLORS } from '../utils/planeIcon';
 import { COLOR_CONFIG } from '../utils/colors';
@@ -20,6 +20,7 @@ interface MapViewProps {
   zonesVisible: boolean;
   showAllPaths: boolean;
   zonesData: ZonesData | null;
+  appConfig: AppConfig | null;
   pathCoords: Record<string, [number, number][]>;
   pathAlerts: Record<string, Alert[]>;
   onSelectFlight: (flightId: string) => void;
@@ -78,6 +79,7 @@ export function MapView({
   zonesVisible,
   showAllPaths,
   zonesData,
+  appConfig,
   pathCoords,
   pathAlerts,
   onSelectFlight,
@@ -111,7 +113,11 @@ export function MapView({
 
   useEffect(() => {
     if (!containerRef.current || mapInstance.current) return;
-    const map = L.map(containerRef.current, { zoomControl: false }).setView([36.681, -78.875], 8);
+    const map = L.map(containerRef.current, {
+      zoomControl: false,
+      zoomSnap: 0,
+      zoomDelta: 0.25,
+    }).setView([35.727, -78.696], 8);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; OpenStreetMap &copy; CARTO',
     }).addTo(map);
@@ -143,6 +149,16 @@ export function MapView({
       mapRef.current = { map: null, fitPathBounds: () => {}, panToAlert: () => {} };
     };
   }, [mapRef]);
+
+  const isFirstViewReset = useRef(true);
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !appConfig) return;
+    if (isFirstViewReset.current && appConfig.home?.latitude != null && appConfig.home?.longitude != null) {
+      map.setView([appConfig.home.latitude, appConfig.home.longitude], 8);
+      isFirstViewReset.current = false;
+    }
+  }, [appConfig]);
 
   useEffect(() => {
     const map = mapInstance.current;
