@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
-import type { Alert, FlightSummary, ZonesData } from '../api/types';
+import type { Alert, FlightSummary, ZonesData, TelemetryPoint } from '../api/types';
 import { isFlightLive } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight, ZONE_COLORS } from '../utils/planeIcon';
+import { COLOR_CONFIG } from '../utils/colors';
 
 export interface MapViewHandle {
   map: L.Map | null;
@@ -14,6 +15,7 @@ interface MapViewProps {
   flights: FlightSummary[];
   filteredFlights: FlightSummary[];
   activeFlightId: string | null;
+  selectedTelemetryPoint: TelemetryPoint | null;
   followSelectedPlane: boolean;
   zonesVisible: boolean;
   showAllPaths: boolean;
@@ -71,6 +73,7 @@ export function MapView({
   flights,
   filteredFlights,
   activeFlightId,
+  selectedTelemetryPoint,
   followSelectedPlane,
   zonesVisible,
   showAllPaths,
@@ -98,6 +101,7 @@ export function MapView({
   const planePaths = useRef<Record<string, L.Polyline>>({});
   const planeEventMarkers = useRef<Record<string, L.CircleMarker[]>>({});
   const zoneLayers = useRef<L.Layer[]>([]);
+  const selectedTelemetryMarker = useRef<L.CircleMarker | null>(null);
   const onFollowDisabledRef = useRef(onFollowDisabled);
   const onSelectFlightRef = useRef(onSelectFlight);
   const lastFollowPanRef = useRef<[number, number] | null>(null);
@@ -135,9 +139,43 @@ export function MapView({
       planePaths.current = {};
       planeEventMarkers.current = {};
       zoneLayers.current = [];
+      selectedTelemetryMarker.current = null;
       mapRef.current = { map: null, fitPathBounds: () => {}, panToAlert: () => {} };
     };
   }, [mapRef]);
+
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map) return;
+
+    if (selectedTelemetryMarker.current) {
+      map.removeLayer(selectedTelemetryMarker.current);
+      selectedTelemetryMarker.current = null;
+    }
+
+    if (
+      selectedTelemetryPoint &&
+      selectedTelemetryPoint.latitude != null &&
+      selectedTelemetryPoint.longitude != null
+    ) {
+      const pos: L.LatLngExpression = [
+        selectedTelemetryPoint.latitude,
+        selectedTelemetryPoint.longitude,
+      ];
+      const marker = L.circleMarker(pos, {
+        radius: 7,
+        color: '#ffffff',
+        weight: 2,
+        fillColor: COLOR_CONFIG.accent,
+        fillOpacity: 1.0,
+      }).addTo(map);
+      marker.bindTooltip(
+        `Time: ${new Date(selectedTelemetryPoint.timestamp * 1000).toLocaleTimeString()}<br/>Alt: ${selectedTelemetryPoint.altitude} m<br/>Speed: ${selectedTelemetryPoint.speed} km/h`,
+      );
+      selectedTelemetryMarker.current = marker;
+      map.panTo(pos);
+    }
+  }, [selectedTelemetryPoint]);
 
   useEffect(() => {
     const map = mapInstance.current;

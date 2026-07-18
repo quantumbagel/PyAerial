@@ -268,6 +268,8 @@ class RedisLiveStore:
                 _KEY_TELEMETRY.format(flight_id=flight_id),
                 _KEY_ALERTS.format(flight_id=flight_id),
             )
+            for alert_raw in raw_alerts:
+                pipe.lrem(_KEY_ALERTS_RECENT, 0, alert_raw)
             pipe.execute()
             self._last_telemetry_ts.pop(flight_id, None)
             return {

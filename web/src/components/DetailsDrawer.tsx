@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import type { Alert, FlightDetail, TelemetryPoint } from '../api/types';
 import {
   formatAlertAltitude,
@@ -20,9 +21,11 @@ interface DetailsDrawerProps {
   flightAlerts: Alert[];
   flightTelemetry: TelemetryPoint[];
   drawerTab: DrawerTab;
+  selectedTelemetryPoint: TelemetryPoint | null;
   onClose: () => void;
   onSwitchTab: (tab: DrawerTab) => void;
   onSelectAlert: (alert: Alert) => void;
+  onSelectTelemetryPoint: (point: TelemetryPoint) => void;
 }
 
 export function DetailsDrawer({
@@ -32,10 +35,20 @@ export function DetailsDrawer({
   flightAlerts,
   flightTelemetry,
   drawerTab,
+  selectedTelemetryPoint,
   onClose,
   onSwitchTab,
   onSelectAlert,
+  onSelectTelemetryPoint,
 }: DetailsDrawerProps) {
+  useEffect(() => {
+    if (activeAlertId && drawerTab === 'alerts' && open) {
+      const el = document.querySelector('#alert-timeline-list .alert-timeline-item.active');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+  }, [activeAlertId, drawerTab, open]);
   const callsign = flightDetail?.callsign || 'UNKNOWN';
   const icao = flightDetail?.icao?.toUpperCase() || 'N/A';
   const photoUrl =
@@ -289,8 +302,14 @@ export function DetailsDrawer({
                     });
                     const latVal = point.latitude != null ? point.latitude.toFixed(4) : 'N/A';
                     const lonVal = point.longitude != null ? point.longitude.toFixed(4) : 'N/A';
+                    const isSelected = selectedTelemetryPoint?.timestamp === point.timestamp;
                     return (
-                      <tr key={point.timestamp}>
+                      <tr
+                        key={point.timestamp}
+                        onClick={() => onSelectTelemetryPoint(point)}
+                        className={isSelected ? 'active-tel-row' : ''}
+                        style={{ cursor: 'pointer' }}
+                      >
                         <td>{timeStr}</td>
                         <td className="tel-num">{formatAltitudeCell(point.altitude)}</td>
                         <td className="tel-num">{formatSpeedCell(point.speed)}</td>

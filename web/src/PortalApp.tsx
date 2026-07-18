@@ -6,6 +6,7 @@ import { DetailsDrawer, type DrawerTab } from './components/DetailsDrawer';
 import { MapView, type MapViewHandle } from './components/MapView';
 import { Sidebar, type SidebarTab, type WarningFilter } from './components/Sidebar';
 import { isFlightLive } from './utils/format';
+import { COLOR_CONFIG } from './utils/colors';
 
 const ALERTS_LIMIT = 50;
 
@@ -41,7 +42,7 @@ function mergeLiveFlights(existing: FlightSummary[], incoming: FlightSummary[]):
   });
   const remoteIds = new Set(incoming.map((f) => f.flight_id));
   return next.filter(
-    (f) => remoteIds.has(f.flight_id) || isFlightLive(f),
+    (f) => remoteIds.has(f.flight_id),
   );
 }
 
@@ -124,6 +125,7 @@ export function PortalApp() {
   const [zonesData, setZonesData] = useState<ZonesData | null>(null);
   const [pathCoords, setPathCoords] = useState<Record<string, [number, number][]>>({});
   const [pathAlerts, setPathAlerts] = useState<Record<string, Alert[]>>({});
+  const [selectedTelemetryPoint, setSelectedTelemetryPoint] = useState<TelemetryPoint | null>(null);
 
   const mapRef = useRef<MapViewHandle>({
     map: null,
@@ -139,6 +141,13 @@ export function PortalApp() {
   const showAllPathsRef = useRef(showAllPaths);
   const flightAlertsRef = useRef(flightAlerts);
   const pathCoordsRef = useRef(pathCoords);
+
+  useEffect(() => {
+    Object.entries(COLOR_CONFIG).forEach(([key, val]) => {
+      const cssKey = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
+      document.documentElement.style.setProperty(cssKey, val);
+    });
+  }, []);
 
   useEffect(() => {
     activeFlightIdRef.current = activeFlightId;
@@ -179,10 +188,7 @@ export function PortalApp() {
     filteredFlightsRef.current = filteredFlights;
   }, [filteredFlights]);
 
-  const liveCount = useMemo(
-    () => flightsData.filter((f) => isFlightLive(f)).length,
-    [flightsData],
-  );
+
 
   const flightCount = useMemo(() => {
     if (portalView === 'live') {
@@ -302,6 +308,7 @@ export function PortalApp() {
         flightDetailsPollTimer.current = null;
       }
       setActiveFlightId(flightId);
+      setSelectedTelemetryPoint(null);
       setFollowSelectedPlane(true);
       setDrawerOpen(true);
       setDrawerTab('alerts');
@@ -337,6 +344,7 @@ export function PortalApp() {
   const selectAlert = useCallback(
     async (alert: Alert) => {
       setActiveAlertId(alert.alert_id);
+      setSidebarTab('alerts');
       if (alert.latitude != null && alert.longitude != null) {
         mapRef.current.panToAlert(alert.latitude, alert.longitude);
       }
@@ -355,6 +363,7 @@ export function PortalApp() {
     }
     setDrawerOpen(false);
     setActiveFlightId(null);
+    setSelectedTelemetryPoint(null);
     setFollowSelectedPlane(false);
     setFlightDetail(null);
     setFlightAlerts([]);
@@ -431,6 +440,25 @@ export function PortalApp() {
   }, [loadZones]);
 
   useEffect(() => {
+    if (portalView !== 'live') return undefined;
+    const interval = setInterval(() => {
+      const cutoff = Date.now() / 1000 - 30; // 30 seconds inactivity
+      setFlightsData((prev) => {
+        const next = prev.filter((f) => !f.is_live || (f.timestamp && f.timestamp >= cutoff));
+        if (next.length !== prev.length) {
+          const activeId = activeFlightIdRef.current;
+          if (activeId && !next.some((f) => f.flight_id === activeId)) {
+            closeDrawer();
+          }
+          return next;
+        }
+        return prev;
+      });
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [portalView, closeDrawer]);
+
+  useEffect(() => {
     if (portalView === 'history') {
       fetchHistoryData();
       const timer = setInterval(fetchHistoryData, 10000);
@@ -440,9 +468,9 @@ export function PortalApp() {
   }, [portalView, fetchHistoryData]);
 
   useEffect(() => {
-    if (portalView !== 'live') return undefined;
     return connectLiveSocket({
       onMessage: (message) => {
+        if (portalViewRef.current !== 'live') return;
         if (message.type === 'flights') {
           setFlightsData((prev) => sortFlights(mergeLiveFlights(prev, message.flights)));
         } else if (message.type === 'alerts') {
@@ -542,7 +570,6 @@ export function PortalApp() {
         activeFlightId={activeFlightId}
         activeAlertId={activeAlertId}
         flightCount={flightCount}
-        liveCount={liveCount}
         onSwitchPortalView={switchPortalView}
         onSwitchSidebarTab={setSidebarTab}
         onSearchChange={setSearchQuery}
@@ -555,6 +582,7 @@ export function PortalApp() {
         flights={flightsData}
         filteredFlights={filteredFlights}
         activeFlightId={activeFlightId}
+        selectedTelemetryPoint={selectedTelemetryPoint}
         followSelectedPlane={followSelectedPlane}
         zonesVisible={zonesVisible}
         showAllPaths={showAllPaths}
@@ -596,6 +624,8 @@ export function PortalApp() {
             flightAlerts={flightAlerts}
             flightTelemetry={flightTelemetry}
             drawerTab={drawerTab}
+            selectedTelemetryPoint={selectedTelemetryPoint}
+            onSelectTelemetryPoint={setSelectedTelemetryPoint}
             onClose={closeDrawer}
             onSwitchTab={setDrawerTab}
             onSelectAlert={selectAlert}

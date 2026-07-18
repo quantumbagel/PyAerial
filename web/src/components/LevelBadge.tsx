@@ -19,19 +19,24 @@ export function AlertLevelBadge({ level }: { level?: string }) {
 
 export function flightTimeLabel(flight: FlightSummary): string {
   const isLive = isFlightLive(flight);
-  const liveTime = flight.timestamp ?? flight.end_time;
-  if (isLive && liveTime) {
-    return new Date(liveTime * 1000).toLocaleTimeString([], {
-      hour: '2-digit',
+  const formatTime = (ts?: number) => {
+    if (!ts) return '';
+    return new Date(ts * 1000).toLocaleTimeString([], {
+      hour: 'numeric',
       minute: '2-digit',
       second: '2-digit',
     });
+  };
+
+  if (isLive) {
+    const liveTime = flight.timestamp ?? flight.end_time ?? flight.start_time;
+    return formatTime(liveTime);
+  } else {
+    const startStr = formatTime(flight.start_time);
+    const endStr = formatTime(flight.end_time);
+    if (startStr && endStr) {
+      return `${startStr} : ${endStr}`;
+    }
+    return startStr || endStr || '';
   }
-  if (flight.start_time) {
-    return new Date(flight.start_time * 1000).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  }
-  return '';
 }

@@ -137,6 +137,7 @@ body {
     cursor: pointer;
     background-color: transparent;
     transition: background-color 0.15s;
+    list-style-type: none !important;
 }
 .flight-item:hover {
     background-color: var(--panel-hover);
@@ -574,6 +575,12 @@ body {
     font-variant-numeric: tabular-nums;
     text-align: right;
 }
+.tel-table tr.active-tel-row {
+    background-color: var(--accent-active-bg) !important;
+}
+.tel-table tr.active-tel-row td {
+    color: var(--accent-soft) !important;
+}
 .plane-icon-div {
     background: none;
     border: none;
@@ -599,8 +606,8 @@ body {
     color: var(--text);
 }
 .level-badge.live { background: var(--status-live-bg); }
-.level-badge.warn { background: #78350f; }
-.level-badge.alert { background: #7f1d1d; }
+.level-badge.warn { background: var(--warn-dark); }
+.level-badge.alert { background: var(--alert-dark); }
 .level-badge.done { background: #1e293b; }
 #sidebar-tabs {
     display: flex;
@@ -633,12 +640,12 @@ body {
     color: var(--text);
 }
 .alert-badge.warn {
-    background-color: rgba(245, 158, 11, 0.25);
-    border: 1px solid rgba(245, 158, 11, 0.4);
+    background-color: color-mix(in srgb, var(--warn) 25%, transparent);
+    border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
 }
 .alert-badge.alert {
-    background-color: rgba(239, 68, 68, 0.25);
-    border: 1px solid rgba(239, 68, 68, 0.4);
+    background-color: color-mix(in srgb, var(--alert) 25%, transparent);
+    border: 1px solid color-mix(in srgb, var(--alert) 40%, transparent);
 }
 .alert-item {
     padding: var(--space-4) var(--space-6);
@@ -646,6 +653,7 @@ body {
     cursor: pointer;
     background-color: transparent;
     transition: background-color 0.15s;
+    list-style-type: none !important;
 }
 .alert-item:hover {
     background-color: var(--panel-hover);
@@ -671,22 +679,22 @@ body {
     background: #1c212b;
 }
 .alert-timeline-item.warn {
-    border-left-color: #f59e0b;
-    background: rgba(245, 158, 11, 0.03);
-    border: 1px solid rgba(245, 158, 11, 0.1);
+    border-left-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 3%, transparent);
+    border: 1px solid color-mix(in srgb, var(--warn) 10%, transparent);
     border-left-width: 4px;
 }
 .alert-timeline-item.warn:hover {
-    background: rgba(245, 158, 11, 0.07);
+    background: color-mix(in srgb, var(--warn) 7%, transparent);
 }
 .alert-timeline-item.alert {
-    border-left-color: #ef4444;
-    background: rgba(239, 68, 68, 0.03);
-    border: 1px solid rgba(239, 68, 68, 0.1);
+    border-left-color: var(--alert);
+    background: color-mix(in srgb, var(--alert) 3%, transparent);
+    border: 1px solid color-mix(in srgb, var(--alert) 10%, transparent);
     border-left-width: 4px;
 }
 .alert-timeline-item.alert:hover {
-    background: rgba(239, 68, 68, 0.07);
+    background: color-mix(in srgb, var(--alert) 7%, transparent);
 }
 .alert-timeline-item.active {
     border: 1px solid var(--accent) !important;

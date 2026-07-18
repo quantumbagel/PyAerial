@@ -1,4 +1,5 @@
 import L from 'leaflet';
+import { COLOR_CONFIG } from './colors';
 
 export function createPlaneIcon(
   heading: number | null | undefined,
@@ -14,32 +15,32 @@ export function createPlaneIcon(
   let extraStyle = '';
 
   if (alertLevel === 'alert') {
-    fill = '#ef4444';
-    stroke = '#7f1d1d';
+    fill = COLOR_CONFIG.alert;
+    stroke = COLOR_CONFIG.alertDark;
     size = isSelected ? 30 : 28;
     opacity = 1.0;
     if (isSelected) {
-      extraStyle = 'filter: drop-shadow(0 0 4px #ef4444) drop-shadow(0 0 8px rgba(239, 68, 68, 0.5));';
+      extraStyle = `filter: drop-shadow(0 0 4px ${COLOR_CONFIG.alert}) drop-shadow(0 0 8px ${COLOR_CONFIG.alert}80);`;
     }
   } else if (isSelected) {
     fill = '#ffffff';
-    stroke = '#3b82f6';
+    stroke = COLOR_CONFIG.accent;
     size = 30;
     opacity = 1.0;
-    extraStyle = 'filter: drop-shadow(0 0 4px #3b82f6) drop-shadow(0 0 10px rgba(59, 130, 246, 0.55));';
+    extraStyle = `filter: drop-shadow(0 0 4px ${COLOR_CONFIG.accent}) drop-shadow(0 0 10px ${COLOR_CONFIG.accent}8c);`;
   } else if (alertLevel === 'warn') {
-    fill = '#f59e0b';
-    stroke = '#78350f';
+    fill = COLOR_CONFIG.warn;
+    stroke = COLOR_CONFIG.warnDark;
     size = 26;
     opacity = 1.0;
   } else if (isLive) {
-    fill = '#34d399';
-    stroke = '#047857';
+    fill = COLOR_CONFIG.live;
+    stroke = COLOR_CONFIG.liveDark;
     size = 24;
     opacity = 1.0;
   } else {
-    fill = '#64748b';
-    stroke = '#334155';
+    fill = COLOR_CONFIG.default;
+    stroke = COLOR_CONFIG.defaultDark;
     size = 24;
     opacity = 0.65;
   }
@@ -69,10 +70,10 @@ export function pathStyleForFlight(
   isSelected: boolean,
 ): L.PolylineOptions {
   const alertLevel = (flight?.level || '').toLowerCase();
-  let color = '#64748b';
-  if (alertLevel === 'alert') color = '#ef4444';
-  else if (alertLevel === 'warn') color = '#f59e0b';
-  if (isSelected) color = '#3b82f6';
+  let color = COLOR_CONFIG.default;
+  if (alertLevel === 'alert') color = COLOR_CONFIG.alert;
+  else if (alertLevel === 'warn') color = COLOR_CONFIG.warn;
+  if (isSelected) color = COLOR_CONFIG.accent;
   return {
     color,
     weight: isSelected ? 3 : 2,

@@ -89,7 +89,7 @@ def _view_param(view: str) -> str:
 def _enrich_from_aircraft_db(icao: str, aircraft_db: AircraftDB | None) -> dict[str, str | None]:
     if not aircraft_db:
         return {}
-    meta = aircraft_db.lookup(icao)
+    meta = aircraft_db.lookup_cached(icao)
     if not meta:
         return {}
     return {
@@ -491,12 +491,136 @@ def create_app(*, config: Config, db: pymongo.database.Database,
         except Exception as exc:
             raise HTTPException(500, f"Configuration error: {exc}") from exc
 
+    async def handle_ws_request(action: str, params: dict[str, Any]) -> Any:
+        view = _view_param(params.get("view", "live"))
+        if action == "fetchFlights":
+            if view == "live":
+                return _get_live_flights(live_store, aircraft_db)
+            return _get_history_flights(db, aircraft_db)
+
+        elif action == "fetchFlight":
+            flight_id = params.get("flight_id")
+            if not flight_id:
+                raise ValueError("Missing flight_id")
+            if view == "live":
+                flight_data = live_store.get_flight(flight_id)
+                if not flight_data:
+                    return None
+                icao = flight_data.get("icao", "")
+                enriched = _enrich_from_aircraft_db(icao, aircraft_db)
+                return {
+                    **flight_data,
+                    "callsign": flight_data.get("callsign") or enriched.get("callsign"),
+                    "model": flight_data.get("model") or enriched.get("model"),
+                    "owner": flight_data.get("owner") or enriched.get("owner"),
+                    "country": flight_data.get("country") or enriched.get("country"),
+                    "aircraft_type": flight_data.get("aircraft_type") or enriched.get("typecode"),
+                    "registration": flight_data.get("registration") or enriched.get("registration"),
+                    "photo_url": enriched.get("photo_url"),
+                    "photo_photographer": enriched.get("photo_photographer"),
+                    "photo_link": enriched.get("photo_link"),
+                }
+            else:
+                doc = db.get_collection("flights").find_one({"_id": flight_id})
+                if not doc:
+                    return None
+                icao = doc.get("icao", "")
+                enriched = _enrich_from_aircraft_db(icao, aircraft_db)
+                info = doc.get("info", {})
+                return {
+                    "flight_id": doc["_id"],
+                    "icao": icao,
+                    "zone": doc.get("zone"),
+                    "level": doc.get("level"),
+                    "start_time": doc.get("start_time"),
+                    "end_time": doc.get("end_time"),
+                    "callsign": doc.get("callsign") or info.get("callsign") or enriched.get("callsign"),
+                    "model": doc.get("model") or info.get("model") or enriched.get("model"),
+                    "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
+                    "country": doc.get("country") or info.get("country") or enriched.get("country"),
+                    "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type") or info.get("typecode") or enriched.get("aircraft_type") or enriched.get("typecode"),
+                    "registration": doc.get("registration") or info.get("registration") or enriched.get("registration"),
+                    "photo_url": enriched.get("photo_url"),
+                    "photo_photographer": enriched.get("photo_photographer"),
+                    "photo_link": enriched.get("photo_link"),
+                    "raw_messages": doc.get("raw_messages", []),
+                    "is_live": False,
+                    "status": doc.get("status", "completed"),
+                }
+
+        elif action == "fetchTelemetry":
+            flight_id = params.get("flight_id")
+            if not flight_id:
+                raise ValueError("Missing flight_id")
+            since = float(params.get("since", 0.0))
+            if view == "live":
+                return live_store.get_telemetry(flight_id, since=since)
+            filt: dict[str, Any] = {"flight_id": flight_id}
+            if since > 0:
+                filt["timestamp"] = {"$gt": since}
+            cursor = db.get_collection("telemetry").find(filt).sort("timestamp", 1)
+            return [_telemetry_point(doc) for doc in cursor]
+
+        elif action == "fetchAlerts":
+            since = float(params.get("since", 0.0))
+            flight_id = params.get("flight_id")
+            level = params.get("level")
+            limit = int(params.get("limit", 0))
+            skip = int(params.get("skip", 0))
+            if view == "live":
+                return _get_live_alerts(
+                    live_store, since=since, flight_id=flight_id, level=level, limit=limit, skip=skip,
+                )
+            filt: dict[str, Any] = {}
+            if since:
+                filt["timestamp"] = {"$gt": since}
+            if flight_id:
+                filt["flight_id"] = flight_id
+            if level:
+                filt["level"] = level
+            cursor = db.get_collection("alerts").find(filt).sort("timestamp", -1)
+            if skip:
+                cursor = cursor.skip(skip)
+            if limit:
+                cursor = cursor.limit(limit)
+            return [_format_alert(doc) for doc in cursor]
+
+        elif action == "fetchZones":
+            return _zones_payload(config)
+
+        else:
+            raise ValueError(f"Unknown action: {action}")
+
     @app.websocket("/ws/live")
     async def ws_live(websocket: WebSocket):
         await broadcaster.connect(websocket)
         try:
             while True:
-                await websocket.receive_text()
+                data = await websocket.receive_text()
+                try:
+                    req = json.loads(data)
+                    if isinstance(req, dict) and req.get("type") == "request":
+                        req_id = req.get("id")
+                        action = req.get("action")
+                        params = req.get("params", {})
+                        try:
+                            res_data = await handle_ws_request(action, params)
+                            await websocket.send_json({
+                                "type": "response",
+                                "id": req_id,
+                                "success": True,
+                                "data": _sanitize_for_json(res_data)
+                            })
+                        except Exception as inner_exc:
+                            log.error(f"Error executing action {action}: {inner_exc}")
+                            await websocket.send_json({
+                                "type": "response",
+                                "id": req_id,
+                                "success": False,
+                                "error": str(inner_exc)
+                            })
+                except Exception as parse_exc:
+                    log.error(f"Error parsing WS message: {parse_exc}")
         except WebSocketDisconnect:
             broadcaster.disconnect(websocket)
         except Exception:

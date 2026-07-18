@@ -10,6 +10,8 @@ from pathlib import Path
 
 log = logging.getLogger("pyaerial.aircraft_db")
 
+_MISSING = object()
+
 
 import requests
 
@@ -66,7 +68,11 @@ class AircraftDB:
     def available(self) -> bool:
         return self._conn is not None
 
-    def lookup(self, icao: str) -> dict | None:
+    def lookup_cached(self, icao: str) -> dict | None:
+        """Return locally cached metadata without querying external APIs."""
+        return self.lookup(icao, fetch_if_missing=False)
+
+    def lookup(self, icao: str, *, fetch_if_missing: bool = True) -> dict | None:
         """Return aircraft metadata for an ICAO hex, checking local index first, then API."""
         if self._conn is None:
             return None
@@ -75,42 +81,51 @@ class AircraftDB:
         if not icao:
             return None
 
-        # 1. Check local SQLite database/cache
-        try:
-            row = self._conn.execute(
-                "SELECT data FROM aircraft WHERE icao = ?", (icao,)
-            ).fetchone()
-        except sqlite3.Error as e:
-            log.warning("Database error during lookup for %s: %s", icao, e)
-            row = None
-
-        if row:
-            if row[0] is None:
-                # Cached negative lookup
+        record = self._read_cached_record(icao)
+        if record is not _MISSING:
+            if record is None:
                 return None
-            try:
-                record = json.loads(row[0])
-                if record is not None:
-                    # If we already checked Planespotters.net, return the cached result
-                    if "photo_checked" in record:
-                        return self._return_normalized_record(icao, record)
+            if "photo_checked" in record or not fetch_if_missing:
+                return self._return_normalized_record(icao, record)
 
-                    # Otherwise, attempt to enrich with a photo and save
-                    photo_info = self._fetch_photo_from_planespotters(icao, record.get("registration"))
-                    record.update(photo_info)
-                    record["photo_checked"] = True
-                    self._update_cache(icao, record)
-                    return normalize_record_photos(record)
-            except Exception as e:
-                log.warning("Error parsing cached record for %s: %s", icao, e)
+            photo_info = self._fetch_photo_from_planespotters(icao, record.get("registration"))
+            record.update(photo_info)
+            record["photo_checked"] = True
+            self._update_cache(icao, record)
+            return normalize_record_photos(record)
 
-        # 2. Cache miss: Fetch from HexDB and Planespotters APIs
+        if not fetch_if_missing:
+            return None
+
+        # Cache miss: Fetch from HexDB and Planespotters APIs
         log.info("Aircraft DB miss for %s. Querying online APIs...", icao)
         record = self._fetch_from_apis(icao)
 
         # Cache results (even if None/empty, to prevent spamming APIs for invalid ICAOs)
         self._update_cache(icao, record)
         return normalize_record_photos(record) if record is not None else None
+
+    def _read_cached_record(self, icao: str) -> dict | None | object:
+        """Return cached record, None for a negative cache entry, or _MISSING."""
+        try:
+            row = self._conn.execute(
+                "SELECT data FROM aircraft WHERE icao = ?", (icao,)
+            ).fetchone()
+        except sqlite3.Error as e:
+            log.warning("Database error during lookup for %s: %s", icao, e)
+            return _MISSING
+
+        if not row:
+            return _MISSING
+        if row[0] is None:
+            return None
+
+        try:
+            record = json.loads(row[0])
+        except Exception as e:
+            log.warning("Error parsing cached record for %s: %s", icao, e)
+            return _MISSING
+        return record if isinstance(record, dict) else _MISSING
 
     def _return_normalized_record(self, icao: str, record: dict) -> dict:
         raw_url = record.get("photo_url")

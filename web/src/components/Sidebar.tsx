@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import type { Alert, FlightSummary } from '../api/types';
 import { AlertLevelBadge, flightTimeLabel, LevelBadge } from './LevelBadge';
 
@@ -14,7 +15,6 @@ interface SidebarProps {
   activeFlightId: string | null;
   activeAlertId: string | null;
   flightCount: number;
-  liveCount: number;
   onSwitchPortalView: (view: 'live' | 'history') => void;
   onSwitchSidebarTab: (tab: SidebarTab) => void;
   onSearchChange: (query: string) => void;
@@ -34,7 +34,6 @@ export function Sidebar({
   activeFlightId,
   activeAlertId,
   flightCount,
-  liveCount,
   onSwitchPortalView,
   onSwitchSidebarTab,
   onSearchChange,
@@ -43,6 +42,14 @@ export function Sidebar({
   onSelectAlert,
   onAlertsScroll,
 }: SidebarProps) {
+  useEffect(() => {
+    if (activeAlertId && sidebarTab === 'alerts') {
+      const el = document.querySelector('#alert-list li.active');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+  }, [activeAlertId, sidebarTab]);
   return (
     <div id="sidebar">
       <div id="sidebar-header">
@@ -93,16 +100,6 @@ export function Sidebar({
           <span id="flight-stat-label">{portalView === 'live' ? 'Live:' : 'Retained:'}</span>
           <strong id="flight-count" className="stat-live">
             {flightCount}
-          </strong>
-        </div>
-        <div
-          className="stat-card"
-          id="live-stat-card"
-          style={{ display: portalView === 'live' ? 'flex' : 'none' }}
-        >
-          <span>Tracking:</span>
-          <strong id="live-count" className="stat-tracking">
-            {liveCount}
           </strong>
         </div>
         <div className="stat-card">
