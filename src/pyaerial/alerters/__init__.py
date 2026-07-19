@@ -58,3 +58,5 @@ def create_alerter(method: str, arguments: dict) -> Alerter:
 
 from pyaerial.alerters import kafka as _kafka  # noqa: E402,F401
 from pyaerial.alerters import printer as _printer  # noqa: E402,F401
+from pyaerial.alerters import webhook as _webhook  # noqa: E402,F401
+

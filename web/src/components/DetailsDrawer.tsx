@@ -153,6 +153,48 @@ export function DetailsDrawer({
           </div>
         </div>
 
+        <div className="info-section" style={{ borderBottom: '1px solid var(--border)' }}>
+          <h3>External Trackers</h3>
+          <div className="external-links-grid">
+            <a
+              href={flightDetail?.callsign ? `https://flightaware.com/live/flight/${flightDetail.callsign.trim()}` : `https://flightaware.com/live/modes/${icao.toLowerCase()}`}
+              target="_blank"
+              rel="noreferrer"
+              className="external-link-btn"
+              style={{ borderColor: 'rgba(59, 130, 246, 0.4)', color: '#60a5fa' }}
+            >
+              ✈️ FlightAware
+            </a>
+            <a
+              href={flightDetail?.registration ? `https://www.flightradar24.com/data/aircraft/${flightDetail.registration.trim()}` : `https://globe.adsbexchange.com/?icao=${icao.toLowerCase()}`}
+              target="_blank"
+              rel="noreferrer"
+              className="external-link-btn"
+              style={{ borderColor: 'rgba(245, 158, 11, 0.4)', color: '#fbbf24' }}
+            >
+              📡 Flightradar24
+            </a>
+            <a
+              href={`https://globe.adsbexchange.com/?icao=${icao.toLowerCase()}`}
+              target="_blank"
+              rel="noreferrer"
+              className="external-link-btn"
+              style={{ borderColor: 'rgba(52, 211, 153, 0.4)', color: '#34d399' }}
+            >
+              🌐 ADS-B Exchange
+            </a>
+            <a
+              href={flightDetail?.registration ? `https://www.radarbox.com/data/registration/${flightDetail.registration.trim()}` : `https://www.radarbox.com/data/mode-s/${icao.toLowerCase()}`}
+              target="_blank"
+              rel="noreferrer"
+              className="external-link-btn"
+              style={{ borderColor: 'rgba(239, 68, 68, 0.4)', color: '#fca5a5' }}
+            >
+              📦 RadarBox
+            </a>
+          </div>
+        </div>
+
         <div className="info-section" style={{ backgroundColor: '#141720' }}>
           <h3>Telemetry Readings</h3>
           <div className="details-grid">

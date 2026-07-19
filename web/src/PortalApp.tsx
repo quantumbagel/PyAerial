@@ -118,6 +118,8 @@ export function PortalApp() {
   }, [portalView]);
   const [flightsData, setFlightsData] = useState<FlightSummary[]>([]);
   const [alertsData, setAlertsData] = useState<Alert[]>([]);
+  const [toasts, setToasts] = useState<{ id: string; alert: Alert }[]>([]);
+  const [unreadAlertsCount, setUnreadAlertsCount] = useState(0);
   const [activeFlightId, setActiveFlightId] = useState<string | null>(null);
   const [activeAlertId, setActiveAlertId] = useState<string | null>(null);
   const [flightDetail, setFlightDetail] = useState<FlightDetail | null>(null);
@@ -148,12 +150,74 @@ export function PortalApp() {
   const showAllPathsRef = useRef(showAllPaths);
   const flightAlertsRef = useRef(flightAlerts);
   const pathCoordsRef = useRef(pathCoords);
+  const sidebarTabRef = useRef(sidebarTab);
 
   useEffect(() => {
     Object.entries(COLOR_CONFIG).forEach(([key, val]) => {
       const cssKey = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
       document.documentElement.style.setProperty(cssKey, val);
     });
+  }, []);
+
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  const playWarningChime = useCallback((level: string) => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      osc1.connect(gainNode);
+      osc2.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      const isAlert = level.toLowerCase() === 'alert';
+      osc1.frequency.setValueAtTime(isAlert ? 880 : 587.33, ctx.currentTime);
+      osc2.frequency.setValueAtTime(isAlert ? 1046.50 : 698.46, ctx.currentTime);
+
+      gainNode.gain.setValueAtTime(0.12, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (isAlert ? 0.7 : 0.4));
+
+      osc1.type = 'sine';
+      osc2.type = 'sine';
+
+      osc1.start();
+      osc2.start();
+      osc1.stop(ctx.currentTime + 0.8);
+      osc2.stop(ctx.currentTime + 0.8);
+    } catch (err) {
+      console.warn('AudioContext warning chime failed:', err);
+    }
+  }, []);
+
+  const triggerDesktopNotification = useCallback((alert: Alert) => {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const level = (alert.level || 'warning').toUpperCase();
+    new Notification(`PyAerial ${level}: ${alert.callsign || 'Unknown'}`, {
+      body: `Zone: ${alert.zone}\nAlt: ${alert.altitude ? alert.altitude + ' m' : 'N/A'}\nETA: ${alert.eta ? Math.round(alert.eta) + 's' : 'N/A'}`,
+    });
+  }, []);
+
+  const addToast = useCallback((alert: Alert) => {
+    const id = `${alert.alert_id}-${Date.now()}-${Math.random()}`;
+    setToasts((current) => [{ id, alert }, ...current].slice(0, 5));
+    setTimeout(() => {
+      setToasts((current) => current.filter((t) => t.id !== id));
+    }, 6000);
+  }, []);
+
+  const handleSwitchSidebarTab = useCallback((tab: SidebarTab) => {
+    setSidebarTab(tab);
+    if (tab === 'alerts') {
+      setUnreadAlertsCount(0);
+    }
   }, []);
 
   useEffect(() => {
@@ -171,6 +235,9 @@ export function PortalApp() {
   useEffect(() => {
     pathCoordsRef.current = pathCoords;
   }, [pathCoords]);
+  useEffect(() => {
+    sidebarTabRef.current = sidebarTab;
+  }, [sidebarTab]);
 
   const filteredFlights = useMemo(() => {
     const q = searchQuery.toLowerCase();
@@ -497,7 +564,22 @@ export function PortalApp() {
         if (message.type === 'flights') {
           setFlightsData((prev) => sortFlights(mergeLiveFlights(prev, message.flights)));
         } else if (message.type === 'alerts') {
-          setAlertsData(message.alerts);
+          setAlertsData((prev) => {
+            const prevIds = new Set(prev.map((a) => a.alert_id));
+            const newAlerts = message.alerts.filter((a: Alert) => !prevIds.has(a.alert_id));
+            if (newAlerts.length > 0) {
+              const newest = newAlerts[0];
+              playWarningChime(newest.level || 'warn');
+              triggerDesktopNotification(newest);
+              newAlerts.forEach((a: Alert) => {
+                addToast(a);
+              });
+              if (sidebarTabRef.current !== 'alerts') {
+                setUnreadAlertsCount((c) => c + newAlerts.length);
+              }
+            }
+            return message.alerts;
+          });
         } else if (message.type === 'telemetry') {
           setFlightsData((prev) => {
             let next = prev;
@@ -535,7 +617,7 @@ export function PortalApp() {
                 if (prev[point.flight_id!]) {
                   const existing = prev[point.flight_id!];
                   return {
-                    ...prev,
+                     ...prev,
                     [point.flight_id!]: [
                       ...existing,
                       [point.latitude!, point.longitude!] as [number, number],
@@ -549,7 +631,7 @@ export function PortalApp() {
         }
       },
     });
-  }, [portalView, loadFlightAlerts]);
+  }, [portalView, loadFlightAlerts, playWarningChime, triggerDesktopNotification, addToast]);
 
   useEffect(() => {
     refreshFlightPaths(activeFlightId, portalView);
@@ -592,8 +674,9 @@ export function PortalApp() {
         activeFlightId={activeFlightId}
         activeAlertId={activeAlertId}
         flightCount={flightCount}
+        unreadAlertsCount={unreadAlertsCount}
         onSwitchPortalView={switchPortalView}
-        onSwitchSidebarTab={setSidebarTab}
+        onSwitchSidebarTab={handleSwitchSidebarTab}
         onSearchChange={setSearchQuery}
         onSelectFlight={selectFlight}
         onSelectAlert={selectAlert}
@@ -654,6 +737,44 @@ export function PortalApp() {
           />
         }
       />
+
+      {/* Toast notifications container */}
+      <div className="toast-container">
+        {toasts.map((toast) => {
+          const levelClass = toast.alert.level?.toLowerCase() === 'alert' ? 'level-alert' : 'level-warn';
+          const displayLvl = toast.alert.level?.toUpperCase() || 'WARNING';
+          return (
+            <div
+              key={toast.id}
+              className={`toast-alert ${levelClass}`}
+              onClick={() => {
+                selectAlert(toast.alert);
+                setToasts((current) => current.filter((t) => t.id !== toast.id));
+              }}
+            >
+              <div className="toast-header">
+                <span className="toast-title">
+                  {toast.alert.level?.toLowerCase() === 'alert' ? '🚨' : '⚠️'} {displayLvl}: {toast.alert.callsign || 'Unknown'}
+                </span>
+                <button
+                  type="button"
+                  className="toast-close"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setToasts((current) => current.filter((t) => t.id !== toast.id));
+                  }}
+                >
+                  &times;
+                </button>
+              </div>
+              <div className="toast-body">
+                Met conditions in zone <strong>{toast.alert.zone || 'Zone'}</strong>.<br />
+                Alt: {toast.alert.altitude ? toast.alert.altitude + ' m' : 'N/A'} | ETA: {toast.alert.eta ? Math.round(toast.alert.eta) + 's' : 'N/A'}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </>
   );
 }

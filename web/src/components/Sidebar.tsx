@@ -13,6 +13,7 @@ interface SidebarProps {
   activeFlightId: string | null;
   activeAlertId: string | null;
   flightCount: number;
+  unreadAlertsCount?: number;
   onSwitchPortalView: (view: 'live' | 'history') => void;
   onSwitchSidebarTab: (tab: SidebarTab) => void;
   onSearchChange: (query: string) => void;
@@ -30,6 +31,7 @@ export function Sidebar({
   activeFlightId,
   activeAlertId,
   flightCount,
+  unreadAlertsCount = 0,
   onSwitchPortalView,
   onSwitchSidebarTab,
   onSearchChange,
@@ -108,6 +110,9 @@ export function Sidebar({
           onClick={() => onSwitchSidebarTab('alerts')}
         >
           Alerts
+          {unreadAlertsCount > 0 && (
+            <span className="alerts-badge-count">{unreadAlertsCount}</span>
+          )}
         </button>
       </div>
       <div id="panel-flights" className={`sidebar-panel${sidebarTab === 'flights' ? ' active' : ''}`}>
