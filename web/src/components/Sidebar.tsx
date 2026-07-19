@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import type { Alert, FlightSummary } from '../api/types';
 import { AlertLevelBadge, flightTimeLabel, LevelBadge } from './LevelBadge';
+import { formatAlertAltitude, formatAlertEta } from '../utils/format';
 
 type SidebarTab = 'flights' | 'alerts';
 
@@ -155,7 +156,7 @@ export function Sidebar({
               : '';
             const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
             const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-            const title = `Triggered:\nTime: ${alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}`;
+            const title = `Triggered:\nTime: ${alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
             return (
               <li
                 key={alert.alert_id}

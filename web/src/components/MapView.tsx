@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
-import { isFlightLive } from '../utils/format';
+import { isFlightLive, formatAlertAltitude, formatAlertEta } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight, ZONE_COLORS } from '../utils/planeIcon';
 import { COLOR_CONFIG } from '../utils/colors';
 
@@ -335,7 +335,8 @@ export function MapView({
           fillColor,
           fillOpacity: 0.95,
         }).addTo(map);
-        marker.bindTooltip(`${(alert.level || 'event').toUpperCase()} · ${alert.zone || 'zone'}`);
+        const timeStr = alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleTimeString() : 'N/A';
+        marker.bindTooltip(`<strong>${(alert.level || 'event').toUpperCase()}</strong> · ${alert.zone || 'zone'}<br/>Time: ${timeStr}<br/>Alt: ${formatAlertAltitude(alert.altitude)}<br/>ETA: ${formatAlertEta(alert.eta)}`);
         marker.on('click', () => onSelectFlightRef.current(flightId));
         markers.push(marker);
       });
