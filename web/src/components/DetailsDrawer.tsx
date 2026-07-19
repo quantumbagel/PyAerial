@@ -91,15 +91,17 @@ export function DetailsDrawer({
       <button type="button" id="close-drawer-btn" className="close-btn" title="Close" onClick={onClose}>
         &times;
       </button>
-      <div id="drawer-header" className={hasPhoto ? 'has-photo' : 'no-photo'}>
-        <div className="drawer-header-label">Selected Aircraft</div>
-        <h2>
-          <span id="detail-callsign">{callsign}</span>{' '}
-          <span id="detail-icao" className="flight-icao">
-            {icao}
-          </span>
-        </h2>
-      </div>
+      {!hasPhoto && (
+        <div id="drawer-header" className="no-photo">
+          <div className="drawer-header-label">Selected Aircraft</div>
+          <h2>
+            <span id="detail-callsign">{callsign}</span>{' '}
+            <span id="detail-icao" className="flight-icao">
+              {icao}
+            </span>
+          </h2>
+        </div>
+      )}
       <div className="drawer-content">
         <div
           id="detail-photo-container"

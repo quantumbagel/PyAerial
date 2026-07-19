@@ -52,13 +52,21 @@ class AircraftDB:
     """Lookup of aircraft metadata by ICAO hex, backed by SQLite (local or dynamic API cache)."""
 
     def __init__(self, path: str | Path):
-        self.path = Path(path)
+        path = Path(path)
+        if not path.is_absolute():
+            # Resolve relative to the project root directory
+            project_root = Path(__file__).resolve().parent.parent.parent.parent
+            path = (project_root / path).resolve()
+
+        self.path = path
         # Ensure parent directory exists
         if self.path.parent:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         
         # Open in read-write mode to allow dynamic caching, and allow shared thread access
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS aircraft (icao TEXT PRIMARY KEY, data TEXT)"
         )

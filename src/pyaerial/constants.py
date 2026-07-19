@@ -104,5 +104,7 @@ STORAGE_ZONE = "zone"
 LOGGING_LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
 
 # --- Defaults -----------------------------------------------------------------
+from pathlib import Path
 DEFAULT_CONFIG_FILE = "config.yaml"
-DEFAULT_AIRCRAFT_DB = "aircraft.db"
+DEFAULT_AIRCRAFT_DB = str((Path(__file__).resolve().parent / ".." / ".." / ".." / "aircraft.db").resolve())
+
