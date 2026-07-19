@@ -166,22 +166,13 @@ export function DetailsDrawer({
               ✈️ FlightAware
             </a>
             <a
-              href={flightDetail?.registration ? `https://www.flightradar24.com/data/aircraft/${flightDetail.registration.trim()}` : `https://globe.adsbexchange.com/?icao=${icao.toLowerCase()}`}
-              target="_blank"
-              rel="noreferrer"
-              className="external-link-btn"
-              style={{ borderColor: 'rgba(245, 158, 11, 0.4)', color: '#fbbf24' }}
-            >
-              📡 Flightradar24
-            </a>
-            <a
               href={`https://globe.adsbexchange.com/?icao=${icao.toLowerCase()}`}
               target="_blank"
               rel="noreferrer"
               className="external-link-btn"
               style={{ borderColor: 'rgba(52, 211, 153, 0.4)', color: '#34d399' }}
             >
-              🌐 ADS-B Exchange
+              🌐 ADS-B Exch
             </a>
             <a
               href={flightDetail?.registration ? `https://www.radarbox.com/data/registration/${flightDetail.registration.trim()}` : `https://www.radarbox.com/data/mode-s/${icao.toLowerCase()}`}
@@ -222,14 +213,16 @@ export function DetailsDrawer({
         </div>
 
         <div className="drawer-tabs">
-          <button
-            type="button"
-            className={`tab-btn${drawerTab === 'alerts' ? ' active' : ''}`}
-            id="tab-btn-alerts"
-            onClick={() => onSwitchTab('alerts')}
-          >
-            Alerts
-          </button>
+          {flightAlerts.length > 0 && (
+            <button
+              type="button"
+              className={`tab-btn${drawerTab === 'alerts' ? ' active' : ''}`}
+              id="tab-btn-alerts"
+              onClick={() => onSwitchTab('alerts')}
+            >
+              Alerts
+            </button>
+          )}
           <button
             type="button"
             className={`tab-btn${drawerTab === 'telemetry' ? ' active' : ''}`}

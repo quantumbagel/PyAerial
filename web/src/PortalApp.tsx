@@ -126,7 +126,7 @@ export function PortalApp() {
   const [flightAlerts, setFlightAlerts] = useState<Alert[]>([]);
   const [flightTelemetry, setFlightTelemetry] = useState<TelemetryPoint[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<DrawerTab>('alerts');
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>('telemetry');
   const [followSelectedPlane, setFollowSelectedPlane] = useState(false);
   const [zonesVisible, setZonesVisible] = useState(true);
   const [showAllPaths, setShowAllPaths] = useState(false);
@@ -410,13 +410,18 @@ export function PortalApp() {
       setSelectedTelemetryPoint(null);
       setFollowSelectedPlane(true);
       setDrawerOpen(true);
-      setDrawerTab('alerts');
+      setDrawerTab('telemetry');
       try {
         const detail = await api.fetchFlight(flightId, portalView);
         setFlightDetail(detail);
         await loadFlightTelemetry(flightId, portalView);
-        await loadFlightAlerts(flightId, portalView);
+        const alerts = await loadFlightAlerts(flightId, portalView);
         await fetchAndSetPath(flightId, portalView);
+        if (alerts && alerts.length > 0) {
+          setDrawerTab('alerts');
+        } else {
+          setDrawerTab('telemetry');
+        }
         if (detail.latitude != null && detail.longitude != null && mapRef.current.map) {
           mapRef.current.map.setView(
             [detail.latitude, detail.longitude],
