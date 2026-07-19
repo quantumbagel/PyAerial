@@ -87,21 +87,19 @@ export function DetailsDrawer({
     flightTelemetry.length > 0 ? flightTelemetry[flightTelemetry.length - 1] : null;
 
   return (
-    <div id="details-drawer" className={`${open ? 'open' : ''} ${hasPhoto ? 'has-photo-drawer' : ''}`.trim()}>
+    <div id="details-drawer" className={open ? 'open' : ''}>
       <button type="button" id="close-drawer-btn" className="close-btn" title="Close" onClick={onClose}>
         &times;
       </button>
-      {!hasPhoto && (
-        <div id="drawer-header" className="no-photo">
-          <div className="drawer-header-label">Selected Aircraft</div>
-          <h2>
-            <span id="detail-callsign">{callsign}</span>{' '}
-            <span id="detail-icao" className="flight-icao">
-              {icao}
-            </span>
-          </h2>
-        </div>
-      )}
+      <div id="drawer-header">
+        <div className="drawer-header-label">Selected Aircraft</div>
+        <h2>
+          <span id="detail-callsign">{callsign}</span>{' '}
+          <span id="detail-icao" className="flight-icao">
+            {icao}
+          </span>
+        </h2>
+      </div>
       <div className="drawer-content">
         <div
           id="detail-photo-container"
@@ -111,16 +109,6 @@ export function DetailsDrawer({
           {photoUrl && (
             <img id="detail-photo" src={photoUrl} alt="Aircraft Photo" />
           )}
-          <div className="photo-gradient-top" />
-          <div className="photo-title-overlay">
-            <div className="drawer-header-label">Selected Aircraft</div>
-            <h2>
-              <span id="detail-callsign-photo">{callsign}</span>{' '}
-              <span id="detail-icao-photo" className="flight-icao">
-                {icao}
-              </span>
-            </h2>
-          </div>
           <div className="photo-gradient-bottom">
             <span>
               Photo by{' '}

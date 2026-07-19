@@ -775,23 +775,7 @@ body {
     overflow-y: auto;
     flex-grow: 1;
 }
-#drawer-header.no-photo h2 {
-    margin-top: 6px;
-}
-#drawer-header.has-photo {
-    padding: 12px 20px;
-}
-#drawer-header.has-photo h2,
-#drawer-header.has-photo .drawer-header-label {
-    display: none;
-}
-#details-drawer.has-photo-drawer .close-btn {
-    color: #fff;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
-}
-#details-drawer.has-photo-drawer .close-btn:hover {
-    color: #fca5a5;
-}
+
 
 #root {
     display: flex;
