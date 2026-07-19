@@ -166,7 +166,7 @@ def _cmd_list(client: pymongo.MongoClient, parts: list[str],
             return
         print("General data:")
         print(f"ICAO: {plane_id}")
-        record = aircraft_db.lookup(plane_id)
+        record = aircraft_db.lookup_cached(plane_id)
         if record is None:
             print("No aircraft metadata in local database.")
         else:
@@ -238,7 +238,7 @@ def _cmd_dump(client: pymongo.MongoClient, parts: list[str],
             print("[err] dump opensky requires a plane id")
             return
         plane = parts[2]
-        record = aircraft_db.lookup(plane)
+        record = aircraft_db.lookup_cached(plane)
         print(json.dumps(record, indent=2) if record else "No record found.")
         return
 
