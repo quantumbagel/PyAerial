@@ -242,7 +242,6 @@ class MongoStore:
             "aircraft_type": info.get("aircraft_type") or info.get("typecode") or "",
             "typecode": info.get("typecode") or "",
             "info": {str(k): v for k, v in info.items()},
-            "raw_messages": plane.get("raw_messages", []),
         }
         telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         alert_docs = [

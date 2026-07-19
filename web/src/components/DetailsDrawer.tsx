@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Alert, FlightDetail, TelemetryPoint } from '../api/types';
 import {
   formatAlertAltitude,
@@ -12,7 +12,7 @@ import {
   formatZoneLevel,
 } from '../utils/format';
 
-type DrawerTab = 'alerts' | 'telemetry' | 'raw';
+type DrawerTab = 'alerts' | 'telemetry';
 
 interface DetailsDrawerProps {
   open: boolean;
@@ -41,6 +41,25 @@ export function DetailsDrawer({
   onSelectAlert,
   onSelectTelemetryPoint,
 }: DetailsDrawerProps) {
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const [prevTelemetryLength, setPrevTelemetryLength] = useState(0);
+
+  useEffect(() => {
+    const el = tableContainerRef.current;
+    if (!el) return;
+
+    const diff = flightTelemetry.length - prevTelemetryLength;
+    const oldLength = prevTelemetryLength;
+    setPrevTelemetryLength(flightTelemetry.length);
+
+    if (oldLength > 0 && diff > 0 && diff < 5) {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceFromBottom < 80) {
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  }, [flightTelemetry, prevTelemetryLength]);
+
   useEffect(() => {
     if (activeAlertId && drawerTab === 'alerts' && open) {
       const el = document.querySelector('#alert-timeline-list .alert-timeline-item.active');
@@ -231,14 +250,6 @@ export function DetailsDrawer({
           >
             Telemetry
           </button>
-          <button
-            type="button"
-            className={`tab-btn${drawerTab === 'raw' ? ' active' : ''}`}
-            id="tab-btn-raw"
-            onClick={() => onSwitchTab('raw')}
-          >
-            Raw
-          </button>
         </div>
 
         <div
@@ -309,7 +320,7 @@ export function DetailsDrawer({
           id="tab-telemetry"
           style={{ display: drawerTab === 'telemetry' ? 'flex' : 'none' }}
         >
-          <div className="table-container">
+          <div className="table-container" ref={tableContainerRef}>
             <table className="tel-table">
               <thead>
                 <tr>
@@ -357,34 +368,6 @@ export function DetailsDrawer({
                 )}
               </tbody>
             </table>
-          </div>
-        </div>
-
-        <div
-          className="tab-content"
-          id="tab-raw"
-          style={{ display: drawerTab === 'raw' ? 'flex' : 'none' }}
-        >
-          <div id="raw-messages-list" className="terminal-list">
-            {!flightDetail?.raw_messages?.length ? (
-              <div className="terminal-line" style={{ color: '#64748b' }}>
-                No raw messages captured yet.
-              </div>
-            ) : (
-              flightDetail.raw_messages.map((msg, idx) => {
-                const msgTime = new Date(msg.timestamp * 1000).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                });
-                return (
-                  <div key={`${msg.timestamp}-${idx}`} className="terminal-line">
-                    <span className="terminal-time">[{msgTime}]</span>
-                    <span className="terminal-hex">{msg.hex.toUpperCase()}</span>
-                  </div>
-                );
-              })
-            )}
           </div>
         </div>
       </div>

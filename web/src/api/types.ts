@@ -27,12 +27,6 @@ export interface FlightDetail extends FlightSummary {
   photo_url?: string | null;
   photo_photographer?: string | null;
   photo_link?: string | null;
-  raw_messages?: RawMessage[];
-}
-
-export interface RawMessage {
-  timestamp: number;
-  hex: string;
 }
 
 export interface TelemetryPoint {

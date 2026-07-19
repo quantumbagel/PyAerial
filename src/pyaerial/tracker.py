@@ -148,11 +148,6 @@ class Tracker:
                 if not series or series[-1].value != datum.value:
                     series.append(datum)
 
-        if "raw_messages" not in plane:
-            plane["raw_messages"] = []
-        plane["raw_messages"].append({"hex": msg_hex, "timestamp": timestamp})
-        if len(plane["raw_messages"]) > 1000:
-            plane["raw_messages"].pop(0)
 
         internal = plane.setdefault(STORE_INTERNAL, {
             STORE_MOST_RECENT_PACKET: timestamp,
