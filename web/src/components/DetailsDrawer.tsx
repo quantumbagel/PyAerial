@@ -87,7 +87,7 @@ export function DetailsDrawer({
     flightTelemetry.length > 0 ? flightTelemetry[flightTelemetry.length - 1] : null;
 
   return (
-    <div id="details-drawer" className={open ? 'open' : ''}>
+    <div id="details-drawer" className={`${open ? 'open' : ''} ${hasPhoto ? 'has-photo-drawer' : ''}`.trim()}>
       <button type="button" id="close-drawer-btn" className="close-btn" title="Close" onClick={onClose}>
         &times;
       </button>

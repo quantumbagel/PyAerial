@@ -166,16 +166,13 @@ class PlaneCalculator:
     def _bg_lookup_metadata(self, plane: dict, icao: str) -> None:
         try:
             callsign = plane[STORE_INFO].get(STORE_CALLSIGN)
-            if not callsign:
-                callsign = _lookup_callsign_hexdb(icao)
-
             model = ""
             owner = ""
             country = ""
             aircraft_type = ""
 
             if self.aircraft_db and self.aircraft_db.available:
-                record = self.aircraft_db.lookup(icao)
+                record = self.aircraft_db.lookup_cached(icao)
                 if record:
                     if not callsign:
                         callsign = record.get("callsign") or record.get("registration")
@@ -261,12 +258,4 @@ class PlaneCalculator:
         return self._alerters[key]
 
 
-def _lookup_callsign_hexdb(icao: str) -> str | None:
-    try:
-        resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{icao}", timeout=1)
-    except requests.RequestException:
-        return None
-    if resp.status_code != 200:
-        return None
-    data = resp.json()
-    return data.get("Registration")
+

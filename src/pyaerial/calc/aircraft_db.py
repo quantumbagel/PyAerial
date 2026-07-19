@@ -69,10 +69,6 @@ class AircraftDB:
         return self._conn is not None
 
     def lookup_cached(self, icao: str) -> dict | None:
-        """Return locally cached metadata without querying external APIs."""
-        return self.lookup(icao, fetch_if_missing=False)
-
-    def lookup(self, icao: str, *, fetch_if_missing: bool = True) -> dict | None:
         """Return aircraft metadata for an ICAO hex, checking local index first, then API."""
         if self._conn is None:
             return None
@@ -85,7 +81,7 @@ class AircraftDB:
         if record is not _MISSING:
             if record is None:
                 return None
-            if "photo_checked" in record or not fetch_if_missing:
+            if "photo_checked" in record:
                 return self._return_normalized_record(icao, record)
 
             photo_info = self._fetch_photo_from_planespotters(icao, record.get("registration"))
@@ -93,9 +89,6 @@ class AircraftDB:
             record["photo_checked"] = True
             self._update_cache(icao, record)
             return normalize_record_photos(record)
-
-        if not fetch_if_missing:
-            return None
 
         # Cache miss: Fetch from HexDB and Planespotters APIs
         log.info("Aircraft DB miss for %s. Querying online APIs...", icao)
