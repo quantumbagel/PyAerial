@@ -3,6 +3,14 @@ import type { Alert, PortalView } from '../api/types';
 import type { DrawerTab } from '../components/DetailsDrawer';
 import type { MapViewHandle } from '../components/MapView';
 import type { SidebarTab } from '../components/Sidebar';
+import {
+  defaultSortDirection,
+  loadFlightSort,
+  saveFlightSort,
+  sortFlightsBy,
+  type FlightSortField,
+  type SortDirection,
+} from '../utils/flightData';
 import { useAlertNotifications } from './useAlertNotifications';
 import { useFlightPaths } from './useFlightPaths';
 import { useFlightSelection } from './useFlightSelection';
@@ -15,10 +23,35 @@ export function usePortalApp() {
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [zonesVisible, setZonesVisible] = useState(true);
+  const [flightSortField, setFlightSortField] = useState<FlightSortField>(
+    () => loadFlightSort(portalView).field,
+  );
+  const [flightSortDirection, setFlightSortDirection] = useState<SortDirection>(
+    () => loadFlightSort(portalView).direction,
+  );
 
   useEffect(() => {
     localStorage.setItem('portalView', portalView);
   }, [portalView]);
+
+  useEffect(() => {
+    const saved = loadFlightSort(portalView);
+    setFlightSortField(saved.field);
+    setFlightSortDirection(saved.direction);
+  }, [portalView]);
+
+  useEffect(() => {
+    saveFlightSort(portalView, flightSortField, flightSortDirection);
+  }, [portalView, flightSortField, flightSortDirection]);
+
+  const setFlightSort = useCallback((field: FlightSortField) => {
+    setFlightSortField(field);
+    setFlightSortDirection(defaultSortDirection(field));
+  }, []);
+
+  const toggleFlightSortDirection = useCallback(() => {
+    setFlightSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
+  }, []);
 
   const mapRef = useRef<MapViewHandle>({
     map: null,
@@ -79,7 +112,7 @@ export function usePortalApp() {
 
   const filteredFlights = useMemo(() => {
     const q = searchQuery.toLowerCase();
-    return portal.flightsData.filter((flight) => {
+    const filtered = portal.flightsData.filter((flight) => {
       const callsign = (flight.callsign || '').toLowerCase();
       const icao = (flight.icao || '').toLowerCase();
       const model = (flight.model || '').toLowerCase();
@@ -93,7 +126,8 @@ export function usePortalApp() {
         zone.includes(q)
       );
     });
-  }, [portal.flightsData, searchQuery]);
+    return sortFlightsBy(filtered, flightSortField, flightSortDirection);
+  }, [portal.flightsData, searchQuery, flightSortField, flightSortDirection]);
 
   const paths = useFlightPaths(portalView, selection.activeFlightId, filteredFlights);
 
@@ -157,6 +191,10 @@ export function usePortalApp() {
     filteredFlights,
     filteredAlerts,
     flightCount,
+    flightSortField,
+    flightSortDirection,
+    setFlightSort,
+    toggleFlightSortDirection,
     disableFollow,
   };
 }

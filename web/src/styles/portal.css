@@ -118,6 +118,54 @@ body {
     overflow-y: auto;
     list-style: none;
 }
+.flight-sort-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-5);
+    border-bottom: 1px solid var(--border);
+    background-color: var(--panel-raised);
+    flex-shrink: 0;
+}
+.flight-sort-label {
+    font-size: var(--font-meta);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.flight-sort-select {
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--input-border);
+    background-color: var(--input-bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: var(--font-meta);
+    outline: none;
+}
+.flight-sort-select:focus {
+    border-color: var(--accent);
+}
+.flight-sort-direction {
+    flex-shrink: 0;
+    width: 32px;
+    height: 28px;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--input-border);
+    background-color: var(--input-bg);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.flight-sort-direction:hover {
+    border-color: var(--accent);
+    color: var(--text);
+}
 .flight-item {
     padding: var(--space-4) var(--space-6);
     border-bottom: 1px solid var(--border-subtle);

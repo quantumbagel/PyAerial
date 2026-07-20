@@ -1,7 +1,8 @@
 import { useEffect, useMemo } from 'react';
 import type { Alert, FlightSummary } from '../api/types';
-import { AlertLevelBadge, flightTimeLabel, LevelBadge } from './LevelBadge';
+import { FLIGHT_SORT_OPTIONS, type FlightSortField, type SortDirection } from '../utils/flightData';
 import { formatAlertAltitude, formatAlertEta } from '../utils/format';
+import { AlertLevelBadge, flightTimeLabel, LevelBadge } from './LevelBadge';
 
 type SidebarTab = 'flights' | 'alerts';
 
@@ -14,8 +15,12 @@ interface SidebarProps {
   activeFlightId: string | null;
   activeAlertId: string | null;
   flightCount: number;
+  flightSortField: FlightSortField;
+  flightSortDirection: SortDirection;
   unreadAlertsCount?: number;
   onSwitchPortalView: (view: 'live' | 'history') => void;
+  onFlightSortChange: (field: FlightSortField) => void;
+  onFlightSortDirectionToggle: () => void;
   onSwitchSidebarTab: (tab: SidebarTab) => void;
   onSearchChange: (query: string) => void;
   onSelectFlight: (flightId: string) => void;
@@ -32,8 +37,12 @@ export function Sidebar({
   activeFlightId,
   activeAlertId,
   flightCount,
+  flightSortField,
+  flightSortDirection,
   unreadAlertsCount = 0,
   onSwitchPortalView,
+  onFlightSortChange,
+  onFlightSortDirectionToggle,
   onSwitchSidebarTab,
   onSearchChange,
   onSelectFlight,
@@ -128,6 +137,32 @@ export function Sidebar({
         </button>
       </div>
       <div id="panel-flights" className={`sidebar-panel${sidebarTab === 'flights' ? ' active' : ''}`}>
+        <div id="flight-sort-bar" className="flight-sort-bar">
+          <label htmlFor="flight-sort-field" className="flight-sort-label">
+            Sort by
+          </label>
+          <select
+            id="flight-sort-field"
+            className="flight-sort-select"
+            value={flightSortField}
+            onChange={(e) => onFlightSortChange(e.target.value as FlightSortField)}
+          >
+            {FLIGHT_SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="flight-sort-direction"
+            onClick={onFlightSortDirectionToggle}
+            title={flightSortDirection === 'asc' ? 'Ascending' : 'Descending'}
+            aria-label={flightSortDirection === 'asc' ? 'Sort ascending' : 'Sort descending'}
+          >
+            {flightSortDirection === 'asc' ? '↑' : '↓'}
+          </button>
+        </div>
         <ul id="flight-list">
           {flights.map((flight) => (
             <li

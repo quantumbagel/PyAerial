@@ -21,6 +21,10 @@ export function PortalApp() {
     filteredFlights,
     filteredAlerts,
     flightCount,
+    flightSortField,
+    flightSortDirection,
+    setFlightSort,
+    toggleFlightSortDirection,
     disableFollow,
   } = usePortalApp();
 
@@ -48,8 +52,12 @@ export function PortalApp() {
         activeFlightId={selection.activeFlightId}
         activeAlertId={selection.activeAlertId}
         flightCount={flightCount}
+        flightSortField={flightSortField}
+        flightSortDirection={flightSortDirection}
         unreadAlertsCount={portal.unreadAlertsCount}
         onSwitchPortalView={portal.switchPortalView}
+        onFlightSortChange={setFlightSort}
+        onFlightSortDirectionToggle={toggleFlightSortDirection}
         onSwitchSidebarTab={portal.handleSwitchSidebarTab}
         onSearchChange={setSearchQuery}
         onSelectFlight={selection.selectFlight}
