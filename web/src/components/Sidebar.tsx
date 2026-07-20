@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 import type { Alert, FlightSummary } from '../api/types';
 import { FLIGHT_SORT_OPTIONS, type FlightSortField, type SortDirection } from '../utils/flightData';
 import { formatAlertAltitude, formatAlertEta } from '../utils/format';
-import { AlertLevelBadge, flightTimeLabel, LevelBadge } from './LevelBadge';
+import { AlertLevelBadge, flightSortValueLabel, flightTimeLabel, LevelBadge } from './LevelBadge';
 
 type SidebarTab = 'flights' | 'alerts';
 
@@ -12,6 +12,7 @@ interface SidebarProps {
   searchQuery: string;
   flights: FlightSummary[];
   alerts: Alert[];
+  allAlerts: Alert[];
   activeFlightId: string | null;
   activeAlertId: string | null;
   flightCount: number;
@@ -34,6 +35,7 @@ export function Sidebar({
   searchQuery,
   flights,
   alerts,
+  allAlerts,
   activeFlightId,
   activeAlertId,
   flightCount,
@@ -58,16 +60,19 @@ export function Sidebar({
     }
   }, [activeAlertId, sidebarTab]);
 
-  // Build a per-flight alert count map for the Done badge
+  // Build a per-flight alert count map from the full (unfiltered) alert set
   const alertCountByFlight = useMemo(() => {
     const map = new Map<string, number>();
-    for (const alert of alerts) {
+    for (const alert of allAlerts) {
       if (alert.flight_id) {
         map.set(alert.flight_id, (map.get(alert.flight_id) ?? 0) + 1);
       }
     }
     return map;
-  }, [alerts]);
+  }, [allAlerts]);
+
+  // Determine the bottom-right label for each flight row based on sort field
+  const isTimeSortField = flightSortField === 'last_seen' || flightSortField === 'first_seen';
   return (
     <div id="sidebar">
       <div id="sidebar-header">
@@ -185,7 +190,11 @@ export function Sidebar({
               </div>
               <div className="flight-meta-row">
                 <span className="flight-desc">{flight.model || 'Unknown Model'}</span>
-                <span className="flight-time">{flightTimeLabel(flight)}</span>
+                <span className="flight-time">
+                  {isTimeSortField
+                    ? flightTimeLabel(flight)
+                    : flightSortValueLabel(flight, flightSortField)}
+                </span>
               </div>
             </li>
           ))}

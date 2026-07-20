@@ -49,6 +49,7 @@ export function PortalApp() {
         searchQuery={searchQuery}
         flights={filteredFlights}
         alerts={filteredAlerts}
+        allAlerts={portal.alertsData}
         activeFlightId={selection.activeFlightId}
         activeAlertId={selection.activeAlertId}
         flightCount={flightCount}
