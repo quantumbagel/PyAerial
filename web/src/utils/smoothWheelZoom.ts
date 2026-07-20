@@ -39,14 +39,14 @@ const SmoothWheelZoom = L.Handler.extend({
     const map: L.Map = this._map;
     this._isWheeling   = true;
     this._wheelMousePosition = map.mouseEventToContainerPoint(e);
-    this._centerPoint        = map.getSize()._divideBy(2);
+    this._centerPoint        = map.getSize().divideBy(2);
     this._startLatLng        = map.containerPointToLatLng(this._centerPoint);
     this._wheelMouseLatLng   = map.containerPointToLatLng(this._wheelMousePosition);
     this._startZoom          = map.getZoom();
     this._moved              = false;
     this._zooming            = true;
 
-    map._stop();
+    (map as any)._stop(); // internal Leaflet method – no public equivalent
     if ((map as any)._panAnim) (map as any)._panAnim.stop();
 
     this._goalZoom     = map.getZoom();
@@ -113,13 +113,13 @@ const SmoothWheelZoom = L.Handler.extend({
 
     // Calculate the new centre so the point under the cursor stays fixed
     const scale = map.getZoomScale(newZoom, currentZoom);
-    const viewHalf = map.getSize()._divideBy(2);
+    const viewHalf = map.getSize().divideBy(2);
 
     const newCenter = map
       .project(this._wheelMouseLatLng, newZoom)
-      ._subtract(pivot)
-      ._add(viewHalf)
-      ._add(viewHalf._subtract(pivot)._multiplyBy(-(1 / scale - 1)));
+      .subtract(pivot)
+      .add(viewHalf)
+      .add(viewHalf.subtract(pivot).multiplyBy(-(1 / scale - 1)));
 
     const newLatLng = map.unproject(newCenter, newZoom);
 
