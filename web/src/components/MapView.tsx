@@ -230,16 +230,13 @@ export function MapView({
         opacity: 0.9,
       }).addTo(map);
       polygon.bindPopup(buildZonePopup(zone));
-      const center = polygon.getBounds().getCenter();
-      const label = L.marker(center, {
-        interactive: false,
-        icon: L.divIcon({
-          className: 'zone-label-marker',
-          html: `<div class="zone-label">${zone.name}</div>`,
-          iconSize: [0, 0],
-        }),
-      }).addTo(map);
-      zoneLayers.current.push(polygon, label);
+      polygon.bindTooltip(zone.name.toUpperCase(), {
+        sticky: false,
+        permanent: false,
+        direction: 'center',
+        className: 'zone-name-tooltip',
+      });
+      zoneLayers.current.push(polygon);
     });
   }, [zonesVisible, zonesData]);
 
