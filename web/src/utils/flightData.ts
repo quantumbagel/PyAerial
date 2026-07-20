@@ -10,9 +10,7 @@ export type FlightSortField =
   | 'model'
   | 'type'
   | 'altitude'
-  | 'speed'
-  | 'zone'
-  | 'level';
+  | 'speed';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -26,12 +24,10 @@ export const FLIGHT_SORT_OPTIONS: { value: FlightSortField; label: string }[] = 
   { value: 'type', label: 'Type' },
   { value: 'altitude', label: 'Altitude' },
   { value: 'speed', label: 'Speed' },
-  { value: 'zone', label: 'Zone' },
-  { value: 'level', label: 'Level' },
 ];
 
 export function defaultSortDirection(field: FlightSortField): SortDirection {
-  if (field === 'callsign' || field === 'icao' || field === 'model' || field === 'type' || field === 'zone' || field === 'level') {
+  if (field === 'callsign' || field === 'icao' || field === 'model' || field === 'type') {
     return 'asc';
   }
   return 'desc';
