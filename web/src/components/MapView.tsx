@@ -40,36 +40,7 @@ interface MapViewProps {
   drawer?: React.ReactNode;
 }
 
-function formatConstraint(when: Record<string, { min?: number; max?: number }>): string {
-  return Object.entries(when)
-    .map(([field, bounds]) => {
-      const parts: string[] = [];
-      if (bounds.min != null) parts.push(`min ${bounds.min}`);
-      if (bounds.max != null) parts.push(`max ${bounds.max}`);
-      return `${field}: ${parts.join(', ')}`;
-    })
-    .join(' · ');
-}
 
-function buildZonePopup(zone: ZonesData['zones'][0]): string {
-  const rules = (zone.rules || [])
-    .map((rule) => {
-      const level = (rule.name || '').toLowerCase();
-      const levelClass = level === 'alert' ? 'alert' : level === 'warn' ? 'warn' : '';
-      const displayLvl = level.charAt(0).toUpperCase() + level.slice(1);
-      return `
-        <div class="rule">
-          <div class="rule-header">
-            <span class="level-badge ${levelClass}">${displayLvl}</span>
-            <span class="rule-dwell">Dwell: ${rule.dwell_seconds}s</span>
-          </div>
-          <div class="rule-constraint">${formatConstraint(rule.when)}</div>
-        </div>
-      `;
-    })
-    .join('');
-  return `<div class="zone-popup"><h4>${zone.name}</h4>${rules || '<div class="subtitle">No rules configured.</div>'}</div>`;
-}
 
 export function MapView({
   flights,
@@ -213,10 +184,9 @@ export function MapView({
         fillColor: '#38bdf8',
         fillOpacity: 0.95,
         weight: 2,
+        interactive: false,
       }).addTo(map);
-      homeMarker.bindPopup(
-        '<div class="zone-popup"><h4>Home</h4><div class="subtitle">Receiver / reference location</div></div>',
-      );
+      homeMarker.bindTooltip('Home · Receiver / reference location');
       zoneLayers.current.push(homeMarker);
     }
 
@@ -229,12 +199,10 @@ export function MapView({
         weight: 2,
         opacity: 0.9,
       }).addTo(map);
-      polygon.bindPopup(buildZonePopup(zone));
       polygon.bindTooltip(zone.name.toUpperCase(), {
         sticky: false,
         permanent: false,
         direction: 'center',
-        className: 'zone-name-tooltip',
       });
       zoneLayers.current.push(polygon);
     });

@@ -282,24 +282,6 @@ body {
     border-color: var(--accent);
     color: var(--accent-soft);
 }
-/* Zone name appears as a Leaflet tooltip on polygon hover — monochrome detail style */
-.zone-name-tooltip {
-    background: rgba(10, 10, 10, 0.82) !important;
-    border: 1px solid rgba(255, 255, 255, 0.18) !important;
-    color: rgba(255, 255, 255, 0.92) !important;
-    font-family: 'Outfit', system-ui, sans-serif;
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    padding: 3px 10px;
-    border-radius: 4px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.55);
-    white-space: nowrap;
-}
-.zone-name-tooltip::before {
-    display: none;
-}
 .leaflet-popup-content-wrapper {
     background: rgba(26, 26, 26, 0.95) !important;
     backdrop-filter: blur(8px);
