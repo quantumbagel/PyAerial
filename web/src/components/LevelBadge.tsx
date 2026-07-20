@@ -1,14 +1,16 @@
 import type { FlightSummary } from '../api/types';
 import { isFlightLive } from '../utils/format';
 
-export function LevelBadge({ flight }: { flight: FlightSummary }) {
+export function LevelBadge({ flight, alertCount }: { flight: FlightSummary; alertCount?: number }) {
   if (flight.is_live) {
     return <span className="level-badge live">Live</span>;
   }
   const level = (flight.level || '').toLowerCase();
   if (level === 'warn') return <span className="level-badge warn">Warn</span>;
   if (level === 'alert') return <span className="level-badge alert">Alert</span>;
-  return <span className="level-badge done">Done</span>;
+  const count = alertCount ?? 0;
+  const label = count === 1 ? '1 alert' : `${count} alerts`;
+  return <span className={`level-badge ${count > 0 ? 'warn' : 'done'}`}>{label}</span>;
 }
 
 export function AlertLevelBadge({ level }: { level?: string }) {

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { Alert, FlightSummary } from '../api/types';
 import { AlertLevelBadge, flightTimeLabel, LevelBadge } from './LevelBadge';
 import { formatAlertAltitude, formatAlertEta } from '../utils/format';
@@ -48,6 +48,17 @@ export function Sidebar({
       }
     }
   }, [activeAlertId, sidebarTab]);
+
+  // Build a per-flight alert count map for the Done badge
+  const alertCountByFlight = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const alert of alerts) {
+      if (alert.flight_id) {
+        map.set(alert.flight_id, (map.get(alert.flight_id) ?? 0) + 1);
+      }
+    }
+    return map;
+  }, [alerts]);
   return (
     <div id="sidebar">
       <div id="sidebar-header">
@@ -127,7 +138,7 @@ export function Sidebar({
               <div className="flight-meta-row">
                 <span className="flight-callsign">
                   {flight.callsign || 'UNKNOWN'}{' '}
-                  <LevelBadge flight={flight} />
+                  <LevelBadge flight={flight} alertCount={alertCountByFlight.get(flight.flight_id)} />
                 </span>
                 <span className="flight-icao">{flight.icao.toUpperCase()}</span>
               </div>
