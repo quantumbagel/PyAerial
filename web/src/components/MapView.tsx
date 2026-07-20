@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import L from 'leaflet';
+import * as L from 'leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
 import { isFlightLive, formatAlertAltitude, formatAlertEta } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight, ZONE_COLORS } from '../utils/planeIcon';

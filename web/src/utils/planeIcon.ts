@@ -1,4 +1,4 @@
-import L from 'leaflet';
+import * as L from 'leaflet';
 import { COLOR_CONFIG } from './colors';
 
 export function createPlaneIcon(
