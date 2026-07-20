@@ -46,7 +46,11 @@ export function usePortalApp() {
       alertNotifications.triggerDesktopNotification(newest);
       newAlerts.forEach((a) => alertNotifications.addToast(a));
     },
-    [alertNotifications],
+    [
+      alertNotifications.playWarningChime,
+      alertNotifications.triggerDesktopNotification,
+      alertNotifications.addToast,
+    ],
   );
 
   const selection = useFlightSelection({

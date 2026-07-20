@@ -46,6 +46,9 @@ export function usePortalData({
   const portalViewRef = useRef<PortalView>(portalView);
   const sidebarTabRef = useRef(sidebarTab);
   const appendSelectedTelemetryRef = useRef(appendSelectedTelemetry);
+  const onNewAlertsRef = useRef(onNewAlerts);
+  const loadFlightAlertsRef = useRef(loadFlightAlerts);
+  const setPathCoordsRef = useRef(setPathCoords);
 
   useEffect(() => {
     portalViewRef.current = portalView;
@@ -56,6 +59,15 @@ export function usePortalData({
   useEffect(() => {
     appendSelectedTelemetryRef.current = appendSelectedTelemetry;
   }, [appendSelectedTelemetry]);
+  useEffect(() => {
+    onNewAlertsRef.current = onNewAlerts;
+  }, [onNewAlerts]);
+  useEffect(() => {
+    loadFlightAlertsRef.current = loadFlightAlerts;
+  }, [loadFlightAlerts]);
+  useEffect(() => {
+    setPathCoordsRef.current = setPathCoords;
+  }, [setPathCoords]);
 
   const handleSwitchSidebarTab = useCallback((tab: SidebarTab) => {
     setSidebarTab(tab);
@@ -170,7 +182,7 @@ export function usePortalData({
             const prevIds = new Set(prev.map((a) => a.alert_id));
             const newAlerts = message.alerts.filter((a: Alert) => !prevIds.has(a.alert_id));
             if (newAlerts.length > 0) {
-              onNewAlerts(newAlerts);
+              onNewAlertsRef.current(newAlerts);
               if (sidebarTabRef.current !== 'alerts') {
                 setUnreadAlertsCount((c) => c + newAlerts.length);
               }
@@ -190,20 +202,20 @@ export function usePortalData({
             const selectedPoints = message.telemetry.filter((p) => p.flight_id === flightId);
             if (selectedPoints.length > 0) {
               appendSelectedTelemetryRef.current(selectedPoints);
-              setPathCoords((prev) => {
+              setPathCoordsRef.current((prev) => {
                 const existing = prev[flightId] || [];
                 const added = selectedPoints
                   .filter((p) => p.latitude != null && p.longitude != null)
                   .map((p) => [p.latitude!, p.longitude!] as [number, number]);
                 return { ...prev, [flightId]: [...existing, ...added] };
               });
-              loadFlightAlerts(flightId, 'live', true);
+              loadFlightAlertsRef.current(flightId, 'live', true);
             }
           }
           if (showAllPathsRef.current) {
             message.telemetry.forEach((point) => {
               if (!point.flight_id) return;
-              setPathCoords((prev) => {
+              setPathCoordsRef.current((prev) => {
                 if (prev[point.flight_id!]) {
                   const existing = prev[point.flight_id!];
                   return {
@@ -221,7 +233,7 @@ export function usePortalData({
         }
       },
     });
-  }, [activeFlightIdRef, showAllPathsRef, setPathCoords, loadFlightAlerts, onNewAlerts]);
+  }, []);
 
   return {
     flightsData,

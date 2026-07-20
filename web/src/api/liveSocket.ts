@@ -7,7 +7,6 @@ export type LiveSocketHandlers = {
 };
 
 let ws: WebSocket | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let isClosed = false;
 let backoff = 1000;
 const handlersSet = new Set<LiveSocketHandlers>();
@@ -74,7 +73,7 @@ function connect() {
     pendingRequests.clear();
 
     if (!isClosed) {
-      reconnectTimer = setTimeout(connect, backoff);
+      setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, 10000);
     }
   };
@@ -93,15 +92,6 @@ export function connectLiveSocket(handlers: LiveSocketHandlers): () => void {
   }
   return () => {
     handlersSet.delete(handlers);
-    if (handlersSet.size === 0) {
-      isClosed = true;
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      ws?.close();
-      ws = null;
-    }
   };
 }
 
