@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Alert, FlightDetail, TelemetryPoint } from '../api/types';
+import { isFlightLive } from '../utils/format';
 import {
   formatAlertAltitude,
   formatAlertEta,
@@ -198,6 +199,35 @@ export function DetailsDrawer({
         <div className="info-section" style={{ backgroundColor: '#141720' }}>
           <h3>Telemetry Readings</h3>
           <div className="details-grid">
+            {(() => {
+              const formatTs = (ts?: number | null) =>
+                ts ? new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : 'N/A';
+              const live = flightDetail ? isFlightLive(flightDetail) : false;
+              if (live) {
+                const liveTs = flightDetail?.timestamp ?? flightDetail?.end_time ?? flightDetail?.start_time;
+                return (
+                  <>
+                    <span className="details-label">Last Seen</span>
+                    <span className="details-value" id="detail-last-seen" style={{ color: '#34d399' }}>
+                      {formatTs(liveTs)}
+                    </span>
+                  </>
+                );
+              } else {
+                return (
+                  <>
+                    <span className="details-label">First Seen</span>
+                    <span className="details-value" id="detail-first-seen">
+                      {formatTs(flightDetail?.start_time)}
+                    </span>
+                    <span className="details-label">Last Seen</span>
+                    <span className="details-value" id="detail-last-seen">
+                      {formatTs(flightDetail?.end_time ?? flightDetail?.timestamp)}
+                    </span>
+                  </>
+                );
+              }
+            })()}
             <span className="details-label">Altitude</span>
             <span className="details-value" id="detail-altitude">
               {lastPoint ? formatAltitude(lastPoint.altitude) : 'N/A'}
