@@ -4,6 +4,7 @@ import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from 
 import { isFlightLive, formatAlertAltitude, formatAlertEta } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight, ZONE_COLORS } from '../utils/planeIcon';
 import { COLOR_CONFIG } from '../utils/colors';
+import { initSmoothWheelZoom } from '../utils/smoothWheelZoom';
 
 export interface MapViewHandle {
   map: L.Map | null;
@@ -117,8 +118,11 @@ export function MapView({
       zoomControl: false,
       zoomSnap: 0,
       zoomDelta: 1.0,
-      wheelPxPerZoomLevel: 40,
+      scrollWheelZoom: false,   // disabled in favour of SmoothWheelZoom
+      smoothWheelZoom: true,
+      smoothSensitivity: 1,
     }).setView([35.727, -78.696], 8);
+    initSmoothWheelZoom(map);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; OpenStreetMap &copy; CARTO',
     }).addTo(map);
