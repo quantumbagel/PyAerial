@@ -76,23 +76,39 @@ export function Sidebar({
             <h1>PyAerial Live Tracker</h1>
             <p>See the data captured by your ADS-B receiver</p>
           </div>
-          <div id="view-toggle">
-            <button
-              type="button"
-              className={`view-btn${portalView === 'live' ? ' active' : ''}`}
-              id="view-live"
-              onClick={() => onSwitchPortalView('live')}
-            >
-              Live
-            </button>
-            <button
-              type="button"
-              className={`view-btn${portalView === 'history' ? ' active' : ''}`}
-              id="view-history"
-              onClick={() => onSwitchPortalView('history')}
-            >
-              Historical
-            </button>
+          <div className="sidebar-header-controls">
+            <div id="view-toggle">
+              <button
+                type="button"
+                className={`view-btn${portalView === 'live' ? ' active' : ''}`}
+                id="view-live"
+                onClick={() => onSwitchPortalView('live')}
+              >
+                Live
+              </button>
+              <button
+                type="button"
+                className={`view-btn${portalView === 'history' ? ' active' : ''}`}
+                id="view-history"
+                onClick={() => onSwitchPortalView('history')}
+              >
+                Historical
+              </button>
+            </div>
+            <div id="stats-panel">
+              <div className="stat-card">
+                <span id="flight-stat-label">{portalView === 'live' ? 'Live:' : 'Retained:'}</span>
+                <strong id="flight-count" className="stat-live">
+                  {flightCount}
+                </strong>
+              </div>
+              <div className="stat-card">
+                <span>Alerts:</span>
+                <strong id="alert-count" className="stat-alerts">
+                  {alerts.length}
+                </strong>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -104,20 +120,6 @@ export function Sidebar({
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
         />
-      </div>
-      <div id="stats-panel">
-        <div className="stat-card">
-          <span id="flight-stat-label">{portalView === 'live' ? 'Live:' : 'Retained:'}</span>
-          <strong id="flight-count" className="stat-live">
-            {flightCount}
-          </strong>
-        </div>
-        <div className="stat-card">
-          <span>Alerts:</span>
-          <strong id="alert-count" className="stat-alerts">
-            {alerts.length}
-          </strong>
-        </div>
       </div>
       <div id="sidebar-tabs">
         <button

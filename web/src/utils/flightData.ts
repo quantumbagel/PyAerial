@@ -51,6 +51,37 @@ function getFlightAircraftType(flight: FlightSummary): string {
   return (flight.aircraft_type || flight.typecode || '').toLowerCase();
 }
 
+function isFiniteSortNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+export function isFlightSortValueMissing(flight: FlightSummary, field: FlightSortField): boolean {
+  switch (field) {
+    case 'altitude':
+      return !isFiniteSortNumber(flight.altitude);
+    case 'speed':
+      return !isFiniteSortNumber(flight.speed);
+    case 'last_seen':
+      return getFlightLastSeen(flight) === 0;
+    case 'first_seen':
+      return (flight.start_time ?? 0) === 0;
+    case 'callsign':
+      return !flight.callsign?.trim();
+    case 'icao':
+      return !flight.icao?.trim();
+    case 'model':
+      return !flight.model?.trim();
+    case 'type':
+      return !getFlightAircraftType(flight);
+    case 'zone':
+      return !flight.zone?.trim();
+    case 'level':
+      return !flight.level?.trim();
+    default:
+      return false;
+  }
+}
+
 function compareFlightsByField(a: FlightSummary, b: FlightSummary, field: FlightSortField): number {
   switch (field) {
     case 'last_seen':
@@ -68,9 +99,9 @@ function compareFlightsByField(a: FlightSummary, b: FlightSummary, field: Flight
     case 'type':
       return getFlightAircraftType(a).localeCompare(getFlightAircraftType(b), undefined, { sensitivity: 'base' });
     case 'altitude':
-      return (a.altitude ?? -1) - (b.altitude ?? -1);
+      return (a.altitude as number) - (b.altitude as number);
     case 'speed':
-      return (a.speed ?? -1) - (b.speed ?? -1);
+      return (a.speed as number) - (b.speed as number);
     case 'zone':
       return (a.zone || '').localeCompare(b.zone || '', undefined, { sensitivity: 'base' });
     case 'level':
@@ -80,6 +111,10 @@ function compareFlightsByField(a: FlightSummary, b: FlightSummary, field: Flight
   }
 }
 
+function compareFlightsByLastSeenDesc(a: FlightSummary, b: FlightSummary): number {
+  return compareFlightsByField(a, b, 'last_seen') * -1;
+}
+
 export function sortFlightsBy(
   flights: FlightSummary[],
   field: FlightSortField,
@@ -87,9 +122,15 @@ export function sortFlightsBy(
 ): FlightSummary[] {
   const mult = direction === 'asc' ? 1 : -1;
   return [...flights].sort((a, b) => {
+    const aMissing = isFlightSortValueMissing(a, field);
+    const bMissing = isFlightSortValueMissing(b, field);
+    if (aMissing && bMissing) return compareFlightsByLastSeenDesc(a, b);
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+
     const cmp = compareFlightsByField(a, b, field);
     if (cmp !== 0) return cmp * mult;
-    return compareFlightsByField(a, b, 'last_seen') * -1;
+    return compareFlightsByLastSeenDesc(a, b);
   });
 }
 
