@@ -57,28 +57,40 @@ body {
     z-index: 10;
 }
 #sidebar-header {
-    padding: var(--space-5);
+    padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border);
     background-color: var(--panel-raised);
 }
+.sidebar-header-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-2);
+}
+.sidebar-header-text {
+    min-width: 0;
+    flex: 1;
+}
 #sidebar-header h1 {
-    font-size: 1.2rem;
+    font-size: 0.95rem;
     font-weight: 600;
     color: var(--accent);
-    margin-bottom: var(--space-1);
+    line-height: 1.2;
 }
 #sidebar-header p {
-    font-size: var(--font-meta);
+    font-size: 0.65rem;
     color: var(--text-secondary);
+    line-height: 1.25;
+    margin-top: 1px;
 }
 #search-container {
-    padding: var(--space-3) var(--space-5);
+    padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border);
     background-color: var(--panel-raised);
 }
 #search-input {
     width: 100%;
-    padding: var(--space-2) var(--space-3);
+    padding: 5px var(--space-2);
     border-radius: var(--radius-sm);
     border: 1px solid var(--input-border);
     background-color: var(--input-bg);
@@ -92,17 +104,17 @@ body {
     border-color: var(--accent);
 }
 #stats-panel {
-    padding: var(--space-3) var(--space-5);
+    padding: var(--space-2) var(--space-3);
     background-color: var(--panel-raised);
     border-bottom: 1px solid var(--border);
-    font-size: var(--font-body);
+    font-size: var(--font-meta);
     display: flex;
     gap: var(--space-2);
 }
 .stat-card {
     flex: 1;
     background-color: var(--panel-hover);
-    padding: var(--space-2) var(--space-3);
+    padding: 3px var(--space-2);
     border-radius: var(--radius-md);
     border: 1px solid var(--border);
     display: flex;
@@ -122,7 +134,7 @@ body {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-2) var(--space-5);
+    padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border);
     background-color: var(--panel-raised);
     flex-shrink: 0;
@@ -149,8 +161,8 @@ body {
 }
 .flight-sort-direction {
     flex-shrink: 0;
-    width: 32px;
-    height: 28px;
+    width: 26px;
+    height: 24px;
     padding: 0;
     border-radius: var(--radius-sm);
     border: 1px solid var(--input-border);
@@ -167,7 +179,7 @@ body {
     color: var(--text);
 }
 .flight-item {
-    padding: var(--space-4) var(--space-6);
+    padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border-subtle);
     cursor: pointer;
     background-color: transparent;
@@ -188,11 +200,11 @@ body {
     align-items: center;
 }
 .flight-meta-row + .flight-meta-row {
-    margin-top: var(--space-2);
+    margin-top: 2px;
 }
 .flight-callsign {
     font-weight: 600;
-    font-size: var(--font-title);
+    font-size: var(--font-body);
     color: var(--text);
     display: flex;
     align-items: center;
@@ -270,16 +282,16 @@ body {
 }
 #map-controls {
     position: absolute;
-    top: var(--space-3);
-    left: var(--space-3);
+    top: var(--space-2);
+    left: var(--space-2);
     z-index: 1005;
     display: flex;
     align-items: stretch;
     gap: 0;
     background: rgba(15, 18, 24, 0.9);
     border: 1px solid rgba(51, 65, 85, 0.8);
-    border-radius: var(--radius-lg);
-    padding: var(--space-1);
+    border-radius: var(--radius-md);
+    padding: 2px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
     backdrop-filter: blur(8px);
 }
@@ -295,8 +307,8 @@ body {
 }
 .toolbar-btn,
 .view-btn {
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-md);
+    padding: 5px var(--space-2);
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--panel-hover);
     color: var(--text-secondary);
@@ -311,8 +323,8 @@ body {
     flex: 1;
 }
 .map-zoom-btn {
-    padding: var(--space-2) var(--space-4);
-    font-size: 1.1rem;
+    padding: 4px var(--space-3);
+    font-size: 1rem;
     font-weight: 500;
 }
 #follow-btn {
@@ -626,12 +638,12 @@ body {
 }
 .sidebar-tab {
     flex: 1;
-    padding: 10px 8px;
+    padding: 6px 8px;
     border: none;
     background: transparent;
     color: #888;
     font-family: inherit;
-    font-size: 0.8rem;
+    font-size: var(--font-meta);
     cursor: pointer;
 }
 .sidebar-tab.active {
@@ -658,7 +670,7 @@ body {
     border: 1px solid color-mix(in srgb, var(--alert) 40%, transparent);
 }
 .alert-item {
-    padding: var(--space-4) var(--space-6);
+    padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border-subtle);
     cursor: pointer;
     background-color: transparent;
@@ -740,10 +752,13 @@ body {
 }
 #view-toggle {
     display: flex;
-    gap: var(--space-2);
-    padding: var(--space-3) var(--space-5);
-    border-bottom: 1px solid var(--border);
-    background-color: var(--panel-raised);
+    flex-shrink: 0;
+    gap: var(--space-1);
+}
+#view-toggle .view-btn {
+    padding: 4px 8px;
+    font-size: var(--font-meta);
+    flex: 0 0 auto;
 }
 #detail-photo-container {
     display: none;

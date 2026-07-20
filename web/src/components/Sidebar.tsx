@@ -71,26 +71,30 @@ export function Sidebar({
   return (
     <div id="sidebar">
       <div id="sidebar-header">
-        <h1>PyAerial Live Tracker</h1>
-        <p>See the data captured by your ADS-B receiver</p>
-      </div>
-      <div id="view-toggle">
-        <button
-          type="button"
-          className={`view-btn${portalView === 'live' ? ' active' : ''}`}
-          id="view-live"
-          onClick={() => onSwitchPortalView('live')}
-        >
-          Live
-        </button>
-        <button
-          type="button"
-          className={`view-btn${portalView === 'history' ? ' active' : ''}`}
-          id="view-history"
-          onClick={() => onSwitchPortalView('history')}
-        >
-          Historical
-        </button>
+        <div className="sidebar-header-top">
+          <div className="sidebar-header-text">
+            <h1>PyAerial Live Tracker</h1>
+            <p>See the data captured by your ADS-B receiver</p>
+          </div>
+          <div id="view-toggle">
+            <button
+              type="button"
+              className={`view-btn${portalView === 'live' ? ' active' : ''}`}
+              id="view-live"
+              onClick={() => onSwitchPortalView('live')}
+            >
+              Live
+            </button>
+            <button
+              type="button"
+              className={`view-btn${portalView === 'history' ? ' active' : ''}`}
+              id="view-history"
+              onClick={() => onSwitchPortalView('history')}
+            >
+              Historical
+            </button>
+          </div>
+        </div>
       </div>
       <div id="search-container">
         <input
