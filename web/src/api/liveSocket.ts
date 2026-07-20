@@ -20,17 +20,15 @@ function generateId(): string {
 
 function flushQueue() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  console.log(`[WS] Flushing ${requestQueue.length} queued request(s)`);
   while (requestQueue.length > 0) {
     const req = requestQueue.shift();
     if (req) {
       pendingRequests.set(req.id, { resolve: req.resolve, reject: req.reject });
-      console.log(`[WS] Sending queued request: ${req.action} (id: ${req.id})`, req.params);
       ws.send(JSON.stringify({
         type: 'request',
         id: req.id,
         action: req.action,
-        params: req.params
+        params: req.params,
       }));
     }
   }
@@ -40,11 +38,9 @@ function connect() {
   isClosed = false;
   if (ws) return;
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  console.log(`[WS] Connecting to ${protocol}//${window.location.host}/ws/live`);
   ws = new WebSocket(`${protocol}//${window.location.host}/ws/live`);
 
   ws.onopen = () => {
-    console.log('[WS] Connection established');
     backoff = 1000;
     handlersSet.forEach((h) => h.onOpen?.());
     flushQueue();
@@ -54,7 +50,6 @@ function connect() {
     try {
       const data = JSON.parse(event.data);
       if (data && data.type === 'response') {
-        console.log(`[WS] Received response for ${data.id}: success=${data.success}`, data.data || data.error);
         const req = pendingRequests.get(data.id);
         if (req) {
           pendingRequests.delete(data.id);
@@ -73,25 +68,23 @@ function connect() {
   };
 
   ws.onclose = () => {
-    console.warn('[WS] Connection closed');
     ws = null;
     handlersSet.forEach((h) => h.onClose?.());
     pendingRequests.forEach((req) => req.reject(new Error('Connection closed')));
     pendingRequests.clear();
-    
+
     if (!isClosed) {
       reconnectTimer = setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, 10000);
     }
   };
 
-  ws.onerror = (e) => {
-    console.error('[WS] Connection error:', e);
+  ws.onerror = () => {
     ws?.close();
   };
 }
 
-export function subscribeLiveSocket(handlers: LiveSocketHandlers): () => void {
+export function connectLiveSocket(handlers: LiveSocketHandlers): () => void {
   handlersSet.add(handlers);
   if (!ws) {
     connect();
@@ -101,7 +94,6 @@ export function subscribeLiveSocket(handlers: LiveSocketHandlers): () => void {
   return () => {
     handlersSet.delete(handlers);
     if (handlersSet.size === 0) {
-      console.log('[WS] No more subscribers, closing connection');
       isClosed = true;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
@@ -113,24 +105,18 @@ export function subscribeLiveSocket(handlers: LiveSocketHandlers): () => void {
   };
 }
 
-export function connectLiveSocket(handlers: LiveSocketHandlers): () => void {
-  return subscribeLiveSocket(handlers);
-}
-
 export function sendWsRequest<T>(action: string, params: any = {}): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const id = generateId();
     if (ws && ws.readyState === WebSocket.OPEN) {
       pendingRequests.set(id, { resolve, reject });
-      console.log(`[WS] Sending request: ${action} (id: ${id})`, params);
       ws.send(JSON.stringify({
         type: 'request',
         id,
         action,
-        params
+        params,
       }));
     } else {
-      console.log(`[WS] Queueing request: ${action} (id: ${id})`, params);
       requestQueue.push({ id, action, params, resolve, reject });
       if (!ws) {
         connect();

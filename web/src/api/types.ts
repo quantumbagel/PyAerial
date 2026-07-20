@@ -83,6 +83,4 @@ export type LiveMessage =
 export interface AppConfig {
   home: { latitude: number; longitude: number };
   remember_planes: number;
-  hz: number;
-  duplicate_packet_merging: number;
 }

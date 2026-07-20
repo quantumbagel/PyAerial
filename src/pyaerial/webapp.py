@@ -17,9 +17,9 @@ from typing import Any
 
 import pymongo
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from pyaerial.calc.aircraft_db import AircraftDB, normalize_photo_url
@@ -136,10 +136,6 @@ def _sanitize_for_json(data: Any) -> Any:
     if isinstance(data, tuple):
         return [_sanitize_for_json(value) for value in data]
     return data
-
-
-def _json_response(data: Any) -> JSONResponse:
-    return JSONResponse(_sanitize_for_json(data))
 
 
 def _alert_coords(doc: dict[str, Any]) -> tuple[Any, Any]:
@@ -264,6 +260,121 @@ def _get_live_alerts(live_store: RedisLiveStore, *, since: float = 0.0,
     return [_format_alert(alert) for alert in alerts]
 
 
+def _enrich_flight_detail(flight_data: dict[str, Any], icao: str,
+                          aircraft_db: AircraftDB | None) -> dict[str, Any]:
+    enriched = _enrich_from_aircraft_db(icao, aircraft_db)
+    return {
+        **flight_data,
+        "callsign": flight_data.get("callsign") or enriched.get("callsign"),
+        "model": flight_data.get("model") or enriched.get("model"),
+        "owner": flight_data.get("owner") or enriched.get("owner"),
+        "country": flight_data.get("country") or enriched.get("country"),
+        "aircraft_type": flight_data.get("aircraft_type") or enriched.get("typecode"),
+        "registration": flight_data.get("registration") or enriched.get("registration"),
+        "photo_url": enriched.get("photo_url"),
+        "photo_photographer": enriched.get("photo_photographer"),
+        "photo_link": enriched.get("photo_link"),
+    }
+
+
+def _get_flight_detail(
+    flight_id: str,
+    view: str,
+    *,
+    live_store: RedisLiveStore,
+    db: pymongo.database.Database,
+    aircraft_db: AircraftDB | None,
+) -> dict[str, Any] | None:
+    if view == "live":
+        flight_data = live_store.get_flight(flight_id)
+        if not flight_data:
+            return None
+        return _enrich_flight_detail(flight_data, flight_data.get("icao", ""), aircraft_db)
+
+    doc = db.get_collection("flights").find_one({"_id": flight_id})
+    if not doc:
+        return None
+    icao = doc.get("icao", "")
+    enriched = _enrich_from_aircraft_db(icao, aircraft_db)
+    info = doc.get("info", {})
+    return {
+        "flight_id": doc["_id"],
+        "icao": icao,
+        "zone": doc.get("zone"),
+        "level": doc.get("level"),
+        "start_time": doc.get("start_time"),
+        "end_time": doc.get("end_time"),
+        "callsign": doc.get("callsign") or info.get("callsign") or enriched.get("callsign"),
+        "model": doc.get("model") or info.get("model") or enriched.get("model"),
+        "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
+        "country": doc.get("country") or info.get("country") or enriched.get("country"),
+        "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type") or info.get("typecode") or enriched.get("aircraft_type") or enriched.get("typecode"),
+        "registration": doc.get("registration") or info.get("registration") or enriched.get("registration"),
+        "photo_url": enriched.get("photo_url"),
+        "photo_photographer": enriched.get("photo_photographer"),
+        "photo_link": enriched.get("photo_link"),
+        "is_live": False,
+        "status": doc.get("status", "completed"),
+    }
+
+
+def _get_telemetry(
+    flight_id: str,
+    view: str,
+    since: float,
+    *,
+    live_store: RedisLiveStore,
+    db: pymongo.database.Database,
+) -> list[dict[str, Any]]:
+    if view == "live":
+        return live_store.get_telemetry(flight_id, since=since)
+    filt: dict[str, Any] = {"flight_id": flight_id}
+    if since > 0:
+        filt["timestamp"] = {"$gt": since}
+    cursor = db.get_collection("telemetry").find(filt).sort("timestamp", 1)
+    return [_telemetry_point(doc) for doc in cursor]
+
+
+def _get_alerts(
+    view: str,
+    *,
+    since: float = 0.0,
+    flight_id: str | None = None,
+    level: str | None = None,
+    limit: int = 0,
+    skip: int = 0,
+    live_store: RedisLiveStore,
+    db: pymongo.database.Database,
+) -> list[dict[str, Any]]:
+    if view == "live":
+        return _get_live_alerts(
+            live_store, since=since, flight_id=flight_id, level=level, limit=limit, skip=skip,
+        )
+    filt: dict[str, Any] = {}
+    if since:
+        filt["timestamp"] = {"$gt": since}
+    if flight_id:
+        filt["flight_id"] = flight_id
+    if level:
+        filt["level"] = level
+    cursor = db.get_collection("alerts").find(filt).sort("timestamp", -1)
+    if skip:
+        cursor = cursor.skip(skip)
+    if limit:
+        cursor = cursor.limit(limit)
+    return [_format_alert(doc) for doc in cursor]
+
+
+def _app_config_payload(config: Config) -> dict[str, Any]:
+    return {
+        "home": {
+            "latitude": config.home.latitude,
+            "longitude": config.home.longitude,
+        },
+        "remember_planes": config.tracking.remember_planes,
+    }
+
+
 class LiveBroadcaster:
     """Poll Redis and push live updates to connected WebSocket clients."""
 
@@ -368,143 +479,6 @@ def create_app(*, config: Config, db: pymongo.database.Database,
         allow_headers=["*"],
     )
 
-    @app.get("/api/flights")
-    def api_flights(view: str = Query("live")):
-        view = _view_param(view)
-        try:
-            if view == "live":
-                return _json_response(_get_live_flights(live_store, aircraft_db))
-            return _json_response(_get_history_flights(db, aircraft_db))
-        except Exception as exc:
-            raise HTTPException(500, f"Database error: {exc}") from exc
-
-    @app.get("/api/flight")
-    def api_flight(flight_id: str = Query(...), view: str = Query("live")):
-        view = _view_param(view)
-        try:
-            if view == "live":
-                flight_data = live_store.get_flight(flight_id)
-                if not flight_data:
-                    raise HTTPException(404, "Flight not found")
-                icao = flight_data.get("icao", "")
-                enriched = _enrich_from_aircraft_db(icao, aircraft_db)
-                flight_data = {
-                    **flight_data,
-                    "callsign": flight_data.get("callsign") or enriched.get("callsign"),
-                    "model": flight_data.get("model") or enriched.get("model"),
-                    "owner": flight_data.get("owner") or enriched.get("owner"),
-                    "country": flight_data.get("country") or enriched.get("country"),
-                    "aircraft_type": flight_data.get("aircraft_type") or enriched.get("typecode"),
-                    "registration": flight_data.get("registration") or enriched.get("registration"),
-                    "photo_url": enriched.get("photo_url"),
-                    "photo_photographer": enriched.get("photo_photographer"),
-                    "photo_link": enriched.get("photo_link"),
-                }
-                return _json_response(flight_data)
-
-            doc = db.get_collection("flights").find_one({"_id": flight_id})
-            if not doc:
-                raise HTTPException(404, "Flight not found")
-            icao = doc.get("icao", "")
-            enriched = _enrich_from_aircraft_db(icao, aircraft_db)
-            info = doc.get("info", {})
-            flight_data = {
-                "flight_id": doc["_id"],
-                "icao": icao,
-                "zone": doc.get("zone"),
-                "level": doc.get("level"),
-                "start_time": doc.get("start_time"),
-                "end_time": doc.get("end_time"),
-                "callsign": doc.get("callsign") or info.get("callsign") or enriched.get("callsign"),
-                "model": doc.get("model") or info.get("model") or enriched.get("model"),
-                "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
-                "country": doc.get("country") or info.get("country") or enriched.get("country"),
-                "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type") or info.get("typecode") or enriched.get("aircraft_type") or enriched.get("typecode"),
-                "registration": doc.get("registration") or info.get("registration") or enriched.get("registration"),
-                "photo_url": enriched.get("photo_url"),
-                "photo_photographer": enriched.get("photo_photographer"),
-                "photo_link": enriched.get("photo_link"),
-                "is_live": False,
-                "status": doc.get("status", "completed"),
-            }
-            return _json_response(flight_data)
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(500, f"Database error: {exc}") from exc
-
-    @app.get("/api/telemetry")
-    def api_telemetry(flight_id: str = Query(...), view: str = Query("live"), since: float = 0.0):
-        view = _view_param(view)
-        try:
-            if view == "live":
-                points = live_store.get_telemetry(flight_id, since=since)
-                return _json_response(points)
-
-            filt: dict[str, Any] = {"flight_id": flight_id}
-            if since > 0:
-                filt["timestamp"] = {"$gt": since}
-            cursor = db.get_collection("telemetry").find(filt).sort("timestamp", 1)
-            points = [_telemetry_point(doc) for doc in cursor]
-            return _json_response(points)
-        except Exception as exc:
-            raise HTTPException(500, f"Database error: {exc}") from exc
-
-    @app.get("/api/alerts")
-    def api_alerts(
-        view: str = Query("live"),
-        since: float = 0.0,
-        flight_id: str | None = None,
-        level: str | None = None,
-        limit: int = 0,
-        skip: int = 0,
-    ):
-        view = _view_param(view)
-        try:
-            if view == "live":
-                return _json_response(_get_live_alerts(
-                    live_store, since=since, flight_id=flight_id, level=level, limit=limit, skip=skip,
-                ))
-
-            filt: dict[str, Any] = {}
-            if since:
-                filt["timestamp"] = {"$gt": since}
-            if flight_id:
-                filt["flight_id"] = flight_id
-            if level:
-                filt["level"] = level
-
-            cursor = db.get_collection("alerts").find(filt).sort("timestamp", -1)
-            if skip:
-                cursor = cursor.skip(skip)
-            if limit:
-                cursor = cursor.limit(limit)
-            return _json_response([_format_alert(doc) for doc in cursor])
-        except Exception as exc:
-            raise HTTPException(500, f"Database error: {exc}") from exc
-
-    @app.get("/api/zones")
-    def api_zones():
-        try:
-            return _json_response(_zones_payload(config))
-        except Exception as exc:
-            raise HTTPException(500, f"Configuration error: {exc}") from exc
-
-    @app.get("/api/config")
-    def api_config():
-        try:
-            return _json_response({
-                "home": {
-                    "latitude": config.home.latitude,
-                    "longitude": config.home.longitude,
-                },
-                "remember_planes": config.tracking.remember_planes,
-                "hz": config.tracking.hz,
-                "duplicate_packet_merging": config.tracking.duplicate_packet_merging,
-            })
-        except Exception as exc:
-            raise HTTPException(500, f"Configuration error: {exc}") from exc
-
     async def handle_ws_request(action: str, params: dict[str, Any]) -> Any:
         view = _view_param(params.get("view", "live"))
         if action == "fetchFlights":
@@ -512,70 +486,25 @@ def create_app(*, config: Config, db: pymongo.database.Database,
                 return _get_live_flights(live_store, aircraft_db)
             return _get_history_flights(db, aircraft_db)
 
-        elif action == "fetchFlight":
+        if action == "fetchFlight":
             flight_id = params.get("flight_id") or params.get("flightId")
             if not flight_id:
                 raise ValueError("Missing flight_id")
-            if view == "live":
-                flight_data = live_store.get_flight(flight_id)
-                if not flight_data:
-                    return None
-                icao = flight_data.get("icao", "")
-                enriched = _enrich_from_aircraft_db(icao, aircraft_db)
-                return {
-                    **flight_data,
-                    "callsign": flight_data.get("callsign") or enriched.get("callsign"),
-                    "model": flight_data.get("model") or enriched.get("model"),
-                    "owner": flight_data.get("owner") or enriched.get("owner"),
-                    "country": flight_data.get("country") or enriched.get("country"),
-                    "aircraft_type": flight_data.get("aircraft_type") or enriched.get("typecode"),
-                    "registration": flight_data.get("registration") or enriched.get("registration"),
-                    "photo_url": enriched.get("photo_url"),
-                    "photo_photographer": enriched.get("photo_photographer"),
-                    "photo_link": enriched.get("photo_link"),
-                }
-            else:
-                doc = db.get_collection("flights").find_one({"_id": flight_id})
-                if not doc:
-                    return None
-                icao = doc.get("icao", "")
-                enriched = _enrich_from_aircraft_db(icao, aircraft_db)
-                info = doc.get("info", {})
-                return {
-                    "flight_id": doc["_id"],
-                    "icao": icao,
-                    "zone": doc.get("zone"),
-                    "level": doc.get("level"),
-                    "start_time": doc.get("start_time"),
-                    "end_time": doc.get("end_time"),
-                    "callsign": doc.get("callsign") or info.get("callsign") or enriched.get("callsign"),
-                    "model": doc.get("model") or info.get("model") or enriched.get("model"),
-                    "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
-                    "country": doc.get("country") or info.get("country") or enriched.get("country"),
-                    "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type") or info.get("typecode") or enriched.get("aircraft_type") or enriched.get("typecode"),
-                    "registration": doc.get("registration") or info.get("registration") or enriched.get("registration"),
-                    "photo_url": enriched.get("photo_url"),
-                    "photo_photographer": enriched.get("photo_photographer"),
-                    "photo_link": enriched.get("photo_link"),
-                    "is_live": False,
-                    "status": doc.get("status", "completed"),
-                }
- 
-        elif action == "fetchTelemetry":
+            return _get_flight_detail(
+                flight_id, view, live_store=live_store, db=db, aircraft_db=aircraft_db,
+            )
+
+        if action == "fetchTelemetry":
             flight_id = params.get("flight_id") or params.get("flightId")
             if not flight_id:
                 raise ValueError("Missing flight_id")
             since_val = params.get("since")
             since = float(since_val) if since_val is not None else 0.0
-            if view == "live":
-                return live_store.get_telemetry(flight_id, since=since)
-            filt: dict[str, Any] = {"flight_id": flight_id}
-            if since > 0:
-                filt["timestamp"] = {"$gt": since}
-            cursor = db.get_collection("telemetry").find(filt).sort("timestamp", 1)
-            return [_telemetry_point(doc) for doc in cursor]
- 
-        elif action == "fetchAlerts":
+            return _get_telemetry(
+                flight_id, view, since, live_store=live_store, db=db,
+            )
+
+        if action == "fetchAlerts":
             since_val = params.get("since")
             since = float(since_val) if since_val is not None else 0.0
             flight_id = params.get("flight_id") or params.get("flightId")
@@ -584,40 +513,24 @@ def create_app(*, config: Config, db: pymongo.database.Database,
             limit = int(limit_val) if limit_val is not None else 0
             skip_val = params.get("skip")
             skip = int(skip_val) if skip_val is not None else 0
-            if view == "live":
-                return _get_live_alerts(
-                    live_store, since=since, flight_id=flight_id, level=level, limit=limit, skip=skip,
-                )
-            filt: dict[str, Any] = {}
-            if since:
-                filt["timestamp"] = {"$gt": since}
-            if flight_id:
-                filt["flight_id"] = flight_id
-            if level:
-                filt["level"] = level
-            cursor = db.get_collection("alerts").find(filt).sort("timestamp", -1)
-            if skip:
-                cursor = cursor.skip(skip)
-            if limit:
-                cursor = cursor.limit(limit)
-            return [_format_alert(doc) for doc in cursor]
+            return _get_alerts(
+                view,
+                since=since,
+                flight_id=flight_id,
+                level=level,
+                limit=limit,
+                skip=skip,
+                live_store=live_store,
+                db=db,
+            )
 
-        elif action == "fetchZones":
+        if action == "fetchZones":
             return _zones_payload(config)
 
-        elif action == "fetchConfig":
-            return {
-                "home": {
-                    "latitude": config.home.latitude,
-                    "longitude": config.home.longitude,
-                },
-                "remember_planes": config.tracking.remember_planes,
-                "hz": config.tracking.hz,
-                "duplicate_packet_merging": config.tracking.duplicate_packet_merging,
-            }
+        if action == "fetchConfig":
+            return _app_config_payload(config)
 
-        else:
-            raise ValueError(f"Unknown action: {action}")
+        raise ValueError(f"Unknown action: {action}")
 
     @app.websocket("/ws/live")
     async def ws_live(websocket: WebSocket):
@@ -670,7 +583,7 @@ def create_app(*, config: Config, db: pymongo.database.Database,
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
-        if full_path.startswith("api/") or full_path.startswith("ws/"):
+        if full_path.startswith("ws/"):
             raise HTTPException(404)
         file_path = _STATIC_DIR / full_path
         if file_path.is_file():

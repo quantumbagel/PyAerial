@@ -184,7 +184,7 @@ Flight IDs use the form `{icao}-{first_packet_timestamp}` for both live and hist
 
 ## Web portal
 
-The portal is a React + Vite SPA (`web/`) served by a FastAPI app (`pyaerial web`, default port `10090`). Live view updates are pushed over WebSocket (`/ws/live`); historical data uses REST.
+The portal is a React + Vite SPA (`web/`) served by a FastAPI app (`pyaerial web`, default port `10090`). All data flows through WebSocket (`/ws/live`): live updates are pushed, and queries use request/response messages on the same connection.
 
 ### Development
 
@@ -193,7 +193,7 @@ The portal is a React + Vite SPA (`web/`) served by a FastAPI app (`pyaerial web
 pip install -e .
 pyaerial web -c config.yaml
 
-# Terminal 2 — Vite dev server with /api and /ws proxy
+# Terminal 2 — Vite dev server with /ws proxy
 cd web && npm install && npm run dev
 ```
 
@@ -204,16 +204,30 @@ cd web && npm run build
 pyaerial web
 ```
 
-### API
+### WebSocket API
 
-| Route | Description |
-|-------|-------------|
-| `GET /api/flights?view=live\|history` | Live flights (Redis) or retained history (MongoDB) |
-| `GET /api/flight?flight_id=&view=` | Flight metadata and raw messages |
-| `GET /api/telemetry?flight_id=&view=` | Track points |
-| `GET /api/alerts?since=&flight_id=&level=&view=` | Alert events |
-| `GET /api/zones` | Home location and geofence polygons/rules |
-| `WS /ws/live` | Live flights, telemetry, and alerts (JSON messages) |
+Connect to `WS /ws/live`. The server pushes live snapshots and updates:
+
+| Message type | Description |
+|--------------|-------------|
+| `flights` | Live flight list |
+| `telemetry` | Incremental track points |
+| `alerts` | Alert events |
+
+Send JSON request messages for queries:
+
+```json
+{ "type": "request", "id": "<unique>", "action": "<action>", "params": { ... } }
+```
+
+| Action | Params | Description |
+|--------|--------|-------------|
+| `fetchFlights` | `view`: `live` \| `history` | Live flights (Redis) or retained history (MongoDB) |
+| `fetchFlight` | `flightId`, `view` | Flight metadata |
+| `fetchTelemetry` | `flightId`, `view`, `since?` | Track points |
+| `fetchAlerts` | `view`, `since?`, `flightId?`, `level?`, `limit?`, `skip?` | Alert events |
+| `fetchZones` | — | Home location and geofence polygons/rules |
+| `fetchConfig` | — | Home location and tracking settings |
 
 ## Package layout
 
@@ -223,7 +237,7 @@ src/pyaerial/
   engine.py           Main loop and receiver orchestration
   tracker.py          Plane state and deduplication
   store/              Redis live store + MongoDB history persistence
-  webapp.py           FastAPI portal server (REST + WebSocket + static SPA)
+  webapp.py           FastAPI portal server (WebSocket + static SPA)
   config/             Typed schema and loader
   receivers/          Receiver plugin registry
   alerters/           Alert delivery plugin registry
