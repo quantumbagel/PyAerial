@@ -184,7 +184,6 @@ export function MapView({
         fillColor: '#38bdf8',
         fillOpacity: 0.95,
         weight: 2,
-        interactive: false,
       }).addTo(map);
       homeMarker.bindTooltip('Home · Receiver / reference location');
       zoneLayers.current.push(homeMarker);
@@ -201,7 +200,7 @@ export function MapView({
       }).addTo(map);
       polygon.bindTooltip(zone.name.toUpperCase(), {
         sticky: false,
-        permanent: false,
+        permanent: true,
         direction: 'center',
       });
       zoneLayers.current.push(polygon);
