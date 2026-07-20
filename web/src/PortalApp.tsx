@@ -735,6 +735,7 @@ export function PortalApp() {
             flightTelemetry={flightTelemetry}
             drawerTab={drawerTab}
             selectedTelemetryPoint={selectedTelemetryPoint}
+            appConfig={appConfig}
             onSelectTelemetryPoint={setSelectedTelemetryPoint}
             onClose={closeDrawer}
             onSwitchTab={setDrawerTab}

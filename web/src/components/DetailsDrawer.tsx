@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Alert, FlightDetail, TelemetryPoint } from '../api/types';
+import type { Alert, AppConfig, FlightDetail, TelemetryPoint } from '../api/types';
 import { isFlightLive } from '../utils/format';
 import {
   formatAlertAltitude,
@@ -23,6 +23,7 @@ interface DetailsDrawerProps {
   flightTelemetry: TelemetryPoint[];
   drawerTab: DrawerTab;
   selectedTelemetryPoint: TelemetryPoint | null;
+  appConfig: AppConfig | null;
   onClose: () => void;
   onSwitchTab: (tab: DrawerTab) => void;
   onSelectAlert: (alert: Alert) => void;
@@ -37,6 +38,7 @@ export function DetailsDrawer({
   flightTelemetry,
   drawerTab,
   selectedTelemetryPoint,
+  appConfig,
   onClose,
   onSwitchTab,
   onSelectAlert,
@@ -44,6 +46,14 @@ export function DetailsDrawer({
 }: DetailsDrawerProps) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [prevTelemetryLength, setPrevTelemetryLength] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  // Tick every second when drawer is open and flight is live, to update relative time display
+  useEffect(() => {
+    if (!open || !flightDetail || !isFlightLive(flightDetail)) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [open, flightDetail]);
 
   useEffect(() => {
     const el = tableContainerRef.current;
@@ -205,11 +215,21 @@ export function DetailsDrawer({
               const live = flightDetail ? isFlightLive(flightDetail) : false;
               if (live) {
                 const liveTs = flightDetail?.timestamp ?? flightDetail?.end_time ?? flightDetail?.start_time;
+                const secsAgo = liveTs ? Math.max(0, Math.round((now / 1000) - liveTs)) : null;
+                const rememberSecs = appConfig?.remember_planes ?? null;
+                const dropIn = (secsAgo != null && rememberSecs != null)
+                  ? Math.max(0, rememberSecs - secsAgo)
+                  : null;
                 return (
                   <>
                     <span className="details-label">Last Seen</span>
                     <span className="details-value" id="detail-last-seen" style={{ color: '#34d399' }}>
                       {formatTs(liveTs)}
+                      {secsAgo != null && (
+                        <span style={{ display: 'block', fontSize: '0.72em', color: secsAgo > (rememberSecs ?? Infinity) * 0.75 ? '#f59e0b' : '#6ee7b7', marginTop: '2px' }}>
+                          {secsAgo}s ago{dropIn != null ? ` · drops in ${dropIn}s` : ''}
+                        </span>
+                      )}
                     </span>
                   </>
                 );
