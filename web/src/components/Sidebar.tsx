@@ -19,6 +19,7 @@ interface SidebarProps {
   flightSortField: FlightSortField;
   flightSortDirection: SortDirection;
   unreadAlertsCount?: number;
+  isLoadingFlights?: boolean;
   onSwitchPortalView: (view: 'live' | 'history') => void;
   onFlightSortChange: (field: FlightSortField) => void;
   onFlightSortDirectionToggle: () => void;
@@ -42,6 +43,7 @@ export function Sidebar({
   flightSortField,
   flightSortDirection,
   unreadAlertsCount = 0,
+  isLoadingFlights = false,
   onSwitchPortalView,
   onFlightSortChange,
   onFlightSortDirectionToggle,
@@ -175,29 +177,36 @@ export function Sidebar({
           </button>
         </div>
         <ul id="flight-list">
-          {flights.map((flight) => (
-            <li
-              key={flight.flight_id}
-              className={`flight-item${flight.flight_id === activeFlightId ? ' active' : ''}`}
-              onClick={() => onSelectFlight(flight.flight_id)}
-            >
-              <div className="flight-meta-row">
-                <span className="flight-callsign">
-                  {flight.callsign || 'UNKNOWN'}{' '}
-                  <LevelBadge flight={flight} alertCount={alertCountByFlight.get(flight.flight_id)} />
-                </span>
-                <span className="flight-icao">{flight.icao.toUpperCase()}</span>
-              </div>
-              <div className="flight-meta-row">
-                <span className="flight-desc">{flight.model || 'Unknown Model'}</span>
-                <span className="flight-time">
-                  {isTimeSortField
-                    ? flightTimeLabel(flight)
-                    : flightSortValueLabel(flight, flightSortField)}
-                </span>
-              </div>
+          {isLoadingFlights ? (
+            <li className="flight-list-loading">
+              <span className="flight-list-spinner" aria-hidden="true" />
+              Loading flights…
             </li>
-          ))}
+          ) : (
+            flights.map((flight) => (
+              <li
+                key={flight.flight_id}
+                className={`flight-item${flight.flight_id === activeFlightId ? ' active' : ''}`}
+                onClick={() => onSelectFlight(flight.flight_id)}
+              >
+                <div className="flight-meta-row">
+                  <span className="flight-callsign">
+                    {flight.callsign || 'UNKNOWN'}{' '}
+                    <LevelBadge flight={flight} alertCount={alertCountByFlight.get(flight.flight_id)} />
+                  </span>
+                  <span className="flight-icao">{flight.icao.toUpperCase()}</span>
+                </div>
+                <div className="flight-meta-row">
+                  <span className="flight-desc">{flight.model || 'Unknown Model'}</span>
+                  <span className="flight-time">
+                    {isTimeSortField
+                      ? flightTimeLabel(flight)
+                      : flightSortValueLabel(flight, flightSortField)}
+                  </span>
+                </div>
+              </li>
+            ))
+          )}
         </ul>
       </div>
       <div
