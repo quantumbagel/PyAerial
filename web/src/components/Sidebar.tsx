@@ -215,39 +215,43 @@ export function Sidebar({
         onScroll={(e) => onAlertsScroll(e.currentTarget)}
       >
         <ul id="alert-list">
-          {alerts.map((alert) => {
-            const level = (alert.level || 'event').toLowerCase();
-            const timeStr = alert.timestamp
-              ? new Date(alert.timestamp * 1000).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                })
-              : '';
-            const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
-            const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-            const title = `Triggered:\nTime: ${alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
-            return (
-              <li
-                key={alert.alert_id}
-                className={`alert-item ${level}${alert.alert_id === activeAlertId ? ' active' : ''}`}
-                title={title}
-                onClick={() => onSelectAlert(alert)}
-              >
-                <div className="flight-meta-row">
-                  <span className="flight-callsign">
-                    {alert.callsign || 'UNKNOWN'}{' '}
-                    <AlertLevelBadge level={alert.level} />
-                  </span>
-                  <span className="flight-icao">{(alert.icao || '').toUpperCase()}</span>
-                </div>
-                <div className="flight-meta-row">
-                  <span className="flight-desc">{alert.zone || 'Zone'}</span>
-                  <span className="flight-time">{timeStr}</span>
-                </div>
-              </li>
-            );
-          })}
+          {alerts.length === 0 ? (
+            <li className="flight-list-loading">No alerts yet</li>
+          ) : (
+            alerts.map((alert) => {
+              const level = (alert.level || 'event').toLowerCase();
+              const timeStr = alert.timestamp
+                ? new Date(alert.timestamp * 1000).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  })
+                : '';
+              const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
+              const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
+              const title = `Triggered:\nTime: ${alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
+              return (
+                <li
+                  key={alert.alert_id}
+                  className={`alert-item ${level}${alert.alert_id === activeAlertId ? ' active' : ''}`}
+                  title={title}
+                  onClick={() => onSelectAlert(alert)}
+                >
+                  <div className="flight-meta-row">
+                    <span className="flight-callsign">
+                      {alert.callsign || 'UNKNOWN'}{' '}
+                      <AlertLevelBadge level={alert.level} />
+                    </span>
+                    <span className="flight-icao">{(alert.icao || '').toUpperCase()}</span>
+                  </div>
+                  <div className="flight-meta-row">
+                    <span className="flight-desc">{alert.zone || 'Zone'}</span>
+                    <span className="flight-time">{timeStr}</span>
+                  </div>
+                </li>
+              );
+            })
+          )}
         </ul>
       </div>
     </div>
