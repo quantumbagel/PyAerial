@@ -140,10 +140,40 @@ export function DetailsDrawer({
         </div>
 
         <div className="info-section">
+          <h3>External Trackers</h3>
+          <div className="external-links-grid">
+            <a
+              href={flightDetail?.callsign ? `https://flightaware.com/live/flight/${flightDetail.callsign.trim()}` : `https://flightaware.com/live/modes/${icao.toLowerCase()}`}
+              target="_blank"
+              rel="noreferrer"
+              className="external-link-btn"
+            >
+              ✈️ FlightAware
+            </a>
+            <a
+              href={`https://globe.adsbexchange.com/?icao=${icao.toLowerCase()}`}
+              target="_blank"
+              rel="noreferrer"
+              className="external-link-btn"
+            >
+              🌐 ADS-B Exch
+            </a>
+            <a
+              href={flightDetail?.registration ? `https://www.radarbox.com/data/registration/${flightDetail.registration.trim()}` : `https://www.radarbox.com/data/mode-s/${icao.toLowerCase()}`}
+              target="_blank"
+              rel="noreferrer"
+              className="external-link-btn"
+            >
+              📦 RadarBox
+            </a>
+          </div>
+        </div>
+
+        <div className="info-section">
           <h3>Aircraft Details</h3>
           <div className="details-grid">
             <span className="details-label">Registration</span>
-            <span className="details-value" id="detail-registration" style={{ fontWeight: 600, color: '#3b82f6' }}>
+            <span className="details-value details-value--accent" id="detail-registration">
               {flightDetail?.registration || 'Unknown'}
             </span>
             <span className="details-label">Model</span>
@@ -164,49 +194,15 @@ export function DetailsDrawer({
             </span>
             <span className="details-label">Zone / Level</span>
             <span
-              className="details-value"
+              className={`details-value${hasAlert ? ' details-value--warn' : ' details-value--muted'}`}
               id="detail-zone-level"
-              style={{ color: hasAlert ? '#f59e0b' : '#94a3b8' }}
             >
               {formatZoneLevel(flightDetail?.zone, flightDetail?.level)}
             </span>
           </div>
         </div>
 
-        <div className="info-section" style={{ borderBottom: '1px solid var(--border)' }}>
-          <h3>External Trackers</h3>
-          <div className="external-links-grid">
-            <a
-              href={flightDetail?.callsign ? `https://flightaware.com/live/flight/${flightDetail.callsign.trim()}` : `https://flightaware.com/live/modes/${icao.toLowerCase()}`}
-              target="_blank"
-              rel="noreferrer"
-              className="external-link-btn"
-              style={{ borderColor: 'rgba(59, 130, 246, 0.4)', color: '#60a5fa' }}
-            >
-              ✈️ FlightAware
-            </a>
-            <a
-              href={`https://globe.adsbexchange.com/?icao=${icao.toLowerCase()}`}
-              target="_blank"
-              rel="noreferrer"
-              className="external-link-btn"
-              style={{ borderColor: 'rgba(52, 211, 153, 0.4)', color: '#34d399' }}
-            >
-              🌐 ADS-B Exch
-            </a>
-            <a
-              href={flightDetail?.registration ? `https://www.radarbox.com/data/registration/${flightDetail.registration.trim()}` : `https://www.radarbox.com/data/mode-s/${icao.toLowerCase()}`}
-              target="_blank"
-              rel="noreferrer"
-              className="external-link-btn"
-              style={{ borderColor: 'rgba(239, 68, 68, 0.4)', color: '#fca5a5' }}
-            >
-              📦 RadarBox
-            </a>
-          </div>
-        </div>
-
-        <div className="info-section" style={{ backgroundColor: '#141720' }}>
+        <div className="info-section">
           <h3>Telemetry Readings</h3>
           <div className="details-grid">
             {(() => {
@@ -220,13 +216,14 @@ export function DetailsDrawer({
                 const dropIn = (secsAgo != null && rememberSecs != null)
                   ? Math.max(0, rememberSecs - secsAgo)
                   : null;
+                const isWarning = secsAgo != null && secsAgo > (rememberSecs ?? Infinity) * 0.75;
                 return (
                   <>
                     <span className="details-label">Last Seen</span>
-                    <span className="details-value" id="detail-last-seen" style={{ color: '#34d399' }}>
+                    <span className="details-value details-value--live" id="detail-last-seen">
                       {formatTs(liveTs)}
                       {secsAgo != null && (
-                        <span style={{ display: 'block', fontSize: '0.72em', color: secsAgo > (rememberSecs ?? Infinity) * 0.75 ? '#f59e0b' : '#6ee7b7', marginTop: '2px' }}>
+                        <span className={`details-sub${isWarning ? ' details-sub--warn' : ' details-sub--live'}`}>
                           {secsAgo}s ago{dropIn != null ? ` · drops in ${dropIn}s` : ''}
                         </span>
                       )}
@@ -299,7 +296,7 @@ export function DetailsDrawer({
         >
           <div id="alert-timeline-list">
             {sortedAlerts.length === 0 ? (
-              <div style={{ color: '#64748b' }}>No alert events for this flight.</div>
+              <div className="alert-timeline-empty">No alert events for this flight.</div>
             ) : (
               sortedAlerts.map((alert) => {
                 const level = formatAlertLevel(alert.level).toLowerCase();
@@ -325,28 +322,16 @@ export function DetailsDrawer({
                     title={title}
                     onClick={() => onSelectAlert(alert)}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div className="alert-timeline-row">
                       <span className={`alert-badge ${badgeClass}`}>{displayLvl}</span>
-                      <span style={{ color: '#64748b', fontSize: '0.75rem' }}>{timeStr}</span>
+                      <span className="alert-timeline-time">{timeStr}</span>
                     </div>
-                    <div style={{ color: '#f1f5f9', fontWeight: 500, marginTop: 8, fontSize: '0.85rem' }}>
-                      Entered Zone: <span style={{ color: '#3b82f6' }}>{alert.zone || 'zone'}</span>
+                    <div className="alert-timeline-zone">
+                      Entered Zone: <span className="alert-timeline-zone-name">{alert.zone || 'zone'}</span>
                     </div>
-                    <div
-                      style={{
-                        color: '#94a3b8',
-                        marginTop: 6,
-                        fontSize: '0.75rem',
-                        display: 'flex',
-                        gap: 12,
-                      }}
-                    >
-                      <span>
-                        <strong>Alt:</strong> {formatAlertAltitude(alert.altitude)}
-                      </span>
-                      <span>
-                        <strong>ETA:</strong> {formatAlertEta(alert.eta)}
-                      </span>
+                    <div className="alert-timeline-meta">
+                      <span><strong>Alt:</strong> {formatAlertAltitude(alert.altitude)}</span>
+                      <span><strong>ETA:</strong> {formatAlertEta(alert.eta)}</span>
                     </div>
                   </div>
                 );
