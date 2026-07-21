@@ -41,6 +41,7 @@ export function usePortalData({
   const [zonesData, setZonesData] = useState<ZonesData | null>(null);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [isLoadingFlights, setIsLoadingFlights] = useState(true);
+  const [isLoadingAlerts, setIsLoadingAlerts] = useState(true);
 
   const hasMoreAlerts = useRef(true);
   const isFetchingAlerts = useRef(false);
@@ -108,6 +109,7 @@ export function usePortalData({
       console.error('Failed to fetch history data', err);
     } finally {
       setIsLoadingFlights(false);
+      setIsLoadingAlerts(false);
     }
   }, []);
 
@@ -145,6 +147,7 @@ export function usePortalData({
       setAlertsData([]);
       resetPaths();
       setIsLoadingFlights(true);
+      setIsLoadingAlerts(true);
     },
     [portalView, setPortalView, stopDetailPoll, resetSelection, resetPaths],
   );
@@ -183,6 +186,7 @@ export function usePortalData({
           setIsLoadingFlights(false);
           setFlightsData((prev) => sortFlights(mergeLiveFlights(prev, message.flights)));
         } else if (message.type === 'alerts') {
+          setIsLoadingAlerts(false);
           setAlertsData((prev) => {
             const prevIds = new Set(prev.map((a) => a.alert_id));
             const newAlerts = message.alerts.filter((a: Alert) => !prevIds.has(a.alert_id));
@@ -248,6 +252,7 @@ export function usePortalData({
     zonesData,
     appConfig,
     isLoadingFlights,
+    isLoadingAlerts,
     handleSwitchSidebarTab,
     switchPortalView,
     handleAlertsScroll,

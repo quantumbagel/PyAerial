@@ -20,6 +20,7 @@ interface SidebarProps {
   flightSortDirection: SortDirection;
   unreadAlertsCount?: number;
   isLoadingFlights?: boolean;
+  isLoadingAlerts?: boolean;
   onSwitchPortalView: (view: 'live' | 'history') => void;
   onFlightSortChange: (field: FlightSortField) => void;
   onFlightSortDirectionToggle: () => void;
@@ -44,6 +45,7 @@ export function Sidebar({
   flightSortDirection,
   unreadAlertsCount = 0,
   isLoadingFlights = false,
+  isLoadingAlerts = false,
   onSwitchPortalView,
   onFlightSortChange,
   onFlightSortDirectionToggle,
@@ -215,7 +217,12 @@ export function Sidebar({
         onScroll={(e) => onAlertsScroll(e.currentTarget)}
       >
         <ul id="alert-list">
-          {alerts.length === 0 ? (
+          {isLoadingAlerts ? (
+            <li className="flight-list-loading">
+              <span className="flight-list-spinner" aria-hidden="true" />
+              Loading alerts…
+            </li>
+          ) : alerts.length === 0 ? (
             <li className="flight-list-loading">No alerts yet</li>
           ) : (
             alerts.map((alert) => {

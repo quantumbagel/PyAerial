@@ -57,6 +57,7 @@ export function PortalApp() {
         flightSortDirection={flightSortDirection}
         unreadAlertsCount={portal.unreadAlertsCount}
         isLoadingFlights={portal.isLoadingFlights}
+        isLoadingAlerts={portal.isLoadingAlerts}
         onSwitchPortalView={portal.switchPortalView}
         onFlightSortChange={setFlightSort}
         onFlightSortDirectionToggle={toggleFlightSortDirection}
