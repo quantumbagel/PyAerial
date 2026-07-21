@@ -99,20 +99,26 @@ export function useFlightSelection({
   }, []);
 
   const selectFlight = useCallback(
-    async (flightId: string) => {
+    async (flightId: string, initialTab?: DrawerTab) => {
       stopDetailPoll();
       setActiveFlightId(flightId);
       setSelectedTelemetryPoint(null);
       setFollowSelectedPlane(true);
       setDrawerOpen(true);
-      setDrawerTab('telemetry');
+      if (initialTab) {
+        setDrawerTab(initialTab);
+      }
       try {
-        const detail = await api.fetchFlight(flightId, portalView);
+        const [detail, , alerts] = await Promise.all([
+          api.fetchFlight(flightId, portalView),
+          loadFlightTelemetry(flightId, portalView),
+          loadFlightAlerts(flightId, portalView),
+          fetchAndSetPathRef.current(flightId, portalView),
+        ]);
         setFlightDetail(detail);
-        await loadFlightTelemetry(flightId, portalView);
-        const alerts = await loadFlightAlerts(flightId, portalView);
-        await fetchAndSetPathRef.current(flightId, portalView);
-        setDrawerTab(alerts && alerts.length > 0 ? 'alerts' : 'telemetry');
+        if (!initialTab) {
+          setDrawerTab(alerts && alerts.length > 0 ? 'alerts' : 'telemetry');
+        }
         if (detail.latitude != null && detail.longitude != null && mapRef.current?.map) {
           mapRef.current.map.setView(
             [detail.latitude, detail.longitude],
@@ -144,8 +150,7 @@ export function useFlightSelection({
         mapRef.current?.panToAlert(alert.latitude, alert.longitude);
       }
       if (alert.flight_id) {
-        await selectFlight(alert.flight_id);
-        setDrawerTab('alerts');
+        await selectFlight(alert.flight_id, 'alerts');
       }
     },
     [selectFlight, mapRef, onSelectAlertTab],
