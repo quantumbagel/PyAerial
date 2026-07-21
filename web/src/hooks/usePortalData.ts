@@ -42,6 +42,7 @@ export function usePortalData({
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [isLoadingFlights, setIsLoadingFlights] = useState(true);
   const [isLoadingAlerts, setIsLoadingAlerts] = useState(true);
+  const [wsConnected, setWsConnected] = useState(true);
 
   const hasMoreAlerts = useRef(true);
   const isFetchingAlerts = useRef(false);
@@ -180,6 +181,8 @@ export function usePortalData({
 
   useEffect(() => {
     return connectLiveSocket({
+      onOpen: () => setWsConnected(true),
+      onClose: () => setWsConnected(false),
       onMessage: (message) => {
         if (portalViewRef.current !== 'live') return;
         if (message.type === 'flights') {
@@ -253,6 +256,7 @@ export function usePortalData({
     appConfig,
     isLoadingFlights,
     isLoadingAlerts,
+    wsConnected,
     handleSwitchSidebarTab,
     switchPortalView,
     handleAlertsScroll,

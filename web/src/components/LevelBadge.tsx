@@ -3,9 +3,6 @@ import type { FlightSortField } from '../utils/flightData';
 import { isFiniteNumber, isFlightLive } from '../utils/format';
 
 export function LevelBadge({ flight, alertCount }: { flight: FlightSummary; alertCount?: number }) {
-  if (flight.is_live) {
-    return <span className="level-badge live">Live</span>;
-  }
   const level = (flight.level || '').toLowerCase();
   if (level === 'warn') return <span className="level-badge warn">Warn</span>;
   if (level === 'alert') return <span className="level-badge alert">Alert</span>;
