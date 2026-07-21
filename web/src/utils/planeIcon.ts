@@ -1,5 +1,5 @@
 import * as L from 'leaflet';
-import { COLOR_CONFIG } from './colors';
+import { COLOR_HEX } from './colors';
 
 export function createPlaneIcon(
   heading: number | null | undefined,
@@ -15,32 +15,32 @@ export function createPlaneIcon(
   let extraStyle = '';
 
   if (alertLevel === 'alert') {
-    fill = COLOR_CONFIG.alert;
-    stroke = COLOR_CONFIG.alertDark;
+    fill = COLOR_HEX.alert;
+    stroke = COLOR_HEX.alertDark;
     size = isSelected ? 30 : 28;
     opacity = 1.0;
     if (isSelected) {
-      extraStyle = `filter: drop-shadow(0 0 4px ${COLOR_CONFIG.alert}) drop-shadow(0 0 8px ${COLOR_CONFIG.alert}80);`;
+      extraStyle = `filter: drop-shadow(0 0 4px ${COLOR_HEX.alert}) drop-shadow(0 0 8px ${COLOR_HEX.alert}80);`;
     }
   } else if (isSelected) {
     fill = '#ffffff';
-    stroke = COLOR_CONFIG.accent;
+    stroke = COLOR_HEX.accent;
     size = 30;
     opacity = 1.0;
-    extraStyle = `filter: drop-shadow(0 0 4px ${COLOR_CONFIG.accent}) drop-shadow(0 0 10px ${COLOR_CONFIG.accent}8c);`;
+    extraStyle = `filter: drop-shadow(0 0 4px ${COLOR_HEX.accent}) drop-shadow(0 0 10px ${COLOR_HEX.accent}8c);`;
   } else if (alertLevel === 'warn') {
-    fill = COLOR_CONFIG.warn;
-    stroke = COLOR_CONFIG.warnDark;
+    fill = COLOR_HEX.warn;
+    stroke = COLOR_HEX.warnDark;
     size = 26;
     opacity = 1.0;
   } else if (isLive) {
-    fill = COLOR_CONFIG.live;
-    stroke = COLOR_CONFIG.liveDark;
+    fill = COLOR_HEX.live;
+    stroke = COLOR_HEX.liveDark;
     size = 24;
     opacity = 1.0;
   } else {
-    fill = COLOR_CONFIG.default;
-    stroke = COLOR_CONFIG.defaultDark;
+    fill = COLOR_HEX.default;
+    stroke = COLOR_HEX.defaultDark;
     size = 24;
     opacity = 0.65;
   }
@@ -70,10 +70,10 @@ export function pathStyleForFlight(
   isSelected: boolean,
 ): L.PolylineOptions {
   const alertLevel = (flight?.level || '').toLowerCase();
-  let color = COLOR_CONFIG.default;
-  if (alertLevel === 'alert') color = COLOR_CONFIG.alert;
-  else if (alertLevel === 'warn') color = COLOR_CONFIG.warn;
-  if (isSelected) color = COLOR_CONFIG.accent;
+  let color: string = COLOR_HEX.default;
+  if (alertLevel === 'alert') color = COLOR_HEX.alert;
+  else if (alertLevel === 'warn') color = COLOR_HEX.warn;
+  if (isSelected) color = COLOR_HEX.accent;
   return {
     color,
     weight: isSelected ? 3 : 2,

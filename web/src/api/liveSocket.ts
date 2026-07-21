@@ -6,30 +6,79 @@ export type LiveSocketHandlers = {
   onClose?: () => void;
 };
 
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_QUEUE_SIZE = 64;
+
 let ws: WebSocket | null = null;
 let isClosed = false;
 let backoff = 1000;
 const handlersSet = new Set<LiveSocketHandlers>();
-const pendingRequests = new Map<string, { resolve: (val: any) => void; reject: (err: any) => void }>();
-const requestQueue: { id: string; action: string; params: any; resolve: any; reject: any }[] = [];
+const pendingRequests = new Map<
+  string,
+  { resolve: (val: unknown) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
+>();
+const requestQueue: {
+  id: string;
+  action: string;
+  params: Record<string, unknown>;
+  resolve: (val: unknown) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}[] = [];
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 15);
+}
+
+function rejectAllPending(reason: string) {
+  pendingRequests.forEach((req) => {
+    clearTimeout(req.timer);
+    req.reject(new Error(reason));
+  });
+  pendingRequests.clear();
+  while (requestQueue.length > 0) {
+    const req = requestQueue.shift();
+    if (req) {
+      clearTimeout(req.timer);
+      req.reject(new Error(reason));
+    }
+  }
+}
+
+function scheduleTimeout(id: string): ReturnType<typeof setTimeout> {
+  return setTimeout(() => {
+    const pending = pendingRequests.get(id);
+    if (pending) {
+      pendingRequests.delete(id);
+      pending.reject(new Error('Request timed out'));
+    }
+    const queuedIdx = requestQueue.findIndex((req) => req.id === id);
+    if (queuedIdx !== -1) {
+      const [queued] = requestQueue.splice(queuedIdx, 1);
+      clearTimeout(queued.timer);
+      queued.reject(new Error('Request timed out'));
+    }
+  }, REQUEST_TIMEOUT_MS);
 }
 
 function flushQueue() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   while (requestQueue.length > 0) {
     const req = requestQueue.shift();
-    if (req) {
-      pendingRequests.set(req.id, { resolve: req.resolve, reject: req.reject });
-      ws.send(JSON.stringify({
+    if (!req) break;
+    pendingRequests.set(req.id, {
+      resolve: req.resolve,
+      reject: req.reject,
+      timer: req.timer,
+    });
+    ws.send(
+      JSON.stringify({
         type: 'request',
         id: req.id,
         action: req.action,
         params: req.params,
-      }));
-    }
+      }),
+    );
   }
 }
 
@@ -51,6 +100,7 @@ function connect() {
       if (data && data.type === 'response') {
         const req = pendingRequests.get(data.id);
         if (req) {
+          clearTimeout(req.timer);
           pendingRequests.delete(data.id);
           if (data.success) {
             req.resolve(data.data);
@@ -69,8 +119,7 @@ function connect() {
   ws.onclose = () => {
     ws = null;
     handlersSet.forEach((h) => h.onClose?.());
-    pendingRequests.forEach((req) => req.reject(new Error('Connection closed')));
-    pendingRequests.clear();
+    rejectAllPending('Connection closed');
 
     if (!isClosed) {
       setTimeout(connect, backoff);
@@ -81,6 +130,17 @@ function connect() {
   ws.onerror = () => {
     ws?.close();
   };
+}
+
+export function resetLiveSocketForTests(): void {
+  isClosed = true;
+  ws?.close();
+  ws = null;
+  handlersSet.clear();
+  rejectAllPending('test reset');
+  requestQueue.length = 0;
+  backoff = 1000;
+  isClosed = false;
 }
 
 export function connectLiveSocket(handlers: LiveSocketHandlers): () => void {
@@ -95,22 +155,38 @@ export function connectLiveSocket(handlers: LiveSocketHandlers): () => void {
   };
 }
 
-export function sendWsRequest<T>(action: string, params: any = {}): Promise<T> {
+export function sendWsRequest<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const id = generateId();
+    const timer = scheduleTimeout(id);
+    const settle = {
+      resolve: resolve as (val: unknown) => void,
+      reject,
+      timer,
+    };
+
     if (ws && ws.readyState === WebSocket.OPEN) {
-      pendingRequests.set(id, { resolve, reject });
-      ws.send(JSON.stringify({
-        type: 'request',
-        id,
-        action,
-        params,
-      }));
-    } else {
-      requestQueue.push({ id, action, params, resolve, reject });
-      if (!ws) {
-        connect();
-      }
+      pendingRequests.set(id, settle);
+      ws.send(
+        JSON.stringify({
+          type: 'request',
+          id,
+          action,
+          params,
+        }),
+      );
+      return;
+    }
+
+    if (requestQueue.length >= MAX_QUEUE_SIZE) {
+      clearTimeout(timer);
+      reject(new Error('Request queue full'));
+      return;
+    }
+
+    requestQueue.push({ id, action, params, ...settle });
+    if (!ws) {
+      connect();
     }
   });
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Alert } from '../api/types';
 import { AlertLevelBadge } from './LevelBadge';
 import { formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
@@ -18,18 +18,36 @@ interface ToastItemProps {
 }
 
 function ToastItem({ id, alert, duration = 6000, onSelectAlert, onDismiss }: ToastItemProps) {
+  const [remainingMs, setRemainingMs] = useState(duration);
   const [isPaused, setIsPaused] = useState(false);
+  const deadlineRef = useRef(Date.now() + duration);
   const normLevel = normalizeAlertLevel(alert.level);
 
   useEffect(() => {
     if (isPaused) return;
+    const tick = () => {
+      const nextRemaining = Math.max(0, deadlineRef.current - Date.now());
+      setRemainingMs(nextRemaining);
+      if (nextRemaining <= 0) {
+        onDismiss(id);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 100);
+    return () => window.clearInterval(timer);
+  }, [id, isPaused, onDismiss]);
 
-    const timer = setTimeout(() => {
-      onDismiss(id);
-    }, duration);
+  const handlePause = () => {
+    if (isPaused) return;
+    setIsPaused(true);
+    setRemainingMs(Math.max(0, deadlineRef.current - Date.now()));
+  };
 
-    return () => clearTimeout(timer);
-  }, [id, duration, isPaused, onDismiss]);
+  const handleResume = () => {
+    if (!isPaused) return;
+    deadlineRef.current = Date.now() + remainingMs;
+    setIsPaused(false);
+  };
 
   const callsign = alert.callsign?.trim() || alert.icao?.toUpperCase().trim() || 'UNKNOWN';
   const timeStr = alert.timestamp
@@ -43,8 +61,8 @@ function ToastItem({ id, alert, duration = 6000, onSelectAlert, onDismiss }: Toa
   return (
     <div
       className={`toast-alert level-${normLevel}${isPaused ? ' paused' : ''}`}
-      onMouseEnter={() => setIsPaused(true)}
-      onMouseLeave={() => setIsPaused(false)}
+      onMouseEnter={handlePause}
+      onMouseLeave={handleResume}
       onClick={() => {
         onSelectAlert(alert);
         onDismiss(id);
@@ -89,6 +107,7 @@ function ToastItem({ id, alert, duration = 6000, onSelectAlert, onDismiss }: Toa
         style={{
           animationDuration: `${duration}ms`,
           animationPlayState: isPaused ? 'paused' : 'running',
+          transform: `scaleX(${Math.max(0, remainingMs / duration)})`,
         }}
       />
     </div>
@@ -111,4 +130,3 @@ export function AlertToasts({ toasts, onSelectAlert, onDismiss }: AlertToastsPro
     </div>
   );
 }
-

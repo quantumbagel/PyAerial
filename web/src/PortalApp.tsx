@@ -1,11 +1,9 @@
-import { useEffect } from 'react';
 import { AlertToasts } from './components/AlertToasts';
 import { DetailsDrawer } from './components/DetailsDrawer';
 import { DisconnectedBanner } from './components/DisconnectedBanner';
 import { MapView } from './components/MapView';
 import { Sidebar } from './components/Sidebar';
 import { usePortalApp } from './hooks/usePortalApp';
-import { COLOR_CONFIG } from './utils/colors';
 
 export function PortalApp() {
   const {
@@ -14,6 +12,8 @@ export function PortalApp() {
     setSearchQuery,
     zonesVisible,
     setZonesVisible,
+    notificationsEnabled,
+    enableNotifications,
     mapRef,
     alertNotifications,
     selection,
@@ -28,19 +28,6 @@ export function PortalApp() {
     toggleFlightSortDirection,
     disableFollow,
   } = usePortalApp();
-
-  useEffect(() => {
-    Object.entries(COLOR_CONFIG).forEach(([key, val]) => {
-      const cssKey = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
-      document.documentElement.style.setProperty(cssKey, val);
-    });
-  }, []);
-
-  useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-  }, []);
 
   return (
     <>
@@ -59,6 +46,10 @@ export function PortalApp() {
         unreadAlertsCount={portal.unreadAlertsCount}
         isLoadingFlights={portal.isLoadingFlights}
         isLoadingAlerts={portal.isLoadingAlerts}
+        flightsError={portal.flightsError}
+        alertsError={portal.alertsError}
+        notificationsEnabled={notificationsEnabled}
+        onEnableNotifications={enableNotifications}
         onSwitchPortalView={portal.switchPortalView}
         onFlightSortChange={setFlightSort}
         onFlightSortDirectionToggle={toggleFlightSortDirection}
@@ -117,6 +108,7 @@ export function PortalApp() {
             drawerTab={selection.drawerTab}
             selectedTelemetryPoint={selection.selectedTelemetryPoint}
             appConfig={portal.appConfig}
+            selectionError={selection.selectionError}
             onSelectTelemetryPoint={selection.setSelectedTelemetryPoint}
             onClose={selection.closeDrawer}
             onSwitchTab={selection.setDrawerTab}

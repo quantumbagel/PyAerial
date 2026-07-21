@@ -1,8 +1,9 @@
 import { useEffect, useMemo } from 'react';
 import type { Alert, FlightSummary } from '../api/types';
 import { FLIGHT_SORT_OPTIONS, type FlightSortField, type SortDirection } from '../utils/flightData';
-import { formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
-import { AlertLevelBadge, flightSortValueLabel, flightTimeLabel, LevelBadge } from './LevelBadge';
+import { AlertListItem } from './AlertListItem';
+import { FlightListItem } from './FlightListItem';
+import { StatusMessage } from './StatusMessage';
 
 type SidebarTab = 'flights' | 'alerts';
 
@@ -21,6 +22,10 @@ interface SidebarProps {
   unreadAlertsCount?: number;
   isLoadingFlights?: boolean;
   isLoadingAlerts?: boolean;
+  flightsError?: string | null;
+  alertsError?: string | null;
+  notificationsEnabled: boolean;
+  onEnableNotifications: () => void;
   onSwitchPortalView: (view: 'live' | 'history') => void;
   onFlightSortChange: (field: FlightSortField) => void;
   onFlightSortDirectionToggle: () => void;
@@ -46,6 +51,10 @@ export function Sidebar({
   unreadAlertsCount = 0,
   isLoadingFlights = false,
   isLoadingAlerts = false,
+  flightsError = null,
+  alertsError = null,
+  notificationsEnabled,
+  onEnableNotifications,
   onSwitchPortalView,
   onFlightSortChange,
   onFlightSortDirectionToggle,
@@ -57,14 +66,13 @@ export function Sidebar({
 }: SidebarProps) {
   useEffect(() => {
     if (activeAlertId && sidebarTab === 'alerts') {
-      const el = document.querySelector('#alert-list li.active');
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
+      document.querySelector('#alert-list .alert-item.active')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
     }
   }, [activeAlertId, sidebarTab]);
 
-  // Build a per-flight alert count map from the full (unfiltered) alert set
   const alertCountByFlight = useMemo(() => {
     const map = new Map<string, number>();
     for (const alert of allAlerts) {
@@ -75,8 +83,11 @@ export function Sidebar({
     return map;
   }, [allAlerts]);
 
-  // Determine the bottom-right label for each flight row based on sort field
-  const isTimeSortField = flightSortField === 'last_seen' || flightSortField === 'first_seen';
+  const showNotificationPrompt =
+    typeof Notification !== 'undefined' &&
+    Notification.permission === 'default' &&
+    !notificationsEnabled;
+
   return (
     <div id="sidebar">
       <div id="sidebar-header">
@@ -86,11 +97,12 @@ export function Sidebar({
             <p>See the data captured by your ADS-B receiver</p>
           </div>
           <div className="sidebar-header-controls">
-            <div id="view-toggle">
+            <div id="view-toggle" role="group" aria-label="Portal view">
               <button
                 type="button"
                 className={`view-btn${portalView === 'live' ? ' active' : ''}`}
                 id="view-live"
+                aria-pressed={portalView === 'live'}
                 onClick={() => onSwitchPortalView('live')}
               >
                 Live
@@ -99,6 +111,7 @@ export function Sidebar({
                 type="button"
                 className={`view-btn${portalView === 'history' ? ' active' : ''}`}
                 id="view-history"
+                aria-pressed={portalView === 'history'}
                 onClick={() => onSwitchPortalView('history')}
               >
                 Historical
@@ -120,19 +133,30 @@ export function Sidebar({
             </div>
           </div>
         </div>
+        {showNotificationPrompt && (
+          <div className="notification-prompt">
+            <span>Enable desktop alerts for new events</span>
+            <button type="button" onClick={onEnableNotifications}>
+              Enable
+            </button>
+          </div>
+        )}
       </div>
       <div id="search-container">
         <input
-          type="text"
+          type="search"
           id="search-input"
           placeholder="Search by callsign, ICAO, model, or zone..."
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
+          aria-label="Search flights and alerts"
         />
       </div>
-      <div id="sidebar-tabs">
+      <div id="sidebar-tabs" role="tablist" aria-label="Sidebar panels">
         <button
           type="button"
+          role="tab"
+          aria-selected={sidebarTab === 'flights'}
           className={`sidebar-tab${sidebarTab === 'flights' ? ' active' : ''}`}
           id="tab-flights"
           onClick={() => onSwitchSidebarTab('flights')}
@@ -141,6 +165,8 @@ export function Sidebar({
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={sidebarTab === 'alerts'}
           className={`sidebar-tab${sidebarTab === 'alerts' ? ' active' : ''}`}
           id="tab-alerts"
           onClick={() => onSwitchSidebarTab('alerts')}
@@ -151,7 +177,11 @@ export function Sidebar({
           )}
         </button>
       </div>
-      <div id="panel-flights" className={`sidebar-panel${sidebarTab === 'flights' ? ' active' : ''}`}>
+      <div
+        id="panel-flights"
+        role="tabpanel"
+        className={`sidebar-panel${sidebarTab === 'flights' ? ' active' : ''}`}
+      >
         <div id="flight-sort-bar" className="flight-sort-bar">
           <label htmlFor="flight-sort-field" className="flight-sort-label">
             Sort by
@@ -180,84 +210,51 @@ export function Sidebar({
         </div>
         <ul id="flight-list">
           {isLoadingFlights ? (
-            <li className="flight-list-loading">
-              <span className="flight-list-spinner" aria-hidden="true" />
-              Loading flights…
-            </li>
+            <StatusMessage variant="loading">Loading flights…</StatusMessage>
+          ) : flightsError ? (
+            <StatusMessage variant="error">{flightsError}</StatusMessage>
+          ) : flights.length === 0 ? (
+            <StatusMessage>
+              {searchQuery ? 'No flights match your search.' : 'No flights available.'}
+            </StatusMessage>
           ) : (
             flights.map((flight) => (
-              <li
+              <FlightListItem
                 key={flight.flight_id}
-                className={`flight-item${flight.flight_id === activeFlightId ? ' active' : ''}`}
-                onClick={() => onSelectFlight(flight.flight_id)}
-              >
-                <div className="flight-meta-row">
-                  <span className="flight-callsign">
-                    {flight.callsign || 'UNKNOWN'}{' '}
-                    <LevelBadge flight={flight} alertCount={alertCountByFlight.get(flight.flight_id)} />
-                  </span>
-                  <span className="flight-icao">{flight.icao.toUpperCase()}</span>
-                </div>
-                <div className="flight-meta-row">
-                  <span className="flight-desc">{flight.model || 'Unknown Model'}</span>
-                  <span className="flight-time">
-                    {isTimeSortField
-                      ? flightTimeLabel(flight)
-                      : flightSortValueLabel(flight, flightSortField)}
-                  </span>
-                </div>
-              </li>
+                flight={flight}
+                active={flight.flight_id === activeFlightId}
+                sortField={flightSortField}
+                alertCount={alertCountByFlight.get(flight.flight_id)}
+                onSelect={onSelectFlight}
+              />
             ))
           )}
         </ul>
       </div>
       <div
         id="panel-alerts"
+        role="tabpanel"
         className={`sidebar-panel${sidebarTab === 'alerts' ? ' active' : ''}`}
         onScroll={(e) => onAlertsScroll(e.currentTarget)}
       >
         <ul id="alert-list">
           {isLoadingAlerts ? (
-            <li className="flight-list-loading">
-              <span className="flight-list-spinner" aria-hidden="true" />
-              Loading alerts…
-            </li>
+            <StatusMessage variant="loading">Loading alerts…</StatusMessage>
+          ) : alertsError ? (
+            <StatusMessage variant="error">{alertsError}</StatusMessage>
           ) : alerts.length === 0 ? (
-            <li className="flight-list-loading">No alerts yet</li>
+            <StatusMessage>
+              {searchQuery ? 'No alerts match your search.' : 'No alerts yet'}
+            </StatusMessage>
           ) : (
-            alerts.map((alert) => {
-              const normLevel = normalizeAlertLevel(alert.level);
-              const timeStr = alert.timestamp
-                ? new Date(alert.timestamp * 1000).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                  })
-                : '';
-              const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
-              const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-              const title = `Triggered:\nTime: ${alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
-              return (
-                <li
-                  key={alert.alert_id}
-                  className={`alert-item ${normLevel}${alert.alert_id === activeAlertId ? ' active' : ''}`}
-                  title={title}
-                  onClick={() => onSelectAlert(alert)}
-                >
-                  <div className="flight-meta-row">
-                    <span className="flight-callsign">
-                      {alert.callsign || 'UNKNOWN'}{' '}
-                      <AlertLevelBadge level={alert.level} />
-                    </span>
-                    <span className="flight-icao">{(alert.icao || '').toUpperCase()}</span>
-                  </div>
-                  <div className="flight-meta-row">
-                    <span className="flight-desc">{alert.zone || 'Zone'}</span>
-                    <span className="flight-time">{timeStr}</span>
-                  </div>
-                </li>
-              );
-            })
+            alerts.map((alert) => (
+              <AlertListItem
+                key={alert.alert_id}
+                alert={alert}
+                active={alert.alert_id === activeAlertId}
+                onSelect={onSelectAlert}
+              />
+            ))
           )}
         </ul>
       </div>

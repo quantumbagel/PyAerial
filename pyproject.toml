@@ -38,6 +38,7 @@ dependencies = [
 sdr = ["pyrtlsdr>=0.3", "numpy>=1.26"]
 kafka = ["kafka-python-ng>=2.2.2"]
 all = ["pyrtlsdr>=0.3", "numpy>=1.26", "kafka-python-ng>=2.2.2"]
+dev = ["pytest>=8.0", "httpx>=0.27"]
 
 [project.urls]
 Homepage = "https://github.com/quantumbagel/PyAerial"
@@ -50,4 +51,4 @@ pyaerial = "pyaerial.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pyaerial = ["examples/*.yaml", "static/**/*"]
+pyaerial = ["examples/*.yaml"]

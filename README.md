@@ -197,12 +197,16 @@ pyaerial web -c config.yaml
 cd web && npm install && npm run dev
 ```
 
-Production build (output lands in `src/pyaerial/static/`):
+Production build (output lands in `src/pyaerial/static/`, which is generated and not committed):
 
 ```bash
-cd web && npm run build
+cd web && npm install && npm run build
+# or: ./scripts/build_web.sh
+pip install -e .
 pyaerial web
 ```
+
+Docker builds the frontend automatically during image creation. For local editable installs, run the web build before `pyaerial web` or the portal will return HTTP 503.
 
 ### WebSocket API
 

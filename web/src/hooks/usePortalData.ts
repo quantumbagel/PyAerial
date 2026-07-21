@@ -7,6 +7,15 @@ import { applyTelemetryPoint, mergeLiveFlights, sortFlights } from '../utils/fli
 
 const ALERTS_LIMIT = 50;
 
+function isValidCoordinate(lat?: number | null, lon?: number | null): boolean {
+  return (
+    typeof lat === 'number' &&
+    typeof lon === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lon)
+  );
+}
+
 interface UsePortalDataOptions {
   portalView: PortalView;
   setPortalView: (view: PortalView) => void;
@@ -42,10 +51,13 @@ export function usePortalData({
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [isLoadingFlights, setIsLoadingFlights] = useState(true);
   const [isLoadingAlerts, setIsLoadingAlerts] = useState(true);
+  const [flightsError, setFlightsError] = useState<string | null>(null);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(true);
 
   const hasMoreAlerts = useRef(true);
   const isFetchingAlerts = useRef(false);
+  const historyRefreshVersion = useRef(0);
   const portalViewRef = useRef<PortalView>(portalView);
   const sidebarTabRef = useRef(sidebarTab);
   const appendSelectedTelemetryRef = useRef(appendSelectedTelemetry);
@@ -98,29 +110,47 @@ export function usePortalData({
   }, []);
 
   const fetchHistoryData = useCallback(async () => {
+    const version = ++historyRefreshVersion.current;
     try {
       const [flights, alerts] = await Promise.all([
         api.fetchFlights('history'),
         api.fetchAlerts('history', { limit: ALERTS_LIMIT }),
       ]);
+      if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
+        return;
+      }
       setFlightsData(sortFlights(flights));
-      setAlertsData(alerts);
-      hasMoreAlerts.current = alerts.length >= ALERTS_LIMIT;
+      if (!isFetchingAlerts.current) {
+        setAlertsData(alerts);
+        hasMoreAlerts.current = alerts.length >= ALERTS_LIMIT;
+      }
+      setFlightsError(null);
+      setAlertsError(null);
     } catch (err) {
-      console.error('Failed to fetch history data', err);
+      if (version !== historyRefreshVersion.current) return;
+      const message = 'Failed to load historical data.';
+      console.error(message, err);
+      setFlightsError(message);
+      setAlertsError(message);
     } finally {
-      setIsLoadingFlights(false);
-      setIsLoadingAlerts(false);
+      if (version === historyRefreshVersion.current) {
+        setIsLoadingFlights(false);
+        setIsLoadingAlerts(false);
+      }
     }
   }, []);
 
   const fetchHistoryAlerts = useCallback(async (append = false) => {
     if (isFetchingAlerts.current) return;
     isFetchingAlerts.current = true;
+    const version = historyRefreshVersion.current;
     try {
       const skip = append ? alertsData.length : 0;
       const limit = append ? ALERTS_LIMIT : Math.max(ALERTS_LIMIT, alertsData.length);
       const data = await api.fetchAlerts('history', { limit, skip });
+      if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
+        return;
+      }
       if (append) {
         if (data.length < ALERTS_LIMIT) hasMoreAlerts.current = false;
         setAlertsData((prev) => {
@@ -131,8 +161,11 @@ export function usePortalData({
         setAlertsData(data);
         hasMoreAlerts.current = data.length >= ALERTS_LIMIT;
       }
+      setAlertsError(null);
     } catch (err) {
-      console.error('Failed to fetch alerts', err);
+      const message = 'Failed to load alerts.';
+      console.error(message, err);
+      setAlertsError(message);
     } finally {
       isFetchingAlerts.current = false;
     }
@@ -142,11 +175,14 @@ export function usePortalData({
     (view: PortalView) => {
       if (view === portalView) return;
       stopDetailPoll();
+      historyRefreshVersion.current += 1;
       setPortalView(view);
       resetSelection();
       setFlightsData([]);
       setAlertsData([]);
       resetPaths();
+      setFlightsError(null);
+      setAlertsError(null);
       setIsLoadingFlights(true);
       setIsLoadingAlerts(true);
     },
@@ -171,10 +207,16 @@ export function usePortalData({
         api.fetchFlights('live'),
         api.fetchAlerts('live'),
       ]);
+      if (portalViewRef.current !== 'live') return;
       setFlightsData(sortFlights(flights));
       setAlertsData(alerts);
+      setFlightsError(null);
+      setAlertsError(null);
     } catch (err) {
-      console.error('Failed to fetch live data', err);
+      const message = 'Failed to load live data.';
+      console.error(message, err);
+      setFlightsError(message);
+      setAlertsError(message);
     } finally {
       setIsLoadingFlights(false);
       setIsLoadingAlerts(false);
@@ -191,7 +233,8 @@ export function usePortalData({
       fetchHistoryData();
       const timer = setInterval(fetchHistoryData, 10000);
       return () => clearInterval(timer);
-    } else if (portalView === 'live') {
+    }
+    if (portalView === 'live') {
       fetchLiveData();
     }
     return undefined;
@@ -206,6 +249,7 @@ export function usePortalData({
         if (message.type === 'flights') {
           setIsLoadingFlights(false);
           setFlightsData((prev) => sortFlights(mergeLiveFlights(prev, message.flights)));
+          setFlightsError(null);
         } else if (message.type === 'alerts') {
           setIsLoadingAlerts(false);
           setAlertsData((prev) => {
@@ -219,51 +263,54 @@ export function usePortalData({
             }
             return message.alerts;
           });
+          setAlertsError(null);
         } else if (message.type === 'telemetry') {
+          const validPoints = message.telemetry.filter((point) =>
+            isValidCoordinate(point.latitude, point.longitude),
+          );
+          if (validPoints.length === 0) return;
+
           setFlightsData((prev) => {
             let next = prev;
-            message.telemetry.forEach((point) => {
+            validPoints.forEach((point) => {
               next = applyTelemetryPoint(next, point);
             });
             return sortFlights(next);
           });
+
           const flightId = activeFlightIdRef.current;
           if (flightId) {
-            const selectedPoints = message.telemetry.filter((p) => p.flight_id === flightId);
+            const selectedPoints = validPoints.filter((p) => p.flight_id === flightId);
             if (selectedPoints.length > 0) {
               appendSelectedTelemetryRef.current(selectedPoints);
               setPathCoordsRef.current((prev) => {
                 const existing = prev[flightId] || [];
-                const added = selectedPoints
-                  .filter((p) => p.latitude != null && p.longitude != null)
-                  .map((p) => [p.latitude!, p.longitude!] as [number, number]);
+                const added = selectedPoints.map(
+                  (p) => [p.latitude!, p.longitude!] as [number, number],
+                );
                 return { ...prev, [flightId]: [...existing, ...added] };
               });
               loadFlightAlertsRef.current(flightId, 'live', true);
             }
           }
+
           if (showAllPathsRef.current) {
-            message.telemetry.forEach((point) => {
-              if (!point.flight_id) return;
-              setPathCoordsRef.current((prev) => {
-                if (prev[point.flight_id!]) {
-                  const existing = prev[point.flight_id!];
-                  return {
-                    ...prev,
-                    [point.flight_id!]: [
-                      ...existing,
-                      [point.latitude!, point.longitude!] as [number, number],
-                    ],
-                  };
-                }
-                return prev;
+            setPathCoordsRef.current((prev) => {
+              let next = prev;
+              validPoints.forEach((point) => {
+                if (!point.flight_id || next[point.flight_id]) return;
+                next = {
+                  ...next,
+                  [point.flight_id!]: [[point.latitude!, point.longitude!]],
+                };
               });
+              return next;
             });
           }
         }
       },
     });
-  }, []);
+  }, [activeFlightIdRef, showAllPathsRef]);
 
   return {
     flightsData,
@@ -274,6 +321,8 @@ export function usePortalData({
     appConfig,
     isLoadingFlights,
     isLoadingAlerts,
+    flightsError,
+    alertsError,
     wsConnected,
     handleSwitchSidebarTab,
     switchPortalView,

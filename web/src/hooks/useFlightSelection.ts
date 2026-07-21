@@ -28,10 +28,13 @@ export function useFlightSelection({
   const [drawerTab, setDrawerTab] = useState<DrawerTab>('telemetry');
   const [followSelectedPlane, setFollowSelectedPlane] = useState(false);
   const [selectedTelemetryPoint, setSelectedTelemetryPoint] = useState<TelemetryPoint | null>(null);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
 
   const flightDetailsPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeFlightIdRef = useRef<string | null>(null);
   const flightAlertsRef = useRef(flightAlerts);
+  const selectionTokenRef = useRef(0);
+  const portalViewRef = useRef(portalView);
 
   useEffect(() => {
     activeFlightIdRef.current = activeFlightId;
@@ -39,6 +42,9 @@ export function useFlightSelection({
   useEffect(() => {
     flightAlertsRef.current = flightAlerts;
   }, [flightAlerts]);
+  useEffect(() => {
+    portalViewRef.current = portalView;
+  }, [portalView]);
 
   const stopDetailPoll = useCallback(() => {
     if (flightDetailsPollTimer.current) {
@@ -46,6 +52,8 @@ export function useFlightSelection({
       flightDetailsPollTimer.current = null;
     }
   }, []);
+
+  useEffect(() => () => stopDetailPoll(), [stopDetailPoll]);
 
   const loadFlightAlerts = useCallback(async (flightId: string, view: PortalView, append = false) => {
     let since = 0;
@@ -66,12 +74,13 @@ export function useFlightSelection({
   }, []);
 
   const loadFlightTelemetry = useCallback(
-    async (flightId: string, view: PortalView, append = false) => {
+    async (flightId: string, view: PortalView, append = false, token = selectionTokenRef.current) => {
       let since = 0;
       if (append && flightTelemetry.length > 0) {
         since = Math.max(...flightTelemetry.map((t) => t.timestamp || 0));
       }
       const points = await api.fetchTelemetry(flightId, view, append ? since : 0);
+      if (token !== selectionTokenRef.current) return points;
       if (append) {
         setFlightTelemetry((prev) => {
           const ts = new Set(prev.map((t) => t.timestamp));
@@ -90,31 +99,35 @@ export function useFlightSelection({
   const appendSelectedTelemetry = useCallback((points: TelemetryPoint[]) => {
     setFlightTelemetry((prev) => {
       const ts = new Set(prev.map((t) => t.timestamp));
-      const merged = [
-        ...prev,
-        ...points.filter((p) => !ts.has(p.timestamp)),
-      ].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-      return merged;
+      return [...prev, ...points.filter((p) => !ts.has(p.timestamp))].sort(
+        (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
+      );
     });
   }, []);
 
   const selectFlight = useCallback(
     async (flightId: string, initialTab?: DrawerTab) => {
+      const token = ++selectionTokenRef.current;
       stopDetailPoll();
+      setSelectionError(null);
       setActiveFlightId(flightId);
       setSelectedTelemetryPoint(null);
       setFollowSelectedPlane(true);
       setDrawerOpen(true);
+      setFlightDetail(null);
+      setFlightAlerts([]);
+      setFlightTelemetry([]);
       if (initialTab) {
         setDrawerTab(initialTab);
       }
       try {
         const [detail, , alerts] = await Promise.all([
-          api.fetchFlight(flightId, portalView),
-          loadFlightTelemetry(flightId, portalView),
-          loadFlightAlerts(flightId, portalView),
-          fetchAndSetPathRef.current(flightId, portalView),
+          api.fetchFlight(flightId, portalViewRef.current),
+          loadFlightTelemetry(flightId, portalViewRef.current, false, token),
+          loadFlightAlerts(flightId, portalViewRef.current),
+          fetchAndSetPathRef.current(flightId, portalViewRef.current),
         ]);
+        if (token !== selectionTokenRef.current) return;
         setFlightDetail(detail);
         if (!initialTab) {
           setDrawerTab(alerts && alerts.length > 0 ? 'alerts' : 'telemetry');
@@ -125,10 +138,12 @@ export function useFlightSelection({
             Math.max(mapRef.current.map.getZoom(), 11),
           );
         }
-        if (portalView === 'live' && detail.is_live) {
+        if (portalViewRef.current === 'live' && detail.is_live) {
           flightDetailsPollTimer.current = setInterval(async () => {
+            if (token !== selectionTokenRef.current) return;
             try {
               const updated = await api.fetchFlight(flightId, 'live');
+              if (token !== selectionTokenRef.current) return;
               setFlightDetail(updated);
             } catch (err) {
               console.error('Failed to fetch active flight details', err);
@@ -136,10 +151,13 @@ export function useFlightSelection({
           }, 10000);
         }
       } catch (err) {
-        console.error('Failed to fetch flight details', err);
+        if (token !== selectionTokenRef.current) return;
+        const message = 'Failed to load flight details.';
+        console.error(message, err);
+        setSelectionError(message);
       }
     },
-    [portalView, loadFlightTelemetry, loadFlightAlerts, fetchAndSetPathRef, mapRef, stopDetailPoll],
+    [loadFlightTelemetry, loadFlightAlerts, fetchAndSetPathRef, mapRef, stopDetailPoll],
   );
 
   const selectAlert = useCallback(
@@ -157,6 +175,7 @@ export function useFlightSelection({
   );
 
   const closeDrawer = useCallback(() => {
+    selectionTokenRef.current += 1;
     stopDetailPoll();
     setDrawerOpen(false);
     setActiveFlightId(null);
@@ -165,10 +184,12 @@ export function useFlightSelection({
     setFlightDetail(null);
     setFlightAlerts([]);
     setFlightTelemetry([]);
+    setSelectionError(null);
     clearPathsIfNeeded();
   }, [stopDetailPoll, clearPathsIfNeeded]);
 
   const resetSelection = useCallback(() => {
+    selectionTokenRef.current += 1;
     stopDetailPoll();
     setActiveFlightId(null);
     setActiveAlertId(null);
@@ -178,6 +199,7 @@ export function useFlightSelection({
     setFlightAlerts([]);
     setFlightTelemetry([]);
     setSelectedTelemetryPoint(null);
+    setSelectionError(null);
   }, [stopDetailPoll]);
 
   return {
@@ -194,6 +216,7 @@ export function useFlightSelection({
     setFollowSelectedPlane,
     selectedTelemetryPoint,
     setSelectedTelemetryPoint,
+    selectionError,
     selectFlight,
     selectAlert,
     closeDrawer,

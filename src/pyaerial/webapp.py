@@ -36,6 +36,19 @@ _STATIC_DIR = Path(__file__).parent / "static"
 _LIVE_POLL_INTERVAL = 1.0
 
 
+def _safe_static_path(full_path: str) -> Path | None:
+    """Resolve a path under the static directory, rejecting traversal attempts."""
+    if not full_path:
+        return None
+    candidate = (_STATIC_DIR / full_path).resolve()
+    static_root = _STATIC_DIR.resolve()
+    try:
+        candidate.relative_to(static_root)
+    except ValueError:
+        return None
+    return candidate
+
+
 def _connect_stores(config_path: str) -> tuple[Config, pymongo.MongoClient, pymongo.database.Database, RedisLiveStore]:
     config = load_config(config_path)
     client = pymongo.MongoClient(config.database.uri)
@@ -233,21 +246,46 @@ def _get_history_flights(db: pymongo.database.Database, aircraft_db: AircraftDB 
         "$or": [{"retained": True}, {"retained": {"$exists": False}}],
     }).sort("end_time", -1).limit(100)
 
-    completed_docs = []
-    for doc in completed_cursor:
-        if doc.get("retained") or alerts_col.count_documents({"flight_id": doc["_id"]}, limit=1):
-            completed_docs.append(doc)
-        if len(completed_docs) >= 50:
+    completed_docs = list(completed_cursor)
+    if not completed_docs:
+        return []
+
+    flight_ids = [doc["_id"] for doc in completed_docs]
+    alert_flight_ids = {
+        doc["_id"]
+        for doc in alerts_col.aggregate([
+            {"$match": {"flight_id": {"$in": flight_ids}}},
+            {"$group": {"_id": "$flight_id"}},
+        ])
+    }
+
+    selected_docs = []
+    for doc in completed_docs:
+        if doc.get("retained") or doc["_id"] in alert_flight_ids:
+            selected_docs.append(doc)
+        if len(selected_docs) >= 50:
             break
 
-    results = []
-    for doc in completed_docs:
-        last_tel = telemetry_col.find_one(
-            {"flight_id": doc["_id"]},
-            sort=[("timestamp", pymongo.DESCENDING)],
-        )
-        results.append(_flight_summary(doc, last_tel, aircraft_db))
-    return results
+    if not selected_docs:
+        return []
+
+    selected_ids = [doc["_id"] for doc in selected_docs]
+    latest_telemetry = {
+        doc["_id"]: doc["doc"]
+        for doc in telemetry_col.aggregate([
+            {"$match": {"flight_id": {"$in": selected_ids}}},
+            {"$sort": {"timestamp": -1}},
+            {"$group": {
+                "_id": "$flight_id",
+                "doc": {"$first": "$$ROOT"},
+            }},
+        ])
+    }
+
+    return [
+        _flight_summary(doc, latest_telemetry.get(doc["_id"]), aircraft_db)
+        for doc in selected_docs
+    ]
 
 
 def _get_live_alerts(live_store: RedisLiveStore, *, since: float = 0.0,
@@ -493,13 +531,14 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
     app = FastAPI(title="PyAerial Web Portal", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[],
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=["GET", "HEAD", "OPTIONS"],
         allow_headers=["*"],
     )
 
-    async def handle_ws_request(action: str, params: dict[str, Any]) -> Any:
+    def handle_ws_request(action: str, params: dict[str, Any]) -> Any:
         view = _view_param(params.get("view", "live"))
         if mock_store:
             if action == "fetchFlights":
@@ -604,7 +643,7 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
                         action = req.get("action")
                         params = req.get("params", {})
                         try:
-                            res_data = await handle_ws_request(action, params)
+                            res_data = await asyncio.to_thread(handle_ws_request, action, params)
                             await websocket.send_json({
                                 "type": "response",
                                 "id": req_id,
@@ -644,8 +683,13 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
     def serve_spa(full_path: str):
         if full_path.startswith("ws/"):
             raise HTTPException(404)
-        file_path = _STATIC_DIR / full_path
-        if file_path.is_file():
+        if ".." in Path(full_path).parts:
+            raise HTTPException(404)
+        file_path = _safe_static_path(full_path)
+        if file_path is None:
+            if full_path and "." in full_path.rsplit("/", 1)[-1]:
+                raise HTTPException(404)
+        elif file_path.is_file():
             return FileResponse(file_path)
         index = _STATIC_DIR / "index.html"
         if index.is_file():

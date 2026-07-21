@@ -3,7 +3,8 @@ import * as L from 'leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
 import { isFlightLive, formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight, ZONE_COLORS } from '../utils/planeIcon';
-import { COLOR_CONFIG } from '../utils/colors';
+import { COLOR_HEX } from '../utils/colors';
+import { MapToolbar } from './MapToolbar';
 import '@luomus/leaflet-smooth-wheel-zoom';
 
 export interface MapViewHandle {
@@ -40,10 +41,29 @@ interface MapViewProps {
   drawer?: React.ReactNode;
 }
 
+type MarkerState = {
+  lat: number;
+  lon: number;
+  heading: number | null | undefined;
+  selected: boolean;
+  live: boolean;
+  level?: string;
+};
 
+function markerNeedsUpdate(existing: MarkerState | undefined, flight: FlightSummary, isSelected: boolean): boolean {
+  if (!existing) return true;
+  const isLive = isFlightLive(flight);
+  return (
+    existing.lat !== flight.latitude ||
+    existing.lon !== flight.longitude ||
+    existing.heading !== flight.heading ||
+    existing.selected !== isSelected ||
+    existing.live !== isLive ||
+    existing.level !== flight.level
+  );
+}
 
 export function MapView({
-  flights,
   filteredFlights,
   activeFlightId,
   selectedTelemetryPoint,
@@ -54,6 +74,7 @@ export function MapView({
   appConfig,
   pathCoords,
   pathAlerts,
+  flights,
   onSelectFlight,
   onFollowDisabled,
   onToggleFollow,
@@ -72,6 +93,7 @@ export function MapView({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
   const planeMarkers = useRef<Record<string, L.Marker>>({});
+  const markerState = useRef<Record<string, MarkerState>>({});
   const planePaths = useRef<Record<string, L.Polyline>>({});
   const planeEventMarkers = useRef<Record<string, L.CircleMarker[]>>({});
   const zoneLayers = useRef<L.Layer[]>([]);
@@ -89,7 +111,7 @@ export function MapView({
       zoomControl: false,
       zoomSnap: 0,
       zoomDelta: 1.0,
-      scrollWheelZoom: false,   // disabled in favour of SmoothWheelZoom
+      scrollWheelZoom: false,
       smoothWheelZoom: true,
       smoothSensitivity: 1,
     }).setView([35.727, -78.696], 8);
@@ -109,15 +131,14 @@ export function MapView({
         map.setView([lat, lon], Math.max(map.getZoom(), 14));
       },
     };
-    const resizeObserver = new ResizeObserver(() => {
-      map.invalidateSize();
-    });
+    const resizeObserver = new ResizeObserver(() => map.invalidateSize());
     resizeObserver.observe(containerRef.current);
     return () => {
       resizeObserver.disconnect();
       map.remove();
       mapInstance.current = null;
       planeMarkers.current = {};
+      markerState.current = {};
       planePaths.current = {};
       planeEventMarkers.current = {};
       zoneLayers.current = [];
@@ -139,12 +160,10 @@ export function MapView({
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
-
     if (selectedTelemetryMarker.current) {
       map.removeLayer(selectedTelemetryMarker.current);
       selectedTelemetryMarker.current = null;
     }
-
     if (
       selectedTelemetryPoint &&
       selectedTelemetryPoint.latitude != null &&
@@ -158,7 +177,7 @@ export function MapView({
         radius: 7,
         color: '#ffffff',
         weight: 2,
-        fillColor: COLOR_CONFIG.accent,
+        fillColor: COLOR_HEX.accent,
         fillOpacity: 1.0,
       }).addTo(map);
       marker.bindTooltip(
@@ -210,24 +229,36 @@ export function MapView({
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
-
-    if (!followSelectedPlane) {
-      lastFollowPanRef.current = null;
-    }
+    if (!followSelectedPlane) lastFollowPanRef.current = null;
 
     const filteredIds = new Set(filteredFlights.map((f) => f.flight_id));
     Object.keys(planeMarkers.current).forEach((flightId) => {
       if (!filteredIds.has(flightId) && flightId !== activeFlightId) {
         map.removeLayer(planeMarkers.current[flightId]);
         delete planeMarkers.current[flightId];
+        delete markerState.current[flightId];
       }
     });
 
     filteredFlights.forEach((flight) => {
       if (flight.latitude == null || flight.longitude == null) return;
-      const pos: L.LatLngExpression = [flight.latitude, flight.longitude];
       const isSelected = flight.flight_id === activeFlightId;
       const isLive = isFlightLive(flight);
+      const existingState = markerState.current[flight.flight_id];
+      if (!markerNeedsUpdate(existingState, flight, isSelected)) {
+        if (isSelected && followSelectedPlane) {
+          const lat = flight.latitude;
+          const lon = flight.longitude;
+          const prev = lastFollowPanRef.current;
+          if (!prev || prev[0] !== lat || prev[1] !== lon) {
+            lastFollowPanRef.current = [lat, lon];
+            map.panTo([lat, lon], { animate: false });
+          }
+        }
+        return;
+      }
+
+      const pos: L.LatLngExpression = [flight.latitude, flight.longitude];
       const existing = planeMarkers.current[flight.flight_id];
       if (existing) {
         existing.setLatLng(pos);
@@ -239,9 +270,18 @@ export function MapView({
         marker.on('click', () => onSelectFlightRef.current(flight.flight_id));
         planeMarkers.current[flight.flight_id] = marker;
       }
+      markerState.current[flight.flight_id] = {
+        lat: flight.latitude,
+        lon: flight.longitude,
+        heading: flight.heading,
+        selected: isSelected,
+        live: isLive,
+        level: flight.level,
+      };
+
       if (isSelected && followSelectedPlane) {
-        const lat = flight.latitude!;
-        const lon = flight.longitude!;
+        const lat = flight.latitude;
+        const lon = flight.longitude;
         const prev = lastFollowPanRef.current;
         if (!prev || prev[0] !== lat || prev[1] !== lon) {
           lastFollowPanRef.current = [lat, lon];
@@ -295,7 +335,8 @@ export function MapView({
       alerts.forEach((alert) => {
         if (alert.latitude == null || alert.longitude == null) return;
         const norm = normalizeAlertLevel(alert.level);
-        const fillColor = norm === 'alert' ? '#ef4444' : norm === 'warn' ? '#f59e0b' : '#3b82f6';
+        const fillColor =
+          norm === 'alert' ? COLOR_HEX.alert : norm === 'warn' ? COLOR_HEX.warn : COLOR_HEX.accent;
         const displayTag = (alert.level || norm).toUpperCase();
         const marker = L.circleMarker([alert.latitude, alert.longitude], {
           radius: 6,
@@ -304,8 +345,12 @@ export function MapView({
           fillColor,
           fillOpacity: 0.95,
         }).addTo(map);
-        const timeStr = alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleTimeString() : 'N/A';
-        marker.bindTooltip(`<strong>${displayTag}</strong> · ${alert.zone || 'zone'}<br/>Time: ${timeStr}<br/>Alt: ${formatAlertAltitude(alert.altitude)}<br/>ETA: ${formatAlertEta(alert.eta)}`);
+        const timeStr = alert.timestamp
+          ? new Date(alert.timestamp * 1000).toLocaleTimeString()
+          : 'N/A';
+        marker.bindTooltip(
+          `<strong>${displayTag}</strong> · ${alert.zone || 'zone'}<br/>Time: ${timeStr}<br/>Alt: ${formatAlertAltitude(alert.altitude)}<br/>ETA: ${formatAlertEta(alert.eta)}`,
+        );
         marker.on('click', () => onSelectFlightRef.current(flightId));
         markers.push(marker);
       });
@@ -315,59 +360,20 @@ export function MapView({
 
   return (
     <div id="map-container">
-      <div id="map-controls">
-        <div className="map-toolbar-group">
-          <button
-            id="follow-btn"
-            className={`toolbar-btn${followActive ? ' active' : ''}`}
-            type="button"
-            title="Follow selected aircraft"
-            style={{ display: followVisible ? 'block' : 'none' }}
-            onClick={onToggleFollow}
-          >
-            {followLabel}
-          </button>
-          <button
-            id="zones-btn"
-            className={`toolbar-btn${zonesActive ? ' active' : ''}`}
-            type="button"
-            title="Show configured geofence zones"
-            onClick={onToggleZones}
-          >
-            {zonesLabel}
-          </button>
-          <button
-            id="paths-btn"
-            className={`toolbar-btn${pathsActive ? ' active' : ''}`}
-            type="button"
-            title="Show flight paths for all visible aircraft"
-            onClick={onTogglePaths}
-          >
-            {pathsLabel}
-          </button>
-        </div>
-        <div className="map-toolbar-divider" />
-        <div className="map-toolbar-group">
-          <button
-            id="zoom-in-btn"
-            className="toolbar-btn map-zoom-btn"
-            type="button"
-            title="Zoom in"
-            onClick={() => mapInstance.current?.zoomIn()}
-          >
-            +
-          </button>
-          <button
-            id="zoom-out-btn"
-            className="toolbar-btn map-zoom-btn"
-            type="button"
-            title="Zoom out"
-            onClick={() => mapInstance.current?.zoomOut()}
-          >
-            −
-          </button>
-        </div>
-      </div>
+      <MapToolbar
+        followVisible={followVisible}
+        followActive={followActive}
+        zonesActive={zonesActive}
+        pathsActive={pathsActive}
+        followLabel={followLabel}
+        zonesLabel={zonesLabel}
+        pathsLabel={pathsLabel}
+        onToggleFollow={onToggleFollow}
+        onToggleZones={onToggleZones}
+        onTogglePaths={onTogglePaths}
+        onZoomIn={() => mapInstance.current?.zoomIn()}
+        onZoomOut={() => mapInstance.current?.zoomOut()}
+      />
       <div id="map" ref={containerRef} />
       {drawer}
     </div>

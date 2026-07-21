@@ -19,10 +19,13 @@ import { usePortalData } from './usePortalData';
 export function usePortalApp() {
   const [portalView, setPortalView] = useState<PortalView>(() => {
     const saved = localStorage.getItem('portalView');
-    return (saved === 'live' || saved === 'history') ? saved : 'live';
+    return saved === 'live' || saved === 'history' ? saved : 'live';
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [zonesVisible, setZonesVisible] = useState(true);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    () => typeof Notification !== 'undefined' && Notification.permission === 'granted',
+  );
   const [flightSortField, setFlightSortField] = useState<FlightSortField>(
     () => loadFlightSort(portalView).field,
   );
@@ -51,6 +54,12 @@ export function usePortalApp() {
 
   const toggleFlightSortDirection = useCallback(() => {
     setFlightSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
+  }, []);
+
+  const enableNotifications = useCallback(async () => {
+    if (!('Notification' in window)) return;
+    const permission = await Notification.requestPermission();
+    setNotificationsEnabled(permission === 'granted');
   }, []);
 
   const mapRef = useRef<MapViewHandle>({
@@ -89,14 +98,14 @@ export function usePortalApp() {
     (newAlerts: Alert[]) => {
       const newest = newAlerts[0];
       alertNotifications.playWarningChime(newest.level || 'warn');
-      alertNotifications.triggerDesktopNotification(newest, (alert) => selectAlertRef.current(alert));
+      if (notificationsEnabled) {
+        alertNotifications.triggerDesktopNotification(newest, (alert) =>
+          selectAlertRef.current(alert),
+        );
+      }
       newAlerts.forEach((a) => alertNotifications.addToast(a));
     },
-    [
-      alertNotifications.playWarningChime,
-      alertNotifications.triggerDesktopNotification,
-      alertNotifications.addToast,
-    ],
+    [alertNotifications, notificationsEnabled],
   );
 
   const portal = usePortalData({
@@ -168,18 +177,20 @@ export function usePortalApp() {
     return portal.flightsData.length;
   }, [portal.flightsData, portalView]);
 
+  const { activeFlightId, closeDrawer, setFollowSelectedPlane } = selection;
+
   useEffect(() => {
-    if (portalView === 'live' && selection.activeFlightId) {
-      const exists = portal.flightsData.some((f) => f.flight_id === selection.activeFlightId);
+    if (portalView === 'live' && activeFlightId) {
+      const exists = portal.flightsData.some((f) => f.flight_id === activeFlightId);
       if (!exists) {
-        selection.closeDrawer();
+        closeDrawer();
       }
     }
-  }, [portal.flightsData, selection.activeFlightId, portalView, selection.closeDrawer]);
+  }, [portal.flightsData, activeFlightId, portalView, closeDrawer]);
 
   const disableFollow = useCallback(
-    () => selection.setFollowSelectedPlane(false),
-    [selection.setFollowSelectedPlane],
+    () => setFollowSelectedPlane(false),
+    [setFollowSelectedPlane],
   );
 
   return {
@@ -188,6 +199,8 @@ export function usePortalApp() {
     setSearchQuery,
     zonesVisible,
     setZonesVisible,
+    notificationsEnabled,
+    enableNotifications,
     mapRef,
     alertNotifications,
     selection,
