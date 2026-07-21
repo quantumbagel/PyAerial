@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { AlertToasts } from './components/AlertToasts';
 import { DetailsDrawer } from './components/DetailsDrawer';
-import { DisconnectedBanner } from './components/DisconnectedBanner';
+import { DisconnectedBanner, ErrorBanner } from './components/DisconnectedBanner';
 import { MapView } from './components/MapView';
 import { Sidebar } from './components/Sidebar';
 import { usePortalApp } from './hooks/usePortalApp';
@@ -130,6 +130,7 @@ export function PortalApp() {
         onDismiss={alertNotifications.dismissToast}
       />
       <DisconnectedBanner visible={!portal.wsConnected} />
+      <ErrorBanner message={portal.backendError} />
     </>
   );
 }

@@ -43,6 +43,17 @@ export function usePortalData({
   const [isLoadingFlights, setIsLoadingFlights] = useState(true);
   const [isLoadingAlerts, setIsLoadingAlerts] = useState(true);
   const [wsConnected, setWsConnected] = useState(true);
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const reportError = useCallback((msg: string) => {
+    // Trim to the first meaningful sentence (before long stack traces)
+    const firstLine = msg.split('\n')[0].split(',')[0].trim();
+    const display = firstLine.length > 120 ? firstLine.slice(0, 117) + '…' : firstLine;
+    setBackendError(`Backend error: ${display}`);
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = setTimeout(() => setBackendError(null), 6000);
+  }, []);
 
   const hasMoreAlerts = useRef(true);
   const isFetchingAlerts = useRef(false);
@@ -85,8 +96,9 @@ export function usePortalData({
       setZonesData(data);
     } catch (err) {
       console.error('Failed to fetch zones', err);
+      reportError((err as Error).message || 'Failed to fetch zones');
     }
-  }, []);
+  }, [reportError]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -94,8 +106,9 @@ export function usePortalData({
       setAppConfig(data);
     } catch (err) {
       console.error('Failed to fetch config', err);
+      reportError((err as Error).message || 'Failed to fetch config');
     }
-  }, []);
+  }, [reportError]);
 
   const fetchHistoryData = useCallback(async () => {
     try {
@@ -108,11 +121,12 @@ export function usePortalData({
       hasMoreAlerts.current = alerts.length >= ALERTS_LIMIT;
     } catch (err) {
       console.error('Failed to fetch history data', err);
+      reportError((err as Error).message || 'Failed to fetch history data');
     } finally {
       setIsLoadingFlights(false);
       setIsLoadingAlerts(false);
     }
-  }, []);
+  }, [reportError]);
 
   const fetchHistoryAlerts = useCallback(async (append = false) => {
     if (isFetchingAlerts.current) return;
@@ -133,10 +147,11 @@ export function usePortalData({
       }
     } catch (err) {
       console.error('Failed to fetch alerts', err);
+      reportError((err as Error).message || 'Failed to fetch alerts');
     } finally {
       isFetchingAlerts.current = false;
     }
-  }, [alertsData.length]);
+  }, [alertsData.length, reportError]);
 
   const switchPortalView = useCallback(
     (view: PortalView) => {
@@ -257,6 +272,7 @@ export function usePortalData({
     isLoadingFlights,
     isLoadingAlerts,
     wsConnected,
+    backendError,
     handleSwitchSidebarTab,
     switchPortalView,
     handleAlertsScroll,
