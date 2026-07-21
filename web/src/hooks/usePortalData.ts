@@ -165,6 +165,22 @@ export function usePortalData({
     [portalView, fetchHistoryAlerts],
   );
 
+  const fetchLiveData = useCallback(async () => {
+    try {
+      const [flights, alerts] = await Promise.all([
+        api.fetchFlights('live'),
+        api.fetchAlerts('live'),
+      ]);
+      setFlightsData(sortFlights(flights));
+      setAlertsData(alerts);
+    } catch (err) {
+      console.error('Failed to fetch live data', err);
+    } finally {
+      setIsLoadingFlights(false);
+      setIsLoadingAlerts(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadConfig();
     loadZones();
@@ -175,9 +191,11 @@ export function usePortalData({
       fetchHistoryData();
       const timer = setInterval(fetchHistoryData, 10000);
       return () => clearInterval(timer);
+    } else if (portalView === 'live') {
+      fetchLiveData();
     }
     return undefined;
-  }, [portalView, fetchHistoryData]);
+  }, [portalView, fetchHistoryData, fetchLiveData]);
 
   useEffect(() => {
     return connectLiveSocket({
