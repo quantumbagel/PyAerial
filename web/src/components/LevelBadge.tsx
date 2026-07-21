@@ -1,21 +1,29 @@
 import type { FlightSummary } from '../api/types';
 import type { FlightSortField } from '../utils/flightData';
-import { isFiniteNumber, isFlightLive } from '../utils/format';
+import { isFiniteNumber, isFlightLive, normalizeAlertLevel } from '../utils/format';
 
 export function LevelBadge({ flight, alertCount }: { flight: FlightSummary; alertCount?: number }) {
-  const level = (flight.level || '').toLowerCase();
-  if (level === 'warn') return <span className="level-badge warn">Warn</span>;
-  if (level === 'alert') return <span className="level-badge alert">Alert</span>;
+  const norm = normalizeAlertLevel(flight.level);
+  if (norm === 'warn') return <span className="level-badge warn">Warn</span>;
+  if (norm === 'alert') return <span className="level-badge alert">Alert</span>;
   const count = alertCount ?? 0;
   const label = count === 1 ? '1 alert' : `${count} alerts`;
   return <span className={`level-badge ${count > 0 ? 'warn' : 'done'}`}>{label}</span>;
 }
 
 export function AlertLevelBadge({ level }: { level?: string }) {
-  const normalized = (level || 'event').toLowerCase();
-  const display = normalized.charAt(0).toUpperCase() + normalized.slice(1);
-  return <span className={`level-badge ${normalized}`}>{display}</span>;
+  const norm = normalizeAlertLevel(level);
+  const raw = (level || '').trim();
+  const display = raw
+    ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
+    : norm === 'alert'
+    ? 'Alert'
+    : norm === 'warn'
+    ? 'Warn'
+    : 'Info';
+  return <span className={`level-badge ${norm}`}>{display}</span>;
 }
+
 
 export function flightSortValueLabel(flight: FlightSummary, sortField: FlightSortField): string {
   switch (sortField) {

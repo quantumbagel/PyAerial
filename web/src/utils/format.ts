@@ -51,10 +51,21 @@ export function formatAlertAltitude(altitude: unknown): string {
   return `${m} m (${ft} ft)`;
 }
 
-export function formatAlertLevel(level: unknown): string {
-  return String(level || 'event');
+export type NormalizedAlertLevel = 'alert' | 'warn' | 'info';
+
+export function normalizeAlertLevel(level?: unknown): NormalizedAlertLevel {
+  if (!level) return 'info';
+  const str = String(level).toLowerCase().trim();
+  if (['alert', 'critical', 'danger', 'high', 'error'].includes(str)) {
+    return 'alert';
+  }
+  if (['warn', 'warning', 'medium', 'caution'].includes(str)) {
+    return 'warn';
+  }
+  return 'info';
 }
 
 export function isFlightLive(flight: { is_live?: boolean }): boolean {
   return !!flight.is_live;
 }
+

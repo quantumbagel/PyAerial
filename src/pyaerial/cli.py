@@ -64,6 +64,7 @@ def _build_parser() -> argparse.ArgumentParser:
                        help=f"SQLite aircraft index (default: {DEFAULT_AIRCRAFT_DB})")
     web_p.add_argument("--host", default="0.0.0.0", help="host to bind (default: 0.0.0.0)")
     web_p.add_argument("-p", "--port", type=int, default=10090, help="port to bind (default: 10090)")
+    web_p.add_argument("--mock", action="store_true", help="run in mock mode with simulated dummy data (no Redis/MongoDB required)")
     web_p.set_defaults(func=_cmd_web)
 
 
@@ -102,7 +103,7 @@ def _cmd_statview(args: argparse.Namespace) -> None:
 def _cmd_web(args: argparse.Namespace) -> None:
     setup_logging("info")
     from pyaerial.webapp import run_webapp
-    run_webapp(args.config, aircraft_db_path=args.aircraft_db, host=args.host, port=args.port)
+    run_webapp(args.config, aircraft_db_path=args.aircraft_db, host=args.host, port=args.port, mock=args.mock)
 
 
 

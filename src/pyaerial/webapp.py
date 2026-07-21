@@ -26,6 +26,7 @@ from pyaerial.calc.aircraft_db import AircraftDB, normalize_photo_url
 from pyaerial.config import load_config
 from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
+from pyaerial.mock_store import MockStore
 from pyaerial.store.redis_live import RedisLiveStore
 
 log = logging.getLogger("pyaerial.webapp")
@@ -376,11 +377,13 @@ def _app_config_payload(config: Config) -> dict[str, Any]:
 
 
 class LiveBroadcaster:
-    """Poll Redis and push live updates to connected WebSocket clients."""
+    """Poll Redis or MockStore and push live updates to connected WebSocket clients."""
 
-    def __init__(self, live_store: RedisLiveStore, aircraft_db: AircraftDB | None):
+    def __init__(self, live_store: RedisLiveStore | None, aircraft_db: AircraftDB | None,
+                 mock_store: MockStore | None = None):
         self.live_store = live_store
         self.aircraft_db = aircraft_db
+        self.mock_store = mock_store
         self._clients: dict[WebSocket, float] = {}
         self._task: asyncio.Task | None = None
         self._last_flights_sig: str | None = None
@@ -407,9 +410,13 @@ class LiveBroadcaster:
         self._clients.pop(websocket, None)
 
     async def _send_snapshot(self, websocket: WebSocket) -> None:
-        flights = _get_live_flights(self.live_store, self.aircraft_db)
+        if self.mock_store:
+            flights = self.mock_store.get_live_flights()
+            alerts = self.mock_store.get_alerts("live", limit=50)
+        else:
+            flights = _get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
+            alerts = _get_live_alerts(self.live_store, limit=50) if self.live_store else []
         await websocket.send_json({"type": "flights", "flights": _sanitize_for_json(flights)})
-        alerts = _get_live_alerts(self.live_store, limit=50)
         await websocket.send_json({"type": "alerts", "alerts": _sanitize_for_json(alerts)})
 
     async def _run_loop(self) -> None:
@@ -424,14 +431,20 @@ class LiveBroadcaster:
     async def _broadcast_tick(self) -> None:
         now = time.time()
 
-        flights = _get_live_flights(self.live_store, self.aircraft_db)
+        if self.mock_store:
+            self.mock_store.update_live()
+            flights = self.mock_store.get_live_flights()
+            alerts = self.mock_store.get_alerts("live", limit=50)
+        else:
+            flights = _get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
+            alerts = _get_live_alerts(self.live_store, limit=50) if self.live_store else []
+
         flights_sig = json.dumps(_sanitize_for_json(flights), sort_keys=True, default=str)
         if flights_sig != self._last_flights_sig:
             self._last_flights_sig = flights_sig
             msg = {"type": "flights", "flights": _sanitize_for_json(flights)}
             await self._broadcast(msg)
 
-        alerts = _get_live_alerts(self.live_store, limit=50)
         alerts_sig = json.dumps(_sanitize_for_json(alerts), sort_keys=True, default=str)
         if alerts_sig != self._last_alerts_sig:
             self._last_alerts_sig = alerts_sig
@@ -439,7 +452,13 @@ class LiveBroadcaster:
             await self._broadcast(msg)
 
         for websocket, since in list(self._clients.items()):
-            points = self.live_store.get_live_telemetry(since)
+            if self.mock_store:
+                points = self.mock_store.get_live_telemetry(since)
+            elif self.live_store:
+                points = self.live_store.get_live_telemetry(since)
+            else:
+                points = []
+
             if points:
                 payload = {
                     "type": "telemetry",
@@ -460,9 +479,10 @@ class LiveBroadcaster:
                 self.disconnect(websocket)
 
 
-def create_app(*, config: Config, db: pymongo.database.Database,
-               live_store: RedisLiveStore, aircraft_db: AircraftDB | None) -> FastAPI:
-    broadcaster = LiveBroadcaster(live_store, aircraft_db)
+def create_app(*, config: Config, db: pymongo.database.Database | None = None,
+               live_store: RedisLiveStore | None = None, aircraft_db: AircraftDB | None = None,
+               mock_store: MockStore | None = None) -> FastAPI:
+    broadcaster = LiveBroadcaster(live_store, aircraft_db, mock_store=mock_store)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -481,6 +501,45 @@ def create_app(*, config: Config, db: pymongo.database.Database,
 
     async def handle_ws_request(action: str, params: dict[str, Any]) -> Any:
         view = _view_param(params.get("view", "live"))
+        if mock_store:
+            if action == "fetchFlights":
+                return mock_store.get_live_flights() if view == "live" else mock_store.get_history_flights()
+
+            if action == "fetchFlight":
+                flight_id = params.get("flight_id") or params.get("flightId")
+                if not flight_id:
+                    raise ValueError("Missing flight_id")
+                return mock_store.get_flight_detail(flight_id, view)
+
+            if action == "fetchTelemetry":
+                flight_id = params.get("flight_id") or params.get("flightId")
+                if not flight_id:
+                    raise ValueError("Missing flight_id")
+                since_val = params.get("since")
+                since = float(since_val) if since_val is not None else 0.0
+                return mock_store.get_telemetry(flight_id, since)
+
+            if action == "fetchAlerts":
+                since_val = params.get("since")
+                since = float(since_val) if since_val is not None else 0.0
+                flight_id = params.get("flight_id") or params.get("flightId")
+                level = params.get("level")
+                limit_val = params.get("limit")
+                limit = int(limit_val) if limit_val is not None else 0
+                skip_val = params.get("skip")
+                skip = int(skip_val) if skip_val is not None else 0
+                return mock_store.get_alerts(
+                    view, since=since, flight_id=flight_id, level=level, limit=limit, skip=skip,
+                )
+
+            if action == "fetchZones":
+                return _zones_payload(config)
+
+            if action == "fetchConfig":
+                return _app_config_payload(config)
+
+            raise ValueError(f"Unknown action: {action}")
+
         if action == "fetchFlights":
             if view == "live":
                 return _get_live_flights(live_store, aircraft_db)
@@ -601,18 +660,36 @@ def create_app(*, config: Config, db: pymongo.database.Database,
 
 def run_webapp(config_path: str = "config.yaml", *,
                aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
-               host: str = "0.0.0.0", port: int = 10090) -> None:
-    config, client, db, live_store = _connect_stores(config_path)
-    aircraft_db = AircraftDB(aircraft_db_path) if aircraft_db_path else None
-    app = create_app(config=config, db=db, live_store=live_store, aircraft_db=aircraft_db)
+               host: str = "0.0.0.0", port: int = 10090,
+               mock: bool = False) -> None:
+    aircraft_db = AircraftDB(aircraft_db_path) if (aircraft_db_path and Path(aircraft_db_path).exists()) else None
+    client = None
+    live_store = None
 
-    print(f"Starting PyAerial web portal on http://localhost:{port}")
+    if mock:
+        log.info("Running in MOCK mode with simulated flight and alert data (MongoDB & Redis bypassed).")
+        try:
+            config = load_config(config_path)
+        except Exception:
+            from pyaerial.config.schema import Config, HomeConfig, TrackingConfig
+            config = Config(home=HomeConfig(latitude=35.7275, longitude=-78.6959), tracking=TrackingConfig())
+
+        mock_store = MockStore(home_lat=config.home.latitude, home_lon=config.home.longitude)
+        app = create_app(config=config, db=None, live_store=None, aircraft_db=aircraft_db, mock_store=mock_store)
+    else:
+        config, client, db, live_store = _connect_stores(config_path)
+        app = create_app(config=config, db=db, live_store=live_store, aircraft_db=aircraft_db)
+
+    print(f"Starting PyAerial web portal {'[MOCK MODE] ' if mock else ''}on http://localhost:{port}")
     try:
         uvicorn.run(app, host=host, port=port, log_level="info")
     except KeyboardInterrupt:
         print("\nStopping web server...")
     finally:
-        client.close()
-        live_store.close()
+        if client:
+            client.close()
+        if live_store:
+            live_store.close()
         if aircraft_db:
             aircraft_db.close()
+

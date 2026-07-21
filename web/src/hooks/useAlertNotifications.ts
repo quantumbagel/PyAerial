@@ -1,14 +1,37 @@
 import { useCallback, useState } from 'react';
 import type { Alert } from '../api/types';
+import { formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
+
+let sharedAudioCtx: AudioContext | null = null;
+
+function getAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
+      sharedAudioCtx = new AudioCtx();
+    }
+    if (sharedAudioCtx.state === 'suspended') {
+      sharedAudioCtx.resume().catch(() => {});
+    }
+    return sharedAudioCtx;
+  } catch {
+    return null;
+  }
+}
 
 export function useAlertNotifications() {
-  const [toasts, setToasts] = useState<{ id: string; alert: Alert }[]>([]);
+  const [toasts, setToasts] = useState<{ id: string; alert: Alert; duration?: number }[]>([]);
 
   const playWarningChime = useCallback((level: string) => {
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
+      const ctx = getAudioContext();
+      if (!ctx) return;
+
+      const norm = normalizeAlertLevel(level);
+      const now = ctx.currentTime;
+
       const osc1 = ctx.createOscillator();
       const osc2 = ctx.createOscillator();
       const gainNode = ctx.createGain();
@@ -17,39 +40,73 @@ export function useAlertNotifications() {
       osc2.connect(gainNode);
       gainNode.connect(ctx.destination);
 
-      const isAlert = level.toLowerCase() === 'alert';
-      osc1.frequency.setValueAtTime(isAlert ? 880 : 587.33, ctx.currentTime);
-      osc2.frequency.setValueAtTime(isAlert ? 1046.50 : 698.46, ctx.currentTime);
-
-      gainNode.gain.setValueAtTime(0.12, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (isAlert ? 0.7 : 0.4));
-
-      osc1.type = 'sine';
-      osc2.type = 'sine';
-
-      osc1.start();
-      osc2.start();
-      osc1.stop(ctx.currentTime + 0.8);
-      osc2.stop(ctx.currentTime + 0.8);
+      if (norm === 'alert') {
+        osc1.type = 'triangle';
+        osc2.type = 'sine';
+        osc1.frequency.setValueAtTime(880, now);
+        osc2.frequency.setValueAtTime(1046.5, now);
+        gainNode.gain.setValueAtTime(0.14, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.75);
+        osc1.start(now);
+        osc2.start(now);
+        osc1.stop(now + 0.75);
+        osc2.stop(now + 0.75);
+      } else if (norm === 'warn') {
+        osc1.type = 'sine';
+        osc2.type = 'sine';
+        osc1.frequency.setValueAtTime(587.33, now);
+        osc2.frequency.setValueAtTime(698.46, now);
+        gainNode.gain.setValueAtTime(0.1, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+        osc1.start(now);
+        osc2.start(now);
+        osc1.stop(now + 0.45);
+        osc2.stop(now + 0.45);
+      } else {
+        osc1.type = 'sine';
+        osc2.type = 'sine';
+        osc1.frequency.setValueAtTime(523.25, now);
+        osc2.frequency.setValueAtTime(659.25, now);
+        gainNode.gain.setValueAtTime(0.06, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+        osc1.start(now);
+        osc2.start(now);
+        osc1.stop(now + 0.35);
+        osc2.stop(now + 0.35);
+      }
     } catch (err) {
       console.warn('AudioContext warning chime failed:', err);
     }
   }, []);
 
-  const triggerDesktopNotification = useCallback((alert: Alert) => {
+  const triggerDesktopNotification = useCallback((alert: Alert, onSelectAlert?: (alert: Alert) => void) => {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    const level = (alert.level || 'warning').toUpperCase();
-    new Notification(`PyAerial ${level}: ${alert.callsign || 'Unknown'}`, {
-      body: `Zone: ${alert.zone}\nAlt: ${alert.altitude ? alert.altitude + ' m' : 'N/A'}\nETA: ${alert.eta ? Math.round(alert.eta) + 's' : 'N/A'}`,
+    const normLevel = normalizeAlertLevel(alert.level);
+    const icon = normLevel === 'alert' ? '🚨' : normLevel === 'warn' ? '⚠️' : 'ℹ️';
+    const displayLevel = normLevel === 'alert' ? 'ALERT' : normLevel === 'warn' ? 'WARNING' : 'INFO';
+    const callsignStr = alert.callsign || (alert.icao ? alert.icao.toUpperCase() : 'Unknown Flight');
+    const zoneStr = alert.zone ? `Zone: ${alert.zone}` : 'Zone: Unknown';
+    const altStr = `Alt: ${formatAlertAltitude(alert.altitude)}`;
+    const etaStr = `ETA: ${formatAlertEta(alert.eta)}`;
+
+    const notification = new Notification(`${icon} PyAerial ${displayLevel}: ${callsignStr}`, {
+      body: `${zoneStr} • ${altStr} • ${etaStr}`,
+      tag: alert.alert_id,
     });
+
+    notification.onclick = () => {
+      window.focus();
+      if (onSelectAlert) {
+        onSelectAlert(alert);
+      }
+    };
   }, []);
 
   const addToast = useCallback((alert: Alert) => {
     const id = `${alert.alert_id}-${Date.now()}-${Math.random()}`;
-    setToasts((current) => [{ id, alert }, ...current].slice(0, 5));
-    setTimeout(() => {
-      setToasts((current) => current.filter((t) => t.id !== id));
-    }, 6000);
+    const norm = normalizeAlertLevel(alert.level);
+    const duration = norm === 'alert' ? 8000 : 6000;
+    setToasts((current) => [{ id, alert, duration }, ...current].slice(0, 5));
   }, []);
 
   const dismissToast = useCallback((id: string) => {
@@ -64,3 +121,4 @@ export function useAlertNotifications() {
     triggerDesktopNotification,
   };
 }
+

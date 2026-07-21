@@ -4,14 +4,15 @@ import { isFlightLive } from '../utils/format';
 import {
   formatAlertAltitude,
   formatAlertEta,
-  formatAlertLevel,
   formatAltitude,
   formatAltitudeCell,
   formatHeading,
   formatSpeed,
   formatSpeedCell,
   formatZoneLevel,
+  normalizeAlertLevel,
 } from '../utils/format';
+import { AlertLevelBadge } from './LevelBadge';
 
 type DrawerTab = 'alerts' | 'telemetry';
 
@@ -299,7 +300,7 @@ export function DetailsDrawer({
               <div className="alert-timeline-empty">No alert events for this flight.</div>
             ) : (
               sortedAlerts.map((alert) => {
-                const level = formatAlertLevel(alert.level).toLowerCase();
+                const normLevel = normalizeAlertLevel(alert.level);
                 const timeStr = alert.timestamp
                   ? new Date(Number(alert.timestamp) * 1000).toLocaleTimeString([], {
                       hour: '2-digit',
@@ -307,10 +308,6 @@ export function DetailsDrawer({
                       second: '2-digit',
                     })
                   : '';
-                const badgeClass = level === 'alert' ? 'alert' : 'warn';
-                const displayLvl =
-                  formatAlertLevel(alert.level).charAt(0).toUpperCase() +
-                  formatAlertLevel(alert.level).slice(1);
                 const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
                 const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
                 const title = `Triggered:\nTime: ${alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
@@ -318,12 +315,12 @@ export function DetailsDrawer({
                   <div
                     key={alert.alert_id}
                     data-alert-id={alert.alert_id}
-                    className={`alert-timeline-item ${level}${alert.alert_id === activeAlertId ? ' active' : ''}`}
+                    className={`alert-timeline-item ${normLevel}${alert.alert_id === activeAlertId ? ' active' : ''}`}
                     title={title}
                     onClick={() => onSelectAlert(alert)}
                   >
                     <div className="alert-timeline-row">
-                      <span className={`alert-badge ${badgeClass}`}>{displayLvl}</span>
+                      <AlertLevelBadge level={alert.level} />
                       <span className="alert-timeline-time">{timeStr}</span>
                     </div>
                     <div className="alert-timeline-zone">

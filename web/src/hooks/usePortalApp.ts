@@ -72,11 +72,24 @@ export function usePortalApp() {
 
   const alertNotifications = useAlertNotifications();
 
+  const selection = useFlightSelection({
+    portalView,
+    mapRef,
+    fetchAndSetPathRef,
+    clearPathsIfNeeded: () => clearPathsIfNeededRef.current(),
+    onSelectAlertTab: () => onSelectAlertTabRef.current(),
+  });
+
+  const selectAlertRef = useRef(selection.selectAlert);
+  useEffect(() => {
+    selectAlertRef.current = selection.selectAlert;
+  }, [selection.selectAlert]);
+
   const onNewAlerts = useCallback(
     (newAlerts: Alert[]) => {
       const newest = newAlerts[0];
       alertNotifications.playWarningChime(newest.level || 'warn');
-      alertNotifications.triggerDesktopNotification(newest);
+      alertNotifications.triggerDesktopNotification(newest, (alert) => selectAlertRef.current(alert));
       newAlerts.forEach((a) => alertNotifications.addToast(a));
     },
     [
@@ -85,14 +98,6 @@ export function usePortalApp() {
       alertNotifications.addToast,
     ],
   );
-
-  const selection = useFlightSelection({
-    portalView,
-    mapRef,
-    fetchAndSetPathRef,
-    clearPathsIfNeeded: () => clearPathsIfNeededRef.current(),
-    onSelectAlertTab: () => onSelectAlertTabRef.current(),
-  });
 
   const portal = usePortalData({
     portalView,

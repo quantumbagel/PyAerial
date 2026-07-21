@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import type { Alert, FlightSummary } from '../api/types';
 import { FLIGHT_SORT_OPTIONS, type FlightSortField, type SortDirection } from '../utils/flightData';
-import { formatAlertAltitude, formatAlertEta } from '../utils/format';
+import { formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
 import { AlertLevelBadge, flightSortValueLabel, flightTimeLabel, LevelBadge } from './LevelBadge';
 
 type SidebarTab = 'flights' | 'alerts';
@@ -226,7 +226,7 @@ export function Sidebar({
             <li className="flight-list-loading">No alerts yet</li>
           ) : (
             alerts.map((alert) => {
-              const level = (alert.level || 'event').toLowerCase();
+              const normLevel = normalizeAlertLevel(alert.level);
               const timeStr = alert.timestamp
                 ? new Date(alert.timestamp * 1000).toLocaleTimeString([], {
                     hour: '2-digit',
@@ -240,7 +240,7 @@ export function Sidebar({
               return (
                 <li
                   key={alert.alert_id}
-                  className={`alert-item ${level}${alert.alert_id === activeAlertId ? ' active' : ''}`}
+                  className={`alert-item ${normLevel}${alert.alert_id === activeAlertId ? ' active' : ''}`}
                   title={title}
                   onClick={() => onSelectAlert(alert)}
                 >

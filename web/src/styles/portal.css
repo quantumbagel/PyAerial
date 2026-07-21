@@ -657,6 +657,7 @@ body {
 .level-badge.live { background: var(--status-live-bg); }
 .level-badge.warn { background: var(--warn-dark); }
 .level-badge.alert { background: var(--alert-dark); }
+.level-badge.info { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
 .level-badge.done { background: #1e293b; }
 #sidebar-tabs {
     display: flex;
@@ -745,6 +746,15 @@ body {
 }
 .alert-timeline-item.alert:hover {
     background: color-mix(in srgb, var(--alert) 7%, transparent);
+}
+.alert-timeline-item.info {
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 3%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 10%, transparent);
+    border-left-width: 4px;
+}
+.alert-timeline-item.info:hover {
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 .alert-timeline-item.active {
     border: 1px solid var(--accent) !important;
@@ -910,36 +920,36 @@ body {
 
 /* Toast Notification Overlay */
 .toast-container {
-    position: absolute;
+    position: fixed;
     bottom: 24px;
     right: 24px;
     z-index: 9999;
     display: flex;
     flex-direction: column;
     gap: 10px;
-    max-width: 320px;
-    width: 100%;
+    max-width: 340px;
+    width: calc(100vw - 32px);
     pointer-events: none;
 }
 .toast-alert {
-    background-color: #161a24;
+    background-color: rgba(22, 26, 36, 0.95);
+    backdrop-filter: blur(12px);
     border-left: 4px solid var(--accent);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-    border-radius: 6px;
-    padding: 12px 16px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-md);
+    padding: 12px 14px 14px;
     color: var(--text);
     cursor: pointer;
     animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
     position: relative;
-    transition: all 0.25s ease;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-left-width: 4px;
+    overflow: hidden;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
     pointer-events: auto;
 }
 .toast-alert:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.7);
-    background-color: #1c2230;
+    transform: translateY(-3px);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.15);
+    background-color: rgba(28, 34, 48, 0.98);
 }
 .toast-alert.level-alert {
     border-left-color: var(--alert);
@@ -947,36 +957,114 @@ body {
 .toast-alert.level-warn {
     border-left-color: var(--warn);
 }
+.toast-alert.level-info {
+    border-left-color: var(--accent);
+}
 .toast-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
 }
-.toast-title {
-    font-weight: 600;
-    font-size: 0.85rem;
+.toast-header-left {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+}
+.toast-callsign {
+    font-weight: 700;
+    font-size: 0.88rem;
+    color: var(--text);
+    letter-spacing: 0.02em;
+}
+.toast-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.toast-time {
+    font-size: 0.72rem;
+    color: var(--text-muted);
 }
 .toast-close {
     background: none;
     border: none;
     color: var(--text-secondary);
-    font-size: 1.2rem;
     cursor: pointer;
-    line-height: 1;
-    padding: 0;
-    margin-left: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.15s ease;
 }
 .toast-close:hover {
     color: var(--text);
+    background-color: rgba(255, 255, 255, 0.1);
 }
 .toast-body {
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     color: var(--text-secondary);
     line-height: 1.45;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.toast-zone-row {
+    display: flex;
+    gap: 4px;
+    font-size: 0.8rem;
+}
+.toast-zone-label {
+    color: var(--text-muted);
+}
+.toast-zone-val {
+    font-weight: 600;
+    color: var(--text);
+}
+.toast-metrics {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+.toast-action-hint {
+    font-size: 0.7rem;
+    color: var(--accent);
+    margin-top: 8px;
+    font-weight: 500;
+    opacity: 0.85;
+    transition: opacity 0.15s ease;
+}
+.toast-alert:hover .toast-action-hint {
+    opacity: 1;
+    text-decoration: underline;
+}
+.toast-progress-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    width: 100%;
+    background-color: var(--accent);
+    animation: toastProgressBar linear forwards;
+    transform-origin: left center;
+}
+.toast-alert.level-alert .toast-progress-bar {
+    background-color: var(--alert);
+}
+.toast-alert.level-warn .toast-progress-bar {
+    background-color: var(--warn);
+}
+@keyframes toastProgressBar {
+    from {
+        transform: scaleX(1);
+    }
+    to {
+        transform: scaleX(0);
+    }
 }
 
 @keyframes slideIn {
@@ -993,11 +1081,11 @@ body {
 /* ── Disconnected banner ───────────────────────────────────────── */
 @keyframes bannerSlideDown {
     from {
-        transform: translateY(-110%);
+        transform: translateX(-50%) translateY(-110%);
         opacity: 0;
     }
     to {
-        transform: translateY(0);
+        transform: translateX(-50%) translateY(0);
         opacity: 1;
     }
 }
@@ -1038,33 +1126,9 @@ body {
     animation: bannerSlideDown 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
-/* Error variant — red instead of amber, stacks below disconnected banner */
-.disconnected-banner--error {
-    background: #1c0707;
-    border-color: var(--danger, #ef4444);
-    color: var(--danger, #ef4444);
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(239, 68, 68, 0.15);
-    top: 0;
-    margin-top: 0;
-    max-width: 60vw;
-    white-space: normal;
-    text-align: center;
-}
-
-/* When both banners are visible, slide error banner down a bit further */
-.disconnected-banner--error.disconnected-banner--visible {
-    transform: translateX(-50%) translateY(0);
-    opacity: 1;
-}
-
 .disconnected-banner__spinner {
     border-color: rgba(245, 158, 11, 0.2);
     border-top-color: var(--warn, #f59e0b);
-}
-
-.disconnected-banner__spinner--error {
-    border-color: rgba(239, 68, 68, 0.2);
-    border-top-color: var(--danger, #ef4444);
 }
 
 .disconnected-banner__text {

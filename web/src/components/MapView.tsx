@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
-import { isFlightLive, formatAlertAltitude, formatAlertEta } from '../utils/format';
+import { isFlightLive, formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight, ZONE_COLORS } from '../utils/planeIcon';
 import { COLOR_CONFIG } from '../utils/colors';
 import '@luomus/leaflet-smooth-wheel-zoom';
@@ -294,8 +294,9 @@ export function MapView({
       const markers: L.CircleMarker[] = [];
       alerts.forEach((alert) => {
         if (alert.latitude == null || alert.longitude == null) return;
-        const level = (alert.level || '').toLowerCase();
-        const fillColor = level === 'alert' ? '#ef4444' : '#f59e0b';
+        const norm = normalizeAlertLevel(alert.level);
+        const fillColor = norm === 'alert' ? '#ef4444' : norm === 'warn' ? '#f59e0b' : '#3b82f6';
+        const displayTag = (alert.level || norm).toUpperCase();
         const marker = L.circleMarker([alert.latitude, alert.longitude], {
           radius: 6,
           color: '#fff',
@@ -304,7 +305,7 @@ export function MapView({
           fillOpacity: 0.95,
         }).addTo(map);
         const timeStr = alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleTimeString() : 'N/A';
-        marker.bindTooltip(`<strong>${(alert.level || 'event').toUpperCase()}</strong> · ${alert.zone || 'zone'}<br/>Time: ${timeStr}<br/>Alt: ${formatAlertAltitude(alert.altitude)}<br/>ETA: ${formatAlertEta(alert.eta)}`);
+        marker.bindTooltip(`<strong>${displayTag}</strong> · ${alert.zone || 'zone'}<br/>Time: ${timeStr}<br/>Alt: ${formatAlertAltitude(alert.altitude)}<br/>ETA: ${formatAlertEta(alert.eta)}`);
         marker.on('click', () => onSelectFlightRef.current(flightId));
         markers.push(marker);
       });
