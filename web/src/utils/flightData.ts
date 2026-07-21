@@ -10,7 +10,9 @@ export type FlightSortField =
   | 'model'
   | 'type'
   | 'altitude'
-  | 'speed';
+  | 'speed'
+  | 'zone'
+  | 'level';
 
 export type SortDirection = 'asc' | 'desc';
 

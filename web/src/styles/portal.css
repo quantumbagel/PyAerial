@@ -1057,9 +1057,14 @@ body {
     opacity: 1;
 }
 
-.disconnected-banner__icon {
-    font-size: 0.85rem;
-    animation: pulse-dot 1.4s ease-in-out infinite;
+.disconnected-banner__spinner {
+    border-color: rgba(245, 158, 11, 0.2);
+    border-top-color: var(--warn, #f59e0b);
+}
+
+.disconnected-banner__spinner--error {
+    border-color: rgba(239, 68, 68, 0.2);
+    border-top-color: var(--danger, #ef4444);
 }
 
 .disconnected-banner__text {
