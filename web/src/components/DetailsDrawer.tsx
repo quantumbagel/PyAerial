@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Alert, AppConfig, FlightDetail, TelemetryPoint } from '../api/types';
+import type { Alert, AppConfig, FlightDetail, FlightSummary, TelemetryPoint } from '../api/types';
 import {
   formatAltitude,
   formatHeading,
@@ -16,6 +16,7 @@ type DrawerTab = 'alerts' | 'telemetry';
 interface DetailsDrawerProps {
   open: boolean;
   flightDetail: FlightDetail | null;
+  flightSummary?: FlightSummary | null;
   activeAlertId: string | null;
   flightAlerts: Alert[];
   flightTelemetry: TelemetryPoint[];
@@ -23,6 +24,8 @@ interface DetailsDrawerProps {
   selectedTelemetryPoint: TelemetryPoint | null;
   appConfig: AppConfig | null;
   selectionError?: string | null;
+  isLoading?: boolean;
+  onRetry?: () => void;
   onSelectTelemetryPoint: (point: TelemetryPoint) => void;
   onClose: () => void;
   onSwitchTab: (tab: DrawerTab) => void;
@@ -32,6 +35,7 @@ interface DetailsDrawerProps {
 export function DetailsDrawer({
   open,
   flightDetail,
+  flightSummary = null,
   activeAlertId,
   flightAlerts,
   flightTelemetry,
@@ -39,6 +43,8 @@ export function DetailsDrawer({
   selectedTelemetryPoint,
   appConfig,
   selectionError = null,
+  isLoading = false,
+  onRetry,
   onSelectTelemetryPoint,
   onClose,
   onSwitchTab,
@@ -87,8 +93,14 @@ export function DetailsDrawer({
     }
   }, [activeAlertId, drawerTab, open]);
 
-  const callsign = flightDetail?.callsign || 'UNKNOWN';
-  const icao = flightDetail?.icao?.toUpperCase() || 'N/A';
+  const isLoadingPlane = isLoading || (!flightDetail && !selectionError);
+  const rawCallsign = (flightDetail?.callsign || flightSummary?.callsign)?.trim();
+  const rawIcao = (flightDetail?.icao || flightSummary?.icao)?.toUpperCase() || '';
+  const callsign =
+    rawCallsign && rawCallsign.toUpperCase() !== 'UNKNOWN'
+      ? rawCallsign
+      : rawIcao || 'Loading plane details…';
+  const icao = rawIcao || 'N/A';
   const photoUrl = typeof flightDetail?.photo_url === 'string' ? flightDetail.photo_url : null;
   const hasPhoto = Boolean(photoUrl);
   const hasAlert = Boolean((flightDetail?.zone || '').trim() || (flightDetail?.level || '').trim());
@@ -112,161 +124,180 @@ export function DetailsDrawer({
         <div className="drawer-header-label">Selected Aircraft</div>
         <h2>
           <span id="detail-callsign">{callsign}</span>{' '}
-          <span id="detail-icao" className="flight-icao">
-            {icao}
-          </span>
+          {rawIcao && rawIcao !== callsign && (
+            <span id="detail-icao" className="flight-icao">
+              {icao}
+            </span>
+          )}
         </h2>
       </div>
       <div className="drawer-content">
-        {selectionError && (
+        {selectionError ? (
           <div className="info-section">
-            <StatusError>{selectionError}</StatusError>
+            <StatusError onRetry={onRetry}>{selectionError}</StatusError>
           </div>
-        )}
-        {hasPhoto && photoUrl && (
-          <div id="detail-photo-container">
-            <img id="detail-photo" src={photoUrl} alt="Aircraft photo" />
-            <div className="photo-gradient-bottom">
-              <span>
-                Photo by{' '}
-                <span id="detail-photo-photographer" className="photo-credit-name">
-                  {flightDetail?.photo_photographer || 'Unknown'}
+        ) : isLoadingPlane ? (
+          <div className="drawer-loading-container">
+            <span className="flight-list-spinner" aria-hidden="true" />
+            <span>Loading plane details…</span>
+          </div>
+        ) : (
+          <>
+            {hasPhoto && photoUrl && (
+              <div id="detail-photo-container">
+                <img id="detail-photo" src={photoUrl} alt="Aircraft photo" />
+                <div className="photo-gradient-bottom">
+                  <span>
+                    Photo by{' '}
+                    <span id="detail-photo-photographer" className="photo-credit-name">
+                      {flightDetail?.photo_photographer || 'Planespotters'}
+                    </span>
+                  </span>
+                  <a
+                    id="detail-photo-link"
+                    className="photo-link"
+                    href={flightDetail?.photo_link || '#'}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View on Planespotters.net
+                  </a>
+                </div>
+              </div>
+            )}
+
+            <ExternalLinks flightDetail={flightDetail} icao={icao} />
+
+            <div className="info-section">
+              <h3>Aircraft Details</h3>
+              <div className="details-grid">
+                <span className="details-label">Registration</span>
+                <span className="details-value details-value--accent" id="detail-registration">
+                  {flightDetail?.registration && flightDetail.registration !== 'Unknown' ? flightDetail.registration : '—'}
                 </span>
-              </span>
-              <a
-                id="detail-photo-link"
-                className="photo-link"
-                href={flightDetail?.photo_link || '#'}
-                target="_blank"
-                rel="noreferrer"
-              >
-                View on Planespotters.net
-              </a>
+                <span className="details-label">Model</span>
+                <span className="details-value" id="detail-model">
+                  {flightDetail?.model && flightDetail.model !== 'Unknown Model' ? flightDetail.model : '—'}
+                </span>
+                <span className="details-label">Aircraft Type</span>
+                <span className="details-value" id="detail-type">
+                  {flightDetail?.aircraft_type || flightDetail?.typecode || '—'}
+                </span>
+                <span className="details-label">Owner</span>
+                <span className="details-value" id="detail-owner">
+                  {flightDetail?.owner && flightDetail.owner !== 'Unknown Owner' ? flightDetail.owner : '—'}
+                </span>
+                <span className="details-label">Registration Country</span>
+                <span className="details-value" id="detail-country">
+                  {flightDetail?.country && flightDetail.country !== 'Unknown' ? flightDetail.country : '—'}
+                </span>
+                <span className="details-label">Zone / Level</span>
+                <span
+                  className={`details-value${hasAlert ? ' details-value--warn' : ' details-value--muted'}`}
+                  id="detail-zone-level"
+                >
+                  {formatZoneLevel(flightDetail?.zone, flightDetail?.level)}
+                </span>
+              </div>
             </div>
-          </div>
+
+            <div className="info-section">
+              <h3>Telemetry Readings</h3>
+              <div className="details-grid">
+                {renderTelemetrySummary(flightDetail, appConfig, now)}
+                <span className="details-label">Altitude</span>
+                <span className="details-value" id="detail-altitude">
+                  {lastPoint ? formatAltitude(lastPoint.altitude) : 'N/A'}
+                </span>
+                <span className="details-label">Speed</span>
+                <span className="details-value" id="detail-speed">
+                  {lastPoint ? formatSpeed(lastPoint.speed) : 'N/A'}
+                </span>
+                <span className="details-label">Heading</span>
+                <span className="details-value" id="detail-heading">
+                  {lastPoint ? formatHeading(lastPoint.heading) : 'N/A'}
+                </span>
+                <span className="details-label">Latitude</span>
+                <span className="details-value" id="detail-latitude">
+                  {lastPoint?.latitude != null ? lastPoint.latitude.toFixed(5) : 'N/A'}
+                </span>
+                <span className="details-label">Longitude</span>
+                <span className="details-value" id="detail-longitude">
+                  {lastPoint?.longitude != null ? lastPoint.longitude.toFixed(5) : 'N/A'}
+                </span>
+              </div>
+            </div>
+
+            <div className="drawer-tabs" role="tablist" aria-label="Flight detail tabs">
+              {flightAlerts.length > 0 && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={drawerTab === 'alerts'}
+                  className={`tab-btn${drawerTab === 'alerts' ? ' active' : ''}`}
+                  id="tab-btn-alerts"
+                  onClick={() => onSwitchTab('alerts')}
+                >
+                  Alerts
+                </button>
+              )}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={drawerTab === 'telemetry'}
+                className={`tab-btn${drawerTab === 'telemetry' ? ' active' : ''}`}
+                id="tab-btn-telemetry"
+                onClick={() => onSwitchTab('telemetry')}
+              >
+                Telemetry
+              </button>
+            </div>
+
+            <div
+              className="tab-content"
+              id="tab-alerts"
+              role="tabpanel"
+              hidden={drawerTab !== 'alerts'}
+            >
+              <AlertTimeline
+                alerts={sortedAlerts}
+                activeAlertId={activeAlertId}
+                onSelectAlert={onSelectAlert}
+              />
+            </div>
+
+            <div
+              className="tab-content"
+              id="tab-telemetry"
+              role="tabpanel"
+              hidden={drawerTab !== 'telemetry'}
+            >
+              <div ref={tableContainerRef}>
+                <TelemetryTable
+                  telemetry={flightTelemetry}
+                  selectedTelemetryPoint={selectedTelemetryPoint}
+                  onSelectTelemetryPoint={onSelectTelemetryPoint}
+                />
+              </div>
+            </div>
+          </>
         )}
-
-        <ExternalLinks flightDetail={flightDetail} icao={icao} />
-
-        <div className="info-section">
-          <h3>Aircraft Details</h3>
-          <div className="details-grid">
-            <span className="details-label">Registration</span>
-            <span className="details-value details-value--accent" id="detail-registration">
-              {flightDetail?.registration || 'Unknown'}
-            </span>
-            <span className="details-label">Model</span>
-            <span className="details-value" id="detail-model">
-              {flightDetail?.model || 'Unknown Model'}
-            </span>
-            <span className="details-label">Aircraft Type</span>
-            <span className="details-value" id="detail-type">
-              {flightDetail?.aircraft_type || flightDetail?.typecode || 'Unknown Type'}
-            </span>
-            <span className="details-label">Owner</span>
-            <span className="details-value" id="detail-owner">
-              {flightDetail?.owner || 'Unknown Owner'}
-            </span>
-            <span className="details-label">Registration Country</span>
-            <span className="details-value" id="detail-country">
-              {flightDetail?.country || 'Unknown'}
-            </span>
-            <span className="details-label">Zone / Level</span>
-            <span
-              className={`details-value${hasAlert ? ' details-value--warn' : ' details-value--muted'}`}
-              id="detail-zone-level"
-            >
-              {formatZoneLevel(flightDetail?.zone, flightDetail?.level)}
-            </span>
-          </div>
-        </div>
-
-        <div className="info-section">
-          <h3>Telemetry Readings</h3>
-          <div className="details-grid">
-            {renderTelemetrySummary(flightDetail, appConfig, now)}
-            <span className="details-label">Altitude</span>
-            <span className="details-value" id="detail-altitude">
-              {lastPoint ? formatAltitude(lastPoint.altitude) : 'N/A'}
-            </span>
-            <span className="details-label">Speed</span>
-            <span className="details-value" id="detail-speed">
-              {lastPoint ? formatSpeed(lastPoint.speed) : 'N/A'}
-            </span>
-            <span className="details-label">Heading</span>
-            <span className="details-value" id="detail-heading">
-              {lastPoint ? formatHeading(lastPoint.heading) : 'N/A'}
-            </span>
-            <span className="details-label">Latitude</span>
-            <span className="details-value" id="detail-latitude">
-              {lastPoint?.latitude != null ? lastPoint.latitude.toFixed(5) : 'N/A'}
-            </span>
-            <span className="details-label">Longitude</span>
-            <span className="details-value" id="detail-longitude">
-              {lastPoint?.longitude != null ? lastPoint.longitude.toFixed(5) : 'N/A'}
-            </span>
-          </div>
-        </div>
-
-        <div className="drawer-tabs" role="tablist" aria-label="Flight detail tabs">
-          {flightAlerts.length > 0 && (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={drawerTab === 'alerts'}
-              className={`tab-btn${drawerTab === 'alerts' ? ' active' : ''}`}
-              id="tab-btn-alerts"
-              onClick={() => onSwitchTab('alerts')}
-            >
-              Alerts
-            </button>
-          )}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={drawerTab === 'telemetry'}
-            className={`tab-btn${drawerTab === 'telemetry' ? ' active' : ''}`}
-            id="tab-btn-telemetry"
-            onClick={() => onSwitchTab('telemetry')}
-          >
-            Telemetry
-          </button>
-        </div>
-
-        <div
-          className="tab-content"
-          id="tab-alerts"
-          role="tabpanel"
-          hidden={drawerTab !== 'alerts'}
-        >
-          <AlertTimeline
-            alerts={sortedAlerts}
-            activeAlertId={activeAlertId}
-            onSelectAlert={onSelectAlert}
-          />
-        </div>
-
-        <div
-          className="tab-content"
-          id="tab-telemetry"
-          role="tabpanel"
-          hidden={drawerTab !== 'telemetry'}
-        >
-          <div ref={tableContainerRef}>
-            <TelemetryTable
-              telemetry={flightTelemetry}
-              selectedTelemetryPoint={selectedTelemetryPoint}
-              onSelectTelemetryPoint={onSelectTelemetryPoint}
-            />
-          </div>
-        </div>
       </div>
     </div>
   );
 }
 
-function StatusError({ children }: { children: ReactNode }) {
-  return <p className="status-message status-message--error">{children}</p>;
+function StatusError({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
+  return (
+    <div className="status-error-container">
+      <span className="status-message-text">{children}</span>
+      {onRetry && (
+        <button type="button" className="btn-try-again" onClick={onRetry}>
+          Try again
+        </button>
+      )}
+    </div>
+  );
 }
 
 function renderTelemetrySummary(

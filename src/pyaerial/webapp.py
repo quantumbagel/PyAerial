@@ -541,6 +541,8 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
     def handle_ws_request(action: str, params: dict[str, Any]) -> Any:
         view = _view_param(params.get("view", "live"))
         if mock_store:
+            if mock_store.simulated_delay > 0:
+                time.sleep(mock_store.simulated_delay)
             if action == "fetchFlights":
                 return mock_store.get_live_flights() if view == "live" else mock_store.get_history_flights()
 
@@ -705,20 +707,21 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
 def run_webapp(config_path: str = "config.yaml", *,
                aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
                host: str = "0.0.0.0", port: int = 10090,
-               mock: bool = False) -> None:
+               mock: bool = False,
+               mock_delay: float = 0.5) -> None:
     aircraft_db = AircraftDB(aircraft_db_path) if (aircraft_db_path and Path(aircraft_db_path).exists()) else None
     client = None
     live_store = None
 
     if mock:
-        log.info("Running in MOCK mode with simulated flight and alert data (MongoDB & Redis bypassed).")
+        log.info(f"Running in MOCK mode with simulated flight and alert data (delay={mock_delay}s).")
         try:
             config = load_config(config_path)
         except Exception:
             from pyaerial.config.schema import Config, HomeConfig, TrackingConfig
             config = Config(home=HomeConfig(latitude=35.7275, longitude=-78.6959), tracking=TrackingConfig())
 
-        mock_store = MockStore(home_lat=config.home.latitude, home_lon=config.home.longitude)
+        mock_store = MockStore(home_lat=config.home.latitude, home_lon=config.home.longitude, simulated_delay=mock_delay)
         app = create_app(config=config, db=None, live_store=None, aircraft_db=aircraft_db, mock_store=mock_store)
     else:
         config, client, db, live_store = _connect_stores(config_path)

@@ -49,7 +49,11 @@ function ToastItem({ id, alert, duration = 6000, onSelectAlert, onDismiss }: Toa
     setIsPaused(false);
   };
 
-  const callsign = alert.callsign?.trim() || alert.icao?.toUpperCase().trim() || 'UNKNOWN';
+  const rawCallsign = alert.callsign?.trim();
+  const callsign =
+    rawCallsign && rawCallsign.toUpperCase() !== 'UNKNOWN'
+      ? rawCallsign
+      : alert.icao?.toUpperCase().trim() || 'Loading plane details…';
   const timeStr = alert.timestamp
     ? new Date(alert.timestamp * 1000).toLocaleTimeString([], {
         hour: 'numeric',

@@ -84,8 +84,12 @@ export function useAlertNotifications() {
     const normLevel = normalizeAlertLevel(alert.level);
     const icon = normLevel === 'alert' ? '🚨' : normLevel === 'warn' ? '⚠️' : 'ℹ️';
     const displayLevel = normLevel === 'alert' ? 'ALERT' : normLevel === 'warn' ? 'WARNING' : 'INFO';
-    const callsignStr = alert.callsign || (alert.icao ? alert.icao.toUpperCase() : 'Unknown Flight');
-    const zoneStr = alert.zone ? `Zone: ${alert.zone}` : 'Zone: Unknown';
+    const rawCallsign = alert.callsign?.trim();
+    const callsignStr =
+      rawCallsign && rawCallsign.toUpperCase() !== 'UNKNOWN'
+        ? rawCallsign
+        : (alert.icao ? alert.icao.toUpperCase() : 'Aircraft');
+    const zoneStr = alert.zone ? `Zone: ${alert.zone}` : 'Zone: Active';
     const altStr = `Alt: ${formatAlertAltitude(alert.altitude)}`;
     const etaStr = `ETA: ${formatAlertEta(alert.eta)}`;
 

@@ -312,6 +312,26 @@ export function usePortalData({
     });
   }, [activeFlightIdRef, showAllPathsRef]);
 
+  const retryFlights = useCallback(() => {
+    setIsLoadingFlights(true);
+    setFlightsError(null);
+    if (portalView === 'live') {
+      fetchLiveData();
+    } else {
+      fetchHistoryData();
+    }
+  }, [portalView, fetchLiveData, fetchHistoryData]);
+
+  const retryAlerts = useCallback(() => {
+    setIsLoadingAlerts(true);
+    setAlertsError(null);
+    if (portalView === 'live') {
+      fetchLiveData();
+    } else {
+      fetchHistoryAlerts();
+    }
+  }, [portalView, fetchLiveData, fetchHistoryAlerts]);
+
   return {
     flightsData,
     alertsData,
@@ -328,5 +348,7 @@ export function usePortalData({
     switchPortalView,
     handleAlertsScroll,
     setSidebarTab,
+    retryFlights,
+    retryAlerts,
   };
 }

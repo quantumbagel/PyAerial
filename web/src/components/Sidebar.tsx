@@ -25,6 +25,8 @@ interface SidebarProps {
   flightsError?: string | null;
   alertsError?: string | null;
   notificationsEnabled: boolean;
+  onRetryFlights?: () => void;
+  onRetryAlerts?: () => void;
   onEnableNotifications: () => void;
   onSwitchPortalView: (view: 'live' | 'history') => void;
   onFlightSortChange: (field: FlightSortField) => void;
@@ -54,6 +56,8 @@ export function Sidebar({
   flightsError = null,
   alertsError = null,
   notificationsEnabled,
+  onRetryFlights,
+  onRetryAlerts,
   onEnableNotifications,
   onSwitchPortalView,
   onFlightSortChange,
@@ -212,7 +216,9 @@ export function Sidebar({
           {isLoadingFlights ? (
             <StatusMessage variant="loading">Loading flights…</StatusMessage>
           ) : flightsError ? (
-            <StatusMessage variant="error">{flightsError}</StatusMessage>
+            <StatusMessage variant="error" onRetry={onRetryFlights}>
+              {flightsError}
+            </StatusMessage>
           ) : flights.length === 0 ? (
             <StatusMessage>
               {searchQuery ? 'No flights match your search.' : 'No flights available.'}
@@ -241,7 +247,9 @@ export function Sidebar({
           {isLoadingAlerts ? (
             <StatusMessage variant="loading">Loading alerts…</StatusMessage>
           ) : alertsError ? (
-            <StatusMessage variant="error">{alertsError}</StatusMessage>
+            <StatusMessage variant="error" onRetry={onRetryAlerts}>
+              {alertsError}
+            </StatusMessage>
           ) : alerts.length === 0 ? (
             <StatusMessage>
               {searchQuery ? 'No alerts match your search.' : 'No alerts yet'}

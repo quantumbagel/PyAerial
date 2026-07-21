@@ -12,9 +12,10 @@ from typing import Any
 class MockStore:
     """Simulates Redis and MongoDB stores with realistic generated flight data."""
 
-    def __init__(self, home_lat: float = 35.7275, home_lon: float = -78.6959):
+    def __init__(self, home_lat: float = 35.7275, home_lon: float = -78.6959, simulated_delay: float = 0.0):
         self.home_lat = home_lat
         self.home_lon = home_lon
+        self.simulated_delay = simulated_delay
         self._start_time = time.time()
 
         # Initial live flights

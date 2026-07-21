@@ -29,6 +29,9 @@ export function PortalApp() {
     disableFollow,
   } = usePortalApp();
 
+  const selectedFlightSummary =
+    portal.flightsData.find((f) => f.flight_id === selection.activeFlightId) || null;
+
   return (
     <>
       <Sidebar
@@ -49,6 +52,8 @@ export function PortalApp() {
         flightsError={portal.flightsError}
         alertsError={portal.alertsError}
         notificationsEnabled={notificationsEnabled}
+        onRetryFlights={portal.retryFlights}
+        onRetryAlerts={portal.retryAlerts}
         onEnableNotifications={enableNotifications}
         onSwitchPortalView={portal.switchPortalView}
         onFlightSortChange={setFlightSort}
@@ -102,6 +107,8 @@ export function PortalApp() {
           <DetailsDrawer
             open={selection.drawerOpen}
             flightDetail={selection.flightDetail}
+            flightSummary={selectedFlightSummary}
+            isLoading={selection.isLoading}
             activeAlertId={selection.activeAlertId}
             flightAlerts={selection.flightAlerts}
             flightTelemetry={selection.flightTelemetry}
@@ -109,6 +116,11 @@ export function PortalApp() {
             selectedTelemetryPoint={selection.selectedTelemetryPoint}
             appConfig={portal.appConfig}
             selectionError={selection.selectionError}
+            onRetry={() => {
+              if (selection.activeFlightId) {
+                selection.selectFlight(selection.activeFlightId, selection.drawerTab);
+              }
+            }}
             onSelectTelemetryPoint={selection.setSelectedTelemetryPoint}
             onClose={selection.closeDrawer}
             onSwitchTab={selection.setDrawerTab}

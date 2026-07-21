@@ -29,6 +29,7 @@ export function useFlightSelection({
   const [followSelectedPlane, setFollowSelectedPlane] = useState(false);
   const [selectedTelemetryPoint, setSelectedTelemetryPoint] = useState<TelemetryPoint | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   const flightDetailsPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeFlightIdRef = useRef<string | null>(null);
@@ -110,6 +111,7 @@ export function useFlightSelection({
       const token = ++selectionTokenRef.current;
       stopDetailPoll();
       setSelectionError(null);
+      setIsLoading(true);
       setActiveFlightId(flightId);
       setSelectedTelemetryPoint(null);
       setFollowSelectedPlane(true);
@@ -129,6 +131,7 @@ export function useFlightSelection({
         ]);
         if (token !== selectionTokenRef.current) return;
         setFlightDetail(detail);
+        setIsLoading(false);
         if (!initialTab) {
           setDrawerTab(alerts && alerts.length > 0 ? 'alerts' : 'telemetry');
         }
@@ -152,6 +155,7 @@ export function useFlightSelection({
         }
       } catch (err) {
         if (token !== selectionTokenRef.current) return;
+        setIsLoading(false);
         const message = 'Failed to load flight details.';
         console.error(message, err);
         setSelectionError(message);
@@ -185,6 +189,7 @@ export function useFlightSelection({
     setFlightAlerts([]);
     setFlightTelemetry([]);
     setSelectionError(null);
+    setIsLoading(false);
     clearPathsIfNeeded();
   }, [stopDetailPoll, clearPathsIfNeeded]);
 
@@ -200,6 +205,7 @@ export function useFlightSelection({
     setFlightTelemetry([]);
     setSelectedTelemetryPoint(null);
     setSelectionError(null);
+    setIsLoading(false);
   }, [stopDetailPoll]);
 
   return {
@@ -217,6 +223,7 @@ export function useFlightSelection({
     selectedTelemetryPoint,
     setSelectedTelemetryPoint,
     selectionError,
+    isLoading,
     selectFlight,
     selectAlert,
     closeDrawer,
