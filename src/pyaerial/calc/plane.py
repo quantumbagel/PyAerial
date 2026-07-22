@@ -237,12 +237,17 @@ class PlaneCalculator:
                 self._alert_state[key] = state
                 self._on_activate(plane, zone_name, rule, eta, geofence_etas,
                                 position, callsign, now, alert_id)
-            elif rule.while_active is not None:
-                interval = rule.while_active.interval_seconds
-                if now - state["last_periodic"] >= interval:
-                    state["last_periodic"] = now
-                    self._on_while_active(plane, zone_name, rule, eta, geofence_etas,
-                                          position, callsign, now, state["alert_id"])
+            else:
+                self._refresh_active_alert(
+                    plane, zone_name, rule, eta, geofence_etas,
+                    position, callsign, now, state["alert_id"],
+                )
+                if rule.while_active is not None:
+                    interval = rule.while_active.interval_seconds
+                    if now - state["last_periodic"] >= interval:
+                        state["last_periodic"] = now
+                        self._on_while_active(plane, zone_name, rule, eta, geofence_etas,
+                                              position, callsign, now, state["alert_id"])
 
             active_alerts.append({
                 "alert_id": state["alert_id"],
@@ -323,6 +328,16 @@ class PlaneCalculator:
                 activated_at=activated_at, deactivated_at=now, active=False,
             )
 
+    def _refresh_active_alert(self, plane: dict, zone_name: str, rule: RuleConfig, eta: float,
+                              geofence_etas: dict[str, float], position: tuple[float, float],
+                              callsign: str, now: float, alert_id: str) -> None:
+        if self.store is None:
+            return
+        meta = self._build_meta(plane, zone_name, rule, eta, geofence_etas, callsign,
+                                _ALERT_HOOK_WHILE_ACTIVE)
+        payload = self._build_payload(plane, position)
+        self.store.update_active_alert(plane, alert_id, meta, payload, now)
+
     def _on_while_active(self, plane: dict, zone_name: str, rule: RuleConfig, eta: float,
                          geofence_etas: dict[str, float], position: tuple[float, float],
                          callsign: str, now: float, alert_id: str) -> None:
@@ -333,8 +348,6 @@ class PlaneCalculator:
                                 _ALERT_HOOK_WHILE_ACTIVE)
         payload = self._build_payload(plane, position)
         self._run_actions(while_active.actions, meta, payload)
-        if self.store is not None:
-            self.store.update_active_alert(plane, alert_id, meta, payload, now)
 
     def _get_alerter(self, method: str, arguments: dict) -> Alerter:
         key = (method, str(sorted(arguments.items())))

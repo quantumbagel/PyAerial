@@ -20,6 +20,40 @@ export type AlertSortField =
 
 export type SortDirection = 'asc' | 'desc';
 
+/** Stable identity for merging live updates into an existing episode row. */
+export function alertEpisodeIdentity(alert: Alert): string {
+  if (alert.alert_id && alert.activated_at != null) {
+    return `${alert.alert_id}:${alert.activated_at}`;
+  }
+  return alertEpisodeKey(alert);
+}
+
+/** Merge incoming alert snapshots into an existing list by episode identity. */
+export function mergeAlertsByEpisode(existing: Alert[], updates: Alert[]): Alert[] {
+  if (updates.length === 0) {
+    return existing;
+  }
+  const updateMap = new Map(updates.map((alert) => [alertEpisodeIdentity(alert), alert]));
+  const mergedKeys = new Set<string>();
+  const merged = existing.map((alert) => {
+    const key = alertEpisodeIdentity(alert);
+    const update = updateMap.get(key);
+    if (update) {
+      mergedKeys.add(key);
+      return { ...alert, ...update };
+    }
+    return alert;
+  });
+  for (const alert of updates) {
+    const key = alertEpisodeIdentity(alert);
+    if (!mergedKeys.has(key) && !merged.some((item) => alertEpisodeIdentity(item) === key)) {
+      merged.push(alert);
+      mergedKeys.add(key);
+    }
+  }
+  return merged;
+}
+
 /** Unique key for a single alert episode row (alert_id repeats across re-entries and event records). */
 export function alertEpisodeKey(alert: Alert, fallbackIndex?: number): string {
   const activated = alert.activated_at;

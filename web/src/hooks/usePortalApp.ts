@@ -221,7 +221,7 @@ export function usePortalApp() {
     return portal.flightsData.length;
   }, [portal.flightsData, portalView]);
 
-  const { activeFlightId, closeDrawer, setFollowSelectedPlane } = selection;
+  const { activeFlightId, closeDrawer, setFollowSelectedPlane, syncFlightAlerts } = selection;
 
   useEffect(() => {
     if (portalView === 'live' && activeFlightId) {
@@ -231,6 +231,12 @@ export function usePortalApp() {
       }
     }
   }, [portal.flightsData, activeFlightId, portalView, closeDrawer]);
+
+  useEffect(() => {
+    if (portalView === 'live' && activeFlightId) {
+      syncFlightAlerts(portal.alertsData);
+    }
+  }, [portal.alertsData, portalView, activeFlightId, syncFlightAlerts]);
 
   const disableFollow = useCallback(
     () => setFollowSelectedPlane(false),

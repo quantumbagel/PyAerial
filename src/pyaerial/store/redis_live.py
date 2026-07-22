@@ -150,23 +150,37 @@ class RedisLiveStore:
 
     def update_active_alert(self, plane: dict, alert_id: str, meta: dict[str, Any],
                             payload: dict[str, Any], timestamp: float) -> None:
-        """Refresh telemetry on an active alert during while_active periodic firing."""
+        """Refresh ETA, position, and telemetry on an active alert."""
+        existing = self._mem_active_alerts.get(alert_id)
+        activated_at = existing.get("activated_at", timestamp) if existing else timestamp
+        if existing is not None:
+            doc = dict(existing)
+            doc.update(self._alert_doc(
+                plane, meta, payload,
+                alert_id=alert_id,
+                activated_at=activated_at,
+                active=True,
+                deactivated_at=None,
+            ))
+        else:
+            doc = self._alert_doc(
+                plane, meta, payload,
+                alert_id=alert_id,
+                activated_at=activated_at,
+                active=True,
+                deactivated_at=None,
+            )
+        doc["last_updated"] = timestamp
+        self._mem_active_alerts[alert_id] = doc
+
         if not self._ensure_connected():
             return
         assert self.client is not None
         try:
             raw = self.client.hget(_KEY_ACTIVE_ALERTS, alert_id)
-            if not raw:
-                return
-            doc = json.loads(raw)
-            doc.update(self._alert_doc(
-                plane, meta, payload,
-                alert_id=alert_id,
-                activated_at=doc.get("activated_at", timestamp),
-                active=True,
-                deactivated_at=None,
-            ))
-            doc["last_updated"] = timestamp
+            if raw:
+                stored = json.loads(raw)
+                doc["activated_at"] = stored.get("activated_at", activated_at)
             self.client.hset(_KEY_ACTIVE_ALERTS, alert_id, json.dumps(doc, separators=(",", ":")))
         except RedisError as exc:
             log.error("Failed to update active alert %s: %s", alert_id, exc)

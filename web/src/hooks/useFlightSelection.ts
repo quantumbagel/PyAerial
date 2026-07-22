@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
 import type { Alert, FlightDetail, PortalView, TelemetryPoint } from '../api/types';
-import { alertEpisodeKey } from '../utils/alertData';
+import { mergeAlertsByEpisode } from '../utils/alertData';
 import type { DrawerTab } from '../components/DetailsDrawer';
 import type { MapViewHandle } from '../components/MapView';
 
@@ -34,16 +34,12 @@ export function useFlightSelection({
 
   const flightDetailsPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeFlightIdRef = useRef<string | null>(null);
-  const flightAlertsRef = useRef(flightAlerts);
   const selectionTokenRef = useRef(0);
   const portalViewRef = useRef(portalView);
 
   useEffect(() => {
     activeFlightIdRef.current = activeFlightId;
   }, [activeFlightId]);
-  useEffect(() => {
-    flightAlertsRef.current = flightAlerts;
-  }, [flightAlerts]);
   useEffect(() => {
     portalViewRef.current = portalView;
   }, [portalView]);
@@ -57,26 +53,25 @@ export function useFlightSelection({
 
   useEffect(() => () => stopDetailPoll(), [stopDetailPoll]);
 
-  const loadFlightAlerts = useCallback(async (flightId: string, view: PortalView, append = false) => {
-    let since = 0;
-    const currentAlerts = flightAlertsRef.current;
-    if (append && currentAlerts.length > 0) {
-      since = Math.max(...currentAlerts.map((a) => a.activated_at || 0));
-    }
+  const loadFlightAlerts = useCallback(async (flightId: string, view: PortalView, merge = false) => {
     const alerts = await api.fetchAlerts(view, {
       flightId,
-      since: append ? since : 0,
       activeOnly: false,
     });
-    if (append) {
-      setFlightAlerts((prev) => {
-        const ids = new Set(prev.map((a) => alertEpisodeKey(a)));
-        return [...prev, ...alerts.filter((a) => !ids.has(alertEpisodeKey(a)))];
-      });
+    if (merge) {
+      setFlightAlerts((prev) => mergeAlertsByEpisode(prev, alerts));
     } else {
       setFlightAlerts(alerts);
     }
     return alerts;
+  }, []);
+
+  const syncFlightAlerts = useCallback((alerts: Alert[]) => {
+    const flightId = activeFlightIdRef.current;
+    if (!flightId) return;
+    const forFlight = alerts.filter((alert) => alert.flight_id === flightId);
+    if (forFlight.length === 0) return;
+    setFlightAlerts((prev) => mergeAlertsByEpisode(prev, forFlight));
   }, []);
 
   const loadFlightTelemetry = useCallback(
@@ -168,9 +163,13 @@ export function useFlightSelection({
           flightDetailsPollTimer.current = setInterval(async () => {
             if (token !== selectionTokenRef.current) return;
             try {
-              const updated = await api.fetchFlight(flightId, 'live');
+              const [updated, alerts] = await Promise.all([
+                api.fetchFlight(flightId, 'live'),
+                api.fetchAlerts('live', { flightId, activeOnly: false }),
+              ]);
               if (token !== selectionTokenRef.current) return;
               setFlightDetail(updated);
+              setFlightAlerts((prev) => mergeAlertsByEpisode(prev, alerts));
             } catch (err) {
               console.error('Failed to fetch active flight details', err);
             }
@@ -252,6 +251,7 @@ export function useFlightSelection({
     closeDrawer,
     resetSelection,
     loadFlightAlerts,
+    syncFlightAlerts,
     appendSelectedTelemetry,
     stopDetailPoll,
   };

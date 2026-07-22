@@ -25,7 +25,7 @@ interface UsePortalDataOptions {
   setPathCoords: React.Dispatch<React.SetStateAction<Record<string, [number, number][]>>>;
   setPathTelemetry?: React.Dispatch<React.SetStateAction<Record<string, TelemetryPoint[]>>>;
   appendSelectedTelemetry: (points: TelemetryPoint[]) => void;
-  loadFlightAlerts: (flightId: string, view: PortalView, append?: boolean) => Promise<Alert[]>;
+  loadFlightAlerts: (flightId: string, view: PortalView, merge?: boolean) => Promise<Alert[]>;
   onNewAlerts?: (alerts: Alert[]) => void;
   resetSelection: () => void;
   resetPaths: () => void;
