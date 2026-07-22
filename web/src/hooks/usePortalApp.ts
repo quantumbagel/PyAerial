@@ -124,6 +124,16 @@ export function usePortalApp() {
 
   onSelectAlertTabRef.current = () => portal.setSidebarTab('alerts');
 
+  const alertCountByFlight = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const alert of portal.alertsData) {
+      if (alert.flight_id) {
+        map.set(alert.flight_id, (map.get(alert.flight_id) ?? 0) + 1);
+      }
+    }
+    return map;
+  }, [portal.alertsData]);
+
   const filteredFlights = useMemo(() => {
     const q = searchQuery.toLowerCase();
     const filtered = portal.flightsData.filter((flight) => {
@@ -140,8 +150,8 @@ export function usePortalApp() {
         zone.includes(q)
       );
     });
-    return sortFlightsBy(filtered, flightSortField, flightSortDirection);
-  }, [portal.flightsData, searchQuery, flightSortField, flightSortDirection]);
+    return sortFlightsBy(filtered, flightSortField, flightSortDirection, alertCountByFlight);
+  }, [portal.flightsData, searchQuery, flightSortField, flightSortDirection, alertCountByFlight]);
 
   const paths = useFlightPaths(portalView, selection.activeFlightId, filteredFlights);
 

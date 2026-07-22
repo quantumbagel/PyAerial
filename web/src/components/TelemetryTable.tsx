@@ -5,12 +5,14 @@ interface TelemetryTableProps {
   telemetry: TelemetryPoint[];
   selectedTelemetryPoint: TelemetryPoint | null;
   onSelectTelemetryPoint: (point: TelemetryPoint) => void;
+  containerRef?: React.Ref<HTMLDivElement>;
 }
 
 export function TelemetryTable({
   telemetry,
   selectedTelemetryPoint,
   onSelectTelemetryPoint,
+  containerRef,
 }: TelemetryTableProps) {
   const handleKeyDown = (event: React.KeyboardEvent, point: TelemetryPoint) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -20,7 +22,7 @@ export function TelemetryTable({
   };
 
   return (
-    <div className="table-container">
+    <div className="table-container" ref={containerRef}>
       <table className="tel-table">
         <thead>
           <tr>

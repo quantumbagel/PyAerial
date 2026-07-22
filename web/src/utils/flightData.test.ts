@@ -38,6 +38,21 @@ describe('sortFlightsBy', () => {
     const sorted = sortFlightsBy(flights, 'altitude', 'desc');
     expect(sorted.map((f) => f.flight_id)).toEqual(['b', 'c', 'a']);
   });
+
+  it('sorts by number of alerts descending using alertCountMap', () => {
+    const flights = [
+      flight({ flight_id: 'a' }),
+      flight({ flight_id: 'b' }),
+      flight({ flight_id: 'c' }),
+    ];
+    const counts = new Map<string, number>([
+      ['a', 1],
+      ['b', 5],
+      ['c', 0],
+    ]);
+    const sorted = sortFlightsBy(flights, 'alerts', 'desc', counts);
+    expect(sorted.map((f) => f.flight_id)).toEqual(['b', 'a', 'c']);
+  });
 });
 
 describe('mergeLiveFlights', () => {

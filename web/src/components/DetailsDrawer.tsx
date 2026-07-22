@@ -72,18 +72,36 @@ export function DetailsDrawer({
   }, [open, onClose]);
 
   useEffect(() => {
+    if (!open || drawerTab !== 'telemetry') return;
     const el = tableContainerRef.current;
     if (!el) return;
+
     const diff = flightTelemetry.length - prevTelemetryLength;
     const oldLength = prevTelemetryLength;
     setPrevTelemetryLength(flightTelemetry.length);
-    if (oldLength > 0 && diff > 0 && diff < 5) {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (distanceFromBottom < 80) {
+
+    if (flightTelemetry.length > 0) {
+      if (oldLength === 0) {
         el.scrollTop = el.scrollHeight;
+      } else if (diff > 0) {
+        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (distanceFromBottom < 100) {
+          el.scrollTop = el.scrollHeight;
+        }
       }
     }
-  }, [flightTelemetry, prevTelemetryLength]);
+  }, [flightTelemetry, prevTelemetryLength, open, drawerTab]);
+
+  useEffect(() => {
+    if (open && drawerTab === 'telemetry') {
+      const el = tableContainerRef.current;
+      if (el) {
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight;
+        });
+      }
+    }
+  }, [open, drawerTab]);
 
   useEffect(() => {
     if (activeAlertId && drawerTab === 'alerts' && open) {
@@ -172,7 +190,7 @@ export function DetailsDrawer({
               <h3>Aircraft Details</h3>
               <div className="details-grid">
                 <span className="details-label">Registration</span>
-                <span className="details-value details-value--accent" id="detail-registration">
+                <span className="details-value details-value--registration" id="detail-registration">
                   {flightDetail?.registration && flightDetail.registration !== 'Unknown' ? flightDetail.registration : '—'}
                 </span>
                 <span className="details-label">Model</span>
@@ -272,13 +290,12 @@ export function DetailsDrawer({
               role="tabpanel"
               hidden={drawerTab !== 'telemetry'}
             >
-              <div ref={tableContainerRef}>
-                <TelemetryTable
-                  telemetry={flightTelemetry}
-                  selectedTelemetryPoint={selectedTelemetryPoint}
-                  onSelectTelemetryPoint={onSelectTelemetryPoint}
-                />
-              </div>
+              <TelemetryTable
+                telemetry={flightTelemetry}
+                selectedTelemetryPoint={selectedTelemetryPoint}
+                onSelectTelemetryPoint={onSelectTelemetryPoint}
+                containerRef={tableContainerRef}
+              />
             </div>
           </>
         )}
@@ -320,14 +337,13 @@ function renderTelemetrySummary(
     const rememberSecs = appConfig?.remember_planes ?? null;
     const dropIn =
       secsAgo != null && rememberSecs != null ? Math.max(0, rememberSecs - secsAgo) : null;
-    const isWarning = secsAgo != null && secsAgo > (rememberSecs ?? Infinity) * 0.75;
     return (
       <>
         <span className="details-label">Last Seen</span>
-        <span className="details-value details-value--live" id="detail-last-seen">
+        <span className="details-value details-value--white" id="detail-last-seen">
           {formatTs(liveTs)}
           {secsAgo != null && (
-            <span className={`details-sub${isWarning ? ' details-sub--warn' : ' details-sub--live'}`}>
+            <span className="details-sub">
               {secsAgo}s ago{dropIn != null ? ` · drops in ${dropIn}s` : ''}
             </span>
           )}

@@ -41,7 +41,7 @@ export function FlightListItem({
         <div className="flight-meta-row">
           <span className="flight-desc">{flight.model && flight.model !== 'Unknown Model' ? flight.model : '—'}</span>
           <span className="flight-time">
-            {isTimeSortField ? flightTimeLabel(flight) : flightSortValueLabel(flight, sortField)}
+            {isTimeSortField ? flightTimeLabel(flight) : flightSortValueLabel(flight, sortField, alertCount)}
           </span>
         </div>
       </button>

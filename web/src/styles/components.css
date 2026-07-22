@@ -22,6 +22,20 @@
     gap: var(--space-3);
 }
 .sidebar-header-text { min-width: 0; flex: 1; }
+.sidebar-title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+.github-link {
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    transition: color 0.15s ease;
+}
+.github-link:hover {
+    color: #ffffff;
+}
 .sidebar-header-controls {
     display: flex;
     flex-direction: column;
@@ -419,12 +433,13 @@
     margin-bottom: var(--space-2);
 }
 .details-value--accent { color: var(--accent); font-weight: 600; }
+.details-value--registration, #detail-registration { color: #ffffff; font-weight: 600; }
 .details-value--warn { color: var(--warn); }
 .details-value--muted { color: var(--text-muted); }
-.details-value--live { color: var(--status-live); }
-.details-sub { display: block; font-size: 0.72em; margin-top: 2px; }
-.details-sub--live { color: var(--status-live-text); }
-.details-sub--warn { color: var(--warn); }
+.details-value--live, .details-value--white, #detail-last-seen { color: #ffffff; }
+.details-sub { display: block; font-size: 0.72em; margin-top: 2px; color: #ffffff; }
+.details-sub--live { color: #ffffff; }
+.details-sub--warn { color: #ffffff; }
 .drawer-tabs {
     display: flex;
     border-bottom: 1px solid var(--border);

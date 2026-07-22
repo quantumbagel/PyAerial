@@ -25,8 +25,16 @@ export function AlertLevelBadge({ level }: { level?: string }) {
 }
 
 
-export function flightSortValueLabel(flight: FlightSummary, sortField: FlightSortField): string {
+export function flightSortValueLabel(
+  flight: FlightSummary,
+  sortField: FlightSortField,
+  alertCount?: number,
+): string {
   switch (sortField) {
+    case 'alerts': {
+      const count = alertCount ?? 0;
+      return count === 1 ? '1 alert' : `${count} alerts`;
+    }
     case 'altitude':
       return isFiniteNumber(flight.altitude)
         ? `${Math.round(Number(flight.altitude)).toLocaleString('en-US')} m`

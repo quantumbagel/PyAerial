@@ -5,6 +5,7 @@ export type FlightSortField =
   | 'last_seen'
   | 'first_seen'
   | 'duration'
+  | 'alerts'
   | 'callsign'
   | 'icao'
   | 'model'
@@ -20,6 +21,7 @@ export const FLIGHT_SORT_OPTIONS: { value: FlightSortField; label: string }[] = 
   { value: 'last_seen', label: 'Last Seen' },
   { value: 'first_seen', label: 'First Seen' },
   { value: 'duration', label: 'Duration' },
+  { value: 'alerts', label: 'Number of Alerts' },
   { value: 'callsign', label: 'Callsign' },
   { value: 'icao', label: 'ICAO' },
   { value: 'model', label: 'Model' },
@@ -75,13 +77,25 @@ export function isFlightSortValueMissing(flight: FlightSummary, field: FlightSor
       return !flight.zone?.trim();
     case 'level':
       return !flight.level?.trim();
+    case 'alerts':
+      return false;
     default:
       return false;
   }
 }
 
-function compareFlightsByField(a: FlightSummary, b: FlightSummary, field: FlightSortField): number {
+function compareFlightsByField(
+  a: FlightSummary,
+  b: FlightSummary,
+  field: FlightSortField,
+  alertCountMap?: Map<string, number>,
+): number {
   switch (field) {
+    case 'alerts': {
+      const aCount = alertCountMap?.get(a.flight_id) ?? 0;
+      const bCount = alertCountMap?.get(b.flight_id) ?? 0;
+      return aCount - bCount;
+    }
     case 'last_seen':
       return getFlightLastSeen(a) - getFlightLastSeen(b);
     case 'first_seen':
@@ -117,6 +131,7 @@ export function sortFlightsBy(
   flights: FlightSummary[],
   field: FlightSortField,
   direction: SortDirection,
+  alertCountMap?: Map<string, number>,
 ): FlightSummary[] {
   const mult = direction === 'asc' ? 1 : -1;
   return [...flights].sort((a, b) => {
@@ -126,7 +141,7 @@ export function sortFlightsBy(
     if (aMissing) return 1;
     if (bMissing) return -1;
 
-    const cmp = compareFlightsByField(a, b, field);
+    const cmp = compareFlightsByField(a, b, field, alertCountMap);
     if (cmp !== 0) return cmp * mult;
     return compareFlightsByLastSeenDesc(a, b);
   });
