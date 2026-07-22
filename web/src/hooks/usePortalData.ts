@@ -22,6 +22,7 @@ interface UsePortalDataOptions {
   activeFlightIdRef: React.RefObject<string | null>;
   showAllPathsRef: React.MutableRefObject<boolean>;
   setPathCoords: React.Dispatch<React.SetStateAction<Record<string, [number, number][]>>>;
+  setPathTelemetry?: React.Dispatch<React.SetStateAction<Record<string, TelemetryPoint[]>>>;
   appendSelectedTelemetry: (points: TelemetryPoint[]) => void;
   loadFlightAlerts: (flightId: string, view: PortalView, append?: boolean) => Promise<Alert[]>;
   onNewAlerts: (alerts: Alert[]) => void;
@@ -36,6 +37,7 @@ export function usePortalData({
   activeFlightIdRef,
   showAllPathsRef,
   setPathCoords,
+  setPathTelemetry,
   appendSelectedTelemetry,
   loadFlightAlerts,
   onNewAlerts,
@@ -64,6 +66,7 @@ export function usePortalData({
   const onNewAlertsRef = useRef(onNewAlerts);
   const loadFlightAlertsRef = useRef(loadFlightAlerts);
   const setPathCoordsRef = useRef(setPathCoords);
+  const setPathTelemetryRef = useRef(setPathTelemetry);
 
   useEffect(() => {
     portalViewRef.current = portalView;
@@ -83,6 +86,9 @@ export function usePortalData({
   useEffect(() => {
     setPathCoordsRef.current = setPathCoords;
   }, [setPathCoords]);
+  useEffect(() => {
+    setPathTelemetryRef.current = setPathTelemetry;
+  }, [setPathTelemetry]);
 
   const handleSwitchSidebarTab = useCallback((tab: SidebarTab) => {
     setSidebarTab(tab);
@@ -250,6 +256,33 @@ export function usePortalData({
           setIsLoadingFlights(false);
           setFlightsData((prev) => sortFlights(mergeLiveFlights(prev, message.flights)));
           setFlightsError(null);
+
+          setPathCoordsRef.current((prev) => {
+            let next = prev;
+            let updated = false;
+
+            message.flights.forEach((f: FlightSummary) => {
+              if (!f.flight_id || !isValidCoordinate(f.latitude, f.longitude)) return;
+              const isTracked = showAllPathsRef.current || f.flight_id === activeFlightIdRef.current;
+              if (!isTracked) return;
+
+              const existing = next[f.flight_id] || [];
+              const newCoord: [number, number] = [f.latitude!, f.longitude!];
+
+              const last = existing[existing.length - 1];
+              if (last && last[0] === newCoord[0] && last[1] === newCoord[1]) {
+                return;
+              }
+
+              if (!updated) {
+                next = { ...next };
+                updated = true;
+              }
+              next[f.flight_id] = [...(next[f.flight_id] || existing), newCoord];
+            });
+
+            return next;
+          });
         } else if (message.type === 'alerts') {
           setIsLoadingAlerts(false);
           setAlertsData((prev) => {
@@ -283,27 +316,64 @@ export function usePortalData({
             const selectedPoints = validPoints.filter((p) => p.flight_id === flightId);
             if (selectedPoints.length > 0) {
               appendSelectedTelemetryRef.current(selectedPoints);
-              setPathCoordsRef.current((prev) => {
-                const existing = prev[flightId] || [];
-                const added = selectedPoints.map(
-                  (p) => [p.latitude!, p.longitude!] as [number, number],
-                );
-                return { ...prev, [flightId]: [...existing, ...added] };
-              });
               loadFlightAlertsRef.current(flightId, 'live', true);
             }
           }
 
-          if (showAllPathsRef.current) {
-            setPathCoordsRef.current((prev) => {
+          setPathCoordsRef.current((prev) => {
+            let next = prev;
+            let updated = false;
+
+            validPoints.forEach((point) => {
+              if (!point.flight_id) return;
+              const fId = point.flight_id;
+              const isTracked = showAllPathsRef.current || fId === activeFlightIdRef.current;
+              if (!isTracked) return;
+
+              const existing = next[fId] || [];
+              const newCoord: [number, number] = [point.latitude!, point.longitude!];
+
+              const last = existing[existing.length - 1];
+              if (last && last[0] === newCoord[0] && last[1] === newCoord[1]) {
+                return;
+              }
+
+              if (!updated) {
+                next = { ...next };
+                updated = true;
+              }
+              next[fId] = [...(next[fId] || existing), newCoord];
+            });
+
+            return next;
+          });
+
+          if (setPathTelemetryRef.current) {
+            setPathTelemetryRef.current((prev) => {
               let next = prev;
+              let updated = false;
+
               validPoints.forEach((point) => {
-                if (!point.flight_id || next[point.flight_id]) return;
-                next = {
-                  ...next,
-                  [point.flight_id!]: [[point.latitude!, point.longitude!]],
-                };
+                if (!point.flight_id) return;
+                const fId = point.flight_id;
+                const isTracked = showAllPathsRef.current || fId === activeFlightIdRef.current;
+                if (!isTracked) return;
+
+                const existing = next[fId];
+                if (!existing) return;
+
+                const last = existing[existing.length - 1];
+                if (last && last.timestamp === point.timestamp) {
+                  return;
+                }
+
+                if (!updated) {
+                  next = { ...next };
+                  updated = true;
+                }
+                next[fId] = [...existing, point];
               });
+
               return next;
             });
           }
