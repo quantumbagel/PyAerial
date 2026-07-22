@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { FLIGHT_SORT_OPTIONS, type FlightSortField, type SortDirection } from '../utils/flightData';
+import { Button } from './ui';
 
 interface FlightSortControlsProps {
   flightSortField: FlightSortField;
@@ -43,25 +44,24 @@ export const FlightSortControls = memo(function FlightSortControls({
   const selectedOption = FLIGHT_SORT_OPTIONS.find((o) => o.value === flightSortField);
 
   return (
-    <div id="flight-sort-bar" className="flight-sort-bar" ref={containerRef}>
-      <label htmlFor="flight-sort-field" className="flight-sort-label">
+    <div id="flight-sort-bar" className="ui-sort-bar" ref={containerRef}>
+      <label htmlFor="flight-sort-field" className="ui-sort-label">
         Sort by
       </label>
-      <div className="flight-sort-dropdown-container">
-        <button
-          type="button"
-          className="flight-sort-trigger-btn"
+      <div className="ui-sort-dropdown">
+        <Button
+          variant="subtle"
           aria-haspopup="listbox"
           aria-expanded={isOpen}
           onClick={() => setIsOpen((prev) => !prev)}
         >
           <span>{selectedOption?.label ?? 'Last Seen'}</span>
-          <span className="sort-chevron">{isOpen ? '▲' : '▼'}</span>
-        </button>
+          <span className="ui-chevron">{isOpen ? '▲' : '▼'}</span>
+        </Button>
 
         <select
           id="flight-sort-field"
-          className="flight-sort-select-hidden"
+          className="ui-select-hidden"
           value={flightSortField}
           onChange={(e) => onFlightSortChange(e.target.value as FlightSortField)}
           tabIndex={-1}
@@ -75,13 +75,13 @@ export const FlightSortControls = memo(function FlightSortControls({
         </select>
 
         {isOpen && (
-          <ul className="flight-sort-menu" role="listbox" aria-label="Sort options">
+          <ul className="ui-menu" role="listbox" aria-label="Sort options">
             {FLIGHT_SORT_OPTIONS.map((option) => (
               <li
                 key={option.value}
                 role="option"
                 aria-selected={option.value === flightSortField}
-                className={`flight-sort-menu-item${option.value === flightSortField ? ' selected' : ''}`}
+                className={`ui-menu-item${option.value === flightSortField ? ' is-selected' : ''}`}
                 onClick={() => {
                   onFlightSortChange(option.value);
                   setIsOpen(false);
@@ -93,15 +93,14 @@ export const FlightSortControls = memo(function FlightSortControls({
           </ul>
         )}
       </div>
-      <button
-        type="button"
-        className="flight-sort-direction"
+      <Button
+        variant="icon"
         onClick={onFlightSortDirectionToggle}
         title={flightSortDirection === 'asc' ? 'Ascending' : 'Descending'}
         aria-label={flightSortDirection === 'asc' ? 'Sort ascending' : 'Sort descending'}
       >
         {flightSortDirection === 'asc' ? '↑' : '↓'}
-      </button>
+      </Button>
     </div>
   );
 });

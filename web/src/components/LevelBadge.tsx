@@ -8,9 +8,10 @@ import {
   isFlightLive,
 } from '../utils/format';
 import { alertColorFor } from '../utils/zoneColors';
+import { Badge, BadgeGroup } from './ui';
 
 export function LiveBadge() {
-  return <span className="level-badge live">Live</span>;
+  return <Badge variant="live">Live</Badge>;
 }
 
 export function AlertColoredLabel({
@@ -18,7 +19,7 @@ export function AlertColoredLabel({
   rule,
   zones,
   alertColors,
-  className = 'alert-colored-label',
+  className,
   active = false,
 }: {
   zone: string;
@@ -32,9 +33,15 @@ export function AlertColoredLabel({
   const ruleName = (rule || '').trim() || 'rule';
   const colors = alertColorFor(zoneName, ruleName, zones, alertColors);
   return (
-    <span className={className} style={{ color: colors.fill }}>
-      {formatZoneRule(zoneName, ruleName, { live: active })}
-    </span>
+    <ZoneBadge
+      zone={zoneName}
+      rule={ruleName}
+      zones={zones}
+      alertColors={alertColors}
+      className={className}
+      label={formatZoneRule(zoneName, ruleName, { live: active })}
+      colors={colors}
+    />
   );
 }
 
@@ -43,27 +50,34 @@ export function ZoneBadge({
   rule,
   zones,
   alertColors,
+  className,
+  label,
+  colors: colorsOverride,
 }: {
   zone: string;
   rule?: string;
   zones?: Zone[];
   alertColors?: Record<string, string>;
+  className?: string;
+  label?: string;
+  colors?: { fill: string };
 }) {
   const zoneName = (zone || 'zone').trim() || 'zone';
   const ruleName = (rule || '').trim() || 'rule';
-  const label = formatZoneRule(zoneName, ruleName);
-  const colors = alertColorFor(zoneName, ruleName, zones, alertColors);
+  const displayLabel = label ?? formatZoneRule(zoneName, ruleName);
+  const colors = colorsOverride ?? alertColorFor(zoneName, ruleName, zones, alertColors);
   return (
-    <span
-      className="zone-badge"
+    <Badge
+      variant="zone"
+      className={className}
       style={{
         backgroundColor: `${colors.fill}26`,
         color: colors.fill,
         borderColor: `${colors.fill}55`,
       }}
     >
-      {label}
-    </span>
+      {displayLabel}
+    </Badge>
   );
 }
 
@@ -78,11 +92,18 @@ export function LevelBadge({ flight, zones, alertColors }: LevelBadgeProps) {
 
   if (active.length > 0) {
     return (
-      <span className="badge-group">
+      <BadgeGroup>
         {active.map((alert, index) => (
-          <ZoneBadge key={alert.alert_id ?? `${alert.zone}-${alert.rule}-${index}`} zone={alert.zone} rule={alert.rule} zones={zones} alertColors={alertColors} />
+          <ZoneBadge
+            key={alert.alert_id ?? `${alert.zone}-${alert.rule}-${index}`}
+            zone={alert.zone}
+            rule={alert.rule}
+            zones={zones}
+            alertColors={alertColors}
+            label={formatZoneRule(alert.zone, alert.rule, { live: true })}
+          />
         ))}
-      </span>
+      </BadgeGroup>
     );
   }
 
@@ -91,10 +112,10 @@ export function LevelBadge({ flight, zones, alertColors }: LevelBadgeProps) {
   }
 
   if ((flight.alert_stats?.episode_count ?? 0) > 0) {
-    return <span className="level-badge done">{formatFlightAlertSummary(flight)}</span>;
+    return <Badge variant="neutral">{formatFlightAlertSummary(flight)}</Badge>;
   }
 
-  return <span className="level-badge done">Clear</span>;
+  return <Badge variant="neutral">Clear</Badge>;
 }
 
 /** @deprecated use ZoneBadge with zone name */
@@ -188,4 +209,3 @@ export function flightTimeLabel(flight: FlightSummary, sortField?: FlightSortFie
     return startStr || endStr || '';
   }
 }
-

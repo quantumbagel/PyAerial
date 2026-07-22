@@ -5,10 +5,11 @@ import {
   formatAlertAltitude,
   formatAlertEta,
   formatEpisodeDuration,
+  formatZoneRule,
   isAlertActive,
-  normalizeAlertRule,
 } from '../utils/format';
-import { AlertColoredLabel } from './LevelBadge';
+import { ZoneBadge } from './LevelBadge';
+import { Chip } from './ui';
 
 interface AlertListItemProps {
   alert: Alert;
@@ -29,7 +30,6 @@ export function AlertListItem({
   alertColors,
   onSelect,
 }: AlertListItemProps) {
-  const normLevel = normalizeAlertRule(alert.rule);
   const isEpisodeActive = isAlertActive(alert);
   const deactivatedStr = alert.deactivated_at ? formatActiveSince(alert.deactivated_at) : null;
   const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
@@ -51,25 +51,24 @@ export function AlertListItem({
     <li>
       <button
         type="button"
-        className={`list-row alert-item ${normLevel}${isEpisodeActive ? ' alert-episode-active' : ' alert-episode-ended'}${active ? ' active' : ''}`}
+        className={`ui-row${!isEpisodeActive ? ' ui-row--muted' : ''}${active ? ' is-active' : ''}`}
         title={title}
         onClick={() => onSelect(alert, episodeKey)}
         aria-pressed={active}
       >
-        <div className="flight-meta-row">
-          <span className="flight-callsign">{displayCallsign}</span>
-          <span className="flight-icao">{(alert.icao || '').toUpperCase()}</span>
+        <div className="ui-row__line">
+          <span className="ui-row__title">{displayCallsign}</span>
+          <Chip>{(alert.icao || '').toUpperCase()}</Chip>
         </div>
-        <div className="flight-meta-row">
-          <AlertColoredLabel
+        <div className="ui-row__line">
+          <ZoneBadge
             zone={alert.zone || 'zone'}
             rule={alert.rule}
             zones={zones}
             alertColors={alertColors}
-            active={isEpisodeActive}
-            className="flight-desc alert-colored-label"
+            label={formatZoneRule(alert.zone || 'zone', alert.rule, { live: isEpisodeActive })}
           />
-          <span className="flight-time">{alertSortValueLabel(alert, sortField)}</span>
+          <span className="ui-row__trailing">{alertSortValueLabel(alert, sortField)}</span>
         </div>
       </button>
     </li>

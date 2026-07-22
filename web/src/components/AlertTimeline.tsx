@@ -5,10 +5,11 @@ import {
   formatAlertAltitude,
   formatAlertEta,
   formatEpisodeDuration,
+  formatZoneRule,
   isAlertActive,
   normalizeAlertRule,
 } from '../utils/format';
-import { AlertColoredLabel } from './LevelBadge';
+import { ZoneBadge } from './LevelBadge';
 
 interface AlertTimelineProps {
   alerts: Alert[];
@@ -20,11 +21,11 @@ interface AlertTimelineProps {
 
 export function AlertTimeline({ alerts, activeAlertId, zones, alertColors, onSelectAlert }: AlertTimelineProps) {
   if (alerts.length === 0) {
-    return <div className="alert-timeline-empty">No alert episodes for this flight.</div>;
+    return <div className="ui-empty ui-empty--inline">No alert episodes for this flight.</div>;
   }
 
   return (
-    <div id="alert-timeline-list">
+    <div id="alert-timeline-list" className="ui-display-list">
       {alerts.map((alert, index) => {
         const episodeKey = alertEpisodeKey(alert, index);
         const normLevel = normalizeAlertRule(alert.rule);
@@ -48,23 +49,22 @@ export function AlertTimeline({ alerts, activeAlertId, zones, alertColors, onSel
             type="button"
             key={`${episodeKey}:${index}`}
             data-alert-episode-key={episodeKey}
-            className={`alert-timeline-item ${normLevel}${isEpisodeActive ? ' episode-active' : ' episode-ended'}${episodeKey === activeAlertId ? ' active' : ''}`}
+            className={`ui-display ui-display--${normLevel}${!isEpisodeActive ? ' ui-display--muted' : ''}${episodeKey === activeAlertId ? ' is-active' : ''}`}
             title={title}
             onClick={() => onSelectAlert(alert, episodeKey)}
             aria-pressed={episodeKey === activeAlertId}
           >
-            <div className="alert-timeline-row">
-              <AlertColoredLabel
+            <div className="ui-row__line">
+              <ZoneBadge
                 zone={alert.zone || 'zone'}
                 rule={alert.rule}
                 zones={zones}
                 alertColors={alertColors}
-                active={isEpisodeActive}
-                className="alert-timeline-zone-name"
+                label={formatZoneRule(alert.zone || 'zone', alert.rule, { live: isEpisodeActive })}
               />
-              <span className="alert-timeline-time">{timeLabel}</span>
+              <span className="ui-row__trailing">{timeLabel}</span>
             </div>
-            <div className="alert-timeline-meta">
+            <div className="ui-display__meta">
               <span><strong>Duration:</strong> {durationStr}</span>
               <span><strong>Alt:</strong> {formatAlertAltitude(alert.altitude)}</span>
               {isEpisodeActive && (

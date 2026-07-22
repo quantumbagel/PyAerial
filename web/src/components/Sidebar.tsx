@@ -13,6 +13,7 @@ import { AlertSortControls } from './AlertSortControls';
 import { FlightListItem } from './FlightListItem';
 import { FlightSortControls } from './FlightSortControls';
 import { StatusMessage } from './StatusMessage';
+import { Button, Input, Stat, StatValue, Tab, TabList } from './ui';
 
 type SidebarTab = 'flights' | 'alerts';
 
@@ -85,7 +86,7 @@ export function Sidebar({
 }: SidebarProps) {
   useEffect(() => {
     if (activeAlertId && sidebarTab === 'alerts') {
-      document.querySelector('#alert-list .alert-item.active')?.scrollIntoView({
+      document.querySelector('#alert-list .ui-row.is-active')?.scrollIntoView({
         behavior: 'smooth',
         block: 'nearest',
       });
@@ -133,46 +134,52 @@ export function Sidebar({
             </div>
           </div>
           <div className="sidebar-header-controls">
-            <div id="view-toggle" role="group" aria-label="Portal view">
-              <button
-                type="button"
-                className={`view-btn${portalView === 'live' ? ' active' : ''}`}
+            <div id="view-toggle" className="ui-btn-group" role="group" aria-label="Portal view">
+              <Button
+                variant="toggle"
+                flex
+                active={portalView === 'live'}
                 id="view-live"
                 aria-pressed={portalView === 'live'}
                 onClick={() => onSwitchPortalView('live')}
               >
                 Live
-              </button>
-              <button
-                type="button"
-                className={`view-btn${portalView === 'history' ? ' active' : ''}`}
+              </Button>
+              <Button
+                variant="toggle"
+                flex
+                active={portalView === 'history'}
                 id="view-history"
                 aria-pressed={portalView === 'history'}
                 onClick={() => onSwitchPortalView('history')}
               >
                 Historical
-              </button>
+              </Button>
             </div>
-            <div id="stats-panel">
-              <div className="stat-card">
+            <div id="stats-panel" className="ui-btn-group">
+              <Stat>
                 <span id="flight-stat-label">{portalView === 'live' ? 'Live:' : 'Retained:'}</span>
-                <strong id="flight-count" className="stat-live">
+                <StatValue id="flight-count" tone="live">
                   {flightCount}
-                </strong>
-              </div>
-              <div className="stat-card" title={`${activeAlertsCount} active alert episode(s) out of ${alerts.length} shown`}>
+                </StatValue>
+              </Stat>
+              <Stat title={`${activeAlertsCount} active alert episode(s) out of ${alerts.length} shown`}>
                 <span>Active Alerts:</span>
-                <strong id="alert-count" className={`stat-alerts${activeAlertsCount > 0 ? ' stat-alerts--active' : ''}`}>
+                <StatValue
+                  id="alert-count"
+                  tone={activeAlertsCount > 0 ? 'alert' : 'warn'}
+                >
                   {activeAlertsCount}
-                </strong>
-              </div>
+                </StatValue>
+              </Stat>
             </div>
           </div>
         </div>
       </div>
       <div id="search-container">
-        <input
+        <Input
           type="search"
+          search
           id="search-input"
           placeholder="Search by callsign, ICAO, model, or alert..."
           value={searchQuery}
@@ -180,28 +187,22 @@ export function Sidebar({
           aria-label="Search flights and alerts"
         />
       </div>
-      <div id="sidebar-tabs" role="tablist" aria-label="Sidebar panels">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={sidebarTab === 'flights'}
-          className={`sidebar-tab${sidebarTab === 'flights' ? ' active' : ''}`}
+      <TabList compact id="sidebar-tabs" aria-label="Sidebar panels">
+        <Tab
           id="tab-flights"
+          active={sidebarTab === 'flights'}
           onClick={() => onSwitchSidebarTab('flights')}
         >
           Flights
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={sidebarTab === 'alerts'}
-          className={`sidebar-tab${sidebarTab === 'alerts' ? ' active' : ''}`}
+        </Tab>
+        <Tab
           id="tab-alerts"
+          active={sidebarTab === 'alerts'}
           onClick={() => onSwitchSidebarTab('alerts')}
         >
           Alerts
-        </button>
-      </div>
+        </Tab>
+      </TabList>
       <div
         id="panel-flights"
         role="tabpanel"

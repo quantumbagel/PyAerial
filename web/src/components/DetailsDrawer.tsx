@@ -10,7 +10,9 @@ import {
 } from '../utils/format';
 import { AlertTimeline } from './AlertTimeline';
 import { ExternalLinks } from './ExternalLinks';
+import { LevelBadge } from './LevelBadge';
 import { TelemetryTable } from './TelemetryTable';
+import { Button, Chip, Spinner, Tab, TabList } from './ui';
 
 type DrawerTab = 'alerts' | 'telemetry';
 
@@ -111,7 +113,7 @@ export function DetailsDrawer({
   useEffect(() => {
     if (activeAlertId && drawerTab === 'alerts' && open) {
       document
-        .querySelector('#alert-timeline-list .alert-timeline-item.active')
+        .querySelector('#alert-timeline-list .ui-display.is-active')
         ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
   }, [activeAlertId, drawerTab, open]);
@@ -130,6 +132,7 @@ export function DetailsDrawer({
     (a, b) => (a.activated_at || 0) - (b.activated_at || 0),
   );
   const lastPoint = flightTelemetry.length > 0 ? flightTelemetry[flightTelemetry.length - 1] : null;
+  const displayFlight = flightDetail ?? flightSummary;
 
   return (
     <div
@@ -141,17 +144,24 @@ export function DetailsDrawer({
       aria-label="Selected aircraft details"
       tabIndex={-1}
     >
-      <button type="button" id="close-drawer-btn" className="close-btn" title="Close" onClick={onClose}>
-        &times;
-      </button>
       <div id="drawer-header">
+        <Button
+          id="close-drawer-btn"
+          variant="ghost"
+          className="drawer-close-btn"
+          title="Close"
+          onClick={onClose}
+        >
+          &times;
+        </Button>
         <div className="drawer-header-label">Selected Aircraft</div>
         <h2>
           <span id="detail-callsign">{callsign}</span>{' '}
           {rawIcao && rawIcao !== callsign && (
-            <span id="detail-icao" className="flight-icao">
-              {icao}
-            </span>
+            <Chip id="detail-icao">{icao}</Chip>
+          )}
+          {displayFlight && (
+            <LevelBadge flight={displayFlight} zones={zones} alertColors={alertColors} />
           )}
         </h2>
       </div>
@@ -162,7 +172,7 @@ export function DetailsDrawer({
           </div>
         ) : isLoadingPlane ? (
           <div className="drawer-loading-container">
-            <span className="flight-list-spinner" aria-hidden="true" />
+            <Spinner size="xl" />
             <span>Loading plane details…</span>
           </div>
         ) : (
@@ -194,37 +204,37 @@ export function DetailsDrawer({
 
             <div className="info-section">
               <h3>Aircraft Details</h3>
-              <div className="details-grid">
-                <span className="details-label">Registration</span>
-                <span className="details-value details-value--registration" id="detail-registration">
+              <div className="ui-fields">
+                <span className="ui-field-label">Registration</span>
+                <span className="ui-field-value ui-field-value--emphasis" id="detail-registration">
                   {flightDetail?.registration && flightDetail.registration !== 'Unknown' ? flightDetail.registration : '—'}
                 </span>
-                <span className="details-label">Model</span>
-                <span className="details-value" id="detail-model">
+                <span className="ui-field-label">Model</span>
+                <span className="ui-field-value" id="detail-model">
                   {flightDetail?.model && flightDetail.model !== 'Unknown Model' ? flightDetail.model : '—'}
                 </span>
-                <span className="details-label">Aircraft Type</span>
-                <span className="details-value" id="detail-type">
+                <span className="ui-field-label">Aircraft Type</span>
+                <span className="ui-field-value" id="detail-type">
                   {flightDetail?.aircraft_type || flightDetail?.typecode || '—'}
                 </span>
-                <span className="details-label">Owner</span>
-                <span className="details-value" id="detail-owner">
+                <span className="ui-field-label">Owner</span>
+                <span className="ui-field-value" id="detail-owner">
                   {flightDetail?.owner && flightDetail.owner !== 'Unknown Owner' ? flightDetail.owner : '—'}
                 </span>
-                <span className="details-label">Registration Country</span>
-                <span className="details-value" id="detail-country">
+                <span className="ui-field-label">Registration Country</span>
+                <span className="ui-field-value" id="detail-country">
                   {flightDetail?.country && flightDetail.country !== 'Unknown' ? flightDetail.country : '—'}
                 </span>
-                <span className="details-label">
+                <span className="ui-field-label">
                   {isFlightLive(flightDetail ?? {}) ? 'Active Alerts' : 'Alert Summary'}
                 </span>
                 <span
-                  className={`details-value${
+                  className={`ui-field-value${
                     (flightDetail?.active_alerts?.length ?? 0) > 0
-                      ? ' details-value--warn'
+                      ? ' ui-field-value--warn'
                       : (flightDetail?.alert_stats?.episode_count ?? 0) > 0
-                      ? ' details-value--accent'
-                      : ' details-value--muted'
+                      ? ' ui-field-value--accent'
+                      : ' ui-field-value--muted'
                   }`}
                   id="detail-active-alerts"
                 >
@@ -243,7 +253,7 @@ export function DetailsDrawer({
 
             <div className="info-section">
               <h3>Telemetry Readings</h3>
-              <div className="details-grid">
+              <div className="ui-fields">
                 {renderTelemetrySummary(
                   flightDetail,
                   flightSummary,
@@ -251,53 +261,47 @@ export function DetailsDrawer({
                   appConfig,
                   now,
                 )}
-                <span className="details-label">Altitude</span>
-                <span className="details-value" id="detail-altitude">
+                <span className="ui-field-label">Altitude</span>
+                <span className="ui-field-value" id="detail-altitude">
                   {lastPoint ? formatAltitude(lastPoint.altitude) : 'N/A'}
                 </span>
-                <span className="details-label">Speed</span>
-                <span className="details-value" id="detail-speed">
+                <span className="ui-field-label">Speed</span>
+                <span className="ui-field-value" id="detail-speed">
                   {lastPoint ? formatSpeed(lastPoint.speed) : 'N/A'}
                 </span>
-                <span className="details-label">Heading</span>
-                <span className="details-value" id="detail-heading">
+                <span className="ui-field-label">Heading</span>
+                <span className="ui-field-value" id="detail-heading">
                   {lastPoint ? formatHeading(lastPoint.heading) : 'N/A'}
                 </span>
-                <span className="details-label">Latitude</span>
-                <span className="details-value" id="detail-latitude">
+                <span className="ui-field-label">Latitude</span>
+                <span className="ui-field-value" id="detail-latitude">
                   {lastPoint?.latitude != null ? lastPoint.latitude.toFixed(5) : 'N/A'}
                 </span>
-                <span className="details-label">Longitude</span>
-                <span className="details-value" id="detail-longitude">
+                <span className="ui-field-label">Longitude</span>
+                <span className="ui-field-value" id="detail-longitude">
                   {lastPoint?.longitude != null ? lastPoint.longitude.toFixed(5) : 'N/A'}
                 </span>
               </div>
             </div>
 
-            <div className="drawer-tabs" role="tablist" aria-label="Flight detail tabs">
+            <TabList aria-label="Flight detail tabs">
               {flightAlerts.length > 0 && (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={drawerTab === 'alerts'}
-                  className={`tab-btn${drawerTab === 'alerts' ? ' active' : ''}`}
+                <Tab
                   id="tab-btn-alerts"
+                  active={drawerTab === 'alerts'}
                   onClick={() => onSwitchTab('alerts')}
                 >
                   Alerts
-                </button>
+                </Tab>
               )}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={drawerTab === 'telemetry'}
-                className={`tab-btn${drawerTab === 'telemetry' ? ' active' : ''}`}
+              <Tab
                 id="tab-btn-telemetry"
+                active={drawerTab === 'telemetry'}
                 onClick={() => onSwitchTab('telemetry')}
               >
                 Telemetry
-              </button>
-            </div>
+              </Tab>
+            </TabList>
 
             <div
               className="tab-content"
@@ -336,12 +340,12 @@ export function DetailsDrawer({
 
 function StatusError({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
   return (
-    <div className="status-error-container">
-      <span className="status-message-text">{children}</span>
+    <div className="ui-empty ui-empty--error">
+      <span>{children}</span>
       {onRetry && (
-        <button type="button" className="btn-try-again" onClick={onRetry}>
+        <Button variant="primary" size="md" onClick={onRetry}>
           Try again
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -395,15 +399,15 @@ function renderTelemetrySummary(
       secsAgo != null && rememberSecs != null ? Math.max(0, rememberSecs - secsAgo) : null;
     return (
       <>
-        <span className="details-label">First Seen</span>
-        <span className="details-value" id="detail-first-seen">
+        <span className="ui-field-label">First Seen</span>
+        <span className="ui-field-value" id="detail-first-seen">
           {formatTs(firstTs)}
         </span>
-        <span className="details-label">Last Seen</span>
-        <span className="details-value details-value--white" id="detail-last-seen">
+        <span className="ui-field-label">Last Seen</span>
+        <span className="ui-field-value ui-field-value--emphasis" id="detail-last-seen">
           {formatTs(lastTs)}
           {secsAgo != null && (
-            <span className="details-sub">
+            <span className="ui-field-sub">
               {secsAgo}s ago{dropIn != null ? ` · drops in ${dropIn}s` : ''}
             </span>
           )}
@@ -413,12 +417,12 @@ function renderTelemetrySummary(
   }
   return (
     <>
-      <span className="details-label">First Seen</span>
-      <span className="details-value" id="detail-first-seen">
+      <span className="ui-field-label">First Seen</span>
+      <span className="ui-field-value" id="detail-first-seen">
         {formatTs(firstTs)}
       </span>
-      <span className="details-label">Last Seen</span>
-      <span className="details-value" id="detail-last-seen">
+      <span className="ui-field-label">Last Seen</span>
+      <span className="ui-field-value" id="detail-last-seen">
         {formatTs(lastTs)}
       </span>
     </>

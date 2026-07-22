@@ -1,4 +1,5 @@
 import type { FlightDetail } from '../api/types';
+import { Button } from './ui';
 
 interface ExternalLinksProps {
   flightDetail: FlightDetail | null;
@@ -11,8 +12,10 @@ export function ExternalLinks({ flightDetail, icao }: ExternalLinksProps) {
   return (
     <div className="info-section">
       <h3>External Trackers</h3>
-      <div className="external-links-grid">
-        <a
+      <div className="ui-link-grid">
+        <Button
+          as="a"
+          variant="link"
           href={
             callsign
               ? `https://flightaware.com/live/flight/${callsign}`
@@ -20,19 +23,21 @@ export function ExternalLinks({ flightDetail, icao }: ExternalLinksProps) {
           }
           target="_blank"
           rel="noreferrer"
-          className="external-link-btn"
         >
           <span>FlightAware</span>
-        </a>
-        <a
+        </Button>
+        <Button
+          as="a"
+          variant="link"
           href={`https://globe.adsbexchange.com/?icao=${icao.toLowerCase()}`}
           target="_blank"
           rel="noreferrer"
-          className="external-link-btn"
         >
           <span>ADS-B Exchange</span>
-        </a>
-        <a
+        </Button>
+        <Button
+          as="a"
+          variant="link"
           href={
             registration
               ? `https://www.radarbox.com/data/registration/${registration}`
@@ -40,10 +45,9 @@ export function ExternalLinks({ flightDetail, icao }: ExternalLinksProps) {
           }
           target="_blank"
           rel="noreferrer"
-          className="external-link-btn"
         >
           <span>RadarBox</span>
-        </a>
+        </Button>
       </div>
     </div>
   );

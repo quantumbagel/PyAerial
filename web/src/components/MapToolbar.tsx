@@ -1,3 +1,5 @@
+import { Button } from './ui';
+
 interface MapToolbarProps {
   followVisible: boolean;
   followActive: boolean;
@@ -28,63 +30,63 @@ export function MapToolbar({
   onZoomOut,
 }: MapToolbarProps) {
   return (
-    <div id="map-controls" role="toolbar" aria-label="Map controls">
-      <div className="map-toolbar-group">
+    <div id="map-controls" className="ui-toolbar" role="toolbar" aria-label="Map controls">
+      <div className="ui-btn-group">
         {followVisible && (
-          <button
+          <Button
             id="follow-btn"
-            className={`toolbar-btn${followActive ? ' active' : ''}`}
-            type="button"
+            variant="toggle"
+            active={followActive}
             title="Follow selected aircraft"
             aria-pressed={followActive}
             onClick={onToggleFollow}
           >
             {followLabel}
-          </button>
+          </Button>
         )}
-        <button
+        <Button
           id="zones-btn"
-          className={`toolbar-btn${zonesActive ? ' active' : ''}`}
-          type="button"
+          variant="toggle"
+          active={zonesActive}
           title="Show configured geofence zones"
           aria-pressed={zonesActive}
           onClick={onToggleZones}
         >
           {zonesLabel}
-        </button>
-        <button
+        </Button>
+        <Button
           id="paths-btn"
-          className={`toolbar-btn${pathsActive ? ' active' : ''}`}
-          type="button"
+          variant="toggle"
+          active={pathsActive}
           title="Show flight paths for all visible aircraft"
           aria-pressed={pathsActive}
           onClick={onTogglePaths}
         >
           {pathsLabel}
-        </button>
+        </Button>
       </div>
-      <div className="map-toolbar-divider" aria-hidden="true" />
-      <div className="map-toolbar-group">
-        <button
+      <div className="ui-toolbar__divider" aria-hidden="true" />
+      <div className="ui-btn-group">
+        <Button
           id="zoom-in-btn"
-          className="toolbar-btn map-zoom-btn"
-          type="button"
+          variant="toggle"
+          zoom
           title="Zoom in"
           aria-label="Zoom in"
           onClick={onZoomIn}
         >
           +
-        </button>
-        <button
+        </Button>
+        <Button
           id="zoom-out-btn"
-          className="toolbar-btn map-zoom-btn"
-          type="button"
+          variant="toggle"
+          zoom
           title="Zoom out"
           aria-label="Zoom out"
           onClick={onZoomOut}
         >
           −
-        </button>
+        </Button>
       </div>
     </div>
   );

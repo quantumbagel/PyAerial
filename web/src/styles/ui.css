@@ -1,0 +1,661 @@
+/* PyAerial UI toolkit — shared primitives */
+
+/* ── Buttons ─────────────────────────────────────────────── */
+
+.ui-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    font-family: inherit;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.ui-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.ui-btn--sm {
+    min-height: var(--control-h-sm);
+    padding: var(--control-py) var(--control-px);
+    font-size: var(--font-meta);
+}
+
+.ui-btn--md {
+    min-height: var(--control-h-md);
+    padding: 6px 14px;
+    font-size: var(--font-body);
+}
+
+.ui-btn--primary {
+    font-weight: 600;
+    color: var(--accent-soft);
+    background-color: var(--accent-active-bg);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+}
+
+.ui-btn--primary:hover:not(:disabled) {
+    background-color: var(--accent);
+    color: var(--text-on-accent);
+}
+
+.ui-btn--ghost {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    padding: 0;
+    min-height: auto;
+}
+
+.ui-btn--ghost:hover:not(:disabled) {
+    color: var(--alert);
+}
+
+.ui-btn--toggle {
+    padding: 5px var(--space-2);
+    border: 1px solid var(--border);
+    background: var(--panel-hover);
+    color: var(--text-secondary);
+    font-size: var(--font-body);
+}
+
+.ui-btn--toggle:hover:not(:disabled) {
+    background-color: var(--panel-hover);
+    color: var(--text);
+    filter: brightness(1.15);
+}
+
+.ui-btn--toggle.is-active {
+    background-color: var(--accent-active-bg);
+    border-color: var(--accent);
+    color: var(--accent-soft);
+}
+
+.ui-btn--toggle.ui-btn--flex {
+    flex: 1;
+}
+
+.ui-btn--icon {
+    flex-shrink: 0;
+    width: 26px;
+    height: var(--control-h-sm);
+    padding: 0;
+    border: 1px solid var(--input-border);
+    background-color: var(--input-bg);
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.ui-btn--icon.ui-btn--icon-lg {
+    width: auto;
+    height: auto;
+    min-height: auto;
+    font-size: var(--font-icon-lg);
+    border: none;
+    background: none;
+}
+
+.ui-btn--subtle {
+    width: 100%;
+    justify-content: space-between;
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--input-border);
+    background-color: var(--input-bg);
+    color: var(--text);
+    font-size: var(--font-meta);
+    text-align: left;
+    font-weight: 400;
+    border-radius: var(--radius-sm);
+}
+
+.ui-btn--subtle:hover:not(:disabled),
+.ui-btn--subtle:focus-visible {
+    border-color: var(--accent);
+    outline: none;
+}
+
+.ui-btn--link {
+    padding: 8px 6px;
+    border-radius: var(--radius-md);
+    font-size: var(--font-body);
+    line-height: 1.2;
+    text-decoration: none;
+    border: 1px solid var(--border);
+    background-color: var(--surface-ghost);
+    color: var(--text);
+    word-break: break-word;
+    text-align: center;
+}
+
+.ui-btn--link:hover:not(:disabled) {
+    background-color: var(--surface-ghost-hover);
+}
+
+.ui-btn--zoom {
+    padding: 4px var(--space-3);
+    font-size: var(--font-icon);
+}
+
+/* ── Badges & chips ──────────────────────────────────────── */
+
+.ui-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: var(--font-xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-sm);
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+.ui-badge--live {
+    background: var(--status-live-bg);
+    color: var(--status-live-text);
+}
+
+.ui-badge--warn {
+    background: var(--warn-dark);
+    color: var(--text);
+}
+
+.ui-badge--alert {
+    background: var(--alert-dark);
+    color: var(--text);
+}
+
+.ui-badge--info {
+    background: var(--info-bg);
+    color: var(--info);
+}
+
+.ui-badge--neutral {
+    background: var(--neutral-dark);
+    color: var(--text-secondary);
+}
+
+.ui-badge--zone {
+    letter-spacing: 0.03em;
+    border: 1px solid;
+}
+
+.ui-badge-group {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+}
+
+.ui-chip {
+    font-family: 'JetBrains Mono', monospace;
+    background-color: var(--border);
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.ui-count {
+    background-color: var(--alert);
+    color: var(--text-on-accent);
+    border-radius: var(--radius-pill);
+    padding: 1px 6px;
+    font-size: var(--font-xs);
+    font-weight: 700;
+    margin-left: 6px;
+}
+
+/* ── Stats ───────────────────────────────────────────────── */
+
+.ui-stat {
+    flex: 1;
+    background-color: var(--panel-hover);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-width: 0;
+    white-space: nowrap;
+    font-size: var(--font-body);
+}
+
+.ui-stat__value--live {
+    color: var(--status-live);
+}
+
+.ui-stat__value--warn {
+    color: var(--warn);
+}
+
+.ui-stat__value--alert {
+    color: var(--alert);
+}
+
+/* ── Tabs ────────────────────────────────────────────────── */
+
+.ui-tablist {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background-color: var(--panel-raised);
+}
+
+.ui-tab {
+    flex: 1;
+    padding: var(--space-3);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: var(--font-body);
+    font-weight: 600;
+    cursor: pointer;
+    transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.ui-tab:hover {
+    color: var(--text);
+    background-color: var(--panel-hover);
+}
+
+.ui-tab.is-active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    background-color: var(--panel);
+}
+
+.ui-tablist--compact .ui-tab {
+    padding: 6px var(--space-2);
+    font-size: var(--font-meta);
+    font-weight: 500;
+    background: transparent;
+}
+
+.ui-tablist--compact .ui-tab.is-active {
+    background: transparent;
+}
+
+/* ── Inputs ──────────────────────────────────────────────── */
+
+.ui-input {
+    width: 100%;
+    padding: 5px var(--space-2);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--input-border);
+    background-color: var(--input-bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: var(--font-body);
+    outline: none;
+    transition: border-color 0.15s ease;
+}
+
+.ui-input:focus {
+    border-color: var(--accent);
+}
+
+.ui-input--search {
+    /* alias for semantic use */
+}
+
+/* ── Menus ───────────────────────────────────────────────── */
+
+.ui-menu {
+    position: absolute;
+    top: calc(100% + var(--space-1));
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background-color: var(--panel-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-popup);
+    list-style: none;
+    margin: 0;
+    padding: var(--space-1) 0;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.ui-menu-item {
+    padding: 6px var(--space-3);
+    font-size: var(--font-meta);
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background-color 0.12s ease;
+}
+
+.ui-menu-item:hover {
+    background-color: var(--panel-hover);
+}
+
+.ui-menu-item.is-selected {
+    color: var(--accent);
+    font-weight: 600;
+    background-color: var(--accent-active-bg);
+}
+
+.ui-chevron {
+    font-size: 0.6rem;
+    color: var(--text-secondary);
+}
+
+/* ── List rows (sidebar lists) ───────────────────────────── */
+
+.ui-row {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: var(--row-py) var(--row-px);
+    border: none;
+    border-bottom: 1px solid var(--border-subtle);
+    cursor: pointer;
+    background-color: transparent;
+    font: inherit;
+    color: inherit;
+    transition: background-color 0.15s ease;
+}
+
+.ui-row:hover {
+    background-color: var(--panel-hover);
+}
+
+.ui-row.is-active {
+    background-color: var(--accent-active-bg);
+    border-left: 4px solid var(--accent);
+    box-shadow: inset 4px 0 14px rgba(59, 130, 246, 0.12);
+}
+
+.ui-row--muted {
+    opacity: 0.82;
+}
+
+.ui-row__line {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.ui-row__line + .ui-row__line {
+    margin-top: var(--row-gap);
+}
+
+.ui-row__title {
+    font-weight: 600;
+    font-size: var(--font-body);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+.ui-row__secondary {
+    font-size: var(--font-meta);
+    color: var(--text-secondary);
+    min-width: 0;
+}
+
+.ui-row__trailing {
+    font-size: var(--font-sm);
+    color: var(--text-muted);
+    text-align: right;
+    flex-shrink: 0;
+}
+
+/* ── Display cards (drawer timeline, etc.) ───────────────── */
+
+.ui-display-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.ui-display {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: var(--row-py) var(--row-px);
+    border: 1px solid transparent;
+    border-left: 4px solid var(--neutral-dark);
+    background: var(--surface-card);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.ui-display--warn {
+    border-left-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 3%, transparent);
+}
+
+.ui-display--alert {
+    border-left-color: var(--alert);
+    background: color-mix(in srgb, var(--alert) 3%, transparent);
+}
+
+.ui-display--info {
+    border-left-color: var(--accent);
+}
+
+.ui-display.is-active {
+    border-color: var(--accent) !important;
+    border-left-width: 4px !important;
+    background: rgba(59, 130, 246, 0.08) !important;
+}
+
+.ui-display--muted {
+    opacity: 0.82;
+}
+
+.ui-display__meta {
+    color: var(--text-secondary);
+    margin-top: var(--space-2);
+    font-size: var(--font-meta);
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+}
+
+/* ── Field grids (drawer details) ────────────────────────── */
+
+.ui-fields {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: var(--space-2) var(--space-5);
+    font-size: var(--font-meta);
+    max-width: 340px;
+}
+
+.ui-field-label {
+    color: var(--text-secondary);
+    margin-bottom: var(--space-2);
+}
+
+.ui-field-value {
+    color: var(--text);
+    text-align: left;
+    font-weight: 500;
+    margin-bottom: var(--space-2);
+}
+
+.ui-field-value--accent {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.ui-field-value--emphasis {
+    color: var(--text-on-accent);
+    font-weight: 600;
+}
+
+.ui-field-value--warn {
+    color: var(--warn);
+}
+
+.ui-field-value--muted {
+    color: var(--text-muted);
+}
+
+.ui-field-sub {
+    display: block;
+    font-size: 0.72em;
+    margin-top: 2px;
+    color: var(--text-on-accent);
+}
+
+/* ── Spinner & empty states ──────────────────────────────── */
+
+.ui-spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: flight-spin 0.75s linear infinite;
+    flex-shrink: 0;
+}
+
+.ui-spinner--lg {
+    width: 24px;
+    height: 24px;
+    border-width: 2.5px;
+}
+
+.ui-spinner--xl {
+    width: 30px;
+    height: 30px;
+    border-width: 3px;
+}
+
+.ui-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-3);
+    color: var(--text-muted);
+    font-size: var(--font-body);
+    list-style: none;
+}
+
+.ui-empty--loading {
+    flex-direction: column;
+    padding: var(--space-8) var(--space-4);
+    gap: var(--space-3);
+    width: 100%;
+    margin: auto;
+}
+
+.ui-empty--error {
+    flex-direction: column;
+    padding: var(--space-6) var(--space-4);
+    gap: var(--space-2);
+    color: var(--text-secondary);
+    width: 100%;
+}
+
+.ui-empty--inline {
+    color: var(--text-muted);
+    padding: var(--space-4);
+    display: block;
+    text-align: left;
+}
+
+/* ── Sort bar layout ─────────────────────────────────────── */
+
+.ui-sort-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--border);
+    background-color: var(--panel-raised);
+    flex-shrink: 0;
+    position: relative;
+}
+
+.ui-sort-label {
+    font-size: var(--font-meta);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.ui-sort-dropdown {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+}
+
+.ui-select-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* ── Button group / toolbar ──────────────────────────────── */
+
+.ui-btn-group {
+    display: flex;
+    gap: var(--space-1);
+}
+
+.ui-toolbar {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    background: var(--surface-toolbar);
+    border: 1px solid var(--surface-toolbar-border);
+    border-radius: var(--radius-md);
+    padding: 2px;
+    box-shadow: var(--shadow-toolbar);
+    backdrop-filter: blur(8px);
+}
+
+.ui-toolbar__divider {
+    width: 1px;
+    background: var(--surface-toolbar-divider);
+    margin: var(--space-1);
+    align-self: stretch;
+}
+
+.ui-link-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-2);
+}
+
+.ui-btn--link span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    width: 100%;
+}

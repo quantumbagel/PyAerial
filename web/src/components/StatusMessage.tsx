@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Button, Spinner, cn } from './ui';
 
 interface StatusMessageProps {
   children: ReactNode;
@@ -8,13 +9,19 @@ interface StatusMessageProps {
 
 export function StatusMessage({ children, variant = 'empty', onRetry }: StatusMessageProps) {
   return (
-    <li className={`status-message status-message--${variant}`}>
-      {variant === 'loading' && <span className="flight-list-spinner" aria-hidden="true" />}
-      <span className="status-message-text">{children}</span>
+    <li
+      className={cn(
+        'ui-empty',
+        variant === 'loading' && 'ui-empty--loading',
+        variant === 'error' && 'ui-empty--error',
+      )}
+    >
+      {variant === 'loading' && <Spinner size="lg" />}
+      <span>{children}</span>
       {variant === 'error' && onRetry && (
-        <button type="button" className="btn-try-again" onClick={onRetry}>
+        <Button variant="primary" size="md" onClick={onRetry} style={{ marginTop: 'var(--space-2)' }}>
           Try again
-        </button>
+        </Button>
       )}
     </li>
   );

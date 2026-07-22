@@ -9,6 +9,7 @@ import {
 
 export type AlertSortField =
   | 'activated'
+  | 'active'
   | 'duration'
   | 'status'
   | 'zone'
@@ -43,6 +44,7 @@ export function alertEpisodeKey(alert: Alert, fallbackIndex?: number): string {
 
 export const ALERT_SORT_OPTIONS: { value: AlertSortField; label: string }[] = [
   { value: 'activated', label: 'Activated' },
+  { value: 'active', label: 'Active' },
   { value: 'duration', label: 'Duration' },
   { value: 'status', label: 'Status' },
   { value: 'zone', label: 'Zone' },
@@ -71,6 +73,7 @@ function compareAlertsByField(a: Alert, b: Alert, field: AlertSortField): number
       return (a.activated_at ?? 0) - (b.activated_at ?? 0);
     case 'duration':
       return alertDuration(a) - alertDuration(b);
+    case 'active':
     case 'status': {
       const aActive = isAlertActive(a) ? 1 : 0;
       const bActive = isAlertActive(b) ? 1 : 0;
@@ -91,8 +94,9 @@ function compareAlertsByField(a: Alert, b: Alert, field: AlertSortField): number
   }
 }
 
-function compareAlertsByActivatedDesc(a: Alert, b: Alert): number {
-  return compareAlertsByField(a, b, 'activated') * -1;
+function compareAlertsByActivated(a: Alert, b: Alert, direction: SortDirection): number {
+  const cmp = compareAlertsByField(a, b, 'activated');
+  return direction === 'asc' ? cmp : -cmp;
 }
 
 export function sortAlertsBy(
@@ -104,7 +108,7 @@ export function sortAlertsBy(
   return [...alerts].sort((a, b) => {
     const cmp = compareAlertsByField(a, b, field);
     if (cmp !== 0) return cmp * mult;
-    return compareAlertsByActivatedDesc(a, b);
+    return compareAlertsByActivated(a, b, direction);
   });
 }
 
@@ -141,6 +145,10 @@ export function alertSortValueLabel(alert: Alert, sortField: AlertSortField): st
   switch (sortField) {
     case 'duration':
       return formatEpisodeDuration(alert.activated_at, alert.deactivated_at);
+    case 'active': {
+      const activatedStr = formatActiveSince(alert.activated_at);
+      return isAlertActive(alert) ? `Active · ${activatedStr}` : `Ended · ${activatedStr}`;
+    }
     case 'status':
       return isAlertActive(alert) ? 'Active' : 'Ended';
     case 'zone':

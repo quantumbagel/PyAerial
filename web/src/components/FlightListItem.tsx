@@ -1,5 +1,6 @@
 import type { FlightSummary, Zone } from '../api/types';
 import type { FlightSortField } from '../utils/flightData';
+import { Chip } from './ui';
 import { flightSortValueLabel, flightTimeLabel, LevelBadge } from './LevelBadge';
 
 interface FlightListItemProps {
@@ -31,20 +32,22 @@ export function FlightListItem({
     <li>
       <button
         type="button"
-        className={`list-row flight-item${active ? ' active' : ''}`}
+        className={`ui-row${active ? ' is-active' : ''}`}
         onClick={() => onSelect(flight.flight_id)}
         aria-pressed={active}
       >
-        <div className="flight-meta-row">
-          <span className="flight-callsign">
+        <div className="ui-row__line">
+          <span className="ui-row__title">
             {displayCallsign}{' '}
             <LevelBadge flight={flight} zones={zones} alertColors={alertColors} />
           </span>
-          <span className="flight-icao">{flight.icao.toUpperCase()}</span>
+          <Chip>{flight.icao.toUpperCase()}</Chip>
         </div>
-        <div className="flight-meta-row">
-          <span className="flight-desc">{flight.model && flight.model !== 'Unknown Model' ? flight.model : '—'}</span>
-          <span className="flight-time">
+        <div className="ui-row__line">
+          <span className="ui-row__secondary">
+            {flight.model && flight.model !== 'Unknown Model' ? flight.model : '—'}
+          </span>
+          <span className="ui-row__trailing">
             {isTimeSortField ? flightTimeLabel(flight, sortField) : flightSortValueLabel(flight, sortField, alertCount)}
           </span>
         </div>
