@@ -16,17 +16,71 @@ def _active_alert(alert_id: str, zone: str, rule: str, activated_at: float,
         "zone": zone,
         "rule": rule,
         "activated_at": activated_at,
-        "eta": eta,
     }
+
+
+_MOCK_PHOTOS: dict[str, dict[str, str]] = {
+    "A1B2C3": {
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ae/Cessna_172S_Skyhawk_SP%2C_Private_JP6817971.jpg/640px-Cessna_172S_Skyhawk_SP%2C_Private_JP6817971.jpg",
+        "photo_photographer": "Wikimedia Commons / Julian Herzog",
+        "photo_link": "https://commons.wikimedia.org/wiki/File:Cessna_172S_Skyhawk_SP,_Private_JP6817971.jpg",
+    },
+    "B4C5D6": {
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/DJI_Matrice_300_RTK_in_flight.jpg/640px-DJI_Matrice_300_RTK_in_flight.jpg",
+        "photo_photographer": "Wikimedia Commons",
+        "photo_link": "https://commons.wikimedia.org/wiki/File:DJI_Matrice_300_RTK_in_flight.jpg",
+    },
+    "C7D8E9": {
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d4/ADAC_Air_Rescuers_Eurocopter_EC135.jpg/640px-ADAC_Air_Rescuers_Eurocopter_EC135.jpg",
+        "photo_photographer": "Wikimedia Commons / Airwolf",
+        "photo_link": "https://commons.wikimedia.org/wiki/File:ADAC_Air_Rescuers_Eurocopter_EC135.jpg",
+    },
+    "D9E0F1": {
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Piper_PA-28-181_Archer_II_N3029R_01.jpg/640px-Piper_PA-28-181_Archer_II_N3029R_01.jpg",
+        "photo_photographer": "Wikimedia Commons",
+        "photo_link": "https://commons.wikimedia.org/wiki/File:Piper_PA-28-181_Archer_II_N3029R_01.jpg",
+    },
+    "A835AF": {
+        "photo_url": "https://t.plnspttrs.net/25966/1577891_37fc82da9a_280.jpg",
+        "photo_photographer": "Demo Borstell",
+        "photo_link": "https://www.planespotters.net/photo/1577891/n628ts-spacex-gulfstream-g650er-gvi?utm_source=api",
+    },
+}
+
+
+def _enrich_mock_photo(res: dict[str, Any], aircraft_db: Any) -> None:
+    icao = (res.get("icao") or "").upper()
+    if aircraft_db:
+        try:
+            meta = aircraft_db.lookup_cached(icao)
+            if meta and meta.get("photo_url"):
+                res["photo_url"] = meta.get("photo_url")
+                res["photo_photographer"] = meta.get("photo_photographer")
+                res["photo_link"] = meta.get("photo_link")
+                return
+        except Exception:
+            pass
+
+    fallback = _MOCK_PHOTOS.get(icao) or _MOCK_PHOTOS.get((res.get("icao") or "").lower())
+    if fallback:
+        res["photo_url"] = fallback.get("photo_url")
+        res["photo_photographer"] = fallback.get("photo_photographer")
+        res["photo_link"] = fallback.get("photo_link")
+    else:
+        res["photo_url"] = None
+        res["photo_photographer"] = None
+        res["photo_link"] = None
 
 
 class MockStore:
     """Simulates Redis and MongoDB stores with realistic generated flight data."""
 
-    def __init__(self, home_lat: float = 35.7275, home_lon: float = -78.6959, simulated_delay: float = 0.0):
+    def __init__(self, home_lat: float = 35.7275, home_lon: float = -78.6959, simulated_delay: float = 0.0,
+                 aircraft_db: Any = None):
         self.home_lat = home_lat
         self.home_lon = home_lon
         self.simulated_delay = simulated_delay
+        self.aircraft_db = aircraft_db
         self._start_time = time.time()
 
         self.live_flights: list[dict[str, Any]] = [
@@ -362,17 +416,13 @@ class MockStore:
             if flight["flight_id"] == flight_id:
                 res = dict(flight)
                 res["registration"] = res.get("registration") or "N/A"
-                res["photo_url"] = None
-                res["photo_photographer"] = None
-                res["photo_link"] = None
+                _enrich_mock_photo(res, self.aircraft_db)
                 return res
         for flight in (self.history_flights if view == "live" else self.live_flights):
             if flight["flight_id"] == flight_id:
                 res = dict(flight)
                 res["registration"] = res.get("registration") or "N/A"
-                res["photo_url"] = None
-                res["photo_photographer"] = None
-                res["photo_link"] = None
+                _enrich_mock_photo(res, self.aircraft_db)
                 return res
         return None
 

@@ -825,7 +825,11 @@ def run_webapp(config_path: str = "config.yaml", *,
                host: str = "0.0.0.0", port: int = 10090,
                mock: bool = False,
                mock_delay: float = 0.5) -> None:
-    aircraft_db = AircraftDB(aircraft_db_path) if (aircraft_db_path and Path(aircraft_db_path).exists()) else None
+    try:
+        aircraft_db = AircraftDB(aircraft_db_path) if aircraft_db_path else None
+    except Exception as e:
+        log.warning("Could not initialize AircraftDB at %s: %s", aircraft_db_path, e)
+        aircraft_db = None
     client = None
     live_store = None
 
@@ -837,7 +841,7 @@ def run_webapp(config_path: str = "config.yaml", *,
             from pyaerial.config.schema import Config, HomeConfig, TrackingConfig
             config = Config(home=HomeConfig(latitude=35.7275, longitude=-78.6959), tracking=TrackingConfig())
 
-        mock_store = MockStore(home_lat=config.home.latitude, home_lon=config.home.longitude, simulated_delay=mock_delay)
+        mock_store = MockStore(home_lat=config.home.latitude, home_lon=config.home.longitude, simulated_delay=mock_delay, aircraft_db=aircraft_db)
         app = create_app(config=config, db=None, live_store=None, aircraft_db=aircraft_db, mock_store=mock_store)
     else:
         config, client, db, live_store = _connect_stores(config_path)

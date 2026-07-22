@@ -126,7 +126,7 @@ class AircraftDB:
         except Exception as e:
             log.warning("Error parsing cached record for %s: %s", icao, e)
             return _MISSING
-        return record if isinstance(record, dict) else _MISSING
+        return record if isinstance(record, dict) or record is None else _MISSING
 
     def _return_normalized_record(self, icao: str, record: dict) -> dict:
         raw_url = record.get("photo_url")
@@ -212,7 +212,7 @@ class AircraftDB:
 
     def _update_cache(self, icao: str, record: dict | None) -> None:
         try:
-            val = json.dumps(record) if record is not None else None
+            val = json.dumps(record)
             self._conn.execute(
                 "INSERT OR REPLACE INTO aircraft (icao, data) VALUES (?, ?)",
                 (icao, val)

@@ -1,8 +1,9 @@
 import { useEffect, useMemo } from 'react';
 import type { Alert, FlightSummary } from '../api/types';
-import { FLIGHT_SORT_OPTIONS, type FlightSortField, type SortDirection } from '../utils/flightData';
+import { type FlightSortField, type SortDirection } from '../utils/flightData';
 import { AlertListItem } from './AlertListItem';
 import { FlightListItem } from './FlightListItem';
+import { FlightSortControls } from './FlightSortControls';
 import { StatusMessage } from './StatusMessage';
 
 type SidebarTab = 'flights' | 'alerts';
@@ -199,32 +200,12 @@ export function Sidebar({
         role="tabpanel"
         className={`sidebar-panel${sidebarTab === 'flights' ? ' active' : ''}`}
       >
-        <div id="flight-sort-bar" className="flight-sort-bar">
-          <label htmlFor="flight-sort-field" className="flight-sort-label">
-            Sort by
-          </label>
-          <select
-            id="flight-sort-field"
-            className="flight-sort-select"
-            value={flightSortField}
-            onChange={(e) => onFlightSortChange(e.target.value as FlightSortField)}
-          >
-            {FLIGHT_SORT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="flight-sort-direction"
-            onClick={onFlightSortDirectionToggle}
-            title={flightSortDirection === 'asc' ? 'Ascending' : 'Descending'}
-            aria-label={flightSortDirection === 'asc' ? 'Sort ascending' : 'Sort descending'}
-          >
-            {flightSortDirection === 'asc' ? '↑' : '↓'}
-          </button>
-        </div>
+        <FlightSortControls
+          flightSortField={flightSortField}
+          flightSortDirection={flightSortDirection}
+          onFlightSortChange={onFlightSortChange}
+          onFlightSortDirectionToggle={onFlightSortDirectionToggle}
+        />
         <ul id="flight-list">
           {isLoadingFlights ? (
             <StatusMessage variant="loading">Loading flights…</StatusMessage>
