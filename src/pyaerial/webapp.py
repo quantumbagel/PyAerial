@@ -77,22 +77,29 @@ def _zones_payload(config: Config) -> dict[str, Any]:
                 if constraint.maximum is not None:
                     entry["max"] = constraint.maximum
                 when[field_name] = entry
-            rules.append({
+            rule_payload: dict[str, Any] = {
                 "name": rule.name,
                 "when": when,
                 "dwell_seconds": rule.dwell_seconds,
-            })
-        zones.append({
+            }
+            if rule.color is not None:
+                rule_payload["color"] = rule.color
+            rules.append(rule_payload)
+        zone_payload: dict[str, Any] = {
             "name": name,
             "coordinates": zone.coordinates,
             "rules": rules,
-        })
+        }
+        if zone.color is not None:
+            zone_payload["color"] = zone.color
+        zones.append(zone_payload)
     return {
         "home": {
             "latitude": config.home.latitude,
             "longitude": config.home.longitude,
         },
         "zones": zones,
+        "alert_colors": dict(config.alert_colors),
     }
 
 
@@ -398,6 +405,40 @@ def _get_live_alerts(live_store: RedisLiveStore, *, since: float = 0.0,
     return [_format_alert(alert) for alert in alerts]
 
 
+def _get_tracked_live_alerts(
+    live_store: RedisLiveStore,
+    flights: list[dict[str, Any]],
+    *,
+    limit: int = 0,
+) -> list[dict[str, Any]]:
+    flight_ids = {flight_id for flight in flights if (flight_id := flight.get("flight_id"))}
+    if not flight_ids:
+        return []
+    alerts = _get_live_alerts(live_store, active_only=False)
+    filtered = [alert for alert in alerts if alert.get("flight_id") in flight_ids]
+    filtered.sort(key=lambda alert: alert.get("activated_at") or 0, reverse=True)
+    if limit:
+        filtered = filtered[:limit]
+    return filtered
+
+
+def _get_mock_tracked_alerts(
+    mock_store: MockStore,
+    flights: list[dict[str, Any]],
+    *,
+    limit: int = 0,
+) -> list[dict[str, Any]]:
+    flight_ids = {flight_id for flight in flights if (flight_id := flight.get("flight_id"))}
+    if not flight_ids:
+        return []
+    alerts = mock_store.get_alerts("live", active_only=False)
+    filtered = [alert for alert in alerts if alert.get("flight_id") in flight_ids]
+    filtered.sort(key=lambda alert: alert.get("activated_at") or 0, reverse=True)
+    if limit:
+        filtered = filtered[:limit]
+    return filtered
+
+
 def _enrich_flight_detail(flight_data: dict[str, Any], icao: str,
                           aircraft_db: AircraftDB | None) -> dict[str, Any]:
     enriched = _enrich_from_aircraft_db(icao, aircraft_db)
@@ -560,10 +601,13 @@ class LiveBroadcaster:
     async def _send_snapshot(self, websocket: WebSocket) -> None:
         if self.mock_store:
             flights = self.mock_store.get_live_flights()
-            alerts = self.mock_store.get_alerts("live", limit=50)
+            alerts = _get_mock_tracked_alerts(self.mock_store, flights, limit=50)
         else:
             flights = _get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
-            alerts = _get_live_alerts(self.live_store, limit=50) if self.live_store else []
+            alerts = (
+                _get_tracked_live_alerts(self.live_store, flights, limit=50)
+                if self.live_store else []
+            )
         await websocket.send_json({"type": "flights", "flights": _sanitize_for_json(flights)})
         await websocket.send_json({"type": "alerts", "alerts": _sanitize_for_json(alerts)})
 
@@ -582,10 +626,13 @@ class LiveBroadcaster:
         if self.mock_store:
             self.mock_store.update_live()
             flights = self.mock_store.get_live_flights()
-            alerts = self.mock_store.get_alerts("live", limit=50)
+            alerts = _get_mock_tracked_alerts(self.mock_store, flights, limit=50)
         else:
             flights = _get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
-            alerts = _get_live_alerts(self.live_store, limit=50) if self.live_store else []
+            alerts = (
+                _get_tracked_live_alerts(self.live_store, flights, limit=50)
+                if self.live_store else []
+            )
 
         flights_sig = json.dumps(_sanitize_for_json(flights), sort_keys=True, default=str)
         if flights_sig != self._last_flights_sig:
@@ -832,27 +879,39 @@ def run_webapp(config_path: str = "config.yaml", *,
         aircraft_db = None
     client = None
     live_store = None
+    engine = None
 
     if mock:
-        log.info(f"Running in MOCK mode with simulated flight and alert data (delay={mock_delay}s).")
+        log.info("Running in MOCK mode with simulated ADS-B feeder feeding real tracking & alerting engine.")
         try:
             config = load_config(config_path)
         except Exception:
             from pyaerial.config.schema import Config, HomeConfig, TrackingConfig
-            config = Config(home=HomeConfig(latitude=35.7275, longitude=-78.6959), tracking=TrackingConfig())
+            config = Config(home=HomeConfig(latitude=35.7275, longitude=-78.6959), tracking=TrackingConfig(), receivers={})
 
-        mock_store = MockStore(home_lat=config.home.latitude, home_lon=config.home.longitude, simulated_delay=mock_delay, aircraft_db=aircraft_db)
-        app = create_app(config=config, db=None, live_store=None, aircraft_db=aircraft_db, mock_store=mock_store)
+        from pyaerial.config.schema import ReceiverConfig
+        from pyaerial.engine import Engine
+        import threading
+
+        config.receivers = {"mock": ReceiverConfig(type="mock")}
+        engine = Engine(config, aircraft_db_path=aircraft_db_path)
+        engine_thread = threading.Thread(target=engine.run, daemon=True, name="mock-engine")
+        engine_thread.start()
+
+        db_ref = engine.mongo_store.db if engine.mongo_store and hasattr(engine.mongo_store, "db") else None
+        app = create_app(config=config, db=db_ref, live_store=engine.live_store, aircraft_db=aircraft_db)
     else:
         config, client, db, live_store = _connect_stores(config_path)
         app = create_app(config=config, db=db, live_store=live_store, aircraft_db=aircraft_db)
 
-    print(f"Starting PyAerial web portal {'[MOCK MODE] ' if mock else ''}on http://localhost:{port}")
+    print(f"Starting PyAerial web portal {'[MOCK FEEDER MODE] ' if mock else ''}on http://localhost:{port}")
     try:
         uvicorn.run(app, host=host, port=port, log_level="info")
     except KeyboardInterrupt:
         print("\nStopping web server...")
     finally:
+        if engine:
+            engine.shutdown()
         if client:
             client.close()
         if live_store:

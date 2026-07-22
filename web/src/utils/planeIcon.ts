@@ -2,6 +2,9 @@ import * as L from 'leaflet';
 import type { ActiveAlert } from '../api/types';
 import { COLOR_HEX } from './colors';
 import { flightAlertSeverity } from './format';
+import { ZONE_COLORS } from './zoneColors';
+
+export { ZONE_COLORS };
 
 export function createPlaneIcon(
   heading: number | null | undefined,
@@ -59,13 +62,6 @@ export function createPlaneIcon(
     iconAnchor: [size / 2, size / 2],
   });
 }
-
-export const ZONE_COLORS = [
-  { stroke: '#f59e0b', fill: '#f59e0b' },
-  { stroke: '#3b82f6', fill: '#3b82f6' },
-  { stroke: '#a855f7', fill: '#a855f7' },
-  { stroke: '#14b8a6', fill: '#14b8a6' },
-];
 
 export function pathStyleForFlight(
   flight: { active_alerts?: ActiveAlert[] } | undefined,

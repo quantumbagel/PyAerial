@@ -2,9 +2,11 @@ import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
 import { isFlightLive } from '../utils/format';
-import { buildAlertPathSegments } from '../utils/alertPathSegments';
-import { createPlaneIcon, pathStyleForFlight, ZONE_COLORS } from '../utils/planeIcon';
+import { formatZoneRule } from '../utils/format';
+import { createPlaneIcon, pathStyleForFlight } from '../utils/planeIcon';
+import { zoneColorFor } from '../utils/zoneColors';
 import { COLOR_HEX } from '../utils/colors';
+import { buildAlertPathSegments } from '../utils/alertPathSegments';
 import { MapToolbar } from './MapToolbar';
 import '@luomus/leaflet-smooth-wheel-zoom';
 
@@ -223,8 +225,8 @@ export function MapView({
       zoneLayers.current.push(homeMarker);
     }
 
-    (zonesData.zones || []).forEach((zone, index) => {
-      const colors = ZONE_COLORS[index % ZONE_COLORS.length];
+    (zonesData.zones || []).forEach((zone) => {
+      const colors = zoneColorFor(zone.name, zonesData.zones);
       const polygon = L.polygon(zone.coordinates, {
         color: colors.stroke,
         fillColor: colors.fill,
@@ -367,9 +369,7 @@ export function MapView({
           opacity: 0.95,
           className: 'flight-path-alert',
         }).addTo(map);
-        overlay.bindTooltip(
-          `<strong>${(segment.rule || segment.severity).toUpperCase()}</strong> · ${segment.zone || 'zone'}`,
-        );
+        overlay.bindTooltip(formatZoneRule(segment.zone, segment.rule));
         overlay.on('click', () => onSelectFlightRef.current(flightId));
         return overlay;
       });

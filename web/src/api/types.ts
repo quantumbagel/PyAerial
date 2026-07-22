@@ -73,12 +73,14 @@ export interface Alert {
 
 export interface ZoneRule {
   name: string;
+  color?: string;
   when: Record<string, { min?: number; max?: number }>;
   dwell_seconds: number;
 }
 
 export interface Zone {
   name: string;
+  color?: string;
   coordinates: [number, number][];
   rules: ZoneRule[];
 }
@@ -86,6 +88,7 @@ export interface Zone {
 export interface ZonesData {
   home: { latitude: number; longitude: number };
   zones: Zone[];
+  alert_colors?: Record<string, string>;
 }
 
 export type PortalView = 'live' | 'history';

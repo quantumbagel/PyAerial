@@ -1,4 +1,4 @@
-import type { FlightSummary } from '../api/types';
+import type { FlightSummary, Zone } from '../api/types';
 import type { FlightSortField } from '../utils/flightData';
 import { flightSortValueLabel, flightTimeLabel, LevelBadge } from './LevelBadge';
 
@@ -7,6 +7,8 @@ interface FlightListItemProps {
   active: boolean;
   sortField: FlightSortField;
   alertCount?: number;
+  zones?: Zone[];
+  alertColors?: Record<string, string>;
   onSelect: (flightId: string) => void;
 }
 
@@ -15,6 +17,8 @@ export function FlightListItem({
   active,
   sortField,
   alertCount,
+  zones,
+  alertColors,
   onSelect,
 }: FlightListItemProps) {
   const isTimeSortField = sortField === 'last_seen' || sortField === 'first_seen';
@@ -34,14 +38,14 @@ export function FlightListItem({
         <div className="flight-meta-row">
           <span className="flight-callsign">
             {displayCallsign}{' '}
-            <LevelBadge flight={flight} />
+            <LevelBadge flight={flight} zones={zones} alertColors={alertColors} />
           </span>
           <span className="flight-icao">{flight.icao.toUpperCase()}</span>
         </div>
         <div className="flight-meta-row">
           <span className="flight-desc">{flight.model && flight.model !== 'Unknown Model' ? flight.model : '—'}</span>
           <span className="flight-time">
-            {isTimeSortField ? flightTimeLabel(flight) : flightSortValueLabel(flight, sortField, alertCount)}
+            {isTimeSortField ? flightTimeLabel(flight, sortField) : flightSortValueLabel(flight, sortField, alertCount)}
           </span>
         </div>
       </button>

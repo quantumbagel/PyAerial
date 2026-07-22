@@ -257,11 +257,26 @@ src/pyaerial/
 
 ## Docker
 
+Full stack (live SDR/dump1090 + Redis + MongoDB):
+
 ```bash
 docker compose up --build
 ```
 
 Runs the engine (`pyaerial`) and web portal (`pyaerial web`) against shared MongoDB and Redis instances on host networking.
+
+Mock mode (standalone simulated feeder + web portal):
+
+```bash
+docker compose -f docker-compose.mock.yml up --build
+```
+
+or build directly:
+
+```bash
+docker build -t pyaerial-mock -f Dockerfile.mock .
+docker run -p 10090:10090 pyaerial-mock
+```
 
 ## Dependencies
 

@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Alert, PortalView, TelemetryPoint } from '../api/types';
+import type { PortalView, TelemetryPoint } from '../api/types';
 import type { DrawerTab } from '../components/DetailsDrawer';
 import type { MapViewHandle } from '../components/MapView';
 import type { SidebarTab } from '../components/Sidebar';
+import {
+  defaultAlertSortDirection,
+  loadAlertSort,
+  saveAlertSort,
+  type AlertSortField,
+  type SortDirection as AlertSortDirection,
+} from '../utils/alertData';
 import {
   defaultSortDirection,
   loadFlightSort,
@@ -11,7 +18,6 @@ import {
   type FlightSortField,
   type SortDirection,
 } from '../utils/flightData';
-import { useAlertNotifications } from './useAlertNotifications';
 import { useFlightPaths } from './useFlightPaths';
 import { useFlightSelection } from './useFlightSelection';
 import { usePortalData } from './usePortalData';
@@ -23,29 +29,51 @@ export function usePortalApp() {
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [zonesVisible, setZonesVisible] = useState(true);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(
-    () => typeof Notification !== 'undefined' && Notification.permission === 'granted',
-  );
   const [flightSortField, setFlightSortField] = useState<FlightSortField>(
     () => loadFlightSort(portalView).field,
   );
   const [flightSortDirection, setFlightSortDirection] = useState<SortDirection>(
     () => loadFlightSort(portalView).direction,
   );
+  const [alertSortField, setAlertSortField] = useState<AlertSortField>(
+    () => loadAlertSort(portalView).field,
+  );
+  const [alertSortDirection, setAlertSortDirection] = useState<AlertSortDirection>(
+    () => loadAlertSort(portalView).direction,
+  );
+  const skipNextFlightSortSave = useRef(false);
+  const skipNextAlertSortSave = useRef(false);
 
   useEffect(() => {
     localStorage.setItem('portalView', portalView);
   }, [portalView]);
 
   useEffect(() => {
+    skipNextFlightSortSave.current = true;
+    skipNextAlertSortSave.current = true;
     const saved = loadFlightSort(portalView);
     setFlightSortField(saved.field);
     setFlightSortDirection(saved.direction);
+    const savedAlerts = loadAlertSort(portalView);
+    setAlertSortField(savedAlerts.field);
+    setAlertSortDirection(savedAlerts.direction);
   }, [portalView]);
 
   useEffect(() => {
+    if (skipNextFlightSortSave.current) {
+      skipNextFlightSortSave.current = false;
+      return;
+    }
     saveFlightSort(portalView, flightSortField, flightSortDirection);
   }, [portalView, flightSortField, flightSortDirection]);
+
+  useEffect(() => {
+    if (skipNextAlertSortSave.current) {
+      skipNextAlertSortSave.current = false;
+      return;
+    }
+    saveAlertSort(portalView, alertSortField, alertSortDirection);
+  }, [portalView, alertSortField, alertSortDirection]);
 
   const setFlightSort = useCallback((field: FlightSortField) => {
     setFlightSortField(field);
@@ -56,10 +84,13 @@ export function usePortalApp() {
     setFlightSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
   }, []);
 
-  const enableNotifications = useCallback(async () => {
-    if (!('Notification' in window)) return;
-    const permission = await Notification.requestPermission();
-    setNotificationsEnabled(permission === 'granted');
+  const setAlertSort = useCallback((field: AlertSortField) => {
+    setAlertSortField(field);
+    setAlertSortDirection(defaultAlertSortDirection(field));
+  }, []);
+
+  const toggleAlertSortDirection = useCallback(() => {
+    setAlertSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
   }, []);
 
   const mapRef = useRef<MapViewHandle>({
@@ -82,8 +113,6 @@ export function usePortalApp() {
     React.Dispatch<React.SetStateAction<Record<string, TelemetryPoint[]>>>
   >(() => {});
 
-  const alertNotifications = useAlertNotifications();
-
   const selection = useFlightSelection({
     portalView,
     mapRef,
@@ -91,30 +120,6 @@ export function usePortalApp() {
     clearPathsIfNeeded: () => clearPathsIfNeededRef.current(),
     onSelectAlertTab: () => onSelectAlertTabRef.current(),
   });
-
-  const selectAlertRef = useRef(selection.selectAlert);
-  useEffect(() => {
-    selectAlertRef.current = selection.selectAlert;
-  }, [selection.selectAlert]);
-
-  const onAlertStateChange = useCallback(
-    (events: { alert: Alert; eventType: 'activated' | 'deactivated' }[]) => {
-      const activatedEvents = events.filter((e) => e.eventType === 'activated');
-      if (activatedEvents.length > 0) {
-        const newest = activatedEvents[0].alert;
-        alertNotifications.playWarningChime(newest.rule || 'warn');
-      }
-      events.forEach(({ alert, eventType }) => {
-        if (notificationsEnabled) {
-          alertNotifications.triggerDesktopNotification(alert, eventType, (selectedAlert) =>
-            selectAlertRef.current(selectedAlert),
-          );
-        }
-        alertNotifications.addToast(alert, eventType);
-      });
-    },
-    [alertNotifications, notificationsEnabled],
-  );
 
   const portal = usePortalData({
     portalView,
@@ -125,7 +130,6 @@ export function usePortalApp() {
     setPathTelemetry: (update) => setPathTelemetryRef.current(update),
     appendSelectedTelemetry: selection.appendSelectedTelemetry,
     loadFlightAlerts: selection.loadFlightAlerts,
-    onAlertStateChange,
     resetSelection: selection.resetSelection,
     resetPaths: () => resetPathsRef.current(),
     stopDetailPoll: selection.stopDetailPoll,
@@ -188,7 +192,14 @@ export function usePortalApp() {
 
   const filteredAlerts = useMemo(() => {
     const q = searchQuery.toLowerCase();
-    return portal.alertsData.filter((alert) => {
+    const trackedFlightIds = new Set(portal.flightsData.map((f) => f.flight_id));
+    const scopedAlerts =
+      portalView === 'live'
+        ? portal.alertsData.filter(
+            (alert) => alert.flight_id && trackedFlightIds.has(alert.flight_id),
+          )
+        : portal.alertsData;
+    const filtered = scopedAlerts.filter((alert) => {
       const callsign = (alert.callsign || '').toLowerCase();
       const icao = (alert.icao || '').toLowerCase();
       const zone = (alert.zone || '').toLowerCase();
@@ -200,7 +211,8 @@ export function usePortalApp() {
         rule.includes(q)
       );
     });
-  }, [portal.alertsData, searchQuery]);
+    return filtered;
+  }, [portal.alertsData, portal.flightsData, portalView, searchQuery]);
 
   const flightCount = useMemo(() => {
     if (portalView === 'live') {
@@ -231,10 +243,7 @@ export function usePortalApp() {
     setSearchQuery,
     zonesVisible,
     setZonesVisible,
-    notificationsEnabled,
-    enableNotifications,
     mapRef,
-    alertNotifications,
     selection,
     portal,
     paths,
@@ -245,6 +254,10 @@ export function usePortalApp() {
     flightSortDirection,
     setFlightSort,
     toggleFlightSortDirection,
+    alertSortField,
+    alertSortDirection,
+    setAlertSort,
+    toggleAlertSortDirection,
     disableFollow,
   };
 }

@@ -1,4 +1,5 @@
-import type { Alert } from '../api/types';
+import type { Alert, Zone } from '../api/types';
+import { alertSortValueLabel, type AlertSortField } from '../utils/alertData';
 import {
   formatActiveSince,
   formatAlertAltitude,
@@ -7,26 +8,37 @@ import {
   isAlertActive,
   normalizeAlertRule,
 } from '../utils/format';
-import { AlertRuleBadge, AlertStatusBadge } from './LevelBadge';
+import { AlertColoredLabel } from './LevelBadge';
 
 interface AlertListItemProps {
   alert: Alert;
+  episodeKey: string;
   active: boolean;
-  onSelect: (alert: Alert) => void;
+  sortField: AlertSortField;
+  zones?: Zone[];
+  alertColors?: Record<string, string>;
+  onSelect: (alert: Alert, episodeKey: string) => void;
 }
 
-export function AlertListItem({ alert, active, onSelect }: AlertListItemProps) {
+export function AlertListItem({
+  alert,
+  episodeKey,
+  active,
+  sortField,
+  zones,
+  alertColors,
+  onSelect,
+}: AlertListItemProps) {
   const normLevel = normalizeAlertRule(alert.rule);
   const isEpisodeActive = isAlertActive(alert);
-  const timeStr = formatActiveSince(alert.activated_at);
   const deactivatedStr = alert.deactivated_at ? formatActiveSince(alert.deactivated_at) : null;
   const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
   const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
   const durationStr = formatEpisodeDuration(alert.activated_at, alert.deactivated_at);
 
   const statusTitle = isEpisodeActive
-    ? `LIVE Episode · Active for ${durationStr}`
-    : `ENDED Episode · Total duration ${durationStr}${deactivatedStr ? ` (ended ${deactivatedStr})` : ''}`;
+    ? `Active episode · ${durationStr}`
+    : `Ended episode · ${durationStr}${deactivatedStr ? ` (ended ${deactivatedStr})` : ''}`;
   const title = `${statusTitle}\nActivated: ${alert.activated_at ? new Date(alert.activated_at * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}${isEpisodeActive ? `\nETA: ${formatAlertEta(alert.eta)}` : ''}`;
 
   const rawCallsign = alert.callsign?.trim();
@@ -35,36 +47,31 @@ export function AlertListItem({ alert, active, onSelect }: AlertListItemProps) {
       ? rawCallsign
       : (alert.icao || '').toUpperCase() || 'Loading plane details…';
 
-  const zoneRule = `${alert.zone || 'zone'} · ${alert.rule || 'rule'}`;
-  const timeDisplay = isEpisodeActive
-    ? `${timeStr} · ${durationStr} ongoing`
-    : deactivatedStr
-    ? `${timeStr} – ${deactivatedStr} (${durationStr})`
-    : `${timeStr} (${durationStr})`;
-
   return (
     <li>
       <button
         type="button"
         className={`list-row alert-item ${normLevel}${isEpisodeActive ? ' alert-episode-active' : ' alert-episode-ended'}${active ? ' active' : ''}`}
         title={title}
-        onClick={() => onSelect(alert)}
+        onClick={() => onSelect(alert, episodeKey)}
         aria-pressed={active}
       >
         <div className="flight-meta-row">
-          <span className="flight-callsign">
-            {displayCallsign}{' '}
-            <AlertRuleBadge rule={alert.rule} />
-            <AlertStatusBadge active={isEpisodeActive} />
-          </span>
+          <span className="flight-callsign">{displayCallsign}</span>
           <span className="flight-icao">{(alert.icao || '').toUpperCase()}</span>
         </div>
         <div className="flight-meta-row">
-          <span className="flight-desc">{zoneRule}</span>
-          <span className="flight-time">{timeDisplay}</span>
+          <AlertColoredLabel
+            zone={alert.zone || 'zone'}
+            rule={alert.rule}
+            zones={zones}
+            alertColors={alertColors}
+            active={isEpisodeActive}
+            className="flight-desc alert-colored-label"
+          />
+          <span className="flight-time">{alertSortValueLabel(alert, sortField)}</span>
         </div>
       </button>
     </li>
   );
 }
-

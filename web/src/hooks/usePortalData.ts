@@ -3,6 +3,7 @@ import * as api from '../api/client';
 import { connectLiveSocket } from '../api/liveSocket';
 import type { Alert, AppConfig, FlightSummary, PortalView, TelemetryPoint, ZonesData } from '../api/types';
 import type { SidebarTab } from '../components/Sidebar';
+import { alertEpisodeKey } from '../utils/alertData';
 import { applyTelemetryPoint, mergeLiveFlights, sortFlights } from '../utils/flightData';
 
 const ALERTS_LIMIT = 50;
@@ -16,11 +17,6 @@ function isValidCoordinate(lat?: number | null, lon?: number | null): boolean {
   );
 }
 
-export interface AlertStateChangeEvent {
-  alert: Alert;
-  eventType: 'activated' | 'deactivated';
-}
-
 interface UsePortalDataOptions {
   portalView: PortalView;
   setPortalView: (view: PortalView) => void;
@@ -30,7 +26,6 @@ interface UsePortalDataOptions {
   setPathTelemetry?: React.Dispatch<React.SetStateAction<Record<string, TelemetryPoint[]>>>;
   appendSelectedTelemetry: (points: TelemetryPoint[]) => void;
   loadFlightAlerts: (flightId: string, view: PortalView, append?: boolean) => Promise<Alert[]>;
-  onAlertStateChange?: (events: AlertStateChangeEvent[]) => void;
   onNewAlerts?: (alerts: Alert[]) => void;
   resetSelection: () => void;
   resetPaths: () => void;
@@ -46,7 +41,6 @@ export function usePortalData({
   setPathTelemetry,
   appendSelectedTelemetry,
   loadFlightAlerts,
-  onAlertStateChange,
   onNewAlerts,
   resetSelection,
   resetPaths,
@@ -71,7 +65,6 @@ export function usePortalData({
   const portalViewRef = useRef<PortalView>(portalView);
   const sidebarTabRef = useRef(sidebarTab);
   const appendSelectedTelemetryRef = useRef(appendSelectedTelemetry);
-  const onAlertStateChangeRef = useRef(onAlertStateChange);
   const onNewAlertsRef = useRef(onNewAlerts);
   const loadFlightAlertsRef = useRef(loadFlightAlerts);
   const setPathCoordsRef = useRef(setPathCoords);
@@ -86,9 +79,6 @@ export function usePortalData({
   useEffect(() => {
     appendSelectedTelemetryRef.current = appendSelectedTelemetry;
   }, [appendSelectedTelemetry]);
-  useEffect(() => {
-    onAlertStateChangeRef.current = onAlertStateChange;
-  }, [onAlertStateChange]);
   useEffect(() => {
     onNewAlertsRef.current = onNewAlerts;
   }, [onNewAlerts]);
@@ -172,8 +162,8 @@ export function usePortalData({
       if (append) {
         if (data.length < ALERTS_LIMIT) hasMoreAlerts.current = false;
         setAlertsData((prev) => {
-          const ids = new Set(prev.map((a) => a.alert_id));
-          return [...prev, ...data.filter((a) => !ids.has(a.alert_id))];
+          const ids = new Set(prev.map((a) => alertEpisodeKey(a)));
+          return [...prev, ...data.filter((a) => !ids.has(alertEpisodeKey(a)))];
         });
       } else {
         setAlertsData(data);
@@ -209,7 +199,7 @@ export function usePortalData({
   );
 
   const handleAlertsScroll = useCallback(
-    (el: HTMLDivElement) => {
+    (el: HTMLElement) => {
       if (portalView !== 'history') return;
       if (el.scrollTop + el.clientHeight >= el.scrollHeight - 50) {
         if (hasMoreAlerts.current && !isFetchingAlerts.current) {
@@ -224,7 +214,7 @@ export function usePortalData({
     try {
       const [flights, alerts] = await Promise.all([
         api.fetchFlights('live'),
-        api.fetchAlerts('live'),
+        api.fetchAlerts('live', { activeOnly: false }),
       ]);
       if (portalViewRef.current !== 'live') return;
       setFlightsData(sortFlights(flights));
@@ -305,7 +295,7 @@ export function usePortalData({
             }
 
             const prevMap = new Map(prev.map((a) => [a.alert_id, a]));
-            const events: AlertStateChangeEvent[] = [];
+            const events: { alert: Alert; eventType: 'activated' | 'deactivated' }[] = [];
             const newlyActivated: Alert[] = [];
 
             message.alerts.forEach((curr: Alert) => {
@@ -328,9 +318,6 @@ export function usePortalData({
             });
 
             if (events.length > 0) {
-              if (onAlertStateChangeRef.current) {
-                onAlertStateChangeRef.current(events);
-              }
               if (newlyActivated.length > 0 && onNewAlertsRef.current) {
                 onNewAlertsRef.current(newlyActivated);
               }

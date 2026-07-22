@@ -1,10 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Alert, FlightSummary } from '../api/types';
+import { alertEpisodeKey } from '../utils/alertData';
 import { isAlertActive } from '../utils/format';
 import { AlertListItem } from './AlertListItem';
-import { AlertToasts } from './AlertToasts';
-import { AlertStatusBadge, LevelBadge } from './LevelBadge';
+import { LevelBadge, LiveBadge } from './LevelBadge';
 import { Sidebar } from './Sidebar';
 
 describe('Alert status & episode display enhancements', () => {
@@ -26,19 +26,46 @@ describe('Alert status & episode display enhancements', () => {
     expect(isAlertActive(endedAlert)).toBe(false);
   });
 
-  it('renders AlertStatusBadge with LIVE for active and ENDED for deactivated', () => {
-    const { rerender } = render(<AlertStatusBadge active={true} />);
-    expect(screen.getByText('LIVE')).not.toBeNull();
+  it('renders LiveBadge for active episodes', () => {
+    render(<LiveBadge />);
+    expect(screen.getByText('Live')).not.toBeNull();
+  });
 
-    rerender(<AlertStatusBadge active={false} />);
-    expect(screen.getByText('ENDED')).not.toBeNull();
+  it('renders LevelBadge with zone badges for live flights with active alerts', () => {
+    const flight: FlightSummary = {
+      flight_id: 'f1',
+      icao: 'A1B2C3',
+      is_live: true,
+      active_alerts: [{ zone: 'aerpaw', rule: 'warn', activated_at: 1700000000 }],
+    };
+
+    const { container } = render(
+      <LevelBadge flight={flight} zones={[{ name: 'aerpaw', coordinates: [], rules: [] }]} />,
+    );
+    expect(screen.queryByText('Live')).toBeNull();
+    expect(screen.getByText('aerpaw · warn')).not.toBeNull();
+    expect(container.querySelector('.zone-badge')).not.toBeNull();
+  });
+
+  it('renders no LevelBadge for live flights without active alerts', () => {
+    const flight: FlightSummary = {
+      flight_id: 'f1',
+      icao: 'A1B2C3',
+      is_live: true,
+      active_alerts: [],
+    };
+
+    const { container } = render(<LevelBadge flight={flight} />);
+    expect(screen.queryByText('Live')).toBeNull();
+    expect(container.querySelector('.zone-badge')).toBeNull();
+    expect(container.querySelector('.level-badge')).toBeNull();
   });
 
   it('renders LevelBadge as Clear (done) when flight has 0 active alerts despite having episode stats history', () => {
     const flightHistoryOnly: FlightSummary = {
       flight_id: 'f1',
       icao: 'A1B2C3',
-      is_live: true,
+      is_live: false,
       active_alerts: [],
       alert_stats: { episode_count: 2, total_seconds: 1200, active_count: 0 },
     };
@@ -46,11 +73,10 @@ describe('Alert status & episode display enhancements', () => {
     const { container } = render(<LevelBadge flight={flightHistoryOnly} />);
     expect(screen.getByText('2 episodes · 20m alerted')).not.toBeNull();
     expect(container.querySelector('.level-badge.done')).not.toBeNull();
-    expect(container.querySelector('.level-badge.warn')).toBeNull();
-    expect(container.querySelector('.level-badge.alert')).toBeNull();
+    expect(container.querySelector('.zone-badge')).toBeNull();
   });
 
-  it('renders AlertListItem with LIVE badge for active alert and ENDED badge for ended alert', () => {
+  it('renders AlertListItem with colored zone text and no Live badge', () => {
     const activeAlert: Alert = {
       alert_id: 'alert_live',
       flight_id: 'f1',
@@ -79,45 +105,120 @@ describe('Alert status & episode display enhancements', () => {
     };
 
     const onSelect = vi.fn();
-    const { rerender } = render(<AlertListItem alert={activeAlert} active={false} onSelect={onSelect} />);
+    const { rerender } = render(
+      <AlertListItem alert={activeAlert} episodeKey="alert_live:active" active={false} sortField="activated" onSelect={onSelect} />,
+    );
 
-    expect(screen.getByText('LIVE')).not.toBeNull();
+    expect(screen.queryByText('Live')).toBeNull();
+    expect(screen.getByText('aerpaw · alert (Live)')).not.toBeNull();
     expect(screen.getByText('N123AB')).not.toBeNull();
+    expect(screen.queryByText(/ongoing/i)).toBeNull();
 
-    rerender(<AlertListItem alert={endedAlert} active={false} onSelect={onSelect} />);
+    rerender(
+      <AlertListItem alert={endedAlert} episodeKey="alert_ended:ended" active={false} sortField="activated" onSelect={onSelect} />,
+    );
 
-    expect(screen.getByText('ENDED')).not.toBeNull();
+    expect(screen.queryByText('Live')).toBeNull();
+    expect(screen.getByText('aerpaw · warn')).not.toBeNull();
     expect(screen.getByText('DRONE01')).not.toBeNull();
   });
 
-  it('renders AlertToasts with LIVE and CLEARED status for active and deactivated events', () => {
-    const activeAlert: Alert = {
-      alert_id: 'a10',
-      callsign: 'TEST01',
-      zone: 'testzone',
-      rule: 'warn',
-      active: true,
-      activated_at: 1700000000,
-    };
-    const clearedAlert: Alert = {
-      ...activeAlert,
-      active: false,
-      deactivated_at: 1700000100,
-    };
-
-    const toasts = [
-      { id: 't1', alert: activeAlert, eventType: 'activated' as const, duration: 6000 },
-      { id: 't2', alert: clearedAlert, eventType: 'deactivated' as const, duration: 5000 },
+  it('highlights only the selected episode when multiple rows share the same alert_id', () => {
+    const sharedAlertId = 'f1:aerpaw:warn';
+    const alerts: Alert[] = [
+      {
+        alert_id: sharedAlertId,
+        flight_id: 'f1',
+        icao: 'A1B2C3',
+        callsign: 'N123AB',
+        zone: 'aerpaw',
+        rule: 'warn',
+        active: false,
+        activated_at: 1700000000,
+        deactivated_at: 1700000300,
+      },
+      {
+        alert_id: sharedAlertId,
+        flight_id: 'f1',
+        icao: 'A1B2C3',
+        callsign: 'N123AB',
+        zone: 'aerpaw',
+        rule: 'warn',
+        active: true,
+        activated_at: 1700001000,
+        deactivated_at: null,
+      },
     ];
+    const selectedKey = alertEpisodeKey(alerts[1]);
 
-    render(<AlertToasts toasts={toasts} onSelectAlert={vi.fn()} onDismiss={vi.fn()} />);
+    render(
+      <ul>
+        {alerts.map((alert, index) => {
+          const episodeKey = alertEpisodeKey(alert, index);
+          return (
+            <AlertListItem
+              key={`${episodeKey}:${index}`}
+              episodeKey={episodeKey}
+              alert={alert}
+              active={episodeKey === selectedKey}
+              sortField="activated"
+              onSelect={vi.fn()}
+            />
+          );
+        })}
+      </ul>,
+    );
 
-    expect(screen.getByText('LIVE')).not.toBeNull();
-    expect(screen.getByText('CLEARED')).not.toBeNull();
-    expect(screen.getByText('Total Episode: 1m 40s')).not.toBeNull();
+    const rows = screen.getAllByRole('button');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].className).not.toContain(' active');
+    expect(rows[1].className).toContain(' active');
   });
 
-  it('renders active alerts count badge on Alerts tab in live view, and omits it in historical view', () => {
+  it('does not highlight activation and deactivation records together', () => {
+    const sharedAlertId = 'f1:aerpaw:warn';
+    const alerts: Alert[] = [
+      {
+        alert_id: sharedAlertId,
+        flight_id: 'f1',
+        active: true,
+        activated_at: 1700000000,
+        deactivated_at: null,
+      },
+      {
+        alert_id: sharedAlertId,
+        flight_id: 'f1',
+        active: false,
+        activated_at: 1700000000,
+        deactivated_at: 1700000300,
+      },
+    ];
+    const selectedKey = alertEpisodeKey(alerts[0]);
+
+    render(
+      <ul>
+        {alerts.map((alert, index) => {
+          const episodeKey = alertEpisodeKey(alert, index);
+          return (
+            <AlertListItem
+              key={`${episodeKey}:${index}`}
+              episodeKey={episodeKey}
+              alert={alert}
+              active={episodeKey === selectedKey}
+              sortField="activated"
+              onSelect={vi.fn()}
+            />
+          );
+        })}
+      </ul>,
+    );
+
+    const rows = screen.getAllByRole('button');
+    expect(rows[0].className).toContain(' active');
+    expect(rows[1].className).not.toContain(' active');
+  });
+
+  it('omits active alerts count badge (red dot) on Alerts tab in all views', () => {
     const alerts: Alert[] = [
       { alert_id: 'a1', active: true, activated_at: 1700000000 },
       { alert_id: 'a2', active: false, activated_at: 1700000000, deactivated_at: 1700000100 },
@@ -134,11 +235,13 @@ describe('Alert status & episode display enhancements', () => {
       flightCount: 1,
       flightSortField: 'last_seen' as const,
       flightSortDirection: 'desc' as const,
-      notificationsEnabled: false,
-      onEnableNotifications: vi.fn(),
+      alertSortField: 'activated' as const,
+      alertSortDirection: 'desc' as const,
       onSwitchPortalView: vi.fn(),
       onFlightSortChange: vi.fn(),
       onFlightSortDirectionToggle: vi.fn(),
+      onAlertSortChange: vi.fn(),
+      onAlertSortDirectionToggle: vi.fn(),
       onSwitchSidebarTab: vi.fn(),
       onSearchChange: vi.fn(),
       onSelectFlight: vi.fn(),
@@ -147,12 +250,9 @@ describe('Alert status & episode display enhancements', () => {
     };
 
     const { rerender } = render(<Sidebar {...sidebarProps} portalView="live" />);
-    const badgeInLive = document.querySelector('.alerts-badge-count');
-    expect(badgeInLive).not.toBeNull();
-    expect(badgeInLive?.textContent).toBe('1');
+    expect(document.querySelector('.alerts-badge-count')).toBeNull();
 
     rerender(<Sidebar {...sidebarProps} portalView="history" />);
-    const badgeInHistory = document.querySelector('.alerts-badge-count');
-    expect(badgeInHistory).toBeNull();
+    expect(document.querySelector('.alerts-badge-count')).toBeNull();
   });
 });

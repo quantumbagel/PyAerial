@@ -54,6 +54,17 @@ export function formatEpisodeDuration(
   return formatDuration(Math.max(0, end - activatedAt));
 }
 
+export function formatZoneRule(
+  zone?: string,
+  rule?: string,
+  opts?: { live?: boolean },
+): string {
+  const zoneName = (zone || '').trim() || 'zone';
+  const ruleName = (rule || '').trim() || 'rule';
+  const base = `${zoneName} · ${ruleName}`;
+  return opts?.live ? `${base} (Live)` : base;
+}
+
 export function formatFlightAlertSummary(
   flight: {
     is_live?: boolean;
@@ -65,11 +76,7 @@ export function formatFlightAlertSummary(
   const active = flight.active_alerts ?? [];
   const stats = flight.alert_stats;
   if (flight.is_live && active.length > 0) {
-    const activeFor = formatDuration(
-      Math.max(...active.map((item) => Math.max(0, now - (item.activated_at ?? now)))),
-    );
-    const label = active.length === 1 ? '1 active' : `${active.length} active`;
-    return `${label} · ${activeFor}`;
+    return formatActiveAlerts(active, now);
   }
   if (stats && (stats.episode_count ?? 0) > 0) {
     const episodes = stats.episode_count === 1 ? '1 episode' : `${stats.episode_count} episodes`;
@@ -85,10 +92,8 @@ export function formatActiveAlerts(
   if (!alerts?.length) return 'None';
   return alerts
     .map((a) => {
-      const zone = (a.zone || '').trim() || 'zone';
-      const rule = (a.rule || '').trim() || 'rule';
       const duration = a.activated_at ? ` (${formatEpisodeDuration(a.activated_at, null, now)})` : '';
-      return `${zone} · ${rule}${duration}`;
+      return `${formatZoneRule(a.zone, a.rule)}${duration}`;
     })
     .join(', ');
 }

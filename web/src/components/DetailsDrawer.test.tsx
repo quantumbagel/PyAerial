@@ -73,4 +73,56 @@ describe('DetailsDrawer loading state', () => {
     expect(screen.queryByText('UNKNOWN')).toBeNull();
     expect(screen.getAllByText('A1B2C3').length).toBeGreaterThan(0);
   });
+
+  it('renders both First Seen and Last Seen for live flights', () => {
+    const flightDetail: FlightDetail = {
+      flight_id: '123',
+      icao: 'A1B2C3',
+      callsign: 'LIVE123',
+      is_live: true,
+      start_time: 1700000000,
+      timestamp: 1700000300,
+    };
+
+    render(<DetailsDrawer {...defaultProps} flightDetail={flightDetail} isLoading={false} />);
+
+    expect(screen.getByText('First Seen')).not.toBeNull();
+    expect(document.querySelector('#detail-first-seen')).not.toBeNull();
+    expect(screen.getByText('Last Seen')).not.toBeNull();
+    expect(document.querySelector('#detail-last-seen')).not.toBeNull();
+  });
+
+  it('uses latest telemetry point timestamp for Last Seen on live flight', () => {
+    const flightDetail: FlightDetail = {
+      flight_id: '123',
+      icao: 'A1B2C3',
+      callsign: 'LIVE123',
+      is_live: true,
+      start_time: 1700000000,
+      timestamp: 1700000100, // Older timestamp in flightDetail
+    };
+    const flightTelemetry = [
+      { timestamp: 1700000100, latitude: 10, longitude: 20 },
+      { timestamp: 1700000500, latitude: 11, longitude: 21 }, // Newer telemetry point
+    ];
+
+    render(
+      <DetailsDrawer
+        {...defaultProps}
+        flightDetail={flightDetail}
+        flightTelemetry={flightTelemetry}
+        isLoading={false}
+      />,
+    );
+
+    const lastSeenEl = document.querySelector('#detail-last-seen');
+    expect(lastSeenEl).not.toBeNull();
+    // The rendered time should correspond to 1700000500 rather than 1700000100
+    const formattedNewerTime = new Date(1700000500 * 1000).toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    expect(lastSeenEl?.textContent).toContain(formattedNewerTime);
+  });
 });

@@ -95,13 +95,13 @@ class MongoStore:
         self._connect()
 
     def _connect(self) -> None:
-        self.client = pymongo.MongoClient(
-            self.uri,
-            serverSelectionTimeoutMS=2000,
-            connectTimeoutMS=1000,
-            socketTimeoutMS=1000,
-        )
         try:
+            self.client = pymongo.MongoClient(
+                self.uri,
+                serverSelectionTimeoutMS=500,
+                connectTimeoutMS=500,
+                socketTimeoutMS=500,
+            )
             self.client.admin.command("ping")
             if self.config.database.name:
                 self.db = self.client.get_database(self.config.database.name)
@@ -112,8 +112,10 @@ class MongoStore:
                     self.db = self.client.get_database("pyaerial")
             self._ensure_indexes()
             log.info("Connected to MongoDB database '%s' at %s", self.db.name, self.uri)
-        except PyMongoError as exc:
-            log.error("Could not reach MongoDB at %s: %s", self.uri, exc)
+        except (PyMongoError, Exception) as exc:
+            log.info("MongoDB unavailable at %s; operating in offline mode.", self.uri)
+            self.client = None
+            self.db = None
 
     def _ensure_indexes(self) -> None:
         if self.db is None:
@@ -135,23 +137,16 @@ class MongoStore:
         alerts.create_index([("icao", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)])
 
     def _ensure_connected(self) -> bool:
-        try:
-            if self.client is not None:
-                self.client.admin.command("ping")
-                return self.db is not None
+        if self.client is None or self.db is None:
             return False
+        try:
+            self.client.admin.command("ping")
+            return True
         except (PyMongoError, AttributeError):
-            log.warning("Lost MongoDB connection; attempting to reconnect...")
-            try:
-                self._connect()
-                if self.client is not None:
-                    self.client.admin.command("ping")
-                    return self.db is not None
-                return False
-            except PyMongoError:
-                log.error("Reconnect to MongoDB failed.")
-                time.sleep(_RECONNECT_DELAY)
-                return False
+            log.info("Lost MongoDB connection; operating in offline mode.")
+            self.client = None
+            self.db = None
+            return False
 
     def finalize_plane(self, plane: dict, *, alerts: list[dict[str, Any]] | None = None) -> None:
         """Persist a completed flight to Mongo if retention rules are met."""

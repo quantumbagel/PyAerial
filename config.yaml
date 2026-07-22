@@ -17,6 +17,11 @@ home:
   latitude: 35.72748800696312
   longitude: -78.69594225530933
 
+alert_colors:
+  warn: "#f59e0b"
+  alert: "#ef4444"
+  cool: "#22d3ee"
+
 receivers:
   main:
     type: dump1090
@@ -25,6 +30,7 @@ receivers:
 
 zones:
   aerpaw:
+    color: "#f59e0b"
     coordinates:
       [[35.72880524177751, -78.69547205552347],
        [35.73034893280391, -78.69655569423412],
@@ -66,6 +72,31 @@ zones:
         when:
           altitude: { max: 1500 }
           eta: { max: 60 }
+        dwell_seconds: 60
+        on_activate:
+          - method: print
+        retain: true
+      - name: cool
+        when:
+          altitude: { max: 3000 }
+          eta: { max: 180 }
+        dwell_seconds: 60
+        on_activate:
+          - method: print
+        retain: true
+  cool:
+    color: "#22d3ee"
+    coordinates:
+      [[35.65, -79.10],
+       [35.65, -78.50],
+       [36.05, -78.50],
+       [36.05, -79.10],
+       [35.65, -79.10]]
+    rules:
+      - name: cool
+        when:
+          altitude: { max: 3000 }
+          eta: { max: 300 }
         dwell_seconds: 60
         on_activate:
           - method: print

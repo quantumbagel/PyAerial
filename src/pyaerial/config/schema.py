@@ -7,9 +7,13 @@ PyAerial v2 uses a flat, portal-oriented layout::
 """
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from pyaerial.constants import LOGGING_LEVELS
+
+_HEX_COLOR_RE = r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
 
 
 class _Strict(BaseModel):
@@ -102,6 +106,7 @@ class WhileActiveConfig(_Strict):
 
 class RuleConfig(_Strict):
     name: str
+    color: str | None = None
     when: dict[str, FieldConstraint] = Field(min_length=1)
     dwell_seconds: int = Field(gt=0)
     retain: bool = True
@@ -109,10 +114,25 @@ class RuleConfig(_Strict):
     on_deactivate: list[AlertActionConfig] = Field(default_factory=list)
     while_active: WhileActiveConfig | None = None
 
+    @field_validator("color")
+    @classmethod
+    def _validate_color(cls, value: str | None) -> str | None:
+        if value is not None and not re.match(_HEX_COLOR_RE, value):
+            raise ValueError("color must be a hex value like #rrggbb")
+        return value
+
 
 class ZoneConfig(_Strict):
+    color: str | None = None
     coordinates: list[list[float]] = Field(min_length=3)
     rules: list[RuleConfig] = Field(min_length=1)
+
+    @field_validator("color")
+    @classmethod
+    def _validate_color(cls, value: str | None) -> str | None:
+        if value is not None and not re.match(_HEX_COLOR_RE, value):
+            raise ValueError("color must be a hex value like #rrggbb")
+        return value
 
     @field_validator("coordinates")
     @classmethod
@@ -130,3 +150,12 @@ class Config(_Strict):
     home: HomeConfig
     receivers: dict[str, ReceiverConfig]
     zones: dict[str, ZoneConfig] = Field(default_factory=dict)
+    alert_colors: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("alert_colors")
+    @classmethod
+    def _validate_alert_colors(cls, value: dict[str, str]) -> dict[str, str]:
+        for color in value.values():
+            if not re.match(_HEX_COLOR_RE, color):
+                raise ValueError("alert_colors values must be hex values like #rrggbb")
+        return value

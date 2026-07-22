@@ -1,8 +1,15 @@
 import { useEffect, useMemo } from 'react';
-import type { Alert, FlightSummary } from '../api/types';
+import type { Alert, FlightSummary, Zone } from '../api/types';
 import { type FlightSortField, type SortDirection } from '../utils/flightData';
+import {
+  alertEpisodeKey,
+  sortAlertsBy,
+  type AlertSortField,
+  type SortDirection as AlertSortDirection,
+} from '../utils/alertData';
 import { isAlertActive } from '../utils/format';
 import { AlertListItem } from './AlertListItem';
+import { AlertSortControls } from './AlertSortControls';
 import { FlightListItem } from './FlightListItem';
 import { FlightSortControls } from './FlightSortControls';
 import { StatusMessage } from './StatusMessage';
@@ -21,22 +28,26 @@ interface SidebarProps {
   flightCount: number;
   flightSortField: FlightSortField;
   flightSortDirection: SortDirection;
+  alertSortField: AlertSortField;
+  alertSortDirection: AlertSortDirection;
   isLoadingFlights?: boolean;
   isLoadingAlerts?: boolean;
   flightsError?: string | null;
   alertsError?: string | null;
-  notificationsEnabled: boolean;
   onRetryFlights?: () => void;
   onRetryAlerts?: () => void;
-  onEnableNotifications: () => void;
   onSwitchPortalView: (view: 'live' | 'history') => void;
   onFlightSortChange: (field: FlightSortField) => void;
   onFlightSortDirectionToggle: () => void;
+  onAlertSortChange: (field: AlertSortField) => void;
+  onAlertSortDirectionToggle: () => void;
   onSwitchSidebarTab: (tab: SidebarTab) => void;
   onSearchChange: (query: string) => void;
   onSelectFlight: (flightId: string) => void;
-  onSelectAlert: (alert: Alert) => void;
-  onAlertsScroll: (el: HTMLDivElement) => void;
+  onSelectAlert: (alert: Alert, episodeKey: string) => void;
+  onAlertsScroll: (el: HTMLElement) => void;
+  zones?: Zone[];
+  alertColors?: Record<string, string>;
 }
 
 export function Sidebar({
@@ -51,22 +62,26 @@ export function Sidebar({
   flightCount,
   flightSortField,
   flightSortDirection,
+  alertSortField,
+  alertSortDirection,
   isLoadingFlights = false,
   isLoadingAlerts = false,
   flightsError = null,
   alertsError = null,
-  notificationsEnabled,
   onRetryFlights,
   onRetryAlerts,
-  onEnableNotifications,
   onSwitchPortalView,
   onFlightSortChange,
   onFlightSortDirectionToggle,
+  onAlertSortChange,
+  onAlertSortDirectionToggle,
   onSwitchSidebarTab,
   onSearchChange,
   onSelectFlight,
   onSelectAlert,
   onAlertsScroll,
+  zones,
+  alertColors,
 }: SidebarProps) {
   useEffect(() => {
     if (activeAlertId && sidebarTab === 'alerts') {
@@ -91,10 +106,10 @@ export function Sidebar({
     return map;
   }, [allAlerts]);
 
-  const showNotificationPrompt =
-    typeof Notification !== 'undefined' &&
-    Notification.permission === 'default' &&
-    !notificationsEnabled;
+  const sortedAlerts = useMemo(
+    () => sortAlertsBy(alerts, alertSortField, alertSortDirection),
+    [alerts, alertSortField, alertSortDirection],
+  );
 
   return (
     <div id="sidebar">
@@ -146,24 +161,14 @@ export function Sidebar({
                 </strong>
               </div>
               <div className="stat-card" title={`${activeAlertsCount} active alert episode(s) out of ${alerts.length} shown`}>
-                <span>Alerts:</span>
+                <span>Active Alerts:</span>
                 <strong id="alert-count" className={`stat-alerts${activeAlertsCount > 0 ? ' stat-alerts--active' : ''}`}>
-                  {activeAlertsCount > 0
-                    ? `${activeAlertsCount} live`
-                    : `${alerts.length} total`}
+                  {activeAlertsCount}
                 </strong>
               </div>
             </div>
           </div>
         </div>
-        {showNotificationPrompt && (
-          <div className="notification-prompt">
-            <span>Enable desktop alerts for new events</span>
-            <button type="button" onClick={onEnableNotifications}>
-              Enable
-            </button>
-          </div>
-        )}
       </div>
       <div id="search-container">
         <input
@@ -195,9 +200,6 @@ export function Sidebar({
           onClick={() => onSwitchSidebarTab('alerts')}
         >
           Alerts
-          {portalView === 'live' && activeAlertsCount > 0 && (
-            <span className="alerts-badge-count">{activeAlertsCount}</span>
-          )}
         </button>
       </div>
       <div
@@ -230,6 +232,8 @@ export function Sidebar({
                 active={flight.flight_id === activeFlightId}
                 sortField={flightSortField}
                 alertCount={alertCountByFlight.get(flight.flight_id)}
+                zones={zones}
+                alertColors={alertColors}
                 onSelect={onSelectFlight}
               />
             ))
@@ -240,28 +244,44 @@ export function Sidebar({
         id="panel-alerts"
         role="tabpanel"
         className={`sidebar-panel${sidebarTab === 'alerts' ? ' active' : ''}`}
-        onScroll={(e) => onAlertsScroll(e.currentTarget)}
       >
-        <ul id="alert-list">
+        <AlertSortControls
+          alertSortField={alertSortField}
+          alertSortDirection={alertSortDirection}
+          onAlertSortChange={onAlertSortChange}
+          onAlertSortDirectionToggle={onAlertSortDirectionToggle}
+        />
+        <ul
+          id="alert-list"
+          key={`${alertSortField}-${alertSortDirection}`}
+          onScroll={(e) => onAlertsScroll(e.currentTarget)}
+        >
           {isLoadingAlerts ? (
             <StatusMessage variant="loading">Loading alerts…</StatusMessage>
           ) : alertsError ? (
             <StatusMessage variant="error" onRetry={onRetryAlerts}>
               {alertsError}
             </StatusMessage>
-          ) : alerts.length === 0 ? (
+          ) : sortedAlerts.length === 0 ? (
             <StatusMessage>
               {searchQuery ? 'No alerts match your search.' : 'No alerts yet.'}
             </StatusMessage>
           ) : (
-            alerts.map((alert) => (
+            sortedAlerts.map((alert, index) => {
+              const episodeKey = alertEpisodeKey(alert, index);
+              return (
               <AlertListItem
-                key={alert.alert_id}
+                key={`${episodeKey}:${index}`}
+                episodeKey={episodeKey}
                 alert={alert}
-                active={alert.alert_id === activeAlertId}
+                active={episodeKey === activeAlertId}
+                sortField={alertSortField}
+                zones={zones}
+                alertColors={alertColors}
                 onSelect={onSelectAlert}
               />
-            ))
+              );
+            })
           )}
         </ul>
       </div>

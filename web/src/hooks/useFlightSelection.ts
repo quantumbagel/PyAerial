@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
 import type { Alert, FlightDetail, PortalView, TelemetryPoint } from '../api/types';
+import { alertEpisodeKey } from '../utils/alertData';
 import type { DrawerTab } from '../components/DetailsDrawer';
 import type { MapViewHandle } from '../components/MapView';
 
@@ -69,8 +70,8 @@ export function useFlightSelection({
     });
     if (append) {
       setFlightAlerts((prev) => {
-        const ids = new Set(prev.map((a) => a.alert_id));
-        return [...prev, ...alerts.filter((a) => !ids.has(a.alert_id))];
+        const ids = new Set(prev.map((a) => alertEpisodeKey(a)));
+        return [...prev, ...alerts.filter((a) => !ids.has(alertEpisodeKey(a)))];
       });
     } else {
       setFlightAlerts(alerts);
@@ -108,6 +109,24 @@ export function useFlightSelection({
         (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
       );
     });
+    const latestPoint = points[points.length - 1];
+    if (latestPoint) {
+      setFlightDetail((prev) => {
+        if (!prev) return prev;
+        const newTs = Math.max(prev.timestamp ?? 0, prev.end_time ?? 0, latestPoint.timestamp);
+        return {
+          ...prev,
+          timestamp: newTs,
+          end_time: newTs,
+          latitude: latestPoint.latitude ?? prev.latitude,
+          longitude: latestPoint.longitude ?? prev.longitude,
+          altitude: latestPoint.altitude ?? prev.altitude,
+          speed: latestPoint.speed ?? prev.speed,
+          heading: latestPoint.heading ?? prev.heading,
+          active_alerts: latestPoint.active_alerts ?? prev.active_alerts,
+        };
+      });
+    }
   }, []);
 
   const selectFlight = useCallback(
@@ -169,8 +188,8 @@ export function useFlightSelection({
   );
 
   const selectAlert = useCallback(
-    async (alert: Alert) => {
-      setActiveAlertId(alert.alert_id);
+    async (alert: Alert, episodeKey: string) => {
+      setActiveAlertId(episodeKey);
       onSelectAlertTab();
       if (alert.latitude != null && alert.longitude != null) {
         mapRef.current?.panToAlert(alert.latitude, alert.longitude);

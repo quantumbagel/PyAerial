@@ -1,4 +1,3 @@
-import { AlertToasts } from './components/AlertToasts';
 import { DetailsDrawer } from './components/DetailsDrawer';
 import { DisconnectedBanner } from './components/DisconnectedBanner';
 import { MapView } from './components/MapView';
@@ -12,10 +11,7 @@ export function PortalApp() {
     setSearchQuery,
     zonesVisible,
     setZonesVisible,
-    notificationsEnabled,
-    enableNotifications,
     mapRef,
-    alertNotifications,
     selection,
     portal,
     paths,
@@ -26,6 +22,10 @@ export function PortalApp() {
     flightSortDirection,
     setFlightSort,
     toggleFlightSortDirection,
+    alertSortField,
+    alertSortDirection,
+    setAlertSort,
+    toggleAlertSortDirection,
     disableFollow,
   } = usePortalApp();
 
@@ -46,22 +46,26 @@ export function PortalApp() {
         flightCount={flightCount}
         flightSortField={flightSortField}
         flightSortDirection={flightSortDirection}
+        alertSortField={alertSortField}
+        alertSortDirection={alertSortDirection}
         isLoadingFlights={portal.isLoadingFlights}
         isLoadingAlerts={portal.isLoadingAlerts}
         flightsError={portal.flightsError}
         alertsError={portal.alertsError}
-        notificationsEnabled={notificationsEnabled}
         onRetryFlights={portal.retryFlights}
         onRetryAlerts={portal.retryAlerts}
-        onEnableNotifications={enableNotifications}
         onSwitchPortalView={portal.switchPortalView}
         onFlightSortChange={setFlightSort}
         onFlightSortDirectionToggle={toggleFlightSortDirection}
+        onAlertSortChange={setAlertSort}
+        onAlertSortDirectionToggle={toggleAlertSortDirection}
         onSwitchSidebarTab={portal.handleSwitchSidebarTab}
         onSearchChange={setSearchQuery}
         onSelectFlight={selection.selectFlight}
         onSelectAlert={selection.selectAlert}
         onAlertsScroll={portal.handleAlertsScroll}
+        zones={portal.zonesData?.zones}
+        alertColors={portal.zonesData?.alert_colors}
       />
       <MapView
         flights={portal.flightsData}
@@ -115,6 +119,8 @@ export function PortalApp() {
             drawerTab={selection.drawerTab}
             selectedTelemetryPoint={selection.selectedTelemetryPoint}
             appConfig={portal.appConfig}
+            zones={portal.zonesData?.zones}
+            alertColors={portal.zonesData?.alert_colors}
             selectionError={selection.selectionError}
             onRetry={() => {
               if (selection.activeFlightId) {
@@ -127,11 +133,6 @@ export function PortalApp() {
             onSelectAlert={selection.selectAlert}
           />
         }
-      />
-      <AlertToasts
-        toasts={alertNotifications.toasts}
-        onSelectAlert={selection.selectAlert}
-        onDismiss={alertNotifications.dismissToast}
       />
       <DisconnectedBanner visible={!portal.wsConnected} />
     </>

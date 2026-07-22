@@ -10,12 +10,13 @@ from typing import Any
 
 
 def _active_alert(alert_id: str, zone: str, rule: str, activated_at: float,
-                  eta: float | None = None) -> dict[str, Any]:
+                  eta: float | None = None, mock_lifetime: float = 120.0) -> dict[str, Any]:
     return {
         "alert_id": alert_id,
         "zone": zone,
         "rule": rule,
         "activated_at": activated_at,
+        "mock_lifetime": mock_lifetime,
     }
 
 
@@ -96,7 +97,7 @@ class MockStore:
                 "altitude": 1200.0,
                 "speed": 180.0,
                 "heading": 45.0,
-                "active_alerts": [_active_alert("mock_live_1:aerpaw:warn", "aerpaw", "warn", self._start_time - 300, 45.0)],
+                "active_alerts": [_active_alert("mock_live_1:aerpaw:warn", "aerpaw", "warn", self._start_time - 30, 45.0, 90.0)],
                 "is_live": True,
                 "status": "live",
                 "retained": True,
@@ -119,7 +120,7 @@ class MockStore:
                 "altitude": 120.0,
                 "speed": 45.0,
                 "heading": 210.0,
-                "active_alerts": [_active_alert("mock_live_2:aerpaw:alert", "aerpaw", "alert", self._start_time - 120, 15.0)],
+                "active_alerts": [_active_alert("mock_live_2:aerpaw:alert", "aerpaw", "alert", self._start_time - 20, 15.0, 75.0)],
                 "is_live": True,
                 "status": "live",
                 "retained": True,
@@ -142,10 +143,10 @@ class MockStore:
                 "altitude": 450.0,
                 "speed": 210.0,
                 "heading": 315.0,
-                "active_alerts": [],
+                "active_alerts": [_active_alert("mock_live_3:cool:cool", "cool", "cool", self._start_time - 45, 60.0, 120.0)],
                 "is_live": True,
                 "status": "live",
-                "retained": False,
+                "retained": True,
                 "start_time": self._start_time - 300,
                 "lat_offset": 0.008,
                 "lon_offset": -0.005,
@@ -302,8 +303,9 @@ class MockStore:
                 "zone": "aerpaw",
                 "rule": "warn",
                 "active": True,
-                "activated_at": now - 300,
+                "activated_at": now - 30,
                 "deactivated_at": None,
+                "mock_lifetime": 90.0,
                 "eta": 45.0,
                 "altitude": 1200.0,
                 "latitude": self.home_lat + 0.002,
@@ -317,12 +319,29 @@ class MockStore:
                 "zone": "aerpaw",
                 "rule": "alert",
                 "active": True,
-                "activated_at": now - 120,
+                "activated_at": now - 20,
                 "deactivated_at": None,
+                "mock_lifetime": 75.0,
                 "eta": 15.0,
                 "altitude": 120.0,
                 "latitude": self.home_lat - 0.001,
                 "longitude": self.home_lon - 0.002,
+            },
+            {
+                "alert_id": "mock_live_3:cool:cool",
+                "flight_id": "mock_live_3",
+                "icao": "C7D8E9",
+                "callsign": "MEDEVAC1",
+                "zone": "cool",
+                "rule": "cool",
+                "active": True,
+                "activated_at": now - 45,
+                "deactivated_at": None,
+                "mock_lifetime": 120.0,
+                "eta": 60.0,
+                "altitude": 450.0,
+                "latitude": self.home_lat + 0.008,
+                "longitude": self.home_lon - 0.005,
             },
         ]
 
@@ -357,10 +376,49 @@ class MockStore:
                 "latitude": self.home_lat + 0.001,
                 "longitude": self.home_lon + 0.002,
             },
+            {
+                "alert_id": "mock_hist_2:cool:cool",
+                "flight_id": "mock_hist_2",
+                "icao": "E1F2A3",
+                "callsign": "SCANNER2",
+                "zone": "cool",
+                "rule": "cool",
+                "active": False,
+                "activated_at": now - 12000,
+                "deactivated_at": now - 11000,
+                "eta": 45.0,
+                "altitude": 2800.0,
+                "latitude": self.home_lat - 0.012,
+                "longitude": self.home_lon + 0.015,
+            },
         ]
+
+    def _deactivate_alert(self, alert: dict[str, Any], now: float) -> None:
+        alert_id = alert.get("alert_id")
+        if not alert_id:
+            return
+        alert["active"] = False
+        alert["deactivated_at"] = now
+        flight_id = alert.get("flight_id")
+        for flight in self.live_flights:
+            if flight.get("flight_id") != flight_id:
+                continue
+            flight["active_alerts"] = [
+                item for item in (flight.get("active_alerts") or [])
+                if item.get("alert_id") != alert_id
+            ]
+            break
 
     def update_live(self) -> list[dict[str, Any]]:
         now = time.time()
+        for alert in self.live_alerts:
+            if not alert.get("active", True):
+                continue
+            activated_at = alert.get("activated_at") or now
+            lifetime = float(alert.get("mock_lifetime") or 120.0)
+            if now - activated_at >= lifetime:
+                self._deactivate_alert(alert, now)
+
         new_points = []
         for flight in self.live_flights:
             flight["phase"] += flight["speed_rad"]

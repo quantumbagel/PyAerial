@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Alert, AppConfig, FlightDetail, FlightSummary, TelemetryPoint } from '../api/types';
+import type { Alert, AppConfig, FlightDetail, FlightSummary, TelemetryPoint, Zone } from '../api/types';
 import {
   formatActiveAlerts,
   formatAltitude,
@@ -24,13 +24,15 @@ interface DetailsDrawerProps {
   drawerTab: DrawerTab;
   selectedTelemetryPoint: TelemetryPoint | null;
   appConfig: AppConfig | null;
+  zones?: Zone[];
+  alertColors?: Record<string, string>;
   selectionError?: string | null;
   isLoading?: boolean;
   onRetry?: () => void;
   onSelectTelemetryPoint: (point: TelemetryPoint) => void;
   onClose: () => void;
   onSwitchTab: (tab: DrawerTab) => void;
-  onSelectAlert: (alert: Alert) => void;
+  onSelectAlert: (alert: Alert, episodeKey: string) => void;
 }
 
 export function DetailsDrawer({
@@ -43,6 +45,8 @@ export function DetailsDrawer({
   drawerTab,
   selectedTelemetryPoint,
   appConfig,
+  zones,
+  alertColors,
   selectionError = null,
   isLoading = false,
   onRetry,
@@ -240,7 +244,13 @@ export function DetailsDrawer({
             <div className="info-section">
               <h3>Telemetry Readings</h3>
               <div className="details-grid">
-                {renderTelemetrySummary(flightDetail, appConfig, now)}
+                {renderTelemetrySummary(
+                  flightDetail,
+                  flightSummary,
+                  flightTelemetry,
+                  appConfig,
+                  now,
+                )}
                 <span className="details-label">Altitude</span>
                 <span className="details-value" id="detail-altitude">
                   {lastPoint ? formatAltitude(lastPoint.altitude) : 'N/A'}
@@ -298,6 +308,8 @@ export function DetailsDrawer({
               <AlertTimeline
                 alerts={sortedAlerts}
                 activeAlertId={activeAlertId}
+                zones={zones}
+                alertColors={alertColors}
                 onSelectAlert={onSelectAlert}
               />
             </div>
@@ -337,6 +349,8 @@ function StatusError({ children, onRetry }: { children: ReactNode; onRetry?: () 
 
 function renderTelemetrySummary(
   flightDetail: FlightDetail | null,
+  flightSummary: FlightSummary | null,
+  flightTelemetry: TelemetryPoint[],
   appConfig: AppConfig | null,
   now: number,
 ) {
@@ -348,18 +362,46 @@ function renderTelemetrySummary(
           second: '2-digit',
         })
       : 'N/A';
-  const live = flightDetail ? isFlightLive(flightDetail) : false;
+  const live = flightDetail
+    ? isFlightLive(flightDetail)
+    : flightSummary
+    ? isFlightLive(flightSummary)
+    : false;
+
+  const firstTsCandidates = [
+    flightDetail?.start_time,
+    flightSummary?.start_time,
+    flightTelemetry.length > 0 ? flightTelemetry[0].timestamp : null,
+  ].filter((ts): ts is number => typeof ts === 'number' && ts > 0);
+  const firstTs = firstTsCandidates.length > 0 ? Math.min(...firstTsCandidates) : null;
+
+  const lastPoint = flightTelemetry.length > 0 ? flightTelemetry[flightTelemetry.length - 1] : null;
+
+  const lastTsCandidates = [
+    lastPoint?.timestamp,
+    flightSummary?.timestamp,
+    flightSummary?.end_time,
+    flightDetail?.timestamp,
+    flightDetail?.end_time,
+    flightDetail?.start_time,
+    flightSummary?.start_time,
+  ].filter((ts): ts is number => typeof ts === 'number' && ts > 0);
+  const lastTs = lastTsCandidates.length > 0 ? Math.max(...lastTsCandidates) : null;
+
   if (live) {
-    const liveTs = flightDetail?.timestamp ?? flightDetail?.end_time ?? flightDetail?.start_time;
-    const secsAgo = liveTs ? Math.max(0, Math.round(now / 1000 - liveTs)) : null;
+    const secsAgo = lastTs ? Math.max(0, Math.round(now / 1000 - lastTs)) : null;
     const rememberSecs = appConfig?.remember_planes ?? null;
     const dropIn =
       secsAgo != null && rememberSecs != null ? Math.max(0, rememberSecs - secsAgo) : null;
     return (
       <>
+        <span className="details-label">First Seen</span>
+        <span className="details-value" id="detail-first-seen">
+          {formatTs(firstTs)}
+        </span>
         <span className="details-label">Last Seen</span>
         <span className="details-value details-value--white" id="detail-last-seen">
-          {formatTs(liveTs)}
+          {formatTs(lastTs)}
           {secsAgo != null && (
             <span className="details-sub">
               {secsAgo}s ago{dropIn != null ? ` · drops in ${dropIn}s` : ''}
@@ -373,11 +415,11 @@ function renderTelemetrySummary(
     <>
       <span className="details-label">First Seen</span>
       <span className="details-value" id="detail-first-seen">
-        {formatTs(flightDetail?.start_time)}
+        {formatTs(firstTs)}
       </span>
       <span className="details-label">Last Seen</span>
       <span className="details-value" id="detail-last-seen">
-        {formatTs(flightDetail?.end_time ?? flightDetail?.timestamp)}
+        {formatTs(lastTs)}
       </span>
     </>
   );
