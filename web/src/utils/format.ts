@@ -62,7 +62,7 @@ export function formatZoneRule(
   const zoneName = (zone || '').trim() || 'zone';
   const ruleName = (rule || '').trim() || 'rule';
   const base = `${zoneName} · ${ruleName}`;
-  return opts?.live ? `${base} (Live)` : base;
+  return opts?.live ? `${base} (Active)` : base;
 }
 
 export function formatFlightAlertSummary(
