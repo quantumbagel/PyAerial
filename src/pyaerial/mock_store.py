@@ -122,6 +122,7 @@ class MockStore:
                 "start_time": now - 7200,
                 "end_time": now - 3600,
                 "timestamp": now - 3600,
+                "alert_stats": {"episode_count": 1, "total_seconds": 1600, "active_count": 0},
                 "latitude": home_lat + 0.003,
                 "longitude": home_lon - 0.004,
             },
@@ -166,6 +167,7 @@ class MockStore:
                 "start_time": now - 21600,
                 "end_time": now - 18000,
                 "timestamp": now - 18000,
+                "alert_stats": {"episode_count": 1, "total_seconds": 1000, "active_count": 0},
                 "latitude": home_lat + 0.001,
                 "longitude": home_lon + 0.002,
             },
@@ -337,7 +339,19 @@ class MockStore:
         return new_points
 
     def get_live_flights(self) -> list[dict[str, Any]]:
-        return [dict(f) for f in self.live_flights]
+        now = time.time()
+        results = []
+        for flight in self.live_flights:
+            row = dict(flight)
+            active = row.get("active_alerts") or []
+            if active:
+                row["alert_stats"] = {
+                    "episode_count": len(active),
+                    "total_seconds": int(sum(max(0.0, now - (a.get("activated_at") or now)) for a in active)),
+                    "active_count": len(active),
+                }
+            results.append(row)
+        return results
 
     def get_history_flights(self) -> list[dict[str, Any]]:
         return [dict(f) for f in self.history_flights]
@@ -381,11 +395,18 @@ class MockStore:
         rule: str | None = None,
         limit: int = 0,
         skip: int = 0,
+        active_only: bool | None = None,
     ) -> list[dict[str, Any]]:
         if view == "live":
-            alerts = [a for a in self.live_alerts if a.get("active", True)]
+            alerts = list(self.live_alerts) if not flight_id else [
+                a for a in self.live_alerts if a.get("flight_id") == flight_id
+            ]
+            if active_only is not False and not flight_id:
+                alerts = [a for a in alerts if a.get("active", True)]
         else:
-            alerts = list(self.history_alerts)
+            alerts = list(self.history_alerts) if not flight_id else [
+                a for a in self.history_alerts if a.get("flight_id") == flight_id
+            ]
         if since > 0:
             alerts = [a for a in alerts if (a.get("activated_at") or 0) > since]
         if flight_id:

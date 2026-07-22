@@ -11,6 +11,7 @@ import json
 import logging
 import math
 import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -195,9 +196,74 @@ def _format_active_alerts(doc: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _live_alert_stats(active_alerts: list[dict[str, Any]]) -> dict[str, int]:
+    now = time.time()
+    total = 0.0
+    for item in active_alerts:
+        activated = item.get("activated_at")
+        if activated is not None:
+            total += max(0.0, now - activated)
+    return {
+        "episode_count": len(active_alerts),
+        "total_seconds": int(total),
+        "active_count": len(active_alerts),
+    }
+
+
+def _alert_stats_by_flight(
+    db: pymongo.database.Database,
+    flight_ids: list[str],
+    *,
+    flight_ends: dict[str, float] | None = None,
+) -> dict[str, dict[str, int]]:
+    if not flight_ids:
+        return {}
+    ends = flight_ends or {}
+    episodes: dict[str, dict[str, dict[str, float | None]]] = defaultdict(dict)
+    for doc in db.get_collection("alerts").find({"flight_id": {"$in": flight_ids}}):
+        flight_id = doc.get("flight_id")
+        alert_id = doc.get("alert_id") or str(doc.get("_id"))
+        if not flight_id or not alert_id:
+            continue
+        bucket = episodes[flight_id].setdefault(alert_id, {
+            "activated_at": None,
+            "deactivated_at": None,
+        })
+        activated = doc.get("activated_at", doc.get("timestamp"))
+        if activated is not None:
+            current = bucket["activated_at"]
+            bucket["activated_at"] = activated if current is None else min(current, activated)
+        deactivated = doc.get("deactivated_at")
+        if deactivated is not None:
+            current = bucket["deactivated_at"]
+            bucket["deactivated_at"] = deactivated if current is None else max(current, deactivated)
+
+    stats: dict[str, dict[str, int]] = {}
+    for flight_id, alert_map in episodes.items():
+        total = 0.0
+        for episode in alert_map.values():
+            start = episode["activated_at"]
+            if start is None:
+                continue
+            end = episode["deactivated_at"]
+            if end is None:
+                end = ends.get(flight_id, start)
+            total += max(0.0, end - start)
+        stats[flight_id] = {
+            "episode_count": len(alert_map),
+            "total_seconds": int(total),
+            "active_count": 0,
+        }
+    return stats
+
+
 def _enrich_flight_summary(summary: dict[str, Any], aircraft_db: AircraftDB | None) -> dict[str, Any]:
     enriched = _enrich_from_aircraft_db(summary.get("icao", ""), aircraft_db)
-    return {
+    active_alerts = summary.get("active_alerts") or []
+    alert_stats = summary.get("alert_stats")
+    if alert_stats is None and active_alerts:
+        alert_stats = _live_alert_stats(active_alerts)
+    result = {
         **summary,
         "callsign": summary.get("callsign") or enriched.get("callsign"),
         "model": summary.get("model") or enriched.get("model"),
@@ -205,6 +271,9 @@ def _enrich_flight_summary(summary: dict[str, Any], aircraft_db: AircraftDB | No
         "country": summary.get("country") or enriched.get("country"),
         "aircraft_type": summary.get("aircraft_type") or enriched.get("aircraft_type") or enriched.get("typecode"),
     }
+    if alert_stats is not None:
+        result["alert_stats"] = alert_stats
+    return result
 
 
 def _flight_summary(doc: dict[str, Any], last_tel: dict[str, Any] | None,
@@ -222,10 +291,12 @@ def _flight_summary(doc: dict[str, Any], last_tel: dict[str, Any] | None,
         heading = tel.get("heading")
         timestamp = tel.get("timestamp")
     is_live = doc.get("status") == _FLIGHT_STATUS_LIVE
-    return {
+    active_alerts = _format_active_alerts(doc)
+    alert_stats = _live_alert_stats(active_alerts) if is_live and active_alerts else doc.get("alert_stats")
+    summary = {
         "flight_id": doc["_id"],
         "icao": icao,
-        "active_alerts": _format_active_alerts(doc),
+        "active_alerts": active_alerts,
         "start_time": doc.get("start_time"),
         "end_time": doc.get("end_time"),
         "callsign": doc.get("callsign") or info.get("callsign") or enriched.get("callsign"),
@@ -243,6 +314,9 @@ def _flight_summary(doc: dict[str, Any], last_tel: dict[str, Any] | None,
         "retained": doc.get("retained", False),
         "timestamp": timestamp,
     }
+    if alert_stats is not None:
+        summary["alert_stats"] = alert_stats
+    return summary
 
 
 def _get_live_flights(live_store: RedisLiveStore, aircraft_db: AircraftDB | None) -> list[dict[str, Any]]:
@@ -286,6 +360,8 @@ def _get_history_flights(db: pymongo.database.Database, aircraft_db: AircraftDB 
         return []
 
     selected_ids = [doc["_id"] for doc in selected_docs]
+    flight_ends = {doc["_id"]: doc.get("end_time") or doc.get("start_time") or 0 for doc in selected_docs}
+    alert_stats = _alert_stats_by_flight(db, selected_ids, flight_ends=flight_ends)
     latest_telemetry = {
         doc["_id"]: doc["doc"]
         for doc in telemetry_col.aggregate([
@@ -299,7 +375,11 @@ def _get_history_flights(db: pymongo.database.Database, aircraft_db: AircraftDB 
     }
 
     return [
-        _flight_summary(doc, latest_telemetry.get(doc["_id"]), aircraft_db)
+        _flight_summary(
+            {**doc, "alert_stats": alert_stats.get(doc["_id"])},
+            latest_telemetry.get(doc["_id"]),
+            aircraft_db,
+        )
         for doc in selected_docs
     ]
 
@@ -321,7 +401,11 @@ def _get_live_alerts(live_store: RedisLiveStore, *, since: float = 0.0,
 def _enrich_flight_detail(flight_data: dict[str, Any], icao: str,
                           aircraft_db: AircraftDB | None) -> dict[str, Any]:
     enriched = _enrich_from_aircraft_db(icao, aircraft_db)
-    return {
+    active_alerts = flight_data.get("active_alerts") or []
+    alert_stats = flight_data.get("alert_stats")
+    if alert_stats is None and active_alerts:
+        alert_stats = _live_alert_stats(active_alerts)
+    result = {
         **flight_data,
         "callsign": flight_data.get("callsign") or enriched.get("callsign"),
         "model": flight_data.get("model") or enriched.get("model"),
@@ -333,6 +417,9 @@ def _enrich_flight_detail(flight_data: dict[str, Any], icao: str,
         "photo_photographer": enriched.get("photo_photographer"),
         "photo_link": enriched.get("photo_link"),
     }
+    if alert_stats is not None:
+        result["alert_stats"] = alert_stats
+    return result
 
 
 def _get_flight_detail(
@@ -355,10 +442,15 @@ def _get_flight_detail(
     icao = doc.get("icao", "")
     enriched = _enrich_from_aircraft_db(icao, aircraft_db)
     info = doc.get("info", {})
-    return {
+    flight_end = doc.get("end_time") or doc.get("start_time") or 0
+    alert_stats = _alert_stats_by_flight(
+        db, [flight_id], flight_ends={flight_id: flight_end},
+    ).get(flight_id)
+    return _enrich_flight_detail({
         "flight_id": doc["_id"],
         "icao": icao,
         "active_alerts": _format_active_alerts(doc),
+        "alert_stats": alert_stats,
         "start_time": doc.get("start_time"),
         "end_time": doc.get("end_time"),
         "callsign": doc.get("callsign") or info.get("callsign") or enriched.get("callsign"),
@@ -367,12 +459,9 @@ def _get_flight_detail(
         "country": doc.get("country") or info.get("country") or enriched.get("country"),
         "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type") or info.get("typecode") or enriched.get("aircraft_type") or enriched.get("typecode"),
         "registration": doc.get("registration") or info.get("registration") or enriched.get("registration"),
-        "photo_url": enriched.get("photo_url"),
-        "photo_photographer": enriched.get("photo_photographer"),
-        "photo_link": enriched.get("photo_link"),
         "is_live": False,
         "status": doc.get("status", "completed"),
-    }
+    }, icao, aircraft_db)
 
 
 def _get_telemetry(
@@ -402,11 +491,13 @@ def _get_alerts(
     skip: int = 0,
     live_store: RedisLiveStore,
     db: pymongo.database.Database,
+    active_only: bool | None = None,
 ) -> list[dict[str, Any]]:
     if view == "live":
+        resolved_active_only = active_only if active_only is not None else not flight_id
         return _get_live_alerts(
             live_store, since=since, flight_id=flight_id, rule=rule,
-            limit=limit, skip=skip, active_only=True,
+            limit=limit, skip=skip, active_only=resolved_active_only,
         )
     filt: dict[str, Any] = {}
     if since:
@@ -588,8 +679,11 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
                 limit = int(limit_val) if limit_val is not None else 0
                 skip_val = params.get("skip")
                 skip = int(skip_val) if skip_val is not None else 0
+                active_only_val = params.get("active_only")
+                active_only = bool(active_only_val) if active_only_val is not None else None
                 return mock_store.get_alerts(
                     view, since=since, flight_id=flight_id, rule=rule, limit=limit, skip=skip,
+                    active_only=active_only,
                 )
 
             if action == "fetchZones":
@@ -632,6 +726,8 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
             limit = int(limit_val) if limit_val is not None else 0
             skip_val = params.get("skip")
             skip = int(skip_val) if skip_val is not None else 0
+            active_only_val = params.get("active_only")
+            active_only = bool(active_only_val) if active_only_val is not None else None
             return _get_alerts(
                 view,
                 since=since,
@@ -641,6 +737,7 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
                 skip=skip,
                 live_store=live_store,
                 db=db,
+                active_only=active_only,
             )
 
         if action == "fetchZones":

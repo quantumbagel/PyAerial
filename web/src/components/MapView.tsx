@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
-import { isFlightLive, formatActiveSince, formatAlertAltitude, formatAlertEta, normalizeAlertRule } from '../utils/format';
+import { isFlightLive } from '../utils/format';
+import { buildAlertPathSegments } from '../utils/alertPathSegments';
 import { createPlaneIcon, pathStyleForFlight, ZONE_COLORS } from '../utils/planeIcon';
 import { COLOR_HEX } from '../utils/colors';
 import { MapToolbar } from './MapToolbar';
@@ -24,6 +25,7 @@ interface MapViewProps {
   zonesData: ZonesData | null;
   appConfig: AppConfig | null;
   pathCoords: Record<string, [number, number][]>;
+  pathTelemetry: Record<string, TelemetryPoint[]>;
   pathAlerts: Record<string, Alert[]>;
   onSelectFlight: (flightId: string) => void;
   onFollowDisabled: () => void;
@@ -74,6 +76,7 @@ export function MapView({
   zonesData,
   appConfig,
   pathCoords,
+  pathTelemetry,
   pathAlerts,
   flights,
   onSelectFlight,
@@ -96,7 +99,7 @@ export function MapView({
   const planeMarkers = useRef<Record<string, L.Marker>>({});
   const markerState = useRef<Record<string, MarkerState>>({});
   const planePaths = useRef<Record<string, L.Polyline>>({});
-  const planeEventMarkers = useRef<Record<string, L.CircleMarker[]>>({});
+  const planeAlertPaths = useRef<Record<string, L.Polyline[]>>({});
   const zoneLayers = useRef<L.Layer[]>([]);
   const selectedTelemetryMarker = useRef<L.CircleMarker | null>(null);
   const onFollowDisabledRef = useRef(onFollowDisabled);
@@ -125,8 +128,19 @@ export function MapView({
     mapRef.current = {
       map,
       fitPathBounds: (flightId: string) => {
+        const layers: L.Layer[] = [];
         const path = planePaths.current[flightId];
-        if (path) map.fitBounds(path.getBounds(), { padding: [50, 50] });
+        if (path) layers.push(path);
+        for (const segment of planeAlertPaths.current[flightId] || []) {
+          layers.push(segment);
+        }
+        if (!layers.length) return;
+        const bounds = layers[0] instanceof L.Polyline ? layers[0].getBounds() : null;
+        if (!bounds) return;
+        for (const layer of layers.slice(1)) {
+          if (layer instanceof L.Polyline) bounds.extend(layer.getBounds());
+        }
+        map.fitBounds(bounds, { padding: [50, 50] });
       },
       panToAlert: (lat: number, lon: number) => {
         map.setView([lat, lon], Math.max(map.getZoom(), 14));
@@ -141,7 +155,7 @@ export function MapView({
       planeMarkers.current = {};
       markerState.current = {};
       planePaths.current = {};
-      planeEventMarkers.current = {};
+      planeAlertPaths.current = {};
       zoneLayers.current = [];
       selectedTelemetryMarker.current = null;
       mapRef.current = { map: null, fitPathBounds: () => {}, panToAlert: () => {} };
@@ -306,12 +320,18 @@ export function MapView({
       if (!visiblePathIds.has(flightId)) {
         map.removeLayer(planePaths.current[flightId]);
         delete planePaths.current[flightId];
-        if (planeEventMarkers.current[flightId]) {
-          planeEventMarkers.current[flightId].forEach((m) => map.removeLayer(m));
-          delete planeEventMarkers.current[flightId];
+        if (planeAlertPaths.current[flightId]) {
+          planeAlertPaths.current[flightId].forEach((segment) => map.removeLayer(segment));
+          delete planeAlertPaths.current[flightId];
         }
       }
     });
+
+    const severityColor = (severity: string) => {
+      if (severity === 'alert') return COLOR_HEX.alert;
+      if (severity === 'warn') return COLOR_HEX.warn;
+      return COLOR_HEX.accent;
+    };
 
     visiblePathIds.forEach((flightId) => {
       const latlngs = pathCoords[flightId];
@@ -328,34 +348,38 @@ export function MapView({
         planePaths.current[flightId] = path;
       }
 
-      const alerts = pathAlerts[flightId] || [];
-      if (planeEventMarkers.current[flightId]) {
-        planeEventMarkers.current[flightId].forEach((m) => map.removeLayer(m));
+      if (planeAlertPaths.current[flightId]) {
+        planeAlertPaths.current[flightId].forEach((segment) => map.removeLayer(segment));
       }
-      const markers: L.CircleMarker[] = [];
-      alerts.forEach((alert) => {
-        if (alert.latitude == null || alert.longitude == null) return;
-        const norm = normalizeAlertRule(alert.rule);
-        const fillColor =
-          norm === 'alert' ? COLOR_HEX.alert : norm === 'warn' ? COLOR_HEX.warn : COLOR_HEX.accent;
-        const displayTag = (alert.rule || norm).toUpperCase();
-        const marker = L.circleMarker([alert.latitude, alert.longitude], {
-          radius: 6,
-          color: '#fff',
-          weight: 2,
-          fillColor,
-          fillOpacity: 0.95,
+
+      const telemetry = pathTelemetry[flightId] || [];
+      const alerts = pathAlerts[flightId] || [];
+      const flightEnd =
+        flight?.end_time ??
+        flight?.timestamp ??
+        telemetry[telemetry.length - 1]?.timestamp ??
+        Date.now() / 1000;
+      const segments = buildAlertPathSegments(telemetry, alerts, flightEnd);
+      const overlayPaths = segments.map((segment) => {
+        const overlay = L.polyline(segment.latlngs, {
+          color: severityColor(segment.severity),
+          weight: isSelected ? 5 : 4,
+          opacity: 0.95,
+          className: 'flight-path-alert',
         }).addTo(map);
-        const timeStr = formatActiveSince(alert.activated_at);
-        marker.bindTooltip(
-          `<strong>${displayTag}</strong> · ${alert.zone || 'zone'}<br/>Active since: ${timeStr}<br/>Alt: ${formatAlertAltitude(alert.altitude)}<br/>ETA: ${formatAlertEta(alert.eta)}`,
+        overlay.bindTooltip(
+          `<strong>${(segment.rule || segment.severity).toUpperCase()}</strong> · ${segment.zone || 'zone'}`,
         );
-        marker.on('click', () => onSelectFlightRef.current(flightId));
-        markers.push(marker);
+        overlay.on('click', () => onSelectFlightRef.current(flightId));
+        return overlay;
       });
-      if (markers.length) planeEventMarkers.current[flightId] = markers;
+      if (overlayPaths.length) {
+        planeAlertPaths.current[flightId] = overlayPaths;
+      } else {
+        delete planeAlertPaths.current[flightId];
+      }
     });
-  }, [pathCoords, pathAlerts, showAllPaths, filteredFlights, activeFlightId, flights]);
+  }, [pathCoords, pathTelemetry, pathAlerts, showAllPaths, filteredFlights, activeFlightId, flights]);
 
   return (
     <div id="map-container">

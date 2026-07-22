@@ -19,9 +19,23 @@ export function fetchTelemetry(
 
 export function fetchAlerts(
   view: PortalView,
-  opts: { since?: number; flightId?: string; level?: string; limit?: number; skip?: number } = {},
+  opts: {
+    since?: number;
+    flightId?: string;
+    level?: string;
+    rule?: string;
+    limit?: number;
+    skip?: number;
+    activeOnly?: boolean;
+  } = {},
 ): Promise<Alert[]> {
-  return sendWsRequest<Alert[]>('fetchAlerts', { view, ...opts });
+  const { activeOnly, flightId, ...rest } = opts;
+  return sendWsRequest<Alert[]>('fetchAlerts', {
+    view,
+    flightId,
+    active_only: activeOnly,
+    ...rest,
+  });
 }
 
 export function fetchZones(): Promise<ZonesData> {

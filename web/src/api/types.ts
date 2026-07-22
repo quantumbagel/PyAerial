@@ -1,3 +1,9 @@
+export interface AlertStats {
+  episode_count: number;
+  total_seconds: number;
+  active_count?: number;
+}
+
 export interface ActiveAlert {
   alert_id?: string;
   zone: string;
@@ -10,6 +16,7 @@ export interface FlightSummary {
   flight_id: string;
   icao: string;
   active_alerts?: ActiveAlert[];
+  alert_stats?: AlertStats;
   start_time?: number;
   end_time?: number;
   callsign?: string | null;

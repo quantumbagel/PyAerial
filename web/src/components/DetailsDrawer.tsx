@@ -3,6 +3,7 @@ import type { Alert, AppConfig, FlightDetail, FlightSummary, TelemetryPoint } fr
 import {
   formatActiveAlerts,
   formatAltitude,
+  formatFlightAlertSummary,
   formatHeading,
   formatSpeed,
   isFlightLive,
@@ -121,7 +122,9 @@ export function DetailsDrawer({
   const icao = rawIcao || 'N/A';
   const photoUrl = typeof flightDetail?.photo_url === 'string' ? flightDetail.photo_url : null;
   const hasPhoto = Boolean(photoUrl);
-  const hasAlert = (flightDetail?.active_alerts?.length ?? 0) > 0;
+  const hasAlert =
+    (flightDetail?.active_alerts?.length ?? 0) > 0 ||
+    (flightDetail?.alert_stats?.episode_count ?? 0) > 0;
   const sortedAlerts = [...flightAlerts].sort(
     (a, b) => (a.activated_at || 0) - (b.activated_at || 0),
   );
@@ -211,12 +214,16 @@ export function DetailsDrawer({
                 <span className="details-value" id="detail-country">
                   {flightDetail?.country && flightDetail.country !== 'Unknown' ? flightDetail.country : '—'}
                 </span>
-                <span className="details-label">Active Alerts</span>
+                <span className="details-label">
+                  {isFlightLive(flightDetail ?? {}) ? 'Active Alerts' : 'Alert Summary'}
+                </span>
                 <span
                   className={`details-value${hasAlert ? ' details-value--warn' : ' details-value--muted'}`}
                   id="detail-active-alerts"
                 >
-                  {formatActiveAlerts(flightDetail?.active_alerts)}
+                  {isFlightLive(flightDetail ?? {})
+                    ? formatActiveAlerts(flightDetail?.active_alerts)
+                    : formatFlightAlertSummary(flightDetail ?? {})}
                 </span>
               </div>
             </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Alert, PortalView } from '../api/types';
+import type { Alert, PortalView, TelemetryPoint } from '../api/types';
 import type { DrawerTab } from '../components/DetailsDrawer';
 import type { MapViewHandle } from '../components/MapView';
 import type { SidebarTab } from '../components/Sidebar';
@@ -78,6 +78,9 @@ export function usePortalApp() {
   const setPathCoordsRef = useRef<
     React.Dispatch<React.SetStateAction<Record<string, [number, number][]>>>
   >(() => {});
+  const setPathTelemetryRef = useRef<
+    React.Dispatch<React.SetStateAction<Record<string, TelemetryPoint[]>>>
+  >(() => {});
 
   const alertNotifications = useAlertNotifications();
 
@@ -114,6 +117,7 @@ export function usePortalApp() {
     activeFlightIdRef: selection.activeFlightIdRef,
     showAllPathsRef,
     setPathCoords: (update) => setPathCoordsRef.current(update),
+    setPathTelemetry: (update) => setPathTelemetryRef.current(update),
     appendSelectedTelemetry: selection.appendSelectedTelemetry,
     loadFlightAlerts: selection.loadFlightAlerts,
     onNewAlerts,
@@ -126,13 +130,22 @@ export function usePortalApp() {
 
   const alertCountByFlight = useMemo(() => {
     const map = new Map<string, number>();
+    for (const flight of portal.flightsData) {
+      const count =
+        flight.active_alerts?.length ??
+        flight.alert_stats?.episode_count ??
+        0;
+      if (count > 0) {
+        map.set(flight.flight_id, count);
+      }
+    }
     for (const alert of portal.alertsData) {
       if (alert.flight_id) {
         map.set(alert.flight_id, (map.get(alert.flight_id) ?? 0) + 1);
       }
     }
     return map;
-  }, [portal.alertsData]);
+  }, [portal.flightsData, portal.alertsData]);
 
   const filteredFlights = useMemo(() => {
     const q = searchQuery.toLowerCase();
@@ -162,6 +175,7 @@ export function usePortalApp() {
   clearPathsIfNeededRef.current = paths.clearPathsIfNeeded;
   resetPathsRef.current = paths.resetPaths;
   setPathCoordsRef.current = paths.setPathCoords;
+  setPathTelemetryRef.current = paths.setPathTelemetry;
 
   useEffect(() => {
     showAllPathsRef.current = paths.showAllPaths;

@@ -1,5 +1,5 @@
 import type { Alert } from '../api/types';
-import { formatActiveSince, formatAlertAltitude, formatAlertEta, normalizeAlertRule } from '../utils/format';
+import { formatActiveSince, formatAlertAltitude, formatAlertEta, formatEpisodeDuration, normalizeAlertRule } from '../utils/format';
 import { AlertRuleBadge } from './LevelBadge';
 
 interface AlertListItemProps {
@@ -13,7 +13,8 @@ export function AlertListItem({ alert, active, onSelect }: AlertListItemProps) {
   const timeStr = formatActiveSince(alert.activated_at);
   const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
   const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-  const title = `Active since ${alert.activated_at ? new Date(alert.activated_at * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
+  const durationStr = formatEpisodeDuration(alert.activated_at, alert.deactivated_at);
+  const title = `${alert.active ? 'Active' : 'Episode'} · ${durationStr}\nActivated: ${alert.activated_at ? new Date(alert.activated_at * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
 
   const rawCallsign = alert.callsign?.trim();
   const displayCallsign =
@@ -41,7 +42,7 @@ export function AlertListItem({ alert, active, onSelect }: AlertListItemProps) {
         </div>
         <div className="flight-meta-row">
           <span className="flight-desc">{zoneRule}</span>
-          <span className="flight-time">{timeStr}</span>
+          <span className="flight-time">{alert.active ? `${timeStr} · ${durationStr}` : durationStr}</span>
         </div>
       </button>
     </li>

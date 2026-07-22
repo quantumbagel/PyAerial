@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
-import type { Alert, FlightSummary, PortalView } from '../api/types';
+import type { Alert, FlightSummary, PortalView, TelemetryPoint } from '../api/types';
 
 export function useFlightPaths(
   portalView: PortalView,
@@ -9,6 +9,7 @@ export function useFlightPaths(
 ) {
   const [showAllPaths, setShowAllPaths] = useState(false);
   const [pathCoords, setPathCoords] = useState<Record<string, [number, number][]>>({});
+  const [pathTelemetry, setPathTelemetry] = useState<Record<string, TelemetryPoint[]>>({});
   const [pathAlerts, setPathAlerts] = useState<Record<string, Alert[]>>({});
 
   const pendingPathFetches = useRef(new Set<string>());
@@ -32,13 +33,17 @@ export function useFlightPaths(
     try {
       const [telemetry, alerts] = await Promise.all([
         api.fetchTelemetry(flightId, view),
-        api.fetchAlerts(view, { flightId }),
+        api.fetchAlerts(view, { flightId, activeOnly: false }),
       ]);
-      const latlngs = telemetry
-        .filter((p) => p.latitude != null && p.longitude != null)
-        .map((p) => [p.latitude!, p.longitude!] as [number, number]);
+      const validTelemetry = telemetry.filter((p) => p.latitude != null && p.longitude != null);
+      const latlngs = validTelemetry.map((p) => [p.latitude!, p.longitude!] as [number, number]);
       if (latlngs.length === 0) {
         setPathCoords((prev) => {
+          const next = { ...prev };
+          delete next[flightId];
+          return next;
+        });
+        setPathTelemetry((prev) => {
           const next = { ...prev };
           delete next[flightId];
           return next;
@@ -50,10 +55,11 @@ export function useFlightPaths(
         });
       } else {
         setPathCoords((prev) => ({ ...prev, [flightId]: latlngs }));
+        setPathTelemetry((prev) => ({ ...prev, [flightId]: validTelemetry }));
         setPathAlerts((prev) => ({ ...prev, [flightId]: alerts }));
       }
     } catch (err) {
-      console.error('Failed to fetch flight path', flightId, err);
+      console.error('Failed to fetch flight path', err);
     } finally {
       pendingPathFetches.current.delete(flightId);
     }
@@ -68,10 +74,12 @@ export function useFlightPaths(
         await Promise.all(missing.map((f) => fetchAndSetPath(f.flight_id, view)));
       } else if (flightId) {
         setPathCoords({});
+        setPathTelemetry({});
         setPathAlerts({});
         await fetchAndSetPath(flightId, view);
       } else {
         setPathCoords({});
+        setPathTelemetry({});
         setPathAlerts({});
       }
     },
@@ -81,12 +89,14 @@ export function useFlightPaths(
   const clearPathsIfNeeded = useCallback(() => {
     if (!showAllPaths) {
       setPathCoords({});
+      setPathTelemetry({});
       setPathAlerts({});
     }
   }, [showAllPaths]);
 
   const resetPaths = useCallback(() => {
     setPathCoords({});
+    setPathTelemetry({});
     setPathAlerts({});
   }, []);
 
@@ -111,7 +121,10 @@ export function useFlightPaths(
     setShowAllPaths,
     pathCoords,
     setPathCoords,
+    pathTelemetry,
+    setPathTelemetry,
     pathAlerts,
+    setPathAlerts,
     showAllPathsRef,
     fetchAndSetPath,
     clearPathsIfNeeded,

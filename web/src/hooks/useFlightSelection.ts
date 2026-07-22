@@ -62,7 +62,11 @@ export function useFlightSelection({
     if (append && currentAlerts.length > 0) {
       since = Math.max(...currentAlerts.map((a) => a.activated_at || 0));
     }
-    const alerts = await api.fetchAlerts(view, { flightId, since: append ? since : 0 });
+    const alerts = await api.fetchAlerts(view, {
+      flightId,
+      since: append ? since : 0,
+      activeOnly: false,
+    });
     if (append) {
       setFlightAlerts((prev) => {
         const ids = new Set(prev.map((a) => a.alert_id));

@@ -1,16 +1,30 @@
 import type { ActiveAlert, FlightSummary } from '../api/types';
 import type { FlightSortField } from '../utils/flightData';
-import { flightAlertSeverity, isFiniteNumber, isFlightLive, normalizeAlertRule } from '../utils/format';
+import {
+  flightAlertSeverity,
+  formatDuration,
+  formatFlightAlertSummary,
+  isFiniteNumber,
+  isFlightLive,
+  normalizeAlertRule,
+} from '../utils/format';
 
 export function LevelBadge({ flight }: { flight: FlightSummary }) {
-  const alerts = flight.active_alerts ?? [];
-  const count = alerts.length;
-  const severity = flightAlertSeverity(alerts);
-  if (severity === 'alert') return <span className="level-badge alert">Alert</span>;
-  if (severity === 'warn') return <span className="level-badge warn">Warn</span>;
-  if (count > 0) {
-    const label = count === 1 ? '1 active' : `${count} active`;
+  const active = flight.active_alerts ?? [];
+  const severity = flightAlertSeverity(active);
+  if (severity === 'alert') {
+    const label = isFlightLive(flight) ? 'Alert' : formatFlightAlertSummary(flight);
+    return <span className="level-badge alert">{label}</span>;
+  }
+  if (severity === 'warn') {
+    const label = isFlightLive(flight) ? 'Warn' : formatFlightAlertSummary(flight);
     return <span className="level-badge warn">{label}</span>;
+  }
+  if (active.length > 0) {
+    return <span className="level-badge warn">{formatFlightAlertSummary(flight)}</span>;
+  }
+  if ((flight.alert_stats?.episode_count ?? 0) > 0) {
+    return <span className="level-badge warn">{formatFlightAlertSummary(flight)}</span>;
   }
   return <span className="level-badge done">Clear</span>;
 }
@@ -38,7 +52,10 @@ export function flightSortValueLabel(
 ): string {
   switch (sortField) {
     case 'alerts': {
-      const count = flight.active_alerts?.length ?? alertCount ?? 0;
+      if ((flight.alert_stats?.episode_count ?? 0) > 0 || (flight.active_alerts?.length ?? 0) > 0) {
+        return formatFlightAlertSummary(flight);
+      }
+      const count = alertCount ?? 0;
       return count === 1 ? '1 active' : `${count} active`;
     }
     case 'altitude':
@@ -61,9 +78,7 @@ export function flightSortValueLabel(
       const start = flight.start_time ?? 0;
       const end = flight.end_time ?? flight.timestamp ?? start;
       const secs = Math.max(0, end - start);
-      const m = Math.floor(secs / 60);
-      const s = Math.floor(secs % 60);
-      return secs > 0 ? `${m}m ${s}s` : 'N/A';
+      return formatDuration(secs);
     }
     default:
       return flightTimeLabel(flight);

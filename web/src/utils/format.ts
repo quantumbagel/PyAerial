@@ -33,13 +33,62 @@ export function formatSpeedCell(kmh: unknown): string {
   return `${Math.round(Number(kmh)).toLocaleString('en-US')} km/h`;
 }
 
-export function formatActiveAlerts(alerts?: { zone?: string; rule?: string }[]): string {
+export function formatDuration(seconds?: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return '0s';
+  const total = Math.round(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return secs > 0 ? `${minutes}m ${secs}s` : `${minutes}m`;
+  return `${secs}s`;
+}
+
+export function formatEpisodeDuration(
+  activatedAt?: number,
+  deactivatedAt?: number | null,
+  now = Date.now() / 1000,
+): string {
+  if (!activatedAt) return 'N/A';
+  const end = deactivatedAt ?? now;
+  return formatDuration(Math.max(0, end - activatedAt));
+}
+
+export function formatFlightAlertSummary(
+  flight: {
+    is_live?: boolean;
+    active_alerts?: { zone?: string; rule?: string; activated_at?: number }[];
+    alert_stats?: { episode_count?: number; total_seconds?: number; active_count?: number };
+  },
+  now = Date.now() / 1000,
+): string {
+  const active = flight.active_alerts ?? [];
+  const stats = flight.alert_stats;
+  if (flight.is_live && active.length > 0) {
+    const activeFor = formatDuration(
+      Math.max(...active.map((item) => Math.max(0, now - (item.activated_at ?? now)))),
+    );
+    const label = active.length === 1 ? '1 active' : `${active.length} active`;
+    return `${label} · ${activeFor}`;
+  }
+  if (stats && (stats.episode_count ?? 0) > 0) {
+    const episodes = stats.episode_count === 1 ? '1 episode' : `${stats.episode_count} episodes`;
+    return `${episodes} · ${formatDuration(stats.total_seconds)} alerted`;
+  }
+  return 'None';
+}
+
+export function formatActiveAlerts(
+  alerts?: { zone?: string; rule?: string; activated_at?: number }[],
+  now = Date.now() / 1000,
+): string {
   if (!alerts?.length) return 'None';
   return alerts
     .map((a) => {
       const zone = (a.zone || '').trim() || 'zone';
       const rule = (a.rule || '').trim() || 'rule';
-      return `${zone} · ${rule}`;
+      const duration = a.activated_at ? ` (${formatEpisodeDuration(a.activated_at, null, now)})` : '';
+      return `${zone} · ${rule}${duration}`;
     })
     .join(', ');
 }

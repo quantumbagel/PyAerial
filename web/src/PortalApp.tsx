@@ -75,6 +75,7 @@ export function PortalApp() {
         zonesData={portal.zonesData}
         appConfig={portal.appConfig}
         pathCoords={paths.pathCoords}
+        pathTelemetry={paths.pathTelemetry}
         pathAlerts={paths.pathAlerts}
         onSelectFlight={selection.selectFlight}
         onFollowDisabled={disableFollow}

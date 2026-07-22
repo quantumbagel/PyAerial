@@ -57,6 +57,9 @@ function activeAlertCount(flight: FlightSummary, alertCountMap?: Map<string, num
   if (flight.active_alerts !== undefined) {
     return flight.active_alerts.length;
   }
+  if (flight.alert_stats?.episode_count) {
+    return flight.alert_stats.episode_count;
+  }
   return alertCountMap?.get(flight.flight_id) ?? 0;
 }
 
@@ -186,6 +189,7 @@ export function mergeLiveFlights(existing: FlightSummary[], incoming: FlightSumm
           owner: newFlight.owner || next[idx].owner,
           country: newFlight.country || next[idx].country,
           active_alerts: newFlight.active_alerts,
+        alert_stats: newFlight.alert_stats,
           latitude: newFlight.latitude ?? next[idx].latitude,
           longitude: newFlight.longitude ?? next[idx].longitude,
           altitude: newFlight.altitude ?? next[idx].altitude,

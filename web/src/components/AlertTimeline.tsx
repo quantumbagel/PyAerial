@@ -1,5 +1,11 @@
 import type { Alert } from '../api/types';
-import { formatActiveSince, formatAlertAltitude, formatAlertEta, normalizeAlertRule } from '../utils/format';
+import {
+  formatActiveSince,
+  formatAlertAltitude,
+  formatAlertEta,
+  formatEpisodeDuration,
+  normalizeAlertRule,
+} from '../utils/format';
 import { AlertRuleBadge } from './LevelBadge';
 
 interface AlertTimelineProps {
@@ -21,13 +27,14 @@ export function AlertTimeline({ alerts, activeAlertId, onSelectAlert }: AlertTim
         const deactivatedStr = alert.deactivated_at
           ? formatActiveSince(alert.deactivated_at)
           : null;
+        const durationStr = formatEpisodeDuration(alert.activated_at, alert.deactivated_at);
+        const statusLabel = alert.active
+          ? `Active since ${activatedStr} · ${durationStr}`
+          : deactivatedStr
+            ? `${activatedStr} – ${deactivatedStr} · ${durationStr}`
+            : `Activated ${activatedStr} · ${durationStr}`;
         const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
         const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-        const statusLabel = alert.active
-          ? `Active since ${activatedStr}`
-          : deactivatedStr
-            ? `Active ${activatedStr} – ${deactivatedStr}`
-            : `Activated ${activatedStr}`;
         const title = `${statusLabel}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
         return (
           <button
@@ -49,6 +56,7 @@ export function AlertTimeline({ alerts, activeAlertId, onSelectAlert }: AlertTim
               </span>
             </div>
             <div className="alert-timeline-meta">
+              <span><strong>Duration:</strong> {durationStr}</span>
               <span><strong>Alt:</strong> {formatAlertAltitude(alert.altitude)}</span>
               <span><strong>ETA:</strong> {formatAlertEta(alert.eta)}</span>
             </div>
