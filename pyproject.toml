@@ -51,4 +51,4 @@ pyaerial = "pyaerial.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pyaerial = ["examples/*.yaml"]
+pyaerial = ["examples/*.yaml", "static/*", "static/**/*", "static/assets/*"]
