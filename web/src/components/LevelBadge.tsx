@@ -12,21 +12,45 @@ import {
 export function LevelBadge({ flight }: { flight: FlightSummary }) {
   const active = flight.active_alerts ?? [];
   const severity = flightAlertSeverity(active);
-  if (severity === 'alert') {
-    const label = isFlightLive(flight) ? 'Alert' : formatFlightAlertSummary(flight);
-    return <span className="level-badge alert">{label}</span>;
-  }
-  if (severity === 'warn') {
-    const label = isFlightLive(flight) ? 'Warn' : formatFlightAlertSummary(flight);
-    return <span className="level-badge warn">{label}</span>;
-  }
+
   if (active.length > 0) {
-    return <span className="level-badge warn">{formatFlightAlertSummary(flight)}</span>;
+    const label = isFlightLive(flight)
+      ? severity === 'alert'
+        ? 'Alert'
+        : severity === 'warn'
+        ? 'Warn'
+        : 'Info'
+      : formatFlightAlertSummary(flight);
+    const className = severity ? `level-badge ${severity}` : 'level-badge warn';
+    return (
+      <span className={className}>
+        <span className="pulse-dot" aria-hidden="true" />
+        {label}
+      </span>
+    );
   }
+
   if ((flight.alert_stats?.episode_count ?? 0) > 0) {
-    return <span className="level-badge warn">{formatFlightAlertSummary(flight)}</span>;
+    return <span className="level-badge done">{formatFlightAlertSummary(flight)}</span>;
   }
+
   return <span className="level-badge done">Clear</span>;
+}
+
+export function AlertStatusBadge({ active }: { active?: boolean }) {
+  if (active) {
+    return (
+      <span className="alert-status-badge active" title="Alert episode is currently active">
+        <span className="pulse-dot" aria-hidden="true" />
+        LIVE
+      </span>
+    );
+  }
+  return (
+    <span className="alert-status-badge ended" title="Alert episode has ended">
+      ENDED
+    </span>
+  );
 }
 
 export function AlertRuleBadge({ rule }: { rule?: string }) {

@@ -122,9 +122,6 @@ export function DetailsDrawer({
   const icao = rawIcao || 'N/A';
   const photoUrl = typeof flightDetail?.photo_url === 'string' ? flightDetail.photo_url : null;
   const hasPhoto = Boolean(photoUrl);
-  const hasAlert =
-    (flightDetail?.active_alerts?.length ?? 0) > 0 ||
-    (flightDetail?.alert_stats?.episode_count ?? 0) > 0;
   const sortedAlerts = [...flightAlerts].sort(
     (a, b) => (a.activated_at || 0) - (b.activated_at || 0),
   );
@@ -218,11 +215,23 @@ export function DetailsDrawer({
                   {isFlightLive(flightDetail ?? {}) ? 'Active Alerts' : 'Alert Summary'}
                 </span>
                 <span
-                  className={`details-value${hasAlert ? ' details-value--warn' : ' details-value--muted'}`}
+                  className={`details-value${
+                    (flightDetail?.active_alerts?.length ?? 0) > 0
+                      ? ' details-value--warn'
+                      : (flightDetail?.alert_stats?.episode_count ?? 0) > 0
+                      ? ' details-value--accent'
+                      : ' details-value--muted'
+                  }`}
                   id="detail-active-alerts"
                 >
                   {isFlightLive(flightDetail ?? {})
-                    ? formatActiveAlerts(flightDetail?.active_alerts)
+                    ? (flightDetail?.active_alerts?.length ?? 0) > 0
+                      ? formatActiveAlerts(flightDetail?.active_alerts)
+                      : (flightDetail?.alert_stats?.episode_count ?? 0) > 0
+                      ? `None (${flightDetail?.alert_stats?.episode_count} past episode${
+                          flightDetail?.alert_stats?.episode_count === 1 ? '' : 's'
+                        })`
+                      : 'None'
                     : formatFlightAlertSummary(flightDetail ?? {})}
                 </span>
               </div>

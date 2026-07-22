@@ -21,8 +21,15 @@ function getAudioContext(): AudioContext | null {
   }
 }
 
+export interface AlertToastItem {
+  id: string;
+  alert: Alert;
+  eventType: 'activated' | 'deactivated';
+  duration?: number;
+}
+
 export function useAlertNotifications() {
-  const [toasts, setToasts] = useState<{ id: string; alert: Alert; duration?: number }[]>([]);
+  const [toasts, setToasts] = useState<AlertToastItem[]>([]);
 
   const playWarningChime = useCallback((rule: string) => {
     try {
@@ -79,39 +86,62 @@ export function useAlertNotifications() {
     }
   }, []);
 
-  const triggerDesktopNotification = useCallback((alert: Alert, onSelectAlert?: (alert: Alert) => void) => {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    const normLevel = normalizeAlertRule(alert.rule);
-    const icon = normLevel === 'alert' ? '🚨' : normLevel === 'warn' ? '⚠️' : 'ℹ️';
-    const displayLevel = normLevel === 'alert' ? 'ALERT' : normLevel === 'warn' ? 'WARNING' : 'INFO';
-    const rawCallsign = alert.callsign?.trim();
-    const callsignStr =
-      rawCallsign && rawCallsign.toUpperCase() !== 'UNKNOWN'
-        ? rawCallsign
-        : (alert.icao ? alert.icao.toUpperCase() : 'Aircraft');
-    const alertStr = `${alert.zone || 'zone'} · ${alert.rule || 'rule'}`;
-    const altStr = `Alt: ${formatAlertAltitude(alert.altitude)}`;
-    const etaStr = `ETA: ${formatAlertEta(alert.eta)}`;
+  const triggerDesktopNotification = useCallback(
+    (
+      alert: Alert,
+      eventType: 'activated' | 'deactivated' = 'activated',
+      onSelectAlert?: (alert: Alert) => void,
+    ) => {
+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      const normLevel = normalizeAlertRule(alert.rule);
+      const isActivated = eventType === 'activated';
+      const icon = isActivated
+        ? normLevel === 'alert'
+          ? '🚨'
+          : normLevel === 'warn'
+          ? '⚠️'
+          : 'ℹ️'
+        : '✅';
+      const displayLevel = normLevel === 'alert' ? 'ALERT' : normLevel === 'warn' ? 'WARNING' : 'INFO';
+      const statusTitle = isActivated ? `LIVE ${displayLevel}` : `ALERT CLEARED`;
+      const rawCallsign = alert.callsign?.trim();
+      const callsignStr =
+        rawCallsign && rawCallsign.toUpperCase() !== 'UNKNOWN'
+          ? rawCallsign
+          : alert.icao
+          ? alert.icao.toUpperCase()
+          : 'Aircraft';
+      const alertStr = `${alert.zone || 'zone'} · ${alert.rule || 'rule'}`;
+      const altStr = `Alt: ${formatAlertAltitude(alert.altitude)}`;
+      const etaStr = `ETA: ${formatAlertEta(alert.eta)}`;
+      const body = isActivated
+        ? `${alertStr} • ${altStr} • ${etaStr}`
+        : `${alertStr} • Hazard condition ended`;
 
-    const notification = new Notification(`${icon} PyAerial ${displayLevel}: ${callsignStr}`, {
-      body: `${alertStr} • ${altStr} • ${etaStr}`,
-      tag: alert.alert_id,
-    });
+      const notification = new Notification(`${icon} PyAerial ${statusTitle}: ${callsignStr}`, {
+        body,
+        tag: `${alert.alert_id}-${eventType}`,
+      });
 
-    notification.onclick = () => {
-      window.focus();
-      if (onSelectAlert) {
-        onSelectAlert(alert);
-      }
-    };
-  }, []);
+      notification.onclick = () => {
+        window.focus();
+        if (onSelectAlert) {
+          onSelectAlert(alert);
+        }
+      };
+    },
+    [],
+  );
 
-  const addToast = useCallback((alert: Alert) => {
-    const id = `${alert.alert_id}-${Date.now()}-${Math.random()}`;
-    const norm = normalizeAlertRule(alert.rule);
-    const duration = norm === 'alert' ? 8000 : 6000;
-    setToasts((current) => [{ id, alert, duration }, ...current].slice(0, 5));
-  }, []);
+  const addToast = useCallback(
+    (alert: Alert, eventType: 'activated' | 'deactivated' = 'activated') => {
+      const id = `${alert.alert_id}-${eventType}-${Date.now()}-${Math.random()}`;
+      const norm = normalizeAlertRule(alert.rule);
+      const duration = eventType === 'deactivated' ? 5000 : norm === 'alert' ? 8000 : 6000;
+      setToasts((current) => [{ id, alert, eventType, duration }, ...current].slice(0, 5));
+    },
+    [],
+  );
 
   const dismissToast = useCallback((id: string) => {
     setToasts((current) => current.filter((t) => t.id !== id));

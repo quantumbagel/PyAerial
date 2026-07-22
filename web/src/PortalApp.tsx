@@ -46,7 +46,6 @@ export function PortalApp() {
         flightCount={flightCount}
         flightSortField={flightSortField}
         flightSortDirection={flightSortDirection}
-        unreadAlertsCount={portal.unreadAlertsCount}
         isLoadingFlights={portal.isLoadingFlights}
         isLoadingAlerts={portal.isLoadingAlerts}
         flightsError={portal.flightsError}

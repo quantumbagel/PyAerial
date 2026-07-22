@@ -580,12 +580,68 @@
     border-radius: var(--radius-sm);
     background: var(--neutral-dark);
     color: var(--text);
+    display: inline-flex;
+    align-items: center;
 }
 .level-badge.live { background: var(--status-live-bg); color: var(--status-live-text); }
 .level-badge.warn { background: var(--warn-dark); }
 .level-badge.alert { background: var(--alert-dark); }
 .level-badge.info { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
-.level-badge.done { background: var(--neutral-dark); }
+.level-badge.done { background: var(--neutral-dark); color: var(--text-secondary); }
+
+.pulse-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: currentColor;
+    margin-right: 4px;
+    box-shadow: 0 0 6px currentColor;
+    animation: livePulse 1.5s ease-in-out infinite;
+}
+
+@keyframes livePulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.alert-status-badge {
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    display: inline-flex;
+    align-items: center;
+    line-height: 1.2;
+}
+.alert-status-badge.active {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+.alert-status-badge.ended {
+    background: rgba(148, 163, 184, 0.15);
+    color: #94a3b8;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+}
+.alert-item.alert-episode-ended {
+    opacity: 0.82;
+}
+.alert-item.alert-episode-active {
+    background-color: rgba(239, 68, 68, 0.04);
+}
+.alert-timeline-badges {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+.alert-timeline-cleared-tag {
+    color: var(--text-muted);
+}
+.stat-alerts--active {
+    color: #ef4444;
+}
 #sidebar-tabs {
     display: flex;
     border-bottom: 1px solid var(--border);
@@ -744,6 +800,9 @@
 }
 .toast-alert.level-alert { border-left-color: var(--alert); }
 .toast-alert.level-warn { border-left-color: var(--warn); }
+.toast-alert.toast-cleared { border-left-color: #10b981; }
+.toast-alert.toast-cleared .toast-progress-bar { background-color: #10b981; }
+.toast-alert.toast-cleared .toast-action-hint { color: #10b981; }
 .toast-header {
     display: flex;
     justify-content: space-between;

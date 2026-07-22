@@ -16,6 +16,11 @@ function isValidCoordinate(lat?: number | null, lon?: number | null): boolean {
   );
 }
 
+export interface AlertStateChangeEvent {
+  alert: Alert;
+  eventType: 'activated' | 'deactivated';
+}
+
 interface UsePortalDataOptions {
   portalView: PortalView;
   setPortalView: (view: PortalView) => void;
@@ -25,7 +30,8 @@ interface UsePortalDataOptions {
   setPathTelemetry?: React.Dispatch<React.SetStateAction<Record<string, TelemetryPoint[]>>>;
   appendSelectedTelemetry: (points: TelemetryPoint[]) => void;
   loadFlightAlerts: (flightId: string, view: PortalView, append?: boolean) => Promise<Alert[]>;
-  onNewAlerts: (alerts: Alert[]) => void;
+  onAlertStateChange?: (events: AlertStateChangeEvent[]) => void;
+  onNewAlerts?: (alerts: Alert[]) => void;
   resetSelection: () => void;
   resetPaths: () => void;
   stopDetailPoll: () => void;
@@ -40,6 +46,7 @@ export function usePortalData({
   setPathTelemetry,
   appendSelectedTelemetry,
   loadFlightAlerts,
+  onAlertStateChange,
   onNewAlerts,
   resetSelection,
   resetPaths,
@@ -59,10 +66,12 @@ export function usePortalData({
 
   const hasMoreAlerts = useRef(true);
   const isFetchingAlerts = useRef(false);
+  const isInitialAlertsLoad = useRef(true);
   const historyRefreshVersion = useRef(0);
   const portalViewRef = useRef<PortalView>(portalView);
   const sidebarTabRef = useRef(sidebarTab);
   const appendSelectedTelemetryRef = useRef(appendSelectedTelemetry);
+  const onAlertStateChangeRef = useRef(onAlertStateChange);
   const onNewAlertsRef = useRef(onNewAlerts);
   const loadFlightAlertsRef = useRef(loadFlightAlerts);
   const setPathCoordsRef = useRef(setPathCoords);
@@ -77,6 +86,9 @@ export function usePortalData({
   useEffect(() => {
     appendSelectedTelemetryRef.current = appendSelectedTelemetry;
   }, [appendSelectedTelemetry]);
+  useEffect(() => {
+    onAlertStateChangeRef.current = onAlertStateChange;
+  }, [onAlertStateChange]);
   useEffect(() => {
     onNewAlertsRef.current = onNewAlerts;
   }, [onNewAlerts]);
@@ -182,6 +194,7 @@ export function usePortalData({
       if (view === portalView) return;
       stopDetailPoll();
       historyRefreshVersion.current += 1;
+      isInitialAlertsLoad.current = true;
       setPortalView(view);
       resetSelection();
       setFlightsData([]);
@@ -286,12 +299,44 @@ export function usePortalData({
         } else if (message.type === 'alerts') {
           setIsLoadingAlerts(false);
           setAlertsData((prev) => {
-            const prevIds = new Set(prev.map((a) => a.alert_id));
-            const newAlerts = message.alerts.filter((a: Alert) => !prevIds.has(a.alert_id));
-            if (newAlerts.length > 0) {
-              onNewAlertsRef.current(newAlerts);
-              if (sidebarTabRef.current !== 'alerts') {
-                setUnreadAlertsCount((c) => c + newAlerts.length);
+            if (isInitialAlertsLoad.current) {
+              isInitialAlertsLoad.current = false;
+              return message.alerts;
+            }
+
+            const prevMap = new Map(prev.map((a) => [a.alert_id, a]));
+            const events: AlertStateChangeEvent[] = [];
+            const newlyActivated: Alert[] = [];
+
+            message.alerts.forEach((curr: Alert) => {
+              const prevAlert = prevMap.get(curr.alert_id);
+              const isCurrActive = curr.active !== false && !curr.deactivated_at;
+              if (!prevAlert) {
+                if (isCurrActive) {
+                  events.push({ alert: curr, eventType: 'activated' });
+                  newlyActivated.push(curr);
+                }
+              } else {
+                const isPrevActive = prevAlert.active !== false && !prevAlert.deactivated_at;
+                if (!isPrevActive && isCurrActive) {
+                  events.push({ alert: curr, eventType: 'activated' });
+                  newlyActivated.push(curr);
+                } else if (isPrevActive && !isCurrActive) {
+                  events.push({ alert: curr, eventType: 'deactivated' });
+                }
+              }
+            });
+
+            if (events.length > 0) {
+              if (onAlertStateChangeRef.current) {
+                onAlertStateChangeRef.current(events);
+              }
+              if (newlyActivated.length > 0 && onNewAlertsRef.current) {
+                onNewAlertsRef.current(newlyActivated);
+              }
+              const activatedCount = events.filter((e) => e.eventType === 'activated').length;
+              if (activatedCount > 0 && sidebarTabRef.current !== 'alerts') {
+                setUnreadAlertsCount((c) => c + activatedCount);
               }
             }
             return message.alerts;

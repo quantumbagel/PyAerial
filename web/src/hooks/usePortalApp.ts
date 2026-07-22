@@ -97,16 +97,21 @@ export function usePortalApp() {
     selectAlertRef.current = selection.selectAlert;
   }, [selection.selectAlert]);
 
-  const onNewAlerts = useCallback(
-    (newAlerts: Alert[]) => {
-      const newest = newAlerts[0];
-      alertNotifications.playWarningChime(newest.rule || 'warn');
-      if (notificationsEnabled) {
-        alertNotifications.triggerDesktopNotification(newest, (alert) =>
-          selectAlertRef.current(alert),
-        );
+  const onAlertStateChange = useCallback(
+    (events: { alert: Alert; eventType: 'activated' | 'deactivated' }[]) => {
+      const activatedEvents = events.filter((e) => e.eventType === 'activated');
+      if (activatedEvents.length > 0) {
+        const newest = activatedEvents[0].alert;
+        alertNotifications.playWarningChime(newest.rule || 'warn');
       }
-      newAlerts.forEach((a) => alertNotifications.addToast(a));
+      events.forEach(({ alert, eventType }) => {
+        if (notificationsEnabled) {
+          alertNotifications.triggerDesktopNotification(alert, eventType, (selectedAlert) =>
+            selectAlertRef.current(selectedAlert),
+          );
+        }
+        alertNotifications.addToast(alert, eventType);
+      });
     },
     [alertNotifications, notificationsEnabled],
   );
@@ -120,7 +125,7 @@ export function usePortalApp() {
     setPathTelemetry: (update) => setPathTelemetryRef.current(update),
     appendSelectedTelemetry: selection.appendSelectedTelemetry,
     loadFlightAlerts: selection.loadFlightAlerts,
-    onNewAlerts,
+    onAlertStateChange,
     resetSelection: selection.resetSelection,
     resetPaths: () => resetPathsRef.current(),
     stopDetailPoll: selection.stopDetailPoll,

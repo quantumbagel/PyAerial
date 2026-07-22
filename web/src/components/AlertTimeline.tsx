@@ -4,9 +4,10 @@ import {
   formatAlertAltitude,
   formatAlertEta,
   formatEpisodeDuration,
+  isAlertActive,
   normalizeAlertRule,
 } from '../utils/format';
-import { AlertRuleBadge } from './LevelBadge';
+import { AlertRuleBadge, AlertStatusBadge } from './LevelBadge';
 
 interface AlertTimelineProps {
   alerts: Alert[];
@@ -23,32 +24,37 @@ export function AlertTimeline({ alerts, activeAlertId, onSelectAlert }: AlertTim
     <div id="alert-timeline-list">
       {alerts.map((alert) => {
         const normLevel = normalizeAlertRule(alert.rule);
+        const isEpisodeActive = isAlertActive(alert);
         const activatedStr = formatActiveSince(alert.activated_at);
         const deactivatedStr = alert.deactivated_at
           ? formatActiveSince(alert.deactivated_at)
           : null;
         const durationStr = formatEpisodeDuration(alert.activated_at, alert.deactivated_at);
-        const statusLabel = alert.active
-          ? `Active since ${activatedStr} · ${durationStr}`
+        const timeLabel = isEpisodeActive
+          ? `Started ${activatedStr}`
           : deactivatedStr
-            ? `${activatedStr} – ${deactivatedStr} · ${durationStr}`
-            : `Activated ${activatedStr} · ${durationStr}`;
+            ? `${activatedStr} – ${deactivatedStr}`
+            : `Activated ${activatedStr}`;
         const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
         const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-        const title = `${statusLabel}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
+        const title = `${isEpisodeActive ? 'LIVE' : 'ENDED'} Episode · ${durationStr}\nActivated: ${alert.activated_at ? new Date(alert.activated_at * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}${isEpisodeActive ? `\nETA: ${formatAlertEta(alert.eta)}` : ''}`;
+
         return (
           <button
             type="button"
             key={alert.alert_id}
             data-alert-id={alert.alert_id}
-            className={`alert-timeline-item ${normLevel}${alert.alert_id === activeAlertId ? ' active' : ''}`}
+            className={`alert-timeline-item ${normLevel}${isEpisodeActive ? ' episode-active' : ' episode-ended'}${alert.alert_id === activeAlertId ? ' active' : ''}`}
             title={title}
             onClick={() => onSelectAlert(alert)}
             aria-pressed={alert.alert_id === activeAlertId}
           >
             <div className="alert-timeline-row">
-              <AlertRuleBadge rule={alert.rule} />
-              <span className="alert-timeline-time">{statusLabel}</span>
+              <div className="alert-timeline-badges">
+                <AlertRuleBadge rule={alert.rule} />
+                <AlertStatusBadge active={isEpisodeActive} />
+              </div>
+              <span className="alert-timeline-time">{timeLabel}</span>
             </div>
             <div className="alert-timeline-zone">
               <span className="alert-timeline-zone-name">
@@ -58,7 +64,11 @@ export function AlertTimeline({ alerts, activeAlertId, onSelectAlert }: AlertTim
             <div className="alert-timeline-meta">
               <span><strong>Duration:</strong> {durationStr}</span>
               <span><strong>Alt:</strong> {formatAlertAltitude(alert.altitude)}</span>
-              <span><strong>ETA:</strong> {formatAlertEta(alert.eta)}</span>
+              {isEpisodeActive ? (
+                <span><strong>ETA:</strong> {formatAlertEta(alert.eta)}</span>
+              ) : (
+                <span className="alert-timeline-cleared-tag">Episode Cleared</span>
+              )}
             </div>
           </button>
         );
@@ -66,3 +76,4 @@ export function AlertTimeline({ alerts, activeAlertId, onSelectAlert }: AlertTim
     </div>
   );
 }
+

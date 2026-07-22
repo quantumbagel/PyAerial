@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import type { Alert, FlightSummary } from '../api/types';
 import { type FlightSortField, type SortDirection } from '../utils/flightData';
+import { isAlertActive } from '../utils/format';
 import { AlertListItem } from './AlertListItem';
 import { FlightListItem } from './FlightListItem';
 import { FlightSortControls } from './FlightSortControls';
@@ -20,7 +21,6 @@ interface SidebarProps {
   flightCount: number;
   flightSortField: FlightSortField;
   flightSortDirection: SortDirection;
-  unreadAlertsCount?: number;
   isLoadingFlights?: boolean;
   isLoadingAlerts?: boolean;
   flightsError?: string | null;
@@ -51,7 +51,6 @@ export function Sidebar({
   flightCount,
   flightSortField,
   flightSortDirection,
-  unreadAlertsCount = 0,
   isLoadingFlights = false,
   isLoadingAlerts = false,
   flightsError = null,
@@ -77,6 +76,10 @@ export function Sidebar({
       });
     }
   }, [activeAlertId, sidebarTab]);
+
+  const activeAlertsCount = useMemo(() => {
+    return allAlerts.filter(isAlertActive).length;
+  }, [allAlerts]);
 
   const alertCountByFlight = useMemo(() => {
     const map = new Map<string, number>();
@@ -142,10 +145,12 @@ export function Sidebar({
                   {flightCount}
                 </strong>
               </div>
-              <div className="stat-card">
+              <div className="stat-card" title={`${activeAlertsCount} active alert episode(s) out of ${alerts.length} shown`}>
                 <span>Alerts:</span>
-                <strong id="alert-count" className="stat-alerts">
-                  {alerts.length}
+                <strong id="alert-count" className={`stat-alerts${activeAlertsCount > 0 ? ' stat-alerts--active' : ''}`}>
+                  {activeAlertsCount > 0
+                    ? `${activeAlertsCount} live`
+                    : `${alerts.length} total`}
                 </strong>
               </div>
             </div>
@@ -190,8 +195,8 @@ export function Sidebar({
           onClick={() => onSwitchSidebarTab('alerts')}
         >
           Alerts
-          {unreadAlertsCount > 0 && (
-            <span className="alerts-badge-count">{unreadAlertsCount}</span>
+          {portalView === 'live' && activeAlertsCount > 0 && (
+            <span className="alerts-badge-count">{activeAlertsCount}</span>
           )}
         </button>
       </div>
@@ -246,7 +251,7 @@ export function Sidebar({
             </StatusMessage>
           ) : alerts.length === 0 ? (
             <StatusMessage>
-              {searchQuery ? 'No alerts match your search.' : 'No alerts yet'}
+              {searchQuery ? 'No alerts match your search.' : 'No alerts yet.'}
             </StatusMessage>
           ) : (
             alerts.map((alert) => (
