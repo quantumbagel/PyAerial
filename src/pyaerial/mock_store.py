@@ -9,6 +9,17 @@ import time
 from typing import Any
 
 
+def _active_alert(alert_id: str, zone: str, rule: str, activated_at: float,
+                  eta: float | None = None) -> dict[str, Any]:
+    return {
+        "alert_id": alert_id,
+        "zone": zone,
+        "rule": rule,
+        "activated_at": activated_at,
+        "eta": eta,
+    }
+
+
 class MockStore:
     """Simulates Redis and MongoDB stores with realistic generated flight data."""
 
@@ -18,7 +29,6 @@ class MockStore:
         self.simulated_delay = simulated_delay
         self._start_time = time.time()
 
-        # Initial live flights
         self.live_flights: list[dict[str, Any]] = [
             {
                 "flight_id": "mock_live_1",
@@ -32,8 +42,7 @@ class MockStore:
                 "altitude": 1200.0,
                 "speed": 180.0,
                 "heading": 45.0,
-                "zone": "aerpaw",
-                "level": "warn",
+                "active_alerts": [_active_alert("mock_live_1:aerpaw:warn", "aerpaw", "warn", self._start_time - 300, 45.0)],
                 "is_live": True,
                 "status": "live",
                 "retained": True,
@@ -56,8 +65,7 @@ class MockStore:
                 "altitude": 120.0,
                 "speed": 45.0,
                 "heading": 210.0,
-                "zone": "aerpaw",
-                "level": "alert",
+                "active_alerts": [_active_alert("mock_live_2:aerpaw:alert", "aerpaw", "alert", self._start_time - 120, 15.0)],
                 "is_live": True,
                 "status": "live",
                 "retained": True,
@@ -80,8 +88,7 @@ class MockStore:
                 "altitude": 450.0,
                 "speed": 210.0,
                 "heading": 315.0,
-                "zone": None,
-                "level": None,
+                "active_alerts": [],
                 "is_live": True,
                 "status": "live",
                 "retained": False,
@@ -95,7 +102,6 @@ class MockStore:
         ]
 
         now = time.time()
-        # Historical flights
         self.history_flights: list[dict[str, Any]] = [
             {
                 "flight_id": "mock_hist_1",
@@ -109,8 +115,7 @@ class MockStore:
                 "altitude": 950.0,
                 "speed": 165.0,
                 "heading": 180.0,
-                "zone": "aerpaw",
-                "level": "warn",
+                "active_alerts": [],
                 "is_live": False,
                 "status": "completed",
                 "retained": True,
@@ -132,8 +137,7 @@ class MockStore:
                 "altitude": 2800.0,
                 "speed": 310.0,
                 "heading": 90.0,
-                "zone": None,
-                "level": None,
+                "active_alerts": [],
                 "is_live": False,
                 "status": "completed",
                 "retained": True,
@@ -155,8 +159,7 @@ class MockStore:
                 "altitude": 1600.0,
                 "speed": 220.0,
                 "heading": 270.0,
-                "zone": "aerpaw",
-                "level": "alert",
+                "active_alerts": [],
                 "is_live": False,
                 "status": "completed",
                 "retained": True,
@@ -197,8 +200,7 @@ class MockStore:
                     "altitude": flight["altitude"] + (i * 5.0),
                     "speed": flight["speed"],
                     "heading": (flight["heading"] + i * 2) % 360,
-                    "zone": flight.get("zone"),
-                    "level": flight.get("level"),
+                    "active_alerts": flight.get("active_alerts", []),
                 })
             self.telemetry[fid] = points
 
@@ -224,8 +226,7 @@ class MockStore:
                     "altitude": flight["altitude"],
                     "speed": flight["speed"],
                     "heading": round(heading, 1),
-                    "zone": flight.get("zone"),
-                    "level": flight.get("level"),
+                    "active_alerts": flight.get("active_alerts", []),
                 })
             self.telemetry[fid] = points
             if points:
@@ -238,26 +239,30 @@ class MockStore:
         now = time.time()
         self.live_alerts: list[dict[str, Any]] = [
             {
-                "alert_id": "alert_mock_1",
+                "alert_id": "mock_live_1:aerpaw:warn",
                 "flight_id": "mock_live_1",
                 "icao": "A1B2C3",
                 "callsign": "N123AB",
                 "zone": "aerpaw",
-                "level": "warn",
-                "timestamp": now - 300,
+                "rule": "warn",
+                "active": True,
+                "activated_at": now - 300,
+                "deactivated_at": None,
                 "eta": 45.0,
                 "altitude": 1200.0,
                 "latitude": self.home_lat + 0.002,
                 "longitude": self.home_lon + 0.001,
             },
             {
-                "alert_id": "alert_mock_2",
+                "alert_id": "mock_live_2:aerpaw:alert",
                 "flight_id": "mock_live_2",
                 "icao": "B4C5D6",
                 "callsign": "DRONE01",
                 "zone": "aerpaw",
-                "level": "alert",
-                "timestamp": now - 120,
+                "rule": "alert",
+                "active": True,
+                "activated_at": now - 120,
+                "deactivated_at": None,
                 "eta": 15.0,
                 "altitude": 120.0,
                 "latitude": self.home_lat - 0.001,
@@ -267,26 +272,30 @@ class MockStore:
 
         self.history_alerts: list[dict[str, Any]] = [
             {
-                "alert_id": "alert_hist_1",
+                "alert_id": "mock_hist_1:aerpaw:warn",
                 "flight_id": "mock_hist_1",
                 "icao": "D9E0F1",
                 "callsign": "PIPER88",
                 "zone": "aerpaw",
-                "level": "warn",
-                "timestamp": now - 5400,
+                "rule": "warn",
+                "active": False,
+                "activated_at": now - 5600,
+                "deactivated_at": now - 4000,
                 "eta": 30.0,
                 "altitude": 950.0,
                 "latitude": self.home_lat + 0.003,
                 "longitude": self.home_lon - 0.004,
             },
             {
-                "alert_id": "alert_hist_2",
+                "alert_id": "mock_hist_3:aerpaw:alert",
                 "flight_id": "mock_hist_3",
                 "icao": "F3A4B5",
                 "callsign": "SURVEY05",
                 "zone": "aerpaw",
-                "level": "alert",
-                "timestamp": now - 19800,
+                "rule": "alert",
+                "active": False,
+                "activated_at": now - 20000,
+                "deactivated_at": now - 19000,
                 "eta": 10.0,
                 "altitude": 1600.0,
                 "latitude": self.home_lat + 0.001,
@@ -295,7 +304,6 @@ class MockStore:
         ]
 
     def update_live(self) -> list[dict[str, Any]]:
-        """Advance live flight positions and return new telemetry points."""
         now = time.time()
         new_points = []
         for flight in self.live_flights:
@@ -319,8 +327,7 @@ class MockStore:
                 "altitude": flight["altitude"],
                 "speed": flight["speed"],
                 "heading": flight["heading"],
-                "zone": flight.get("zone"),
-                "level": flight.get("level"),
+                "active_alerts": flight.get("active_alerts", []),
             }
             if flight["flight_id"] not in self.telemetry:
                 self.telemetry[flight["flight_id"]] = []
@@ -371,17 +378,21 @@ class MockStore:
         view: str,
         since: float = 0.0,
         flight_id: str | None = None,
-        level: str | None = None,
+        rule: str | None = None,
         limit: int = 0,
         skip: int = 0,
     ) -> list[dict[str, Any]]:
-        alerts = list(self.live_alerts if view == "live" else self.history_alerts)
+        if view == "live":
+            alerts = [a for a in self.live_alerts if a.get("active", True)]
+        else:
+            alerts = list(self.history_alerts)
         if since > 0:
-            alerts = [a for a in alerts if a.get("timestamp", 0) > since]
+            alerts = [a for a in alerts if (a.get("activated_at") or 0) > since]
         if flight_id:
             alerts = [a for a in alerts if a.get("flight_id") == flight_id]
-        if level:
-            alerts = [a for a in alerts if (a.get("level") or "").lower() == level.lower()]
+        if rule:
+            alerts = [a for a in alerts if (a.get("rule") or "").lower() == rule.lower()]
+        alerts.sort(key=lambda a: a.get("activated_at") or 0, reverse=True)
         if skip:
             alerts = alerts[skip:]
         if limit > 0:

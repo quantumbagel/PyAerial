@@ -1,8 +1,15 @@
+export interface ActiveAlert {
+  alert_id?: string;
+  zone: string;
+  rule: string;
+  activated_at?: number;
+  eta?: number | null;
+}
+
 export interface FlightSummary {
   flight_id: string;
   icao: string;
-  zone?: string;
-  level?: string;
+  active_alerts?: ActiveAlert[];
   start_time?: number;
   end_time?: number;
   callsign?: string | null;
@@ -38,8 +45,7 @@ export interface TelemetryPoint {
   heading?: number | null;
   flight_id?: string;
   icao?: string;
-  zone?: string;
-  level?: string;
+  active_alerts?: ActiveAlert[];
 }
 
 export interface Alert {
@@ -48,8 +54,10 @@ export interface Alert {
   icao?: string;
   callsign?: string;
   zone?: string;
-  level?: string;
-  timestamp?: number;
+  rule?: string;
+  active?: boolean;
+  activated_at?: number;
+  deactivated_at?: number | null;
   eta?: number | null;
   altitude?: number | null;
   latitude?: number | null;

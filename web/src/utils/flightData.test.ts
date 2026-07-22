@@ -39,6 +39,16 @@ describe('sortFlightsBy', () => {
     expect(sorted.map((f) => f.flight_id)).toEqual(['b', 'c', 'a']);
   });
 
+  it('sorts by active alerts on the flight when present', () => {
+    const flights = [
+      flight({ flight_id: 'a', active_alerts: [{ zone: 'z', rule: 'warn' }] }),
+      flight({ flight_id: 'b', active_alerts: [{ zone: 'z', rule: 'a' }, { zone: 'z', rule: 'b' }] }),
+      flight({ flight_id: 'c', active_alerts: [] }),
+    ];
+    const sorted = sortFlightsBy(flights, 'alerts', 'desc');
+    expect(sorted.map((f) => f.flight_id)).toEqual(['b', 'a', 'c']);
+  });
+
   it('sorts by number of alerts descending using alertCountMap', () => {
     const flights = [
       flight({ flight_id: 'a' }),

@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { Alert } from '../api/types';
-import { formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
+import { formatAlertAltitude, formatAlertEta, normalizeAlertRule } from '../utils/format';
 
 let sharedAudioCtx: AudioContext | null = null;
 
@@ -24,12 +24,12 @@ function getAudioContext(): AudioContext | null {
 export function useAlertNotifications() {
   const [toasts, setToasts] = useState<{ id: string; alert: Alert; duration?: number }[]>([]);
 
-  const playWarningChime = useCallback((level: string) => {
+  const playWarningChime = useCallback((rule: string) => {
     try {
       const ctx = getAudioContext();
       if (!ctx) return;
 
-      const norm = normalizeAlertLevel(level);
+      const norm = normalizeAlertRule(rule);
       const now = ctx.currentTime;
 
       const osc1 = ctx.createOscillator();
@@ -81,7 +81,7 @@ export function useAlertNotifications() {
 
   const triggerDesktopNotification = useCallback((alert: Alert, onSelectAlert?: (alert: Alert) => void) => {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    const normLevel = normalizeAlertLevel(alert.level);
+    const normLevel = normalizeAlertRule(alert.rule);
     const icon = normLevel === 'alert' ? '🚨' : normLevel === 'warn' ? '⚠️' : 'ℹ️';
     const displayLevel = normLevel === 'alert' ? 'ALERT' : normLevel === 'warn' ? 'WARNING' : 'INFO';
     const rawCallsign = alert.callsign?.trim();
@@ -89,12 +89,12 @@ export function useAlertNotifications() {
       rawCallsign && rawCallsign.toUpperCase() !== 'UNKNOWN'
         ? rawCallsign
         : (alert.icao ? alert.icao.toUpperCase() : 'Aircraft');
-    const zoneStr = alert.zone ? `Zone: ${alert.zone}` : 'Zone: Active';
+    const alertStr = `${alert.zone || 'zone'} · ${alert.rule || 'rule'}`;
     const altStr = `Alt: ${formatAlertAltitude(alert.altitude)}`;
     const etaStr = `ETA: ${formatAlertEta(alert.eta)}`;
 
     const notification = new Notification(`${icon} PyAerial ${displayLevel}: ${callsignStr}`, {
-      body: `${zoneStr} • ${altStr} • ${etaStr}`,
+      body: `${alertStr} • ${altStr} • ${etaStr}`,
       tag: alert.alert_id,
     });
 
@@ -108,7 +108,7 @@ export function useAlertNotifications() {
 
   const addToast = useCallback((alert: Alert) => {
     const id = `${alert.alert_id}-${Date.now()}-${Math.random()}`;
-    const norm = normalizeAlertLevel(alert.level);
+    const norm = normalizeAlertRule(alert.rule);
     const duration = norm === 'alert' ? 8000 : 6000;
     setToasts((current) => [{ id, alert, duration }, ...current].slice(0, 5));
   }, []);

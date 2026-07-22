@@ -1,20 +1,22 @@
 import * as L from 'leaflet';
+import type { ActiveAlert } from '../api/types';
 import { COLOR_HEX } from './colors';
+import { flightAlertSeverity } from './format';
 
 export function createPlaneIcon(
   heading: number | null | undefined,
   isSelected: boolean,
   isLive: boolean,
-  level?: string,
+  activeAlerts?: ActiveAlert[] | null,
 ): L.DivIcon {
-  const alertLevel = (level || '').toLowerCase();
+  const severity = flightAlertSeverity(activeAlerts);
   let fill: string;
   let stroke: string;
   let size: number;
   let opacity: number;
   let extraStyle = '';
 
-  if (alertLevel === 'alert') {
+  if (severity === 'alert') {
     fill = COLOR_HEX.alert;
     stroke = COLOR_HEX.alertDark;
     size = isSelected ? 30 : 28;
@@ -28,7 +30,7 @@ export function createPlaneIcon(
     size = 30;
     opacity = 1.0;
     extraStyle = `filter: drop-shadow(0 0 4px ${COLOR_HEX.accent}) drop-shadow(0 0 10px ${COLOR_HEX.accent}8c);`;
-  } else if (alertLevel === 'warn') {
+  } else if (severity === 'warn' || (severity === 'info' && activeAlerts?.length)) {
     fill = COLOR_HEX.warn;
     stroke = COLOR_HEX.warnDark;
     size = 26;
@@ -66,13 +68,15 @@ export const ZONE_COLORS = [
 ];
 
 export function pathStyleForFlight(
-  flight: { level?: string } | undefined,
+  flight: { active_alerts?: ActiveAlert[] } | undefined,
   isSelected: boolean,
 ): L.PolylineOptions {
-  const alertLevel = (flight?.level || '').toLowerCase();
+  const severity = flightAlertSeverity(flight?.active_alerts);
   let color: string = COLOR_HEX.default;
-  if (alertLevel === 'alert') color = COLOR_HEX.alert;
-  else if (alertLevel === 'warn') color = COLOR_HEX.warn;
+  if (severity === 'alert') color = COLOR_HEX.alert;
+  else if (severity === 'warn' || (severity === 'info' && flight?.active_alerts?.length)) {
+    color = COLOR_HEX.warn;
+  }
   if (isSelected) color = COLOR_HEX.accent;
   return {
     color,

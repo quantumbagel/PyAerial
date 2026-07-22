@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
-import { isFlightLive, formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
+import { isFlightLive, formatActiveSince, formatAlertAltitude, formatAlertEta, normalizeAlertRule } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight, ZONE_COLORS } from '../utils/planeIcon';
 import { COLOR_HEX } from '../utils/colors';
 import { MapToolbar } from './MapToolbar';
@@ -47,19 +47,20 @@ type MarkerState = {
   heading: number | null | undefined;
   selected: boolean;
   live: boolean;
-  level?: string;
+  activeAlertCount: number;
 };
 
 function markerNeedsUpdate(existing: MarkerState | undefined, flight: FlightSummary, isSelected: boolean): boolean {
   if (!existing) return true;
   const isLive = isFlightLive(flight);
+  const alertCount = flight.active_alerts?.length ?? 0;
   return (
     existing.lat !== flight.latitude ||
     existing.lon !== flight.longitude ||
     existing.heading !== flight.heading ||
     existing.selected !== isSelected ||
     existing.live !== isLive ||
-    existing.level !== flight.level
+    existing.activeAlertCount !== alertCount
   );
 }
 
@@ -262,10 +263,10 @@ export function MapView({
       const existing = planeMarkers.current[flight.flight_id];
       if (existing) {
         existing.setLatLng(pos);
-        existing.setIcon(createPlaneIcon(flight.heading, isSelected, isLive, flight.level));
+        existing.setIcon(createPlaneIcon(flight.heading, isSelected, isLive, flight.active_alerts));
       } else {
         const marker = L.marker(pos, {
-          icon: createPlaneIcon(flight.heading, isSelected, isLive, flight.level),
+          icon: createPlaneIcon(flight.heading, isSelected, isLive, flight.active_alerts),
         }).addTo(map);
         marker.on('click', () => onSelectFlightRef.current(flight.flight_id));
         planeMarkers.current[flight.flight_id] = marker;
@@ -276,7 +277,7 @@ export function MapView({
         heading: flight.heading,
         selected: isSelected,
         live: isLive,
-        level: flight.level,
+        activeAlertCount: flight.active_alerts?.length ?? 0,
       };
 
       if (isSelected && followSelectedPlane) {
@@ -334,10 +335,10 @@ export function MapView({
       const markers: L.CircleMarker[] = [];
       alerts.forEach((alert) => {
         if (alert.latitude == null || alert.longitude == null) return;
-        const norm = normalizeAlertLevel(alert.level);
+        const norm = normalizeAlertRule(alert.rule);
         const fillColor =
           norm === 'alert' ? COLOR_HEX.alert : norm === 'warn' ? COLOR_HEX.warn : COLOR_HEX.accent;
-        const displayTag = (alert.level || norm).toUpperCase();
+        const displayTag = (alert.rule || norm).toUpperCase();
         const marker = L.circleMarker([alert.latitude, alert.longitude], {
           radius: 6,
           color: '#fff',
@@ -345,11 +346,9 @@ export function MapView({
           fillColor,
           fillOpacity: 0.95,
         }).addTo(map);
-        const timeStr = alert.timestamp
-          ? new Date(alert.timestamp * 1000).toLocaleTimeString()
-          : 'N/A';
+        const timeStr = formatActiveSince(alert.activated_at);
         marker.bindTooltip(
-          `<strong>${displayTag}</strong> · ${alert.zone || 'zone'}<br/>Time: ${timeStr}<br/>Alt: ${formatAlertAltitude(alert.altitude)}<br/>ETA: ${formatAlertEta(alert.eta)}`,
+          `<strong>${displayTag}</strong> · ${alert.zone || 'zone'}<br/>Active since: ${timeStr}<br/>Alt: ${formatAlertAltitude(alert.altitude)}<br/>ETA: ${formatAlertEta(alert.eta)}`,
         );
         marker.on('click', () => onSelectFlightRef.current(flightId));
         markers.push(marker);

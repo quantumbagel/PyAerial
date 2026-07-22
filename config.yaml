@@ -59,14 +59,14 @@ zones:
           altitude: { max: 2000 }
           eta: { max: 120 }
         dwell_seconds: 60
-        alert:
-          method: print
+        on_activate:
+          - method: print
         retain: true
       - name: alert
         when:
           altitude: { max: 1500 }
           eta: { max: 60 }
         dwell_seconds: 60
-        alert:
-          method: print
+        on_activate:
+          - method: print
         retain: true

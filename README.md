@@ -146,7 +146,13 @@ Built-in receivers: `dump1090` (TCP stream), `py1090` (RTL-SDR, requires `pyrtls
 
 ### Zones and rules
 
-Each zone defines a polygon and one or more rules. A rule fires alerts when its `when` constraints pass, and optionally retains the flight for the portal when `dwell_seconds` is satisfied or alerts were recorded.
+Each zone defines a polygon and one or more rules. A rule becomes **active** while its `when` constraints pass and **inactive** when they stop. Lifecycle hooks run alerters on transitions:
+
+- `on_activate` — when conditions first match
+- `on_deactivate` — when conditions stop matching
+- `while_active` — periodic actions while the rule stays active (`interval_seconds` + `actions`)
+
+`dwell_seconds` controls Mongo retention only (seconds of matching ticks required to keep an unalerted flight).
 
 ```yaml
 zones:
@@ -157,8 +163,8 @@ zones:
         when:
           altitude: { max: 1000 }
         dwell_seconds: 60
-        alert:
-          method: print
+        on_activate:
+          - method: print
         retain: true
 ```
 
@@ -168,7 +174,7 @@ Field constraints use `min` / `max` on telemetry fields such as `altitude`, `hor
 
 ### Redis (live)
 
-Live flights, telemetry points, and alert events are buffered in Redis while a flight is active. Keys are cleared when the flight expires.
+Live flights, telemetry points, active alerts, and alert episodes are buffered in Redis while a flight is active. Keys are cleared when the flight expires.
 
 ### MongoDB (historical)
 
@@ -178,7 +184,7 @@ Retained flights are written once on flight end (when alerts fired or a `retain:
 |------------|---------|
 | `flights` | Retained completed flight documents |
 | `telemetry` | Track points keyed by `flight_id` + `timestamp` |
-| `alerts` | Alert event log with zone, level, position, and timestamp |
+| `alerts` | Alert episodes with zone, rule, activated/deactivated times, and position |
 
 Flight IDs use the form `{icao}-{first_packet_timestamp}` for both live and historical records.
 

@@ -2,8 +2,8 @@
 Per-plane calculations and live geofence alerting.
 
 Runs each tick on every tracked plane: derives speed/heading from position
-history, optionally enriches callsign metadata, and fires alerters when zone
-level requirements are satisfied.
+history, optionally enriches callsign metadata, and manages active/inactive
+alert state with lifecycle alerter hooks.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import math
 import threading
+import time
 from typing import TYPE_CHECKING
 
 import requests
@@ -19,7 +20,7 @@ from shapely import Polygon
 from pyaerial.alerters import Alerter, create_alerter
 from pyaerial.calc import evaluate, geo
 from pyaerial.calc.aircraft_db import AircraftDB
-from pyaerial.config.schema import Config
+from pyaerial.config.schema import AlertActionConfig, Config, RuleConfig
 from pyaerial.store.redis_live import RedisLiveStore
 from pyaerial.constants import (
     ALERT_CAT_ETA,
@@ -38,6 +39,7 @@ from pyaerial.constants import (
     STORE_RECV_DATA,
 )
 from pyaerial.models import Datum, get_latest, patch_append
+from pyaerial.store.mongo import flight_id_for_plane
 
 if TYPE_CHECKING:
     pass
@@ -45,6 +47,9 @@ if TYPE_CHECKING:
 log = logging.getLogger("pyaerial.calc.plane")
 
 _ETA_HORIZON = 10_000
+_ALERT_HOOK_ACTIVATE = "activate"
+_ALERT_HOOK_DEACTIVATE = "deactivate"
+_ALERT_HOOK_WHILE_ACTIVE = "while_active"
 
 
 class PlaneCalculator:
@@ -59,11 +64,11 @@ class PlaneCalculator:
         self.store = store
         self.backdate = config.tracking.backdate_packets
         self._alerters: dict[tuple[str, str], Alerter] = {}
-        # Concurrency for non-blocking API lookups of aircraft callsigns/registrations
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="callsign-lookup")
         self._pending_lookups: set[str] = set()
         self._lock = threading.Lock()
-        self._last_alert_times: dict[tuple[str, str, str], float] = {}
+        # (icao, zone, rule) -> {activated_at, last_periodic, alert_id}
+        self._alert_state: dict[tuple[str, str, str], dict] = {}
 
     def close(self) -> None:
         for alerter in self._alerters.values():
@@ -106,17 +111,15 @@ class PlaneCalculator:
         final_speed, speed_time = self._choose_speed(plane, speed, current_time)
         final_heading = self._choose_heading(plane, heading, current_time)
 
-        # Smooth speed and heading using Exponential Moving Average (EMA) to filter out jitter/noise
         prev_speed_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HORIZ_SPEED, [])
         if prev_speed_series:
-            alpha = 0.3  # Higher values = faster response, lower values = more smoothing
+            alpha = 0.3
             final_speed = alpha * final_speed + (1.0 - alpha) * prev_speed_series[-1].value
 
         prev_heading_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HEADING, [])
         if prev_heading_series:
             alpha = 0.3
             prev_heading = prev_heading_series[-1].value
-            # Correctly handle angular wrap-around at 360/0 degrees by averaging unit vectors
             rad_current = math.radians(final_heading)
             rad_prev = math.radians(prev_heading)
             sin_val = alpha * math.sin(rad_current) + (1.0 - alpha) * math.sin(rad_prev)
@@ -203,9 +206,11 @@ class PlaneCalculator:
 
     def _check_alerts(self, plane: dict, position: tuple[float, float],
                       heading: float, speed: float, callsign: str) -> None:
-        plane["zone"] = ""
-        plane["level"] = ""
+        icao = plane[STORE_INFO][STORE_ICAO]
+        flight_id = flight_id_for_plane(plane)
+        now = time.time()
         geofence_etas: dict[str, float] = {}
+        matching: dict[tuple[str, str, str], tuple[str, RuleConfig, float]] = {}
 
         for zone_name, zone in self.config.zones.items():
             polygon = self.polygons[zone_name]
@@ -216,46 +221,123 @@ class PlaneCalculator:
             for rule in zone.rules:
                 if not evaluate.when_passes(rule.when, resolver):
                     continue
+                key = (icao, zone_name, rule.name)
+                matching[key] = (zone_name, rule, eta)
 
-                if plane.get("level") != "alert":
-                    plane["zone"] = zone_name
-                    plane["level"] = rule.name
-
-                import time
-                icao = plane[STORE_INFO][STORE_ICAO]
-                last_time = self._last_alert_times.get((icao, zone_name, rule.name), 0.0)
-                now = time.time()
-                if now - last_time < rule.refire_seconds:
-                    continue
-                self._last_alert_times[(icao, zone_name, rule.name)] = now
-
-                alerter = self._get_alerter(rule.alert.method, rule.alert.options)
-                alt = get_latest(STORE_RECV_DATA, STORE_ALT, plane)
-                payload = {
-                    STORE_LAT: position[0],
-                    STORE_LONG: position[1],
-                    STORE_ALT: alt.value if alt else None,
+        active_alerts: list[dict] = []
+        for key, (zone_name, rule, eta) in matching.items():
+            state = self._alert_state.get(key)
+            if state is None:
+                alert_id = f"{flight_id}:{zone_name}:{rule.name}"
+                state = {
+                    "activated_at": now,
+                    "last_periodic": 0.0,
+                    "alert_id": alert_id,
                 }
-                meta = {
-                    STORE_ICAO: plane[STORE_INFO][STORE_ICAO],
-                    STORE_CALLSIGN: callsign,
-                    ALERT_CAT_TYPE: rule.name,
-                    ALERT_CAT_ZONE: zone_name,
-                    ALERT_CAT_ETA: eta,
-                    ALERT_CAT_REASON: {
-                        "zones": geofence_etas,
-                        "rule": rule.name,
-                    },
-                }
-                alerter.alert(meta, payload)
-                if self.store is not None:
-                    self.store.record_alert(plane, meta, payload)
+                self._alert_state[key] = state
+                self._on_activate(plane, zone_name, rule, eta, geofence_etas,
+                                position, callsign, now, alert_id)
+            elif rule.while_active is not None:
+                interval = rule.while_active.interval_seconds
+                if now - state["last_periodic"] >= interval:
+                    state["last_periodic"] = now
+                    self._on_while_active(plane, zone_name, rule, eta, geofence_etas,
+                                          position, callsign, now, state["alert_id"])
+
+            active_alerts.append({
+                "alert_id": state["alert_id"],
+                "zone": zone_name,
+                "rule": rule.name,
+                "activated_at": state["activated_at"],
+                "eta": eta,
+            })
+
+        stale_keys = [key for key in self._alert_state if key[0] == icao and key not in matching]
+        for key in stale_keys:
+            zone_name, rule_name = key[1], key[2]
+            state = self._alert_state.pop(key)
+            zone = self.config.zones[zone_name]
+            rule = next(r for r in zone.rules if r.name == rule_name)
+            eta = geofence_etas.get(zone_name, math.inf)
+            self._on_deactivate(plane, zone_name, rule, eta, geofence_etas,
+                                position, callsign, now, state["alert_id"],
+                                state["activated_at"])
+
+        plane["active_alerts"] = active_alerts
+
+    def _build_meta(self, plane: dict, zone_name: str, rule: RuleConfig, eta: float,
+                    geofence_etas: dict[str, float], callsign: str,
+                    hook: str) -> dict:
+        return {
+            STORE_ICAO: plane[STORE_INFO][STORE_ICAO],
+            STORE_CALLSIGN: callsign,
+            ALERT_CAT_TYPE: rule.name,
+            ALERT_CAT_ZONE: zone_name,
+            ALERT_CAT_ETA: eta,
+            ALERT_CAT_REASON: {
+                "zones": geofence_etas,
+                "rule": rule.name,
+                "hook": hook,
+            },
+        }
+
+    def _build_payload(self, plane: dict, position: tuple[float, float]) -> dict:
+        alt = get_latest(STORE_RECV_DATA, STORE_ALT, plane)
+        return {
+            STORE_LAT: position[0],
+            STORE_LONG: position[1],
+            STORE_ALT: alt.value if alt else None,
+        }
+
+    def _run_actions(self, actions: list[AlertActionConfig], meta: dict, payload: dict) -> None:
+        for action in actions:
+            alerter = self._get_alerter(action.method, action.options)
+            alerter.alert(meta, payload)
+
+    def _on_activate(self, plane: dict, zone_name: str, rule: RuleConfig, eta: float,
+                     geofence_etas: dict[str, float], position: tuple[float, float],
+                     callsign: str, now: float, alert_id: str) -> None:
+        meta = self._build_meta(plane, zone_name, rule, eta, geofence_etas, callsign,
+                                _ALERT_HOOK_ACTIVATE)
+        payload = self._build_payload(plane, position)
+        if rule.on_activate:
+            self._run_actions(rule.on_activate, meta, payload)
+        if self.store is not None:
+            self.store.record_alert_episode(
+                plane, meta, payload, alert_id=alert_id,
+                activated_at=now, active=True,
+            )
+
+    def _on_deactivate(self, plane: dict, zone_name: str, rule: RuleConfig, eta: float,
+                       geofence_etas: dict[str, float], position: tuple[float, float],
+                       callsign: str, now: float, alert_id: str,
+                       activated_at: float) -> None:
+        meta = self._build_meta(plane, zone_name, rule, eta, geofence_etas, callsign,
+                                _ALERT_HOOK_DEACTIVATE)
+        payload = self._build_payload(plane, position)
+        if rule.on_deactivate:
+            self._run_actions(rule.on_deactivate, meta, payload)
+        if self.store is not None:
+            self.store.record_alert_episode(
+                plane, meta, payload, alert_id=alert_id,
+                activated_at=activated_at, deactivated_at=now, active=False,
+            )
+
+    def _on_while_active(self, plane: dict, zone_name: str, rule: RuleConfig, eta: float,
+                         geofence_etas: dict[str, float], position: tuple[float, float],
+                         callsign: str, now: float, alert_id: str) -> None:
+        while_active = rule.while_active
+        if while_active is None or not while_active.actions:
+            return
+        meta = self._build_meta(plane, zone_name, rule, eta, geofence_etas, callsign,
+                                _ALERT_HOOK_WHILE_ACTIVE)
+        payload = self._build_payload(plane, position)
+        self._run_actions(while_active.actions, meta, payload)
+        if self.store is not None:
+            self.store.update_active_alert(plane, alert_id, meta, payload, now)
 
     def _get_alerter(self, method: str, arguments: dict) -> Alerter:
         key = (method, str(sorted(arguments.items())))
         if key not in self._alerters:
             self._alerters[key] = create_alerter(method, arguments)
         return self._alerters[key]
-
-
-

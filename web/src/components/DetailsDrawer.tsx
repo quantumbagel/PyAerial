@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Alert, AppConfig, FlightDetail, FlightSummary, TelemetryPoint } from '../api/types';
 import {
+  formatActiveAlerts,
   formatAltitude,
   formatHeading,
   formatSpeed,
-  formatZoneLevel,
   isFlightLive,
 } from '../utils/format';
 import { AlertTimeline } from './AlertTimeline';
@@ -121,8 +121,10 @@ export function DetailsDrawer({
   const icao = rawIcao || 'N/A';
   const photoUrl = typeof flightDetail?.photo_url === 'string' ? flightDetail.photo_url : null;
   const hasPhoto = Boolean(photoUrl);
-  const hasAlert = Boolean((flightDetail?.zone || '').trim() || (flightDetail?.level || '').trim());
-  const sortedAlerts = [...flightAlerts].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  const hasAlert = (flightDetail?.active_alerts?.length ?? 0) > 0;
+  const sortedAlerts = [...flightAlerts].sort(
+    (a, b) => (a.activated_at || 0) - (b.activated_at || 0),
+  );
   const lastPoint = flightTelemetry.length > 0 ? flightTelemetry[flightTelemetry.length - 1] : null;
 
   return (
@@ -209,12 +211,12 @@ export function DetailsDrawer({
                 <span className="details-value" id="detail-country">
                   {flightDetail?.country && flightDetail.country !== 'Unknown' ? flightDetail.country : '—'}
                 </span>
-                <span className="details-label">Zone / Level</span>
+                <span className="details-label">Active Alerts</span>
                 <span
                   className={`details-value${hasAlert ? ' details-value--warn' : ' details-value--muted'}`}
-                  id="detail-zone-level"
+                  id="detail-active-alerts"
                 >
-                  {formatZoneLevel(flightDetail?.zone, flightDetail?.level)}
+                  {formatActiveAlerts(flightDetail?.active_alerts)}
                 </span>
               </div>
             </div>

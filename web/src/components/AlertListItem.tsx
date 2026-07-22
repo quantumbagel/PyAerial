@@ -1,6 +1,6 @@
 import type { Alert } from '../api/types';
-import { formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
-import { AlertLevelBadge } from './LevelBadge';
+import { formatActiveSince, formatAlertAltitude, formatAlertEta, normalizeAlertRule } from '../utils/format';
+import { AlertRuleBadge } from './LevelBadge';
 
 interface AlertListItemProps {
   alert: Alert;
@@ -9,23 +9,19 @@ interface AlertListItemProps {
 }
 
 export function AlertListItem({ alert, active, onSelect }: AlertListItemProps) {
-  const normLevel = normalizeAlertLevel(alert.level);
-  const timeStr = alert.timestamp
-    ? new Date(alert.timestamp * 1000).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      })
-    : '';
+  const normLevel = normalizeAlertRule(alert.rule);
+  const timeStr = formatActiveSince(alert.activated_at);
   const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
   const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-  const title = `Triggered:\nTime: ${alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
+  const title = `Active since ${alert.activated_at ? new Date(alert.activated_at * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
 
   const rawCallsign = alert.callsign?.trim();
   const displayCallsign =
     rawCallsign && rawCallsign.toUpperCase() !== 'UNKNOWN'
       ? rawCallsign
       : (alert.icao || '').toUpperCase() || 'Loading plane details…';
+
+  const zoneRule = `${alert.zone || 'zone'} · ${alert.rule || 'rule'}`;
 
   return (
     <li>
@@ -39,12 +35,12 @@ export function AlertListItem({ alert, active, onSelect }: AlertListItemProps) {
         <div className="flight-meta-row">
           <span className="flight-callsign">
             {displayCallsign}{' '}
-            <AlertLevelBadge level={alert.level} />
+            <AlertRuleBadge rule={alert.rule} />
           </span>
           <span className="flight-icao">{(alert.icao || '').toUpperCase()}</span>
         </div>
         <div className="flight-meta-row">
-          <span className="flight-desc">{alert.zone || 'Zone'}</span>
+          <span className="flight-desc">{zoneRule}</span>
           <span className="flight-time">{timeStr}</span>
         </div>
       </button>

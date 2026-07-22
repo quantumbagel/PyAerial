@@ -11,9 +11,7 @@ export type FlightSortField =
   | 'model'
   | 'type'
   | 'altitude'
-  | 'speed'
-  | 'zone'
-  | 'level';
+  | 'speed';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -21,7 +19,7 @@ export const FLIGHT_SORT_OPTIONS: { value: FlightSortField; label: string }[] = 
   { value: 'last_seen', label: 'Last Seen' },
   { value: 'first_seen', label: 'First Seen' },
   { value: 'duration', label: 'Duration' },
-  { value: 'alerts', label: 'Number of Alerts' },
+  { value: 'alerts', label: 'Active Alerts' },
   { value: 'callsign', label: 'Callsign' },
   { value: 'icao', label: 'ICAO' },
   { value: 'model', label: 'Model' },
@@ -55,6 +53,13 @@ function isFiniteSortNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function activeAlertCount(flight: FlightSummary, alertCountMap?: Map<string, number>): number {
+  if (flight.active_alerts !== undefined) {
+    return flight.active_alerts.length;
+  }
+  return alertCountMap?.get(flight.flight_id) ?? 0;
+}
+
 export function isFlightSortValueMissing(flight: FlightSummary, field: FlightSortField): boolean {
   switch (field) {
     case 'altitude':
@@ -73,10 +78,6 @@ export function isFlightSortValueMissing(flight: FlightSummary, field: FlightSor
       return !flight.model?.trim();
     case 'type':
       return !getFlightAircraftType(flight);
-    case 'zone':
-      return !flight.zone?.trim();
-    case 'level':
-      return !flight.level?.trim();
     case 'alerts':
       return false;
     default:
@@ -92,8 +93,8 @@ function compareFlightsByField(
 ): number {
   switch (field) {
     case 'alerts': {
-      const aCount = alertCountMap?.get(a.flight_id) ?? 0;
-      const bCount = alertCountMap?.get(b.flight_id) ?? 0;
+      const aCount = activeAlertCount(a, alertCountMap);
+      const bCount = activeAlertCount(b, alertCountMap);
       return aCount - bCount;
     }
     case 'last_seen':
@@ -114,10 +115,6 @@ function compareFlightsByField(
       return (a.altitude as number) - (b.altitude as number);
     case 'speed':
       return (a.speed as number) - (b.speed as number);
-    case 'zone':
-      return (a.zone || '').localeCompare(b.zone || '', undefined, { sensitivity: 'base' });
-    case 'level':
-      return (a.level || '').localeCompare(b.level || '', undefined, { sensitivity: 'base' });
     default:
       return 0;
   }
@@ -188,8 +185,7 @@ export function mergeLiveFlights(existing: FlightSummary[], incoming: FlightSumm
           aircraft_type: newFlight.aircraft_type || next[idx].aircraft_type,
           owner: newFlight.owner || next[idx].owner,
           country: newFlight.country || next[idx].country,
-          zone: newFlight.zone,
-          level: newFlight.level,
+          active_alerts: newFlight.active_alerts,
           latitude: newFlight.latitude ?? next[idx].latitude,
           longitude: newFlight.longitude ?? next[idx].longitude,
           altitude: newFlight.altitude ?? next[idx].altitude,
@@ -226,8 +222,7 @@ export function applyTelemetryPoint(
       aircraft_type: null,
       owner: null,
       country: null,
-      zone: point.zone || '',
-      level: point.level || '',
+      active_alerts: point.active_alerts || [],
       start_time: point.timestamp,
       end_time: point.timestamp,
       timestamp: point.timestamp,
@@ -250,8 +245,7 @@ export function applyTelemetryPoint(
       heading: point.heading,
       timestamp: point.timestamp,
       end_time: point.timestamp,
-      zone: point.zone || flight.zone,
-      level: point.level || flight.level,
+      active_alerts: point.active_alerts ?? flight.active_alerts,
       is_live: true,
     };
   }

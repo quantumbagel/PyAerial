@@ -163,7 +163,7 @@ export function Sidebar({
         <input
           type="search"
           id="search-input"
-          placeholder="Search by callsign, ICAO, model, or zone..."
+          placeholder="Search by callsign, ICAO, model, or alert..."
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
           aria-label="Search flights and alerts"

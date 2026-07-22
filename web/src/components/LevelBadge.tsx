@@ -1,19 +1,23 @@
-import type { FlightSummary } from '../api/types';
+import type { ActiveAlert, FlightSummary } from '../api/types';
 import type { FlightSortField } from '../utils/flightData';
-import { isFiniteNumber, isFlightLive, normalizeAlertLevel } from '../utils/format';
+import { flightAlertSeverity, isFiniteNumber, isFlightLive, normalizeAlertRule } from '../utils/format';
 
-export function LevelBadge({ flight, alertCount }: { flight: FlightSummary; alertCount?: number }) {
-  const norm = normalizeAlertLevel(flight.level);
-  if (norm === 'warn') return <span className="level-badge warn">Warn</span>;
-  if (norm === 'alert') return <span className="level-badge alert">Alert</span>;
-  const count = alertCount ?? 0;
-  const label = count === 1 ? '1 alert' : `${count} alerts`;
-  return <span className={`level-badge ${count > 0 ? 'warn' : 'done'}`}>{label}</span>;
+export function LevelBadge({ flight }: { flight: FlightSummary }) {
+  const alerts = flight.active_alerts ?? [];
+  const count = alerts.length;
+  const severity = flightAlertSeverity(alerts);
+  if (severity === 'alert') return <span className="level-badge alert">Alert</span>;
+  if (severity === 'warn') return <span className="level-badge warn">Warn</span>;
+  if (count > 0) {
+    const label = count === 1 ? '1 active' : `${count} active`;
+    return <span className="level-badge warn">{label}</span>;
+  }
+  return <span className="level-badge done">Clear</span>;
 }
 
-export function AlertLevelBadge({ level }: { level?: string }) {
-  const norm = normalizeAlertLevel(level);
-  const raw = (level || '').trim();
+export function AlertRuleBadge({ rule }: { rule?: string }) {
+  const norm = normalizeAlertRule(rule);
+  const raw = (rule || '').trim();
   const display = raw
     ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
     : norm === 'alert'
@@ -24,6 +28,8 @@ export function AlertLevelBadge({ level }: { level?: string }) {
   return <span className={`level-badge ${norm}`}>{display}</span>;
 }
 
+/** @deprecated use AlertRuleBadge */
+export const AlertLevelBadge = AlertRuleBadge;
 
 export function flightSortValueLabel(
   flight: FlightSummary,
@@ -32,8 +38,8 @@ export function flightSortValueLabel(
 ): string {
   switch (sortField) {
     case 'alerts': {
-      const count = alertCount ?? 0;
-      return count === 1 ? '1 alert' : `${count} alerts`;
+      const count = flight.active_alerts?.length ?? alertCount ?? 0;
+      return count === 1 ? '1 active' : `${count} active`;
     }
     case 'altitude':
       return isFiniteNumber(flight.altitude)
@@ -43,10 +49,6 @@ export function flightSortValueLabel(
       return isFiniteNumber(flight.speed)
         ? `${Math.round(Number(flight.speed)).toLocaleString('en-US')} km/h`
         : 'N/A';
-    case 'zone':
-      return flight.zone?.trim() || 'N/A';
-    case 'level':
-      return flight.level?.trim() || 'N/A';
     case 'callsign':
       return flight.callsign?.trim() || 'N/A';
     case 'icao':
@@ -64,7 +66,6 @@ export function flightSortValueLabel(
       return secs > 0 ? `${m}m ${s}s` : 'N/A';
     }
     default:
-      // last_seen, first_seen: fall through to time label
       return flightTimeLabel(flight);
   }
 }
@@ -91,4 +92,10 @@ export function flightTimeLabel(flight: FlightSummary): string {
     }
     return startStr || endStr || '';
   }
+}
+
+export function formatActiveAlertLabel(alert: ActiveAlert): string {
+  const zone = (alert.zone || '').trim() || 'zone';
+  const rule = (alert.rule || '').trim() || 'rule';
+  return `${zone} · ${rule}`;
 }

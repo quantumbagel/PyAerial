@@ -34,7 +34,7 @@ export function FlightListItem({
         <div className="flight-meta-row">
           <span className="flight-callsign">
             {displayCallsign}{' '}
-            <LevelBadge flight={flight} alertCount={alertCount} />
+            <LevelBadge flight={flight} />
           </span>
           <span className="flight-icao">{flight.icao.toUpperCase()}</span>
         </div>

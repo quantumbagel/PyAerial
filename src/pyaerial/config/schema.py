@@ -90,18 +90,24 @@ class FieldConstraint(_Strict):
         return pairs
 
 
-class AlertConfig(_Strict):
-    method: str = "print"
+class AlertActionConfig(_Strict):
+    method: str
     options: dict[str, object] = Field(default_factory=dict)
+
+
+class WhileActiveConfig(_Strict):
+    interval_seconds: int = Field(default=60, gt=0)
+    actions: list[AlertActionConfig] = Field(default_factory=list)
 
 
 class RuleConfig(_Strict):
     name: str
     when: dict[str, FieldConstraint] = Field(min_length=1)
     dwell_seconds: int = Field(gt=0)
-    refire_seconds: int = Field(default=60, ge=0)
-    alert: AlertConfig = Field(default_factory=AlertConfig)
     retain: bool = True
+    on_activate: list[AlertActionConfig] = Field(default_factory=list)
+    on_deactivate: list[AlertActionConfig] = Field(default_factory=list)
+    while_active: WhileActiveConfig | None = None
 
 
 class ZoneConfig(_Strict):

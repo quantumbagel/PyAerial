@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Alert } from '../api/types';
-import { AlertLevelBadge } from './LevelBadge';
-import { formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
+import { AlertRuleBadge } from './LevelBadge';
+import { formatActiveSince, formatAlertAltitude, formatAlertEta, normalizeAlertRule } from '../utils/format';
 
 interface AlertToastsProps {
   toasts: { id: string; alert: Alert; duration?: number }[];
@@ -21,7 +21,7 @@ function ToastItem({ id, alert, duration = 6000, onSelectAlert, onDismiss }: Toa
   const [remainingMs, setRemainingMs] = useState(duration);
   const [isPaused, setIsPaused] = useState(false);
   const deadlineRef = useRef(Date.now() + duration);
-  const normLevel = normalizeAlertLevel(alert.level);
+  const normLevel = normalizeAlertRule(alert.rule);
 
   useEffect(() => {
     if (isPaused) return;
@@ -54,13 +54,8 @@ function ToastItem({ id, alert, duration = 6000, onSelectAlert, onDismiss }: Toa
     rawCallsign && rawCallsign.toUpperCase() !== 'UNKNOWN'
       ? rawCallsign
       : alert.icao?.toUpperCase().trim() || 'Loading plane details…';
-  const timeStr = alert.timestamp
-    ? new Date(alert.timestamp * 1000).toLocaleTimeString([], {
-        hour: 'numeric',
-        minute: '2-digit',
-        second: '2-digit',
-      })
-    : '';
+  const timeStr = formatActiveSince(alert.activated_at);
+  const zoneRule = `${alert.zone || 'zone'} · ${alert.rule || 'rule'}`;
 
   return (
     <div
@@ -74,7 +69,7 @@ function ToastItem({ id, alert, duration = 6000, onSelectAlert, onDismiss }: Toa
     >
       <div className="toast-header">
         <div className="toast-header-left">
-          <AlertLevelBadge level={alert.level} />
+          <AlertRuleBadge rule={alert.rule} />
           <span className="toast-callsign">{callsign}</span>
         </div>
         <div className="toast-header-right">
@@ -97,8 +92,8 @@ function ToastItem({ id, alert, duration = 6000, onSelectAlert, onDismiss }: Toa
       </div>
       <div className="toast-body">
         <div className="toast-zone-row">
-          <span className="toast-zone-label">Zone:</span>
-          <span className="toast-zone-val">{alert.zone || 'Zone'}</span>
+          <span className="toast-zone-label">Alert:</span>
+          <span className="toast-zone-val">{zoneRule}</span>
         </div>
         <div className="toast-metrics">
           <span>Alt: {formatAlertAltitude(alert.altitude)}</span>

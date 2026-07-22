@@ -97,7 +97,7 @@ export function usePortalApp() {
   const onNewAlerts = useCallback(
     (newAlerts: Alert[]) => {
       const newest = newAlerts[0];
-      alertNotifications.playWarningChime(newest.level || 'warn');
+      alertNotifications.playWarningChime(newest.rule || 'warn');
       if (notificationsEnabled) {
         alertNotifications.triggerDesktopNotification(newest, (alert) =>
           selectAlertRef.current(alert),
@@ -141,13 +141,16 @@ export function usePortalApp() {
       const icao = (flight.icao || '').toLowerCase();
       const model = (flight.model || '').toLowerCase();
       const aircraftType = (flight.aircraft_type || flight.typecode || '').toLowerCase();
-      const zone = (flight.zone || '').toLowerCase();
+      const activeAlertText = (flight.active_alerts ?? [])
+        .map((a) => `${a.zone} ${a.rule}`)
+        .join(' ')
+        .toLowerCase();
       return (
         callsign.includes(q) ||
         icao.includes(q) ||
         model.includes(q) ||
         aircraftType.includes(q) ||
-        zone.includes(q)
+        activeAlertText.includes(q)
       );
     });
     return sortFlightsBy(filtered, flightSortField, flightSortDirection, alertCountByFlight);
@@ -170,12 +173,12 @@ export function usePortalApp() {
       const callsign = (alert.callsign || '').toLowerCase();
       const icao = (alert.icao || '').toLowerCase();
       const zone = (alert.zone || '').toLowerCase();
-      const level = (alert.level || '').toLowerCase();
+      const rule = (alert.rule || '').toLowerCase();
       return (
         callsign.includes(q) ||
         icao.includes(q) ||
         zone.includes(q) ||
-        level.includes(q)
+        rule.includes(q)
       );
     });
   }, [portal.alertsData, searchQuery]);

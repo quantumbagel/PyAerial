@@ -163,19 +163,36 @@ def _alert_coords(doc: dict[str, Any]) -> tuple[Any, Any]:
 def _format_alert(doc: dict[str, Any]) -> dict[str, Any]:
     latitude, longitude = _alert_coords(doc)
     alert_id = doc["alert_id"] if "alert_id" in doc else str(doc["_id"])
+    activated_at = doc.get("activated_at", doc.get("timestamp"))
     return {
         "alert_id": alert_id,
         "flight_id": doc.get("flight_id"),
         "icao": doc.get("icao"),
         "callsign": doc.get("callsign"),
         "zone": doc.get("zone"),
-        "level": doc.get("level"),
-        "timestamp": doc.get("timestamp"),
+        "rule": doc.get("rule", doc.get("level")),
+        "active": doc.get("active", False),
+        "activated_at": activated_at,
+        "deactivated_at": doc.get("deactivated_at"),
         "eta": doc.get("eta"),
         "altitude": doc.get("altitude"),
         "latitude": latitude,
         "longitude": longitude,
     }
+
+
+def _format_active_alerts(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    alerts = doc.get("active_alerts") or []
+    return [
+        {
+            "alert_id": item.get("alert_id", ""),
+            "zone": item.get("zone", ""),
+            "rule": item.get("rule", ""),
+            "activated_at": item.get("activated_at"),
+            "eta": item.get("eta"),
+        }
+        for item in alerts
+    ]
 
 
 def _enrich_flight_summary(summary: dict[str, Any], aircraft_db: AircraftDB | None) -> dict[str, Any]:
@@ -208,8 +225,7 @@ def _flight_summary(doc: dict[str, Any], last_tel: dict[str, Any] | None,
     return {
         "flight_id": doc["_id"],
         "icao": icao,
-        "zone": doc.get("zone"),
-        "level": doc.get("level"),
+        "active_alerts": _format_active_alerts(doc),
         "start_time": doc.get("start_time"),
         "end_time": doc.get("end_time"),
         "callsign": doc.get("callsign") or info.get("callsign") or enriched.get("callsign"),
@@ -289,9 +305,12 @@ def _get_history_flights(db: pymongo.database.Database, aircraft_db: AircraftDB 
 
 
 def _get_live_alerts(live_store: RedisLiveStore, *, since: float = 0.0,
-                     flight_id: str | None = None, level: str | None = None,
-                     limit: int = 0, skip: int = 0) -> list[dict[str, Any]]:
-    alerts = live_store.get_alerts(since=since, flight_id=flight_id, level=level)
+                     flight_id: str | None = None, rule: str | None = None,
+                     limit: int = 0, skip: int = 0,
+                     active_only: bool = True) -> list[dict[str, Any]]:
+    alerts = live_store.get_alerts(
+        since=since, flight_id=flight_id, rule=rule, active_only=active_only,
+    )
     if skip:
         alerts = alerts[skip:]
     if limit:
@@ -339,8 +358,7 @@ def _get_flight_detail(
     return {
         "flight_id": doc["_id"],
         "icao": icao,
-        "zone": doc.get("zone"),
-        "level": doc.get("level"),
+        "active_alerts": _format_active_alerts(doc),
         "start_time": doc.get("start_time"),
         "end_time": doc.get("end_time"),
         "callsign": doc.get("callsign") or info.get("callsign") or enriched.get("callsign"),
@@ -379,7 +397,7 @@ def _get_alerts(
     *,
     since: float = 0.0,
     flight_id: str | None = None,
-    level: str | None = None,
+    rule: str | None = None,
     limit: int = 0,
     skip: int = 0,
     live_store: RedisLiveStore,
@@ -387,16 +405,17 @@ def _get_alerts(
 ) -> list[dict[str, Any]]:
     if view == "live":
         return _get_live_alerts(
-            live_store, since=since, flight_id=flight_id, level=level, limit=limit, skip=skip,
+            live_store, since=since, flight_id=flight_id, rule=rule,
+            limit=limit, skip=skip, active_only=True,
         )
     filt: dict[str, Any] = {}
     if since:
-        filt["timestamp"] = {"$gt": since}
+        filt["activated_at"] = {"$gt": since}
     if flight_id:
         filt["flight_id"] = flight_id
-    if level:
-        filt["level"] = level
-    cursor = db.get_collection("alerts").find(filt).sort("timestamp", -1)
+    if rule:
+        filt["rule"] = rule
+    cursor = db.get_collection("alerts").find(filt).sort("activated_at", -1)
     if skip:
         cursor = cursor.skip(skip)
     if limit:
@@ -564,13 +583,13 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
                 since_val = params.get("since")
                 since = float(since_val) if since_val is not None else 0.0
                 flight_id = params.get("flight_id") or params.get("flightId")
-                level = params.get("level")
+                rule = params.get("rule") or params.get("level")
                 limit_val = params.get("limit")
                 limit = int(limit_val) if limit_val is not None else 0
                 skip_val = params.get("skip")
                 skip = int(skip_val) if skip_val is not None else 0
                 return mock_store.get_alerts(
-                    view, since=since, flight_id=flight_id, level=level, limit=limit, skip=skip,
+                    view, since=since, flight_id=flight_id, rule=rule, limit=limit, skip=skip,
                 )
 
             if action == "fetchZones":
@@ -608,7 +627,7 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
             since_val = params.get("since")
             since = float(since_val) if since_val is not None else 0.0
             flight_id = params.get("flight_id") or params.get("flightId")
-            level = params.get("level")
+            rule = params.get("rule") or params.get("level")
             limit_val = params.get("limit")
             limit = int(limit_val) if limit_val is not None else 0
             skip_val = params.get("skip")
@@ -617,7 +636,7 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
                 view,
                 since=since,
                 flight_id=flight_id,
-                level=level,
+                rule=rule,
                 limit=limit,
                 skip=skip,
                 live_store=live_store,

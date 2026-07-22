@@ -60,7 +60,7 @@ export function useFlightSelection({
     let since = 0;
     const currentAlerts = flightAlertsRef.current;
     if (append && currentAlerts.length > 0) {
-      since = Math.max(...currentAlerts.map((a) => a.timestamp || 0));
+      since = Math.max(...currentAlerts.map((a) => a.activated_at || 0));
     }
     const alerts = await api.fetchAlerts(view, { flightId, since: append ? since : 0 });
     if (append) {

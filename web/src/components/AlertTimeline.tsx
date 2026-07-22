@@ -1,6 +1,6 @@
 import type { Alert } from '../api/types';
-import { formatAlertAltitude, formatAlertEta, normalizeAlertLevel } from '../utils/format';
-import { AlertLevelBadge } from './LevelBadge';
+import { formatActiveSince, formatAlertAltitude, formatAlertEta, normalizeAlertRule } from '../utils/format';
+import { AlertRuleBadge } from './LevelBadge';
 
 interface AlertTimelineProps {
   alerts: Alert[];
@@ -10,23 +10,25 @@ interface AlertTimelineProps {
 
 export function AlertTimeline({ alerts, activeAlertId, onSelectAlert }: AlertTimelineProps) {
   if (alerts.length === 0) {
-    return <div className="alert-timeline-empty">No alert events for this flight.</div>;
+    return <div className="alert-timeline-empty">No alert episodes for this flight.</div>;
   }
 
   return (
     <div id="alert-timeline-list">
       {alerts.map((alert) => {
-        const normLevel = normalizeAlertLevel(alert.level);
-        const timeStr = alert.timestamp
-          ? new Date(Number(alert.timestamp) * 1000).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            })
-          : '';
+        const normLevel = normalizeAlertRule(alert.rule);
+        const activatedStr = formatActiveSince(alert.activated_at);
+        const deactivatedStr = alert.deactivated_at
+          ? formatActiveSince(alert.deactivated_at)
+          : null;
         const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
         const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-        const title = `Triggered:\nTime: ${alert.timestamp ? new Date(alert.timestamp * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
+        const statusLabel = alert.active
+          ? `Active since ${activatedStr}`
+          : deactivatedStr
+            ? `Active ${activatedStr} – ${deactivatedStr}`
+            : `Activated ${activatedStr}`;
+        const title = `${statusLabel}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}\nETA: ${formatAlertEta(alert.eta)}`;
         return (
           <button
             type="button"
@@ -38,11 +40,13 @@ export function AlertTimeline({ alerts, activeAlertId, onSelectAlert }: AlertTim
             aria-pressed={alert.alert_id === activeAlertId}
           >
             <div className="alert-timeline-row">
-              <AlertLevelBadge level={alert.level} />
-              <span className="alert-timeline-time">{timeStr}</span>
+              <AlertRuleBadge rule={alert.rule} />
+              <span className="alert-timeline-time">{statusLabel}</span>
             </div>
             <div className="alert-timeline-zone">
-              Entered Zone: <span className="alert-timeline-zone-name">{alert.zone || 'zone'}</span>
+              <span className="alert-timeline-zone-name">
+                {alert.zone || 'zone'} · {alert.rule || 'rule'}
+              </span>
             </div>
             <div className="alert-timeline-meta">
               <span><strong>Alt:</strong> {formatAlertAltitude(alert.altitude)}</span>
