@@ -17,7 +17,8 @@ Version 2 is an installable Python package with typed configuration, plugin regi
 - Web portal with Live and Historical views
 - SQLite-backed aircraft metadata index with API lookup and caching
 - Validated YAML configuration with `pyaerial validate`
-- Interactive MongoDB browser via `pyaerial statview`
+- Interactive saved & live flight viewer via `pyaerial view` (alias: `statview`)
+- Dump1090-like live flight terminal display via `pyaerial dump1090` (alias: `live`)
 
 ## Installation
 
@@ -67,10 +68,16 @@ Validate a config without running:
 pyaerial validate -c config.yaml
 ```
 
-Browse saved flights from the CLI:
+Browse saved and live flights from the CLI:
 
 ```bash
-pyaerial statview -c config.yaml
+pyaerial view -c config.yaml [--mock]
+```
+
+Display live tracking in dump1090 style:
+
+```bash
+pyaerial dump1090 --mock
 ```
 
 ## CLI
@@ -80,7 +87,9 @@ pyaerial statview -c config.yaml
 | `pyaerial run` | Start the tracking engine |
 | `pyaerial web` | Start the web portal |
 | `pyaerial validate` | Check configuration syntax and cross-references |
-| `pyaerial statview` | Interactive MongoDB flight browser |
+| `pyaerial view` | Interactive flight viewer for saved & live data (alias: `statview`) |
+| `pyaerial dump1090` | Terminal live flight table display (alias: `live`) |
+
 
 
 Environment overrides (applied on top of the config file):
