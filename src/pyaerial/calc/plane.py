@@ -364,7 +364,7 @@ class PlaneCalculator:
                     hook: str) -> dict:
         info = plane.get(STORE_INFO, {})
         zone_cfg = self.config.zones.get(zone_name) if self.config and self.config.zones else None
-        color = rule.color or (zone_cfg.color if zone_cfg else None) or (self.config.alert_colors.get(rule.name) if self.config else None)
+        color = rule.color or (zone_cfg.color if zone_cfg else None) or (self.config.alert_colors.get(rule.name) if self.config else None) or "#ef4444"
         meta = {
             STORE_ICAO: info.get(STORE_ICAO, ""),
             STORE_CALLSIGN: callsign,

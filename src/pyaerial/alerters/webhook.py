@@ -63,7 +63,7 @@ def _safe_num(val: object) -> float | int | None:
         return None
 
 
-def _hex_to_int(hex_str: str | None, default: int = 15570228) -> int:
+def _hex_to_int(hex_str: str | None, default: int = 15680580) -> int:
     if not hex_str or not isinstance(hex_str, str):
         return default
     clean = hex_str.lstrip("#").strip()
@@ -127,7 +127,6 @@ class WebhookAlerter(Alerter):
         icao = (meta.get("icao") or "").upper()
         callsign = meta.get("callsign") or "Unknown"
         zone = meta.get("zone", "Unknown")
-        rule = meta.get("type", "warning").upper()
         reason = meta.get("reason")
         hook = reason.get("hook") if isinstance(reason, dict) else None
         hook_str = f" ({hook.capitalize()})" if hook else ""
@@ -191,10 +190,9 @@ class WebhookAlerter(Alerter):
         if tracker_md:
             fields.append({"name": "Plane Trackers", "value": " | ".join(tracker_md), "inline": False})
 
-        default_color = 15570228 if meta.get("type") == "alert" else 16752651
-        embed_color = _hex_to_int(meta.get("color"), default=default_color)
+        embed_color = _hex_to_int(meta.get("color"), default=15680580)
 
-        rule_raw = meta.get("type", "warning")
+        rule_raw = meta.get("type", "unknown")
         embed = {
             "title": f'{callsign} ({icao}) triggered "{zone}/{rule_raw}"{hook_str}',
             "description": f"Aircraft **{callsign}** (`{icao}`) met criteria for zone \"{zone}\", level \"{rule_raw}\".",
@@ -212,8 +210,7 @@ class WebhookAlerter(Alerter):
         icao = (meta.get("icao") or "").upper()
         callsign = meta.get("callsign") or "Unknown"
         zone = meta.get("zone", "Unknown")
-        rule_raw = meta.get("type", "warning")
-        rule = rule_raw.upper()
+        rule_raw = meta.get("type", "unknown")
         reason = meta.get("reason")
         hook = reason.get("hook") if isinstance(reason, dict) else None
         hook_str = f" ({hook.capitalize()})" if hook else ""
