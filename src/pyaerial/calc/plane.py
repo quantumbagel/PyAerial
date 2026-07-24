@@ -38,6 +38,7 @@ from pyaerial.constants import (
     STORE_LAT,
     STORE_LONG,
     STORE_RECV_DATA,
+    STORE_VERT_SPEED,
 )
 from pyaerial.models import Datum, get_latest, patch_append
 from pyaerial.store.mongo import flight_id_for_plane
@@ -361,25 +362,40 @@ class PlaneCalculator:
     def _build_meta(self, plane: dict, zone_name: str, rule: RuleConfig, eta: float,
                     geofence_etas: dict[str, float], callsign: str,
                     hook: str) -> dict:
-        return {
-            STORE_ICAO: plane[STORE_INFO][STORE_ICAO],
+        info = plane.get(STORE_INFO, {})
+        zone_cfg = self.config.zones.get(zone_name) if self.config and self.config.zones else None
+        color = rule.color or (zone_cfg.color if zone_cfg else None) or (self.config.alert_colors.get(rule.name) if self.config else None)
+        meta = {
+            STORE_ICAO: info.get(STORE_ICAO, ""),
             STORE_CALLSIGN: callsign,
             ALERT_CAT_TYPE: rule.name,
             ALERT_CAT_ZONE: zone_name,
             ALERT_CAT_ETA: eta,
+            "color": color,
             ALERT_CAT_REASON: {
                 "zones": geofence_etas,
                 "rule": rule.name,
                 "hook": hook,
             },
         }
+        for field in ("registration", "manufacturer", "manufacturer_name", "model", "owner", "typecode", "photo_url", "country", "operator_callsign"):
+            val = info.get(field)
+            if val:
+                meta[field] = val
+        return meta
 
     def _build_payload(self, plane: dict, position: tuple[float, float]) -> dict:
         alt = get_latest(STORE_RECV_DATA, STORE_ALT, plane)
+        speed = get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane)
+        heading = get_latest(STORE_CALC_DATA, STORE_HEADING, plane)
+        vert_speed = get_latest(STORE_RECV_DATA, STORE_VERT_SPEED, plane)
         return {
             STORE_LAT: position[0],
             STORE_LONG: position[1],
             STORE_ALT: alt.value if alt else None,
+            STORE_HORIZ_SPEED: speed.value if speed else None,
+            STORE_HEADING: heading.value if heading else None,
+            STORE_VERT_SPEED: vert_speed.value if vert_speed else None,
         }
 
     def _run_actions(self, actions: list[AlertActionConfig], meta: dict, payload: dict) -> None:
