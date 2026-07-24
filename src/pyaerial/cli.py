@@ -5,7 +5,7 @@ Subcommands::
 
     run        Start the tracking engine
     validate   Check a configuration file without running
-    view       Interactive flight viewer for saved & live flights (alias: statview)
+    view       Interactive flight viewer for saved & live flights
     live       Live flight terminal display
     web        Start live flight tracker web portal
 """
@@ -54,7 +54,7 @@ def _build_parser() -> argparse.ArgumentParser:
     val_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
     val_p.set_defaults(func=_cmd_validate)
 
-    view_p = sub.add_parser("view", help="interactive flight viewer (saved & live data)", aliases=["statview"])
+    view_p = sub.add_parser("view", help="interactive flight viewer (saved & live data)")
     view_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
     view_p.add_argument("--aircraft-db", default=DEFAULT_AIRCRAFT_DB)
     view_p.add_argument("--mock", action="store_true", help="use mock live data store")

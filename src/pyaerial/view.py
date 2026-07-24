@@ -132,13 +132,6 @@ def run_view(config_path: str = "config.yaml", *,
             last_reset = False
 
 
-def run_statview(config_path: str = "config.yaml", *,
-                 aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
-                 mock: bool = False) -> None:
-    """Alias for run_view for backward compatibility."""
-    run_view(config_path=config_path, aircraft_db_path=aircraft_db_path, mock=mock)
-
-
 def _cmd_status(client: pymongo.MongoClient | None, live_store: Any = None) -> None:
     db = _get_mongo_db(client)
     

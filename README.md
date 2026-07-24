@@ -1,145 +1,260 @@
 # PyAerial
 
-_scanning software for ADS-B / Mode S — airstrik 2.0, rev 2_
+_Scanning software for ADS-B / Mode S for AERPAW_
 
-PyAerial listens for nearby aircraft using the Mode S / ADS-B protocol, tracks them in memory, evaluates user-defined geofences, fires alerts, buffers live flights in Redis for the web portal, and persists retained completed flights to MongoDB.
+[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Version](https://img.shields.io/badge/version-2.0.0-green.svg)](pyproject.toml)
 
-Version 2 is an installable Python package with typed configuration, plugin registries for receivers and alerters, centralized logging, and a CLI.
+**PyAerial** is a high-performance Python 3 application designed to receive ADS-B / Mode S aircraft telemetry signals, track flight positions in real time, evaluate dynamic polygon geofences with early-warning rules, trigger multi-channel alerts, stream live data to a web portal, and persist completed flights to a database.
+---
+
+## Architecture Overview
+
+```mermaid
+graph TD
+    subgraph Inputs ["ADS-B / Mode S Data Sources"]
+        DUMP1090["dump1090 (TCP Raw Stream)"]
+        PY1090["py1090 (RTL-SDR Hardware)"]
+        MOCK_REC["Mock Receiver (Simulated Feed)"]
+    end
+
+    subgraph Core ["PyAerial Engine & Processing"]
+        ENGINE["PyAerial Tracking Engine<br/>(Deduplication & Vector Math)"]
+        AIRCRAFT_DB[("SQLite Index<br/>(aircraft.db Metadata)")]
+    end
+
+    subgraph Alerts ["Alerting & Geofencing"]
+        GEOFENCE["Geofence Engine<br/>(Polygons & Early Warning Rules)"]
+        ALERTERS["Pluggable Alerters<br/>(Console / Webhook / Kafka)"]
+    end
+
+    subgraph Storage ["Dual-Tier Data Storage"]
+        REDIS[("Redis Live Store<br/>(In-Flight Buffers & Alerts)")]
+        MONGO[("MongoDB History Store<br/>(Retained Flight Records)")]
+    end
+
+    subgraph Frontend ["Web Portal & Interfaces"]
+        WEBAPP["FastAPI Server & WebSocket API<br/>(/ws/live)"]
+        WEBUI["React + Vite Web UI<br/>(Live Radar & History View)"]
+        CLI["Terminal Interfaces<br/>(pyaerial view / live)"]
+    end
+
+    DUMP1090 --> ENGINE
+    PY1090 --> ENGINE
+    MOCK_REC --> ENGINE
+
+    ENGINE <--> AIRCRAFT_DB
+    ENGINE --> GEOFENCE
+    GEOFENCE --> ALERTERS
+
+    ENGINE --> REDIS
+    ENGINE --> MONGO
+
+    REDIS --> WEBAPP
+    MONGO --> WEBAPP
+    REDIS --> CLI
+
+    WEBAPP <--> WEBUI
+```
+
+---
 
 ## Features
 
-- ADS-B decoding for position, altitude, velocity, callsign, and more ([The 1090 Megahertz Riddle](https://mode-s.org/decode))
-- Multiple simultaneous receivers (e.g. dump1090 TCP + RTL-SDR)
-- Geofence rules with field constraints and ETA-based alerting
-- Pluggable alerters (`print`, `kafka`)
-- Redis live store for in-flight flights, telemetry, and alert events
-- MongoDB history store for retained completed flights
-- Web portal with Live and Historical views
-- SQLite-backed aircraft metadata index with API lookup and caching
-- Validated YAML configuration with `pyaerial validate`
-- Interactive saved & live flight viewer via `pyaerial view` (alias: `statview`)
-- Dump1090-like live flight terminal display via `pyaerial dump1090` (alias: `live`)
+- Decodes position, altitude, horizontal/vertical velocity, direction, callsign, and ICAO plane categories in real time via [`pyModeS`](https://mode-s.org/decode).
+- Concurrently stream from TCP raw inputs (e.g. `dump1090`), direct hardware SDRs (`py1090` via `pyrtlsdr`), or synthetic test feeds (`mock`).
+- Define custom polygon zones with rule constraints (`altitude`, `speed`, `distance`, `direction`, `eta`) and lifecycle event hooks (`on_activate`, `on_deactivate`, `while_active`).
+- Out-of-the-box support for console output (`print`), HTTP POST (`webhook`), and Apache Kafka message topics (`kafka`).
+- Two storage methods:
+  - Redis: live flight telemetry, active states, and real-time alert events.
+  - MongoDB: Persistent historical storage for important completed flights, track points, and alert episodes.
+- Offline resolution of ICAO 24-bit addresses to aircraft model, manufacturer, operator, and registration details via `aircraft.db`.
+- Webapp with real-time radar, flight tracking, alert feeds, and historical flight playback.
+- Terminal interfaces including an interactive flight viewer (`pyaerial view`) and a live dump1090-style ASCII table display (`pyaerial live`).
 
-## Installation
+---
 
-Dependencies are declared in [`pyproject.toml`](pyproject.toml).
+## Quick Start
+
+### Mock Mode
+
+Test PyAerial immediately without an SDR dongle, Redis, or MongoDB:
 
 ```bash
+# Clone and install dependencies
+git clone https://github.com/quantumbagel/PyAerial.git
+cd PyAerial
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .              # core (dump1090 receiver, print alerter)
-pip install -e ".[all]"       # + RTL-SDR receiver and Kafka alerter
+pip install -e .
+
+# Launch Web Portal in mock mode (simulates live traffic poorly)
+pyaerial web --mock
 ```
 
-Optional extras:
+Open your browser at **[http://localhost:10090](http://localhost:10090)** to view the live radar web application!
 
-| Extra | Packages | Enables |
-|-------|----------|---------|
-| `sdr` | `pyrtlsdr`, `numpy` | `py1090` RTL-SDR receiver |
-| `kafka` | `kafka-python-ng` | Kafka alerter |
-| `all` | both | full feature set |
+Alternatively, view simulated flight traffic directly in your terminal:
 
+```bash
+pyaerial live --mock
+```
 
-## Quick start
+---
 
-1. Edit `config.yaml` (see [Configuration](#configuration) below).
-2. Start MongoDB and Redis (or use `docker compose up`).
-3. Start a message source — for dump1090:
+### Dockerized Setup
 
-   ```bash
-   dump1090 --net --raw
-   ```
+Run PyAerial with MongoDB, Redis, and live SDR/dump1090 support:
 
-4. Run PyAerial:
+```bash
+# Start full production stack
+docker compose up --build
+```
 
+Or run the isolated mock container stack:
+
+```bash
+docker compose -f docker-compose.mock.yml up --build
+```
+
+---
+
+### No Docker Setup
+
+1. Edit [`config.yaml`](config.yaml) with your ground station coordinates and database connection details.
+2. Ensure MongoDB and Redis services are running locally or in Docker.
+3. Start your ADS-B message feeder (e.g. `dump1090 --net --raw`).
+4. Start the tracking engine:
    ```bash
    pyaerial run -c config.yaml
    ```
-
-5. Open the portal:
-
+5. In another terminal, start the web portal:
    ```bash
    pyaerial web -c config.yaml
    ```
 
-Validate a config without running:
+---
+
+## Installation
+
+### Prerequisites
+
+- Python: 3.11 or newer
+- Node.js: 20+
+- `dump1090` (recommended).
+
+### Optional Extras
+
+| Extra   | Dependencies        | Enabled Capabilities                             |
+|---------|---------------------|--------------------------------------------------|
+| `sdr`   | `pyrtlsdr`, `numpy` | Native `py1090` RTL-SDR hardware receiver plugin |
+| `kafka` | `kafka-python-ng`   | Kafka alert publisher plugin                     |
+| `dev`   | `pytest`, `httpx`   | Unit testing suite and API testing tools         |
+| `all`   | all above           | Full feature set                                 |
+
+To install all extras:
 
 ```bash
+pip install -e ".[all]"
+```
+
+---
+
+## CLI Reference
+
+PyAerial provides a unified command line interface via the `pyaerial` executable:
+
+| Subcommand          | Description                                                   |
+|---------------------|---------------------------------------------------------------|
+| `pyaerial run`      | Start the flight tracking engine                              |
+| `pyaerial web`      | Start the web portal (FastAPI + WebSocket + React SPA)        |
+| `pyaerial validate` | Check configuration file syntax, schema, and cross-references |
+| `pyaerial view`     | Interactive terminal flight viewer for live & historical data |
+| `pyaerial live`     | Real-time ASCII terminal flight display                       |
+
+### Usage Options
+
+```bash
+# Run tracking engine with a custom config
+pyaerial run -c /path/to/config.yaml --aircraft-db /path/to/aircraft.db
+
+# Validate configuration
 pyaerial validate -c config.yaml
+
+# Launch web portal on custom host and port
+pyaerial web -c config.yaml --host 0.0.0.0 --port 10090 [--mock]
+
+# Live flight viewer with 2-second refresh rate
+pyaerial live --interval 2.0 [--mock]
+
+# Print single-frame flight snapshot and exit
+pyaerial live --once [--mock]
+
+# Interactive flight search & detail view
+pyaerial view [-c config.yaml] [--mock]
 ```
 
-Browse saved and live flights from the CLI:
+### Environment Variable Overrides
 
-```bash
-pyaerial view -c config.yaml [--mock]
-```
+Environment variables override values in your `config.yaml`:
 
-Display live tracking in dump1090 style:
+| Environment Variable | Overrides Config Key | Description                                         |
+|----------------------|----------------------|-----------------------------------------------------|
+| `PYAERIAL_CONFIG`    | Config path          | Default configuration file location                 |
+| `PYAERIAL_MONGODB`   | `database.uri`       | MongoDB connection URI                              |
+| `PYAERIAL_REDIS`     | `database.redis_uri` | Redis connection URI                                |
+| `PYAERIAL_LOG_LEVEL` | `logging.level`      | Logging level (`debug`, `info`, `warning`, `error`) |
+| `PYAERIAL_LOG_FILE`  | `logging.file`       | Output log file path                                |
+| `PYAERIAL_HZ`        | `tracking.hz`        | Engine loop tick rate (Hz)                          |
 
-```bash
-pyaerial dump1090 --mock
-```
-
-## CLI
-
-| Command | Description |
-|---------|-------------|
-| `pyaerial run` | Start the tracking engine |
-| `pyaerial web` | Start the web portal |
-| `pyaerial validate` | Check configuration syntax and cross-references |
-| `pyaerial view` | Interactive flight viewer for saved & live data (alias: `statview`) |
-| `pyaerial dump1090` | Terminal live flight table display (alias: `live`) |
-
-
-
-Environment overrides (applied on top of the config file):
-
-| Variable | Config key |
-|----------|------------|
-| `PYAERIAL_MONGODB` | `database.uri` |
-| `PYAERIAL_REDIS` | `database.redis_uri` |
-| `PYAERIAL_LOG_LEVEL` | `logging.level` |
-| `PYAERIAL_LOG_FILE` | `logging.file` |
-| `PYAERIAL_HZ` | `tracking.hz` |
+---
 
 ## Configuration
 
-See [`config.yaml`](config.yaml) and [`src/pyaerial/examples/config.yaml`](src/pyaerial/examples/config.yaml) for reference configs.
+Configuration is stored in YAML format. See [`config.yaml`](config.yaml) and [`src/pyaerial/examples/config.yaml`](src/pyaerial/examples/config.yaml).
 
-### Top-level sections
+### Section Breakdown
 
-| Section | Purpose |
-|---------|---------|
-| `database` | MongoDB and Redis connection URIs (optional MongoDB database name) |
-| `tracking` | Tick rate, plane retention, deduplication, status output |
-| `logging` | Log level and optional log file |
-| `home` | Receiver position for ADS-B position decoding |
-| `receivers` | Named receiver instances |
-| `zones` | Geofences and their alert/retain rules |
+| Section        | Description                                                             |
+|----------------|-------------------------------------------------------------------------|
+| `database`     | MongoDB URI, optional database name, and Redis URI                      |
+| `tracking`     | Tick rate, plane retention, deduplication, status reporting             |
+| `logging`      | Log level and optional file logging                                     |
+| `home`         | Receiver station latitude & longitude for position decoding             |
+| `receivers`    | Configured named receiver instances                                     |
+| `zones`        | Geofence coordinates, alert rules, retain policies, and lifecycle hooks |
+| `alert_colors` | Custom hex color palette mapping for alert levels                       |
 
-### Database
+### Configuration Example
 
 ```yaml
 database:
   uri: mongodb://localhost:27017
   redis_uri: redis://localhost:6379/0
-  # name: pyaerial   # optional; defaults to URI path or pyaerial
-```
+  # name: pyaerial   # Optional DB name (defaults to URI path or 'pyaerial')
 
-### Tracking and logging
+tracking:
+  hz: 2                           # Main loop frequency (Hz)
+  remember_planes: 120            # Seconds to retain idle planes in RAM
+  backdate_packets: 10            # Position history depth for velocity calculations
+  duplicate_packet_merging: 5     # Seconds window to dedup duplicate hex frames
+  status_message_top_planes: 5    # Top planes to show in console status lines
+  advanced_status: true
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `tracking.hz` | `2` | Maximum main-loop tick rate |
-| `tracking.remember_planes` | `30` | Seconds to keep idle planes in RAM |
-| `tracking.backdate_packets` | `10` | Position history depth for speed/heading |
-| `tracking.duplicate_packet_merging` | `5` | Dedup window for identical message hex |
-| `logging.level` | `info` | Log level (`debug`, `info`, `warning`, `error`) |
-| `logging.file` | _(none)_ | Optional rotating log file path |
+logging:
+  level: info
+  # file: /var/log/pyaerial.log
 
-### Receivers
+home:
+  latitude: 35.727488
+  longitude: -78.695942
 
-```yaml
+alert_colors:
+  warn: "#f59e0b"
+  alert: "#ef4444"
+  cool: "#22d3ee"
+
 receivers:
   main:
     type: dump1090
@@ -149,163 +264,76 @@ receivers:
     type: py1090
     options:
       rtl_index: "0"
-```
 
-Built-in receivers: `dump1090` (TCP stream), `py1090` (RTL-SDR, requires `pyrtlsdr`).
-
-### Zones and rules
-
-Each zone defines a polygon and one or more rules. A rule becomes **active** while its `when` constraints pass and **inactive** when they stop. Lifecycle hooks run alerters on transitions:
-
-- `on_activate` — when conditions first match
-- `on_deactivate` — when conditions stop matching
-- `while_active` — periodic actions while the rule stays active (`interval_seconds` + `actions`)
-
-`dwell_seconds` controls Mongo retention only (seconds of matching ticks required to keep an unalerted flight).
-
-```yaml
 zones:
-  main:
-    coordinates: [[35.75, -78.90], ...]
+  airport_approach:
+    color: "#f59e0b"
+    coordinates:
+      - [35.7288, -78.6954]
+      - [35.7303, -78.6965]
+      - [35.7304, -78.6992]
+      - [35.7288, -78.6954]
     rules:
-      - name: warn
+      - name: low_altitude_warning
+        color: "#ef4444"
         when:
-          altitude: { max: 1000 }
-        dwell_seconds: 60
+          altitude: { max: 1000 }      # Altitude constraint (meters)
+          eta: { max: 120 }             # Estimated arrival time constraint (seconds)
+        dwell_seconds: 60              # Required seconds in zone for MongoDB retention
+        retain: true                   # Retain flight in MongoDB on completion
         on_activate:
           - method: print
-        retain: true
+          - method: webhook
+            options:
+              url: "https://example.com/alerts"
+        on_deactivate:
+          - method: print
+        while_active:
+          interval_seconds: 30
+          actions:
+            - method: print
 ```
 
-Field constraints use `min` / `max` on telemetry fields such as `altitude`, `horizontal_speed`, `direction`, `distance`, and `eta`.
+### Rule Field Constraints
 
-## Data model
+The `when` section supports numeric constraints (`min` / `max`) on telemetry and calculated metrics:
 
-### Redis (live)
+| Metric Field       | Unit               | Description                                    |
+|--------------------|--------------------|------------------------------------------------|
+| `altitude`         | Meters (`m`)       | Altitude (converted from feet)                 |
+| `horizontal_speed` | Meters/sec (`m/s`) | Speed over ground                              |
+| `vertical_speed`   | Meters/sec (`m/s`) | Rate of climb/descent                          |
+| `distance`         | Meters (`m`)       | Distance from ground home location             |
+| `direction`        | Degrees (`°`)      | Heading / course                               |
+| `eta`              | Seconds (`s`)      | Estimated time to enter or reach home location |
 
-Live flights, telemetry points, active alerts, and alert episodes are buffered in Redis while a flight is active. Keys are cleared when the flight expires.
+---
 
-### MongoDB (historical)
+## Data Model & Storage
 
-Retained flights are written once on flight end (when alerts fired or a `retain: true` rule matched).
+### Redis (Live Telemetry & Active State)
 
-| Collection | Purpose |
-|------------|---------|
-| `flights` | Retained completed flight documents |
-| `telemetry` | Track points keyed by `flight_id` + `timestamp` |
-| `alerts` | Alert episodes with zone, rule, activated/deactivated times, and position |
+Redis serves as an in-memory buffer while flights are active.
+- `flight:{flight_id}`: Current aircraft state JSON document.
+- `telemetry:{flight_id}`: Stream of recent track points.
+- `alerts`: Active alert episodes and log entries.
 
-Flight IDs use the form `{icao}-{first_packet_timestamp}` for both live and historical records.
+Data is automatically cleared or transitioned when a flight expires from memory.
 
-## Web portal
+### MongoDB (Historical Retention)
 
-The portal is a React + Vite SPA (`web/`) served by a FastAPI app (`pyaerial web`, default port `10090`). All data flows through WebSocket (`/ws/live`): live updates are pushed, and queries use request/response messages on the same connection.
+Completed flights matching geofence rules or having `retain: true` are stored permanently in MongoDB upon completion.
 
-### Development
+| Collection  | Purpose                                                                                                      |
+|-------------|--------------------------------------------------------------------------------------------------------------|
+| `flights`   | Retained flight summary documents (ICAO, callsign, start/end times, max speed, min altitude, alert flags)    |
+| `telemetry` | Time-series track points linked by `flight_id`                                                               |
+| `alerts`    | Recorded alert episodes detailing zone name, rule name, activation/deactivation times, and spatial telemetry |
 
-```bash
-# Terminal 1 — API + built static (or rebuild after UI changes)
-pip install -e .
-pyaerial web -c config.yaml
-
-# Terminal 2 — Vite dev server with /ws proxy
-cd web && npm install && npm run dev
-```
-
-Production build (output lands in `src/pyaerial/static/`, which is generated and not committed):
-
-```bash
-cd web && npm install && npm run build
-# or: ./scripts/build_web.sh
-pip install -e .
-pyaerial web
-```
-
-Docker builds the frontend automatically during image creation. For local editable installs, run the web build before `pyaerial web` or the portal will return HTTP 503.
-
-### WebSocket API
-
-Connect to `WS /ws/live`. The server pushes live snapshots and updates:
-
-| Message type | Description |
-|--------------|-------------|
-| `flights` | Live flight list |
-| `telemetry` | Incremental track points |
-| `alerts` | Alert events |
-
-Send JSON request messages for queries:
-
-```json
-{ "type": "request", "id": "<unique>", "action": "<action>", "params": { ... } }
-```
-
-| Action | Params | Description |
-|--------|--------|-------------|
-| `fetchFlights` | `view`: `live` \| `history` | Live flights (Redis) or retained history (MongoDB) |
-| `fetchFlight` | `flightId`, `view` | Flight metadata |
-| `fetchTelemetry` | `flightId`, `view`, `since?` | Track points |
-| `fetchAlerts` | `view`, `since?`, `flightId?`, `level?`, `limit?`, `skip?` | Alert events |
-| `fetchZones` | — | Home location and geofence polygons/rules |
-| `fetchConfig` | — | Home location and tracking settings |
-
-## Package layout
-
-```
-src/pyaerial/
-  cli.py              CLI entrypoint
-  engine.py           Main loop and receiver orchestration
-  tracker.py          Plane state and deduplication
-  store/              Redis live store + MongoDB history persistence
-  webapp.py           FastAPI portal server (WebSocket + static SPA)
-  config/             Typed schema and loader
-  receivers/          Receiver plugin registry
-  alerters/           Alert delivery plugin registry
-  calc/               Geo math, requirement evaluation, aircraft DB
-  examples/config.yaml
-```
-
-## Docker
-
-Full stack (live SDR/dump1090 + Redis + MongoDB):
-
-```bash
-docker compose up --build
-```
-
-Runs the engine (`pyaerial`) and web portal (`pyaerial web`) against shared MongoDB and Redis instances on host networking.
-
-Mock mode (standalone simulated feeder + web portal):
-
-```bash
-docker compose -f docker-compose.mock.yml up --build
-```
-
-or build directly:
-
-```bash
-docker build -t pyaerial-mock -f Dockerfile.mock .
-docker run -p 10090:10090 pyaerial-mock
-```
-
-## Dependencies
-
-Core (from `pyproject.toml`, installed via `pip install -e .`):
-
-- shapely, geopy — geofence math
-- pyModeS — ADS-B decoding
-- pymongo — MongoDB historical persistence
-- redis — live flight buffer
-- pydantic, ruamel.yaml — configuration
-- fastapi, uvicorn — web portal (REST, WebSocket, static SPA)
-- requests — optional callsign lookup
-
-Optional extras (`pip install -e ".[sdr]"` / `".[kafka]"` / `".[all]"`):
-
-- pyrtlsdr, numpy — RTL-SDR receiver
-- kafka-python-ng — Kafka alerter
-
-External: `dump1090` (recommended) for the `dump1090` receiver.
+Flight IDs follow the format: `{icao}-{first_packet_timestamp}` (e.g. `a1b2c3-1721832000`).
 
 ## License
 
-MIT — (c) 2024 Julian Reder (quantumbagel)
+This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
+
+© 2024–2026 **Julian Reder** ([@quantumbagel](https://github.com/quantumbagel)).
