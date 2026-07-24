@@ -225,10 +225,6 @@ export function DetailsDrawer({
                 <span className="ui-field-value" id="detail-country">
                   {flightDetail?.country && flightDetail.country !== 'Unknown' ? flightDetail.country : '—'}
                 </span>
-                <span className="ui-field-label">Flight Phase</span>
-                <span className="ui-field-value" id="detail-flight-phase">
-                  {flightDetail?.flight_phase || flightSummary?.flight_phase || '—'}
-                </span>
                 <span className="ui-field-label">
                   {isFlightLive(flightDetail ?? {}) ? 'Active Alerts' : 'Alert Summary'}
                 </span>

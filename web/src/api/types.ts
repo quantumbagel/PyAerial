@@ -25,7 +25,6 @@ export interface FlightSummary {
   country?: string | null;
   aircraft_type?: string | null;
   typecode?: string | null;
-  flight_phase?: string | null;
   latitude?: number | null;
   longitude?: number | null;
   altitude?: number | null;

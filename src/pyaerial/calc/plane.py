@@ -20,7 +20,6 @@ from shapely import Polygon
 from pyaerial.alerters import Alerter, create_alerter
 from pyaerial.calc import evaluate, geo
 from pyaerial.calc.aircraft_db import AircraftDB
-from pyaerial.calc.flight_phase import classify_flight_phase
 from pyaerial.calc.kalman import KinematicKalmanFilter
 from pyaerial.config.schema import AlertActionConfig, Config, RuleConfig
 from pyaerial.store.redis_live import RedisLiveStore
@@ -148,15 +147,6 @@ class PlaneCalculator:
             self._kalman_filters[icao] = kf
         else:
             kf.update(current[0], current[1], dt)
-
-        # Classify flight phase
-        alt_datum = get_latest(STORE_RECV_DATA, STORE_ALT, plane)
-        alt_ft = alt_datum.value if alt_datum else None
-        prev_alt_ft = None
-        if alt_datum and len(recv.get(STORE_ALT, [])) > 1:
-            prev_alt_ft = recv[STORE_ALT][-2].value
-        phase = classify_flight_phase(final_speed, alt_ft, prev_alt_ft, dt)
-        plane[STORE_INFO]["flight_phase"] = phase.value
 
         patch_append(plane, STORE_CALC_DATA, STORE_HORIZ_SPEED,
                      Datum(final_speed, speed_time))
