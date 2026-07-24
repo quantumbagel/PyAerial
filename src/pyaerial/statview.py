@@ -310,21 +310,26 @@ def _dump_flight(client: pymongo.MongoClient, plane_id: str, flight_id: str) -> 
         t = doc["timestamp"]
         
         # If position GeoJSON exists, reconstruct latitude and longitude
+        has_pos = False
         if "position" in doc and doc["position"].get("type") == "Point":
             coords = doc["position"].get("coordinates", [])
             if len(coords) == 2:
                 series_data.setdefault("longitude", []).append([t, coords[0]])
                 series_data.setdefault("latitude", []).append([t, coords[1]])
+                has_pos = True
                 
         # Process other fields in the telemetry document
         for k, v in doc.items():
-            if k not in ("_id", "flight_id", "icao", "timestamp", "position"):
-                field = k
-                if k == "horizontal_speed":
-                    field = "horizontal_speed"
-                elif k == "direction":
-                    field = "direction"
-                series_data.setdefault(field, []).append([t, v])
+            if k in ("_id", "flight_id", "icao", "timestamp", "position"):
+                continue
+            if has_pos and k in ("latitude", "longitude"):
+                continue
+            field = k
+            if k == "horizontal_speed":
+                field = "horizontal_speed"
+            elif k == "direction":
+                field = "direction"
+            series_data.setdefault(field, []).append([t, v])
 
     result: dict = {}
     for field, data_points in series_data.items():

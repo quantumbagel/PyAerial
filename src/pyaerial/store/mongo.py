@@ -240,6 +240,7 @@ class MongoStore:
         telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         alert_docs = [
             {
+                "alert_id": alert.get("alert_id") or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', alert.get('level', ''))}",
                 "flight_id": flight_id,
                 "icao": alert.get("icao", icao),
                 "callsign": alert.get("callsign") or info.get(STORE_CALLSIGN) or "",

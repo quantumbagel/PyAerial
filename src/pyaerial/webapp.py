@@ -170,7 +170,7 @@ def _alert_coords(doc: dict[str, Any]) -> tuple[Any, Any]:
 
 def _format_alert(doc: dict[str, Any]) -> dict[str, Any]:
     latitude, longitude = _alert_coords(doc)
-    alert_id = doc["alert_id"] if "alert_id" in doc else str(doc["_id"])
+    alert_id = doc.get("alert_id") or f"{doc.get('flight_id', '')}:{doc.get('zone', '')}:{doc.get('rule', doc.get('level', ''))}"
     activated_at = doc.get("activated_at", doc.get("timestamp"))
     return {
         "alert_id": alert_id,
@@ -229,7 +229,7 @@ def _alert_stats_by_flight(
     episodes: dict[str, dict[str, dict[str, float | None]]] = defaultdict(dict)
     for doc in db.get_collection("alerts").find({"flight_id": {"$in": flight_ids}}):
         flight_id = doc.get("flight_id")
-        alert_id = doc.get("alert_id") or str(doc.get("_id"))
+        alert_id = doc.get("alert_id") or f"{flight_id}:{doc.get('zone', '')}:{doc.get('rule', doc.get('level', ''))}"
         if not flight_id or not alert_id:
             continue
         bucket = episodes[flight_id].setdefault(alert_id, {
