@@ -1,0 +1,10 @@
+services:
+  mock:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock
+    container_name: pyaerial_mock
+    ports:
+      - "10090:10090"
+    environment:
+      PYAERIAL_CONFIG: /opt/PyAerial/config.yaml

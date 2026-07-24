@@ -1,0 +1,22 @@
+# Stage 1: Build the React web application
+FROM node:22-bookworm-slim AS webbuild
+WORKDIR /opt/PyAerial
+COPY web/package.json web/package-lock.json ./web/
+RUN cd web && npm ci
+COPY web/ ./web/
+RUN cd web && npm run build
+
+# Stage 2: PyAerial Mock Feeder Web Server
+FROM python:3.12-slim
+
+WORKDIR /opt/PyAerial
+COPY . /opt/PyAerial
+COPY --from=webbuild /opt/PyAerial/src/pyaerial/static /opt/PyAerial/src/pyaerial/static
+
+RUN pip install --no-cache-dir ".[all]"
+
+EXPOSE 10090
+
+ENV PYAERIAL_CONFIG=/opt/PyAerial/config.yaml
+
+CMD ["pyaerial", "web", "-c", "/opt/PyAerial/config.yaml", "--mock", "--host", "0.0.0.0", "--port", "10090"]

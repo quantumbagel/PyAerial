@@ -1,0 +1,9 @@
+web/node_modules
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.idea
+.vscode
+.DS_Store
