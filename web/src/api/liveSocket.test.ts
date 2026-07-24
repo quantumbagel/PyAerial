@@ -70,4 +70,24 @@ describe('liveSocket', () => {
     await expect(promise).rejects.toThrow('Request timed out');
     disconnect();
   });
+
+  it('handles fetchStats requests', async () => {
+    const disconnect = connectLiveSocket({ onMessage: () => {} });
+    const promise = sendWsRequest('fetchStats', { view: 'live' });
+    const ws = MockWebSocket.instances[0];
+    const req = JSON.parse(ws.sent[0]);
+    ws.receive({
+      type: 'response',
+      id: req.id,
+      success: true,
+      data: { live_flights: 5, active_alerts: 2, retained_flights: 10, historical_alerts: 25 },
+    });
+    await expect(promise).resolves.toEqual({
+      live_flights: 5,
+      active_alerts: 2,
+      retained_flights: 10,
+      historical_alerts: 25,
+    });
+    disconnect();
+  });
 });

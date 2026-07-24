@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
 import { connectLiveSocket } from '../api/liveSocket';
-import type { Alert, AppConfig, FlightSummary, PortalView, TelemetryPoint, ZonesData } from '../api/types';
+import type { Alert, AppConfig, FlightSummary, PortalView, ServerStats, TelemetryPoint, ZonesData } from '../api/types';
 import type { SidebarTab } from '../components/Sidebar';
 import { alertEpisodeKey } from '../utils/alertData';
 import { applyTelemetryPoint, mergeLiveFlights, sortFlights } from '../utils/flightData';
@@ -48,6 +48,7 @@ export function usePortalData({
 }: UsePortalDataOptions) {
   const [flightsData, setFlightsData] = useState<FlightSummary[]>([]);
   const [alertsData, setAlertsData] = useState<Alert[]>([]);
+  const [serverStats, setServerStats] = useState<ServerStats | null>(null);
   const [unreadAlertsCount, setUnreadAlertsCount] = useState(0);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('flights');
   const [zonesData, setZonesData] = useState<ZonesData | null>(null);
@@ -120,9 +121,10 @@ export function usePortalData({
   const fetchHistoryData = useCallback(async () => {
     const version = ++historyRefreshVersion.current;
     try {
-      const [flights, alerts] = await Promise.all([
+      const [flights, alerts, stats] = await Promise.all([
         api.fetchFlights('history'),
         api.fetchAlerts('history', { limit: ALERTS_LIMIT }),
+        api.fetchStats('history'),
       ]);
       if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
         return;
@@ -132,6 +134,7 @@ export function usePortalData({
         setAlertsData(alerts);
         hasMoreAlerts.current = alerts.length >= ALERTS_LIMIT;
       }
+      if (stats) setServerStats(stats);
       setFlightsError(null);
       setAlertsError(null);
     } catch (err) {
@@ -212,13 +215,15 @@ export function usePortalData({
 
   const fetchLiveData = useCallback(async () => {
     try {
-      const [flights, alerts] = await Promise.all([
+      const [flights, alerts, stats] = await Promise.all([
         api.fetchFlights('live'),
         api.fetchAlerts('live', { activeOnly: false }),
+        api.fetchStats('live'),
       ]);
       if (portalViewRef.current !== 'live') return;
       setFlightsData(sortFlights(flights));
       setAlertsData(alerts);
+      if (stats) setServerStats(stats);
       setFlightsError(null);
       setAlertsError(null);
     } catch (err) {
@@ -255,7 +260,9 @@ export function usePortalData({
       onClose: () => setWsConnected(false),
       onMessage: (message) => {
         if (portalViewRef.current !== 'live') return;
-        if (message.type === 'flights') {
+        if (message.type === 'stats') {
+          setServerStats(message.stats);
+        } else if (message.type === 'flights') {
           setIsLoadingFlights(false);
           setFlightsData((prev) => sortFlights(mergeLiveFlights(prev, message.flights)));
           setFlightsError(null);
@@ -437,6 +444,7 @@ export function usePortalData({
   return {
     flightsData,
     alertsData,
+    serverStats,
     unreadAlertsCount,
     sidebarTab,
     zonesData,

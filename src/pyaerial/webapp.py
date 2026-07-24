@@ -555,6 +555,29 @@ def _get_alerts(
     return [_format_alert(doc) for doc in cursor]
 
 
+def _get_stats(
+    live_store: RedisLiveStore | None,
+    db: pymongo.database.Database | None,
+    aircraft_db: AircraftDB | None,
+) -> dict[str, int]:
+    live_flights = len(_get_live_flights(live_store, aircraft_db)) if live_store else 0
+    active_alerts = len(_get_live_alerts(live_store, active_only=True)) if live_store else 0
+    retained_flights = 0
+    historical_alerts = 0
+    if db is not None:
+        retained_flights = db.get_collection("flights").count_documents({
+            "status": {"$ne": _FLIGHT_STATUS_LIVE},
+            "$or": [{"retained": True}, {"retained": {"$exists": False}}],
+        })
+        historical_alerts = db.get_collection("alerts").count_documents({})
+    return {
+        "live_flights": live_flights,
+        "active_alerts": active_alerts,
+        "retained_flights": retained_flights,
+        "historical_alerts": historical_alerts,
+    }
+
+
 def _app_config_payload(config: Config) -> dict[str, Any]:
     return {
         "home": {
@@ -577,6 +600,7 @@ class LiveBroadcaster:
         self._task: asyncio.Task | None = None
         self._last_flights_sig: str | None = None
         self._last_alerts_sig: str | None = None
+        self._last_stats_sig: str | None = None
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run_loop())
@@ -602,14 +626,17 @@ class LiveBroadcaster:
         if self.mock_store:
             flights = self.mock_store.get_live_flights()
             alerts = _get_mock_tracked_alerts(self.mock_store, flights, limit=50)
+            stats = self.mock_store.get_stats()
         else:
             flights = _get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
             alerts = (
                 _get_tracked_live_alerts(self.live_store, flights, limit=50)
                 if self.live_store else []
             )
+            stats = _get_stats(self.live_store, None, self.aircraft_db)
         await websocket.send_json({"type": "flights", "flights": _sanitize_for_json(flights)})
         await websocket.send_json({"type": "alerts", "alerts": _sanitize_for_json(alerts)})
+        await websocket.send_json({"type": "stats", "stats": _sanitize_for_json(stats)})
 
     async def _run_loop(self) -> None:
         while True:
@@ -627,12 +654,14 @@ class LiveBroadcaster:
             self.mock_store.update_live()
             flights = self.mock_store.get_live_flights()
             alerts = _get_mock_tracked_alerts(self.mock_store, flights, limit=50)
+            stats = self.mock_store.get_stats()
         else:
             flights = _get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
             alerts = (
                 _get_tracked_live_alerts(self.live_store, flights, limit=50)
                 if self.live_store else []
             )
+            stats = _get_stats(self.live_store, None, self.aircraft_db)
 
         flights_sig = json.dumps(_sanitize_for_json(flights), sort_keys=True, default=str)
         if flights_sig != self._last_flights_sig:
@@ -644,6 +673,12 @@ class LiveBroadcaster:
         if alerts_sig != self._last_alerts_sig:
             self._last_alerts_sig = alerts_sig
             msg = {"type": "alerts", "alerts": _sanitize_for_json(alerts)}
+            await self._broadcast(msg)
+
+        stats_sig = json.dumps(_sanitize_for_json(stats), sort_keys=True, default=str)
+        if stats_sig != self._last_stats_sig:
+            self._last_stats_sig = stats_sig
+            msg = {"type": "stats", "stats": _sanitize_for_json(stats)}
             await self._broadcast(msg)
 
         for websocket, since in list(self._clients.items()):
@@ -733,6 +768,9 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
                     active_only=active_only,
                 )
 
+            if action == "fetchStats":
+                return mock_store.get_stats()
+
             if action == "fetchZones":
                 return _zones_payload(config)
 
@@ -786,6 +824,9 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
                 db=db,
                 active_only=active_only,
             )
+
+        if action == "fetchStats":
+            return _get_stats(live_store, db, aircraft_db)
 
         if action == "fetchZones":
             return _zones_payload(config)

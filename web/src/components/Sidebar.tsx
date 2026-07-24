@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import type { Alert, FlightSummary, Zone } from '../api/types';
+import type { Alert, FlightSummary, ServerStats, Zone } from '../api/types';
 import { type FlightSortField, type SortDirection } from '../utils/flightData';
 import {
   alertEpisodeKey,
@@ -24,6 +24,7 @@ interface SidebarProps {
   flights: FlightSummary[];
   alerts: Alert[];
   allAlerts: Alert[];
+  serverStats?: ServerStats | null;
   activeFlightId: string | null;
   activeAlertId: string | null;
   flightCount: number;
@@ -58,6 +59,7 @@ export function Sidebar({
   flights,
   alerts,
   allAlerts,
+  serverStats,
   activeFlightId,
   activeAlertId,
   flightCount,
@@ -96,6 +98,20 @@ export function Sidebar({
   const activeAlertsCount = useMemo(() => {
     return allAlerts.filter(isAlertActive).length;
   }, [allAlerts]);
+
+  const displayFlightCount = useMemo(() => {
+    if (portalView === 'live') {
+      return serverStats?.live_flights ?? flightCount;
+    }
+    return serverStats?.retained_flights ?? flightCount;
+  }, [serverStats, portalView, flightCount]);
+
+  const displayAlertCount = useMemo(() => {
+    if (portalView === 'live') {
+      return serverStats?.active_alerts ?? activeAlertsCount;
+    }
+    return serverStats?.historical_alerts ?? allAlerts.length;
+  }, [serverStats, portalView, activeAlertsCount, allAlerts.length]);
 
   const alertCountByFlight = useMemo(() => {
     const map = new Map<string, number>();
@@ -160,16 +176,16 @@ export function Sidebar({
               <Stat>
                 <span id="flight-stat-label">{portalView === 'live' ? 'Live:' : 'Retained:'}</span>
                 <StatValue id="flight-count" tone="live">
-                  {flightCount}
+                  {displayFlightCount}
                 </StatValue>
               </Stat>
-              <Stat title={`${activeAlertsCount} active alert episode(s) out of ${alerts.length} shown`}>
-                <span>Active Alerts:</span>
+              <Stat title={portalView === 'live' ? `${displayAlertCount} active alert episode(s)` : `${displayAlertCount} total alert(s)`}>
+                <span>{portalView === 'live' ? 'Active Alerts:' : 'Alerts:'}</span>
                 <StatValue
                   id="alert-count"
-                  tone={activeAlertsCount > 0 ? 'alert' : 'warn'}
+                  tone="warn"
                 >
-                  {activeAlertsCount}
+                  {displayAlertCount}
                 </StatValue>
               </Stat>
             </div>

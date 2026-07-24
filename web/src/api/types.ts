@@ -94,10 +94,18 @@ export interface ZonesData {
 
 export type PortalView = 'live' | 'history';
 
+export interface ServerStats {
+  live_flights: number;
+  active_alerts: number;
+  retained_flights: number;
+  historical_alerts: number;
+}
+
 export type LiveMessage =
   | { type: 'flights'; flights: FlightSummary[] }
   | { type: 'telemetry'; telemetry: TelemetryPoint[]; timestamp: number }
-  | { type: 'alerts'; alerts: Alert[] };
+  | { type: 'alerts'; alerts: Alert[] }
+  | { type: 'stats'; stats: ServerStats };
 
 export interface AppConfig {
   home: { latitude: number; longitude: number };

@@ -527,3 +527,16 @@ class MockStore:
         if limit > 0:
             alerts = alerts[:limit]
         return alerts
+
+    def get_stats(self) -> dict[str, int]:
+        live_flights = len(self.get_live_flights())
+        active_alerts = len(self.get_alerts("live", active_only=True))
+        retained_flights = len(self.history_flights)
+        historical_alerts = len(self.history_alerts)
+        return {
+            "live_flights": live_flights,
+            "active_alerts": active_alerts,
+            "retained_flights": retained_flights,
+            "historical_alerts": historical_alerts,
+        }
+
