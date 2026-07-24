@@ -120,17 +120,37 @@ class RedisLiveStore:
                              *, alert_id: str, activated_at: float,
                              active: bool = True,
                              deactivated_at: float | None = None) -> None:
-        """Record alert activation/deactivation and update the live active set."""
+        """Record alert activation/deactivation and update the live active set.
+
+        On activation (active=True) a new document is appended.  On deactivation
+        (active=False) the *existing* document for this alert_id is updated in
+        place so there is never more than one document per alert episode.
+        """
         flight_id = flight_id_for_plane(plane)
         doc = self._alert_doc(plane, meta, payload, alert_id=alert_id,
                               activated_at=activated_at, active=active,
                               deactivated_at=deactivated_at)
         if active:
             self._mem_active_alerts[alert_id] = doc
+            self._mem_alerts[flight_id].append(doc)
+            self._mem_alert_episodes.insert(0, doc)
         else:
             self._mem_active_alerts.pop(alert_id, None)
-        self._mem_alerts[flight_id].append(doc)
-        self._mem_alert_episodes.insert(0, doc)
+            # Update the existing doc in _mem_alerts in-place.
+            flight_alerts = self._mem_alerts.get(flight_id, [])
+            for i, existing in enumerate(flight_alerts):
+                if existing.get("alert_id") == alert_id:
+                    flight_alerts[i] = doc
+                    break
+            else:
+                flight_alerts.append(doc)
+            # Update the existing doc in _mem_alert_episodes in-place.
+            for i, existing in enumerate(self._mem_alert_episodes):
+                if existing.get("alert_id") == alert_id:
+                    self._mem_alert_episodes[i] = doc
+                    break
+            else:
+                self._mem_alert_episodes.insert(0, doc)
 
         if not self._ensure_connected():
             return
@@ -138,12 +158,41 @@ class RedisLiveStore:
         encoded = json.dumps(doc, separators=(",", ":"))
         try:
             pipe = self.client.pipeline()
+            alerts_key = _KEY_ALERTS.format(flight_id=flight_id)
             if active:
                 pipe.hset(_KEY_ACTIVE_ALERTS, alert_id, encoded)
+                pipe.rpush(alerts_key, encoded)
+                pipe.lpush(_KEY_ALERT_EPISODES, encoded)
             else:
                 pipe.hdel(_KEY_ACTIVE_ALERTS, alert_id)
-            pipe.rpush(_KEY_ALERTS.format(flight_id=flight_id), encoded)
-            pipe.lpush(_KEY_ALERT_EPISODES, encoded)
+                # Replace the existing entry in the per-flight list.
+                existing_raw = self.client.lrange(alerts_key, 0, -1)
+                updated = False
+                for i, raw in enumerate(existing_raw):
+                    try:
+                        entry = json.loads(raw)
+                    except (ValueError, TypeError):
+                        continue
+                    if entry.get("alert_id") == alert_id:
+                        pipe.lset(alerts_key, i, encoded)
+                        updated = True
+                        break
+                if not updated:
+                    pipe.rpush(alerts_key, encoded)
+                # Replace the existing entry in the global episodes list.
+                episodes_raw = self.client.lrange(_KEY_ALERT_EPISODES, 0, -1)
+                ep_updated = False
+                for i, raw in enumerate(episodes_raw):
+                    try:
+                        entry = json.loads(raw)
+                    except (ValueError, TypeError):
+                        continue
+                    if entry.get("alert_id") == alert_id:
+                        pipe.lset(_KEY_ALERT_EPISODES, i, encoded)
+                        ep_updated = True
+                        break
+                if not ep_updated:
+                    pipe.lpush(_KEY_ALERT_EPISODES, encoded)
             pipe.execute()
         except RedisError as exc:
             log.error("Failed to record alert episode for %s: %s", flight_id, exc)
@@ -385,6 +434,7 @@ class RedisLiveStore:
         except RedisError as exc:
             log.error("Failed to read live alerts: %s", exc)
             return []
+
 
     def pop_flight(self, flight_id: str) -> dict[str, Any]:
         """Return buffered flight data and delete Redis keys for the flight."""
