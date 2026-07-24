@@ -67,6 +67,10 @@ zones:
         dwell_seconds: 60
         on_activate:
           - method: print
+          - method: webhook
+            options:
+              url: https://discord.com/api/webhooks/1530220048600403998/FUK7Ljb46XrxIQL54xFnMeREq2-C1CUpwcjRINrfAWeKHVe6l_hPewXNueB-VNbVxMsu
+              format: discord
         retain: true
       - name: alert
         when:
@@ -75,4 +79,8 @@ zones:
         dwell_seconds: 60
         on_activate:
           - method: print
+          - method: webhook
+            options:
+              url: https://discord.com/api/webhooks/1530220048600403998/FUK7Ljb46XrxIQL54xFnMeREq2-C1CUpwcjRINrfAWeKHVe6l_hPewXNueB-VNbVxMsu
+              format: discord
         retain: true
