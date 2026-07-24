@@ -76,20 +76,3 @@ zones:
         on_activate:
           - method: print
         retain: true
-  cool:
-    color: "#22d3ee"
-    coordinates:
-      [[35.65, -79.10],
-       [35.65, -78.50],
-       [36.05, -78.50],
-       [36.05, -79.10],
-       [35.65, -79.10]]
-    rules:
-      - name: cool
-        when:
-          altitude: { max: 3000 }
-          eta: { max: 300 }
-        dwell_seconds: 60
-        on_activate:
-          - method: print
-        retain: true
