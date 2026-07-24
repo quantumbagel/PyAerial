@@ -20,6 +20,8 @@ from shapely import Polygon
 from pyaerial.alerters import Alerter, create_alerter
 from pyaerial.calc import evaluate, geo
 from pyaerial.calc.aircraft_db import AircraftDB
+from pyaerial.calc.flight_phase import classify_flight_phase
+from pyaerial.calc.kalman import KinematicKalmanFilter
 from pyaerial.config.schema import AlertActionConfig, Config, RuleConfig
 from pyaerial.store.redis_live import RedisLiveStore
 from pyaerial.constants import (
@@ -65,8 +67,10 @@ class PlaneCalculator:
         self.backdate = config.tracking.backdate_packets
         self._alerters: dict[tuple[str, str], Alerter] = {}
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="callsign-lookup")
+        self._alert_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="alert-dispatch")
         self._pending_lookups: set[str] = set()
         self._lock = threading.Lock()
+        self._kalman_filters: dict[str, KinematicKalmanFilter] = {}
         # (icao, zone, rule) -> {activated_at, last_periodic, alert_id}
         self._alert_state: dict[tuple[str, str, str], dict] = {}
 
@@ -75,10 +79,19 @@ class PlaneCalculator:
             alerter.close()
         self._alerters.clear()
         self._executor.shutdown(wait=False)
+        self._alert_executor.shutdown(wait=False)
 
-    def calculate_all(self, planes: dict[str, dict]) -> None:
-        for plane in planes.values():
-            self.calculate_plane(plane)
+    def calculate_all(self, planes: dict[str, dict], dirty_icaos: set[str] | None = None) -> None:
+        if dirty_icaos is not None:
+            # Calculate for dirty planes + active alert planes (for periodic checks)
+            active_alert_icaos = {key[0] for key in self._alert_state}
+            target_icaos = dirty_icaos | active_alert_icaos
+            for icao, plane in planes.items():
+                if icao.lower() in target_icaos or icao.upper() in target_icaos:
+                    self.calculate_plane(plane)
+        else:
+            for plane in planes.values():
+                self.calculate_plane(plane)
 
     def calculate_plane(self, plane: dict) -> None:
         recv = plane.get(STORE_RECV_DATA, {})
@@ -125,6 +138,25 @@ class PlaneCalculator:
             sin_val = alpha * math.sin(rad_current) + (1.0 - alpha) * math.sin(rad_prev)
             cos_val = alpha * math.cos(rad_current) + (1.0 - alpha) * math.cos(rad_prev)
             final_heading = (math.degrees(math.atan2(sin_val, cos_val)) + 360.0) % 360.0
+
+        # Run Kalman filter update
+        icao = plane[STORE_INFO][STORE_ICAO].lower()
+        kf = self._kalman_filters.get(icao)
+        dt = current_time - previous_time if previous_time > 0 else 0.0
+        if kf is None:
+            kf = KinematicKalmanFilter(current[0], current[1])
+            self._kalman_filters[icao] = kf
+        else:
+            kf.update(current[0], current[1], dt)
+
+        # Classify flight phase
+        alt_datum = get_latest(STORE_RECV_DATA, STORE_ALT, plane)
+        alt_ft = alt_datum.value if alt_datum else None
+        prev_alt_ft = None
+        if alt_datum and len(recv.get(STORE_ALT, [])) > 1:
+            prev_alt_ft = recv[STORE_ALT][-2].value
+        phase = classify_flight_phase(final_speed, alt_ft, prev_alt_ft, dt)
+        plane[STORE_INFO]["flight_phase"] = phase.value
 
         patch_append(plane, STORE_CALC_DATA, STORE_HORIZ_SPEED,
                      Datum(final_speed, speed_time))
@@ -363,7 +395,7 @@ class PlaneCalculator:
     def _run_actions(self, actions: list[AlertActionConfig], meta: dict, payload: dict) -> None:
         for action in actions:
             alerter = self._get_alerter(action.method, action.options)
-            alerter.alert(meta, payload)
+            self._alert_executor.submit(alerter.alert, meta, payload)
 
     def _on_activate(self, plane: dict, zone_name: str, rule: RuleConfig, eta: float,
                      geofence_etas: dict[str, float], position: tuple[float, float],

@@ -138,8 +138,9 @@ class Engine:
                 raw = self._drain_messages()
                 new_messages = self.tracker.collect_new_messages(raw)
                 processed = self.tracker.ingest(new_messages)
+                dirty_icaos = self.tracker.get_and_clear_dirty_icaos()
 
-                self.calculator.calculate_all(self.tracker.planes)
+                self.calculator.calculate_all(self.tracker.planes, dirty_icaos=dirty_icaos)
                 self.live_store.write_live_planes(self.tracker.planes)
 
                 now = time.time()

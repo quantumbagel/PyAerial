@@ -36,6 +36,14 @@ class Tracker:
         self.planes: dict[str, dict] = {}
         # hex -> most recent timestamp we have seen for that hex
         self._recent: dict[str, float] = {}
+        self._dirty_icaos: set[str] = set()
+
+    def get_and_clear_dirty_icaos(self) -> set[str]:
+        """Return and clear the set of ICAOs updated since last tick."""
+        dirty = set(self._dirty_icaos)
+        self._dirty_icaos.clear()
+        return dirty
+
 
     def ingest(self, messages: list[tuple[str, float]]) -> int:
         """Classify and merge ``messages`` into the plane store. Returns count processed."""
@@ -130,6 +138,7 @@ class Tracker:
         message_data = classified.data
         typecode_cat = classified.typecode_category
         icao = message_data[STORE_INFO][STORE_ICAO]
+        self._dirty_icaos.add(icao)
 
         if icao not in self.planes:
             plane = message_data
