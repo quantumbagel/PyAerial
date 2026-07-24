@@ -28,6 +28,24 @@ Resolver = Callable[[str], float | None]
 
 _RECV_FIELDS = {STORE_LAT, STORE_LONG, STORE_ALT, STORE_VERT_SPEED}
 _CALC_FIELDS = {STORE_HORIZ_SPEED, STORE_HEADING}
+_FIELD_ALIASES = {
+    "speed": STORE_HORIZ_SPEED,
+    "horizontal_speed": STORE_HORIZ_SPEED,
+    "heading": STORE_HEADING,
+    "direction": STORE_HEADING,
+    "alt": STORE_ALT,
+    "altitude": STORE_ALT,
+    "vert_speed": STORE_VERT_SPEED,
+    "vertical_speed": STORE_VERT_SPEED,
+    "lat": STORE_LAT,
+    "latitude": STORE_LAT,
+    "lon": STORE_LONG,
+    "long": STORE_LONG,
+    "longitude": STORE_LONG,
+    "dist": STORE_DISTANCE,
+    "distance": STORE_DISTANCE,
+    "eta": ALERT_CAT_ETA,
+}
 
 
 def make_resolver(plane: dict, eta: float, polygon: Polygon,
@@ -35,15 +53,16 @@ def make_resolver(plane: dict, eta: float, polygon: Polygon,
     """Build a resolver that reads a plane's data fields (optionally at a time)."""
 
     def resolve(field: str) -> float | None:
-        if field in _RECV_FIELDS:
-            datum = get_latest(STORE_RECV_DATA, field, plane, at_time)
+        target_field = _FIELD_ALIASES.get(field, field)
+        if target_field in _RECV_FIELDS:
+            datum = get_latest(STORE_RECV_DATA, target_field, plane, at_time)
             return datum.value if datum else None
-        if field in _CALC_FIELDS:
-            datum = get_latest(STORE_CALC_DATA, field, plane, at_time)
+        if target_field in _CALC_FIELDS:
+            datum = get_latest(STORE_CALC_DATA, target_field, plane, at_time)
             return datum.value if datum else None
-        if field == ALERT_CAT_ETA:
+        if target_field == ALERT_CAT_ETA:
             return eta
-        if field == STORE_DISTANCE:
+        if target_field == STORE_DISTANCE:
             return geo.distance_to_polygon(polygon, position)
         return None
 

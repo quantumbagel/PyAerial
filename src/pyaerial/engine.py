@@ -194,6 +194,7 @@ class Engine:
         log.info("Shutdown complete")
 
     def _finalize_plane(self, plane: dict) -> None:
+        self.calculator.deactivate_plane(plane)
         flight_id = flight_id_for_plane(plane)
         redis_data = self.live_store.pop_flight(flight_id)
         self.mongo_store.finalize_plane(plane, alerts=redis_data.get("alerts", []))

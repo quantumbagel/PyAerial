@@ -134,6 +134,55 @@ class PlaneCalculator:
         callsign = self._resolve_callsign(plane)
         self._check_alerts(plane, current, final_heading, final_speed, callsign)
 
+    def deactivate_plane(self, plane: dict) -> None:
+        """Deactivate and clean up all active alerts for a plane being removed or expired."""
+        info = plane.get(STORE_INFO, {})
+        if STORE_ICAO not in info:
+            return
+        icao = info[STORE_ICAO].lower()
+        stale_keys = [k for k in self._alert_state if k[0] == icao]
+        if not stale_keys:
+            return
+
+        now = time.time()
+        callsign = info.get(STORE_CALLSIGN) or ""
+        recv = plane.get(STORE_RECV_DATA, {})
+        lat_series = recv.get(STORE_LAT, [])
+        lon_series = recv.get(STORE_LONG, [])
+        if lat_series and lon_series:
+            position = (lat_series[-1].value, lon_series[-1].value)
+        else:
+            position = (0.0, 0.0)
+
+        geofence_etas = {z: math.inf for z in self.config.zones}
+        for key in stale_keys:
+            zone_name, rule_name = key[1], key[2]
+            state = self._alert_state.pop(key)
+            zone = self.config.zones.get(zone_name)
+            rule = next((r for r in zone.rules if r.name == rule_name), None) if zone else None
+            if rule is not None:
+                self._on_deactivate(
+                    plane, zone_name, rule, math.inf, geofence_etas,
+                    position, callsign, now, state["alert_id"], state["activated_at"],
+                )
+            elif self.store is not None:
+                self.store.record_alert_episode(
+                    plane,
+                    {
+                        STORE_ICAO: icao,
+                        STORE_CALLSIGN: callsign,
+                        ALERT_CAT_TYPE: rule_name,
+                        ALERT_CAT_ZONE: zone_name,
+                        ALERT_CAT_ETA: math.inf,
+                    },
+                    self._build_payload(plane, position),
+                    alert_id=state["alert_id"],
+                    activated_at=state["activated_at"],
+                    deactivated_at=now,
+                    active=False,
+                )
+        plane["active_alerts"] = []
+
     def _choose_speed(self, plane: dict, computed: float, current_time: float) -> tuple[float, float]:
         recv = plane.get(STORE_RECV_DATA, {})
         if STORE_HORIZ_SPEED not in recv:
@@ -206,7 +255,7 @@ class PlaneCalculator:
 
     def _check_alerts(self, plane: dict, position: tuple[float, float],
                       heading: float, speed: float, callsign: str) -> None:
-        icao = plane[STORE_INFO][STORE_ICAO]
+        icao = plane[STORE_INFO][STORE_ICAO].lower()
         flight_id = flight_id_for_plane(plane)
         now = time.time()
         geofence_etas: dict[str, float] = {}
@@ -261,12 +310,29 @@ class PlaneCalculator:
         for key in stale_keys:
             zone_name, rule_name = key[1], key[2]
             state = self._alert_state.pop(key)
-            zone = self.config.zones[zone_name]
-            rule = next(r for r in zone.rules if r.name == rule_name)
+            zone = self.config.zones.get(zone_name)
+            rule = next((r for r in zone.rules if r.name == rule_name), None) if zone else None
             eta = geofence_etas.get(zone_name, math.inf)
-            self._on_deactivate(plane, zone_name, rule, eta, geofence_etas,
-                                position, callsign, now, state["alert_id"],
-                                state["activated_at"])
+            if rule is not None:
+                self._on_deactivate(plane, zone_name, rule, eta, geofence_etas,
+                                    position, callsign, now, state["alert_id"],
+                                    state["activated_at"])
+            elif self.store is not None:
+                self.store.record_alert_episode(
+                    plane,
+                    {
+                        STORE_ICAO: icao,
+                        STORE_CALLSIGN: callsign,
+                        ALERT_CAT_TYPE: rule_name,
+                        ALERT_CAT_ZONE: zone_name,
+                        ALERT_CAT_ETA: eta,
+                    },
+                    self._build_payload(plane, position),
+                    alert_id=state["alert_id"],
+                    activated_at=state["activated_at"],
+                    deactivated_at=now,
+                    active=False,
+                )
 
         plane["active_alerts"] = active_alerts
 

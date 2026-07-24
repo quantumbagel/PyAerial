@@ -42,7 +42,7 @@ def calculate_speed(previous: tuple[float, float], current: tuple[float, float],
 def distance_to_polygon(polygon: Polygon, position: tuple[float, float]) -> float:
     """Shortest distance (km) from ``position`` to the edge of ``polygon``."""
     point = Point(position)
-    if polygon.contains(point):
+    if polygon.intersects(point) or polygon.covers(point):
         return 0.0
     nearest = nearest_points(polygon, point)[0]
     return geodesic((nearest.x, nearest.y), position).km
@@ -54,10 +54,12 @@ def time_to_enter_geofence(position: tuple[float, float], heading: float, speed:
     Estimate the seconds until a plane at ``position`` (heading/speed) enters the
     geofence, or ``math.inf`` if the projected path never intersects it.
     """
+    point = Point(position)
+    if polygon.intersects(point) or polygon.covers(point):
+        return 0.0
+
     if speed <= 0:
         return math.inf
-    if polygon.contains(Point(position)):
-        return 0.0
 
     # 1. Bounding box lower bound distance check (extremely fast early-return)
     min_lat, min_lon, max_lat, max_lon = polygon.bounds
@@ -73,26 +75,18 @@ def time_to_enter_geofence(position: tuple[float, float], heading: float, speed:
     if min_dist_lb > distance_approx:
         return math.inf
 
-    # 2. Earth's curvature adaptive densification
-    if distance_approx <= 100.0:
-        dest = geodesic(kilometers=distance_approx).destination(position, heading)
-        ray = LineString([Point(position), Point(dest.latitude, dest.longitude)])
-    else:
-        step_km = 100.0
-        num_steps = max(2, min(int(distance_approx / step_km), 15))
-        points = [Point(position)]
-        for i in range(1, num_steps + 1):
-            fraction = i / num_steps
-            dest = geodesic(kilometers=distance_approx * fraction).destination(position, heading)
-            points.append(Point(dest.latitude, dest.longitude))
-        ray = LineString(points)
+    # 2. Continuous ray calculation without discretized steps
+    dest = geodesic(kilometers=distance_approx).destination(position, heading)
+    ray = LineString([point, Point(dest.latitude, dest.longitude)])
 
     # 3. Robust entry calculation using nearest_points to support multi-part geometries
     intersection = ray.intersection(polygon)
     if intersection.is_empty:
         return math.inf
 
-    _, entry_point = nearest_points(Point(position), intersection)
+    _, entry_point = nearest_points(point, intersection)
     entry = (entry_point.x, entry_point.y)
     return geodesic(position, entry).km / speed * 3600
+
+
 
