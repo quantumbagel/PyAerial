@@ -63,7 +63,7 @@ graph TD
 
 ## Features
 
-- Decodes position, altitude, horizontal/vertical velocity, direction, callsign, and ICAO plane categories in real time via [`pyModeS`](https://mode-s.org/decode).
+- Decodes position, altitude, horizontal/vertical velocity, direction, callsign, and ICAO plane categories in real time via [`pyModeS`](https://github.com/junzis/pymodes).
 - Concurrently stream from TCP raw inputs (e.g. `dump1090`), direct hardware SDRs (`py1090` via `pyrtlsdr`), or synthetic test feeds (`mock`).
 - Define custom polygon zones with rule constraints (`altitude`, `speed`, `distance`, `direction`, `eta`) and lifecycle event hooks (`on_activate`, `on_deactivate`, `while_active`).
 - Out-of-the-box support for console output (`print`), HTTP POST (`webhook`), and Apache Kafka message topics (`kafka`).
