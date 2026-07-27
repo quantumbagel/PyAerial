@@ -169,7 +169,7 @@
 
 .ui-badge--alert {
     background: var(--alert-dark);
-    color: var(--text);
+    color: #fca5a5;
 }
 
 .ui-badge--info {
@@ -458,9 +458,44 @@
 }
 
 .ui-display.is-active {
-    border-color: var(--accent) !important;
+    border-color: var(--neutral);
     border-left-width: 4px !important;
-    background: rgba(59, 130, 246, 0.08) !important;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.ui-display--warn.is-active {
+    border-color: var(--warn) !important;
+    border-left-color: var(--warn) !important;
+    background: color-mix(in srgb, var(--warn) 14%, transparent) !important;
+    box-shadow: inset 0 0 12px color-mix(in srgb, var(--warn) 15%, transparent);
+}
+
+.ui-display--warn:focus-visible {
+    outline: 2px solid var(--warn) !important;
+    outline-offset: 2px;
+}
+
+.ui-display--alert.is-active {
+    border-color: var(--alert) !important;
+    border-left-color: var(--alert) !important;
+    background: color-mix(in srgb, var(--alert) 14%, transparent) !important;
+    box-shadow: inset 0 0 12px color-mix(in srgb, var(--alert) 15%, transparent);
+}
+
+.ui-display--alert:focus-visible {
+    outline: 2px solid var(--alert) !important;
+    outline-offset: 2px;
+}
+
+.ui-display--info.is-active {
+    border-color: var(--accent) !important;
+    border-left-color: var(--accent) !important;
+    background: color-mix(in srgb, var(--accent) 14%, transparent) !important;
+}
+
+.ui-display--info:focus-visible {
+    outline: 2px solid var(--accent) !important;
+    outline-offset: 2px;
 }
 
 .ui-display--muted {

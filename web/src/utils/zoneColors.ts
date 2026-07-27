@@ -64,3 +64,44 @@ export function alertColorFor(
 
   return zoneColorFor(zoneName, zones);
 }
+
+function parseHex(hex: string): [number, number, number] | null {
+  const clean = hex.replace('#', '').trim();
+  if (clean.length === 3) {
+    const r = parseInt(clean[0] + clean[0], 16);
+    const g = parseInt(clean[1] + clean[1], 16);
+    const b = parseInt(clean[2] + clean[2], 16);
+    return [r, g, b];
+  }
+  if (clean.length === 6) {
+    const r = parseInt(clean.slice(0, 2), 16);
+    const g = parseInt(clean.slice(2, 4), 16);
+    const b = parseInt(clean.slice(4, 6), 16);
+    return [r, g, b];
+  }
+  return null;
+}
+
+export function getAccessibleBadgeTextColor(colorHex: string): string {
+  const rgb = parseHex(colorHex);
+  if (!rgb) return colorHex;
+  const [r, g, b] = rgb;
+
+  // Red colors (such as #ef4444, #7f1d1d, #b91c1c) offer poor contrast against dark backgrounds.
+  // Map red tones (where red dominates and green/blue are roughly equal) to a light, high-contrast red (#fca5a5).
+  if (r > g * 1.5 && r > b * 1.5 && Math.abs(g - b) < 60) {
+    return '#fca5a5';
+  }
+
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  if (luminance < 0.55) {
+    const factor = 0.55 / Math.max(luminance, 0.1);
+    const newR = Math.min(255, Math.round(r * factor + 60));
+    const newG = Math.min(255, Math.round(g * factor + 60));
+    const newB = Math.min(255, Math.round(b * factor + 60));
+    return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+  }
+
+  return colorHex;
+}
+

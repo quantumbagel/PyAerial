@@ -36,10 +36,10 @@ export function AlertTimeline({ alerts, activeAlertId, zones, alertColors, onSel
           : null;
         const durationStr = formatEpisodeDuration(alert.activated_at, alert.deactivated_at);
         const timeLabel = isEpisodeActive
-          ? `Started ${activatedStr}`
+          ? `${activatedStr} (${durationStr})`
           : deactivatedStr
-            ? `${activatedStr} – ${deactivatedStr}`
-            : `Activated ${activatedStr}`;
+            ? `${activatedStr} – ${deactivatedStr} (${durationStr})`
+            : `${activatedStr} (${durationStr})`;
         const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
         const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
         const title = `${isEpisodeActive ? 'Active' : 'Ended'} episode · ${durationStr}\nActivated: ${alert.activated_at ? new Date(alert.activated_at * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}${isEpisodeActive ? `\nETA: ${formatAlertEta(alert.eta)}` : ''}`;
@@ -65,7 +65,6 @@ export function AlertTimeline({ alerts, activeAlertId, zones, alertColors, onSel
               <span className="ui-row__trailing">{timeLabel}</span>
             </div>
             <div className="ui-display__meta">
-              <span><strong>Duration:</strong> {durationStr}</span>
               <span><strong>Alt:</strong> {formatAlertAltitude(alert.altitude)}</span>
               {isEpisodeActive && (
                 <span><strong>ETA:</strong> {formatAlertEta(alert.eta)}</span>

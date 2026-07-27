@@ -3,7 +3,7 @@ import * as api from '../api/client';
 import { connectLiveSocket } from '../api/liveSocket';
 import type { Alert, AppConfig, FlightSummary, PortalView, ServerStats, TelemetryPoint, ZonesData } from '../api/types';
 import type { SidebarTab } from '../components/Sidebar';
-import { alertEpisodeKey } from '../utils/alertData';
+import { dedupeAlerts } from '../utils/alertData';
 import { applyTelemetryPoint, mergeLiveFlights, sortFlights } from '../utils/flightData';
 
 const ALERTS_LIMIT = 50;
@@ -131,7 +131,7 @@ export function usePortalData({
       }
       setFlightsData(sortFlights(flights));
       if (!isFetchingAlerts.current) {
-        setAlertsData(alerts);
+        setAlertsData(dedupeAlerts(alerts));
         hasMoreAlerts.current = alerts.length >= ALERTS_LIMIT;
       }
       if (stats) setServerStats(stats);
@@ -164,12 +164,9 @@ export function usePortalData({
       }
       if (append) {
         if (data.length < ALERTS_LIMIT) hasMoreAlerts.current = false;
-        setAlertsData((prev) => {
-          const ids = new Set(prev.map((a) => alertEpisodeKey(a)));
-          return [...prev, ...data.filter((a) => !ids.has(alertEpisodeKey(a)))];
-        });
+        setAlertsData((prev) => dedupeAlerts([...prev, ...data]));
       } else {
-        setAlertsData(data);
+        setAlertsData(dedupeAlerts(data));
         hasMoreAlerts.current = data.length >= ALERTS_LIMIT;
       }
       setAlertsError(null);
@@ -222,7 +219,7 @@ export function usePortalData({
       ]);
       if (portalViewRef.current !== 'live') return;
       setFlightsData(sortFlights(flights));
-      setAlertsData(alerts);
+      setAlertsData(dedupeAlerts(alerts));
       if (stats) setServerStats(stats);
       setFlightsError(null);
       setAlertsError(null);
@@ -296,16 +293,17 @@ export function usePortalData({
         } else if (message.type === 'alerts') {
           setIsLoadingAlerts(false);
           setAlertsData((prev) => {
+            const dedupedIncoming = dedupeAlerts(message.alerts);
             if (isInitialAlertsLoad.current) {
               isInitialAlertsLoad.current = false;
-              return message.alerts;
+              return dedupedIncoming;
             }
 
             const prevMap = new Map(prev.map((a) => [a.alert_id, a]));
             const events: { alert: Alert; eventType: 'activated' | 'deactivated' }[] = [];
             const newlyActivated: Alert[] = [];
 
-            message.alerts.forEach((curr: Alert) => {
+            dedupedIncoming.forEach((curr: Alert) => {
               const prevAlert = prevMap.get(curr.alert_id);
               const isCurrActive = curr.active !== false && !curr.deactivated_at;
               if (!prevAlert) {
@@ -333,7 +331,7 @@ export function usePortalData({
                 setUnreadAlertsCount((c) => c + activatedCount);
               }
             }
-            return message.alerts;
+            return dedupedIncoming;
           });
           setAlertsError(null);
         } else if (message.type === 'telemetry') {

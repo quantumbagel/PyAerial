@@ -20,18 +20,58 @@ export type AlertSortField =
 
 export type SortDirection = 'asc' | 'desc';
 
-/** Stable identity for merging live updates into an existing episode row. */
+/** Stable identity for an alert episode (does not change when moving between active and ended states). */
 export function alertEpisodeIdentity(alert: Alert): string {
-  if (alert.alert_id && alert.activated_at != null) {
-    return `${alert.alert_id}:${alert.activated_at}`;
+  if (alert.alert_id) {
+    if (alert.activated_at != null) {
+      return `${alert.alert_id}:${alert.activated_at}`;
+    }
+    return alert.alert_id;
   }
-  return alertEpisodeKey(alert);
+  if (alert.flight_id && alert.zone && alert.rule && alert.activated_at != null) {
+    return `${alert.flight_id}:${alert.zone}:${alert.rule}:${alert.activated_at}`;
+  }
+  if (alert.activated_at != null) {
+    return `episode:${alert.activated_at}`;
+  }
+  return `episode:${alert.icao || alert.callsign || ''}:${alert.zone || ''}:${alert.rule || ''}`;
+}
+
+/** Unique key for a single alert episode row (stable across active/ended status changes). */
+export function alertEpisodeKey(alert: Alert, fallbackIndex?: number): string {
+  const identity = alertEpisodeIdentity(alert);
+  if (identity) return identity;
+  return `episode-index:${fallbackIndex ?? 0}`;
+}
+
+/** Deduplicate alert list by unique episode identity so active and completed states of the same episode are merged into a single entry. */
+export function dedupeAlerts(alerts: Alert[]): Alert[] {
+  if (alerts.length === 0) return alerts;
+  const map = new Map<string, Alert>();
+  for (const alert of alerts) {
+    const key = alertEpisodeIdentity(alert);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, alert);
+    } else {
+      const deactivated_at = alert.deactivated_at ?? existing.deactivated_at;
+      const isEnded = alert.active === false || existing.active === false || deactivated_at != null;
+      map.set(key, {
+        ...existing,
+        ...alert,
+        active: isEnded ? false : (alert.active ?? existing.active ?? true),
+        deactivated_at: deactivated_at ?? undefined,
+        activated_at: alert.activated_at ?? existing.activated_at,
+      });
+    }
+  }
+  return Array.from(map.values());
 }
 
 /** Merge incoming alert snapshots into an existing list by episode identity. */
 export function mergeAlertsByEpisode(existing: Alert[], updates: Alert[]): Alert[] {
   if (updates.length === 0) {
-    return existing;
+    return dedupeAlerts(existing);
   }
   const updateMap = new Map(updates.map((alert) => [alertEpisodeIdentity(alert), alert]));
   const mergedKeys = new Set<string>();
@@ -40,40 +80,25 @@ export function mergeAlertsByEpisode(existing: Alert[], updates: Alert[]): Alert
     const update = updateMap.get(key);
     if (update) {
       mergedKeys.add(key);
-      return { ...alert, ...update };
+      const deactivated_at = update.deactivated_at ?? alert.deactivated_at;
+      const isEnded = update.active === false || alert.active === false || deactivated_at != null;
+      return {
+        ...alert,
+        ...update,
+        active: isEnded ? false : (update.active ?? alert.active ?? true),
+        deactivated_at: deactivated_at ?? undefined,
+      };
     }
     return alert;
   });
   for (const alert of updates) {
     const key = alertEpisodeIdentity(alert);
-    if (!mergedKeys.has(key) && !merged.some((item) => alertEpisodeIdentity(item) === key)) {
+    if (!mergedKeys.has(key)) {
       merged.push(alert);
       mergedKeys.add(key);
     }
   }
-  return merged;
-}
-
-/** Unique key for a single alert episode row (alert_id repeats across re-entries and event records). */
-export function alertEpisodeKey(alert: Alert, fallbackIndex?: number): string {
-  const activated = alert.activated_at;
-  const deactivatedPart =
-    alert.deactivated_at != null && alert.deactivated_at > 0
-      ? String(alert.deactivated_at)
-      : alert.active === false
-        ? 'ended'
-        : 'active';
-
-  if (alert.alert_id && activated != null) {
-    return `${alert.alert_id}:${activated}:${deactivatedPart}`;
-  }
-  if (alert.alert_id) {
-    return `${alert.alert_id}:idx:${fallbackIndex ?? 0}`;
-  }
-  if (activated != null) {
-    return `episode:${activated}:${deactivatedPart}`;
-  }
-  return `episode-index:${fallbackIndex ?? 0}`;
+  return dedupeAlerts(merged);
 }
 
 export const ALERT_SORT_OPTIONS: { value: AlertSortField; label: string }[] = [

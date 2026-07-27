@@ -7,7 +7,7 @@ import {
   isFiniteNumber,
   isFlightLive,
 } from '../utils/format';
-import { alertColorFor } from '../utils/zoneColors';
+import { alertColorFor, getAccessibleBadgeTextColor } from '../utils/zoneColors';
 import { Badge, BadgeGroup } from './ui';
 
 export function LiveBadge() {
@@ -66,13 +66,14 @@ export function ZoneBadge({
   const ruleName = (rule || '').trim() || 'rule';
   const displayLabel = label ?? formatZoneRule(zoneName, ruleName);
   const colors = colorsOverride ?? alertColorFor(zoneName, ruleName, zones, alertColors);
+  const textColor = getAccessibleBadgeTextColor(colors.fill);
   return (
     <Badge
       variant="zone"
       className={className}
       style={{
         backgroundColor: `${colors.fill}26`,
-        color: colors.fill,
+        color: textColor,
         borderColor: `${colors.fill}55`,
       }}
     >
