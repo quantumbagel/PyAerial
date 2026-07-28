@@ -68,6 +68,16 @@ function markerNeedsUpdate(existing: MarkerState | undefined, flight: FlightSumm
   );
 }
 
+/** Pan only when the plane is off-center (avoids snap on every lat/lon tick). */
+function panMapToFollowPlane(map: L.Map, lat: number, lon: number, animate: boolean) {
+  const target = L.latLng(lat, lon);
+  const offset = map
+    .latLngToContainerPoint(target)
+    .subtract(map.latLngToContainerPoint(map.getCenter()));
+  if (offset.distanceTo(L.point(0, 0)) < 1.5) return;
+  map.panBy(offset, { animate, duration: animate ? 0.35 : 0 });
+}
+
 export function MapView({
   filteredFlights,
   activeFlightId,
@@ -107,10 +117,17 @@ export function MapView({
   const selectedTelemetryMarker = useRef<L.CircleMarker | null>(null);
   const onFollowDisabledRef = useRef(onFollowDisabled);
   const onSelectFlightRef = useRef(onSelectFlight);
-  const lastFollowPanRef = useRef<[number, number] | null>(null);
+  const followSelectedPlaneRef = useRef(followSelectedPlane);
+  const activeFlightIdRef = useRef(activeFlightId);
+  const flightsRef = useRef(flights);
+  const filteredFlightsRef = useRef(filteredFlights);
 
   onFollowDisabledRef.current = onFollowDisabled;
   onSelectFlightRef.current = onSelectFlight;
+  followSelectedPlaneRef.current = followSelectedPlane;
+  activeFlightIdRef.current = activeFlightId;
+  flightsRef.current = flights;
+  filteredFlightsRef.current = filteredFlights;
 
   useEffect(() => {
     if (!containerRef.current || mapInstance.current) return;
@@ -127,6 +144,17 @@ export function MapView({
       attribution: '&copy; OpenStreetMap &copy; CARTO',
     }).addTo(map);
     map.on('dragstart', () => onFollowDisabledRef.current());
+    const recenterOnFollowedPlane = () => {
+      if (!followSelectedPlaneRef.current) return;
+      const flightId = activeFlightIdRef.current;
+      if (!flightId) return;
+      const flight =
+        filteredFlightsRef.current.find((f) => f.flight_id === flightId) ??
+        flightsRef.current.find((f) => f.flight_id === flightId);
+      if (flight?.latitude == null || flight?.longitude == null) return;
+      panMapToFollowPlane(map, flight.latitude, flight.longitude, false);
+    };
+    map.on('zoomend', recenterOnFollowedPlane);
     mapInstance.current = map;
     mapRef.current = {
       map,
@@ -247,8 +275,6 @@ export function MapView({
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
-    if (!followSelectedPlane) lastFollowPanRef.current = null;
-
     const filteredIds = new Set(filteredFlights.map((f) => f.flight_id));
     Object.keys(planeMarkers.current).forEach((flightId) => {
       if (!filteredIds.has(flightId) && flightId !== activeFlightId) {
@@ -264,15 +290,6 @@ export function MapView({
       const isLive = isFlightLive(flight);
       const existingState = markerState.current[flight.flight_id];
       if (!markerNeedsUpdate(existingState, flight, isSelected)) {
-        if (isSelected && followSelectedPlane) {
-          const lat = flight.latitude;
-          const lon = flight.longitude;
-          const prev = lastFollowPanRef.current;
-          if (!prev || prev[0] !== lat || prev[1] !== lon) {
-            lastFollowPanRef.current = [lat, lon];
-            map.panTo([lat, lon], { animate: false });
-          }
-        }
         return;
       }
 
@@ -297,17 +314,17 @@ export function MapView({
         activeAlertCount: flight.active_alerts?.length ?? 0,
       };
 
-      if (isSelected && followSelectedPlane) {
-        const lat = flight.latitude;
-        const lon = flight.longitude;
-        const prev = lastFollowPanRef.current;
-        if (!prev || prev[0] !== lat || prev[1] !== lon) {
-          lastFollowPanRef.current = [lat, lon];
-          map.panTo(pos, { animate: false });
-        }
-      }
     });
-  }, [filteredFlights, activeFlightId, followSelectedPlane]);
+
+    if (followSelectedPlane && activeFlightId) {
+      const followed =
+        filteredFlights.find((f) => f.flight_id === activeFlightId) ??
+        flights.find((f) => f.flight_id === activeFlightId);
+      if (followed?.latitude != null && followed?.longitude != null) {
+        panMapToFollowPlane(map, followed.latitude, followed.longitude, true);
+      }
+    }
+  }, [filteredFlights, flights, activeFlightId, followSelectedPlane]);
 
   useEffect(() => {
     const map = mapInstance.current;

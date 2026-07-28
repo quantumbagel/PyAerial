@@ -175,29 +175,40 @@ export function saveFlightSort(
   localStorage.setItem(`flightSort:${view}`, JSON.stringify({ field, direction }));
 }
 
+function flightKinematicTime(flight: FlightSummary): number {
+  return flight.timestamp ?? flight.end_time ?? 0;
+}
+
 export function mergeLiveFlights(existing: FlightSummary[], incoming: FlightSummary[]): FlightSummary[] {
   const next = [...existing];
   incoming.forEach((newFlight) => {
     const idx = next.findIndex((f) => f.flight_id === newFlight.flight_id);
     if (idx !== -1) {
       if (isFlightLive(next[idx])) {
+        const current = next[idx];
+        const useIncomingKinematics =
+          flightKinematicTime(newFlight) >= flightKinematicTime(current);
         next[idx] = {
-          ...next[idx],
-          callsign: newFlight.callsign || next[idx].callsign,
-          model: newFlight.model || next[idx].model,
-          aircraft_type: newFlight.aircraft_type || next[idx].aircraft_type,
-          owner: newFlight.owner || next[idx].owner,
-          country: newFlight.country || next[idx].country,
+          ...current,
+          callsign: newFlight.callsign || current.callsign,
+          model: newFlight.model || current.model,
+          aircraft_type: newFlight.aircraft_type || current.aircraft_type,
+          owner: newFlight.owner || current.owner,
+          country: newFlight.country || current.country,
           active_alerts: newFlight.active_alerts,
-        alert_stats: newFlight.alert_stats,
-          latitude: newFlight.latitude ?? next[idx].latitude,
-          longitude: newFlight.longitude ?? next[idx].longitude,
-          altitude: newFlight.altitude ?? next[idx].altitude,
-          speed: newFlight.speed ?? next[idx].speed,
-          heading: newFlight.heading ?? next[idx].heading,
-          timestamp: newFlight.timestamp ?? next[idx].timestamp,
-          end_time: newFlight.end_time ?? next[idx].end_time,
-          portal_projection: newFlight.portal_projection ?? next[idx].portal_projection,
+          alert_stats: newFlight.alert_stats,
+          portal_projection: newFlight.portal_projection ?? current.portal_projection,
+          ...(useIncomingKinematics
+            ? {
+                latitude: newFlight.latitude ?? current.latitude,
+                longitude: newFlight.longitude ?? current.longitude,
+                altitude: newFlight.altitude ?? current.altitude,
+                speed: newFlight.speed ?? current.speed,
+                heading: newFlight.heading ?? current.heading,
+                timestamp: newFlight.timestamp ?? current.timestamp,
+                end_time: newFlight.end_time ?? current.end_time,
+              }
+            : {}),
         };
       } else {
         next[idx] = newFlight;
