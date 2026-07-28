@@ -197,6 +197,7 @@ export function mergeLiveFlights(existing: FlightSummary[], incoming: FlightSumm
           heading: newFlight.heading ?? next[idx].heading,
           timestamp: newFlight.timestamp ?? next[idx].timestamp,
           end_time: newFlight.end_time ?? next[idx].end_time,
+          portal_projection: newFlight.portal_projection ?? next[idx].portal_projection,
         };
       } else {
         next[idx] = newFlight;

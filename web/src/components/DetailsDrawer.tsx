@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Alert, AppConfig, FlightDetail, FlightSummary, TelemetryPoint, Zone } from '../api/types';
 import {
   formatActiveAlerts,
@@ -132,7 +132,22 @@ export function DetailsDrawer({
     (a, b) => (a.activated_at || 0) - (b.activated_at || 0),
   );
   const lastPoint = flightTelemetry.length > 0 ? flightTelemetry[flightTelemetry.length - 1] : null;
-  const displayFlight = flightDetail ?? flightSummary;
+  const displayFlight = useMemo(() => {
+    const base = flightDetail ?? flightSummary;
+    if (!base) return null;
+    if (!flightSummary?.is_live || !flightSummary.portal_projection) {
+      return base;
+    }
+    return {
+      ...base,
+      portal_projection: flightSummary.portal_projection,
+      latitude: flightSummary.latitude ?? base.latitude,
+      longitude: flightSummary.longitude ?? base.longitude,
+      heading: flightSummary.heading ?? base.heading,
+      speed: flightSummary.speed ?? base.speed,
+      altitude: flightSummary.altitude ?? base.altitude,
+    };
+  }, [flightDetail, flightSummary]);
 
   return (
     <div
