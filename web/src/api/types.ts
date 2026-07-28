@@ -1,3 +1,15 @@
+export interface PortalProjection {
+  horizon_seconds: number;
+  step_seconds?: number;
+  track_path: [number, number][];
+  intent_path?: [number, number][] | null;
+  selected_heading?: number | null;
+  selected_altitude?: number | null;
+  motion_heading?: number;
+  motion_speed_kph?: number;
+  turn_rate_deg_s?: number;
+}
+
 export interface AlertStats {
   episode_count: number;
   total_seconds: number;
@@ -33,6 +45,7 @@ export interface FlightSummary {
   status?: string;
   retained?: boolean;
   timestamp?: number | null;
+  portal_projection?: PortalProjection | null;
 }
 
 export interface FlightDetail extends FlightSummary {
@@ -108,4 +121,5 @@ export type LiveMessage =
 export interface AppConfig {
   home: { latitude: number; longitude: number };
   remember_planes: number;
+  projection_seconds?: number;
 }

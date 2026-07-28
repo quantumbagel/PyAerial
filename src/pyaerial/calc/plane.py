@@ -19,6 +19,7 @@ from shapely import Polygon
 
 from pyaerial.alerters import Alerter, create_alerter
 from pyaerial.calc import evaluate, geo
+from pyaerial.calc.projection import build_portal_projection
 from pyaerial.calc.aircraft_db import AircraftDB
 from pyaerial.calc.kalman import KinematicKalmanFilter
 from pyaerial.config.schema import AlertActionConfig, Config, RuleConfig
@@ -37,6 +38,7 @@ from pyaerial.constants import (
     STORE_INFO,
     STORE_LAT,
     STORE_LONG,
+    STORE_PORTAL_PROJECTION,
     STORE_RECV_DATA,
     STORE_SELECTED_HEADING,
     STORE_VERT_SPEED,
@@ -157,6 +159,9 @@ class PlaneCalculator:
 
         callsign = self._resolve_callsign(plane)
         self._check_alerts(plane, current, final_heading, final_speed, callsign)
+        plane[STORE_PORTAL_PROJECTION] = build_portal_projection(
+            plane, self.config, kf, current, final_heading, final_speed,
+        )
 
     def deactivate_plane(self, plane: dict) -> None:
         """Deactivate and clean up all active alerts for a plane being removed or expired."""

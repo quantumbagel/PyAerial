@@ -273,6 +273,22 @@ export function DetailsDrawer({
                 <span className="ui-field-value" id="detail-heading">
                   {lastPoint ? formatHeading(lastPoint.heading) : 'N/A'}
                 </span>
+                {displayFlight?.portal_projection?.selected_heading != null && (
+                  <>
+                    <span className="ui-field-label">Selected heading (TC 29)</span>
+                    <span className="ui-field-value" id="detail-selected-heading">
+                      {formatHeading(displayFlight.portal_projection.selected_heading)}
+                    </span>
+                  </>
+                )}
+                {displayFlight?.portal_projection?.selected_altitude != null && (
+                  <>
+                    <span className="ui-field-label">Selected altitude (TC 29)</span>
+                    <span className="ui-field-value" id="detail-selected-altitude">
+                      {formatAltitude(displayFlight.portal_projection.selected_altitude)}
+                    </span>
+                  </>
+                )}
                 <span className="ui-field-label">Latitude</span>
                 <span className="ui-field-value" id="detail-latitude">
                   {lastPoint?.latitude != null ? lastPoint.latitude.toFixed(5) : 'N/A'}

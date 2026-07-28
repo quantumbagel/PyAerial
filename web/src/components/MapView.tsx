@@ -102,6 +102,8 @@ export function MapView({
   const markerState = useRef<Record<string, MarkerState>>({});
   const planePaths = useRef<Record<string, L.Polyline>>({});
   const planeAlertPaths = useRef<Record<string, L.Polyline[]>>({});
+  const planeProjectionTracks = useRef<Record<string, L.Polyline>>({});
+  const planeProjectionIntents = useRef<Record<string, L.Polyline>>({});
   const zoneLayers = useRef<L.Layer[]>([]);
   const selectedTelemetryMarker = useRef<L.CircleMarker | null>(null);
   const onFollowDisabledRef = useRef(onFollowDisabled);
@@ -380,6 +382,79 @@ export function MapView({
       }
     });
   }, [pathCoords, pathTelemetry, pathAlerts, showAllPaths, filteredFlights, activeFlightId, flights]);
+
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map) return;
+
+    const visibleProjectionIds = new Set<string>();
+    for (const flight of filteredFlights) {
+      if (!isFlightLive(flight) || !flight.portal_projection?.track_path?.length) continue;
+      if (flight.flight_id === activeFlightId || showAllPaths) {
+        visibleProjectionIds.add(flight.flight_id);
+      }
+    }
+
+    const removeLayer = (layers: Record<string, L.Polyline>, flightId: string) => {
+      const layer = layers[flightId];
+      if (layer) {
+        map.removeLayer(layer);
+        delete layers[flightId];
+      }
+    };
+
+    Object.keys(planeProjectionTracks.current).forEach((flightId) => {
+      if (!visibleProjectionIds.has(flightId)) {
+        removeLayer(planeProjectionTracks.current, flightId);
+        removeLayer(planeProjectionIntents.current, flightId);
+      }
+    });
+
+    visibleProjectionIds.forEach((flightId) => {
+      const flight = flights.find((f) => f.flight_id === flightId);
+      const projection = flight?.portal_projection;
+      if (!projection?.track_path?.length) return;
+
+      const trackLatLngs = projection.track_path.map(([lat, lon]) => [lat, lon] as L.LatLngExpression);
+      const trackStyle: L.PolylineOptions = {
+        color: COLOR_HEX.accent,
+        weight: flightId === activeFlightId ? 3 : 2,
+        opacity: 0.8,
+        dashArray: '10 8',
+        className: 'flight-projection-track',
+      };
+      if (planeProjectionTracks.current[flightId]) {
+        planeProjectionTracks.current[flightId].setLatLngs(trackLatLngs);
+        planeProjectionTracks.current[flightId].setStyle(trackStyle);
+      } else {
+        const line = L.polyline(trackLatLngs, trackStyle).addTo(map);
+        line.bindTooltip('Projected track (server)');
+        planeProjectionTracks.current[flightId] = line;
+      }
+
+      const intent = projection.intent_path;
+      if (intent && intent.length >= 2) {
+        const intentLatLngs = intent.map(([lat, lon]) => [lat, lon] as L.LatLngExpression);
+        const intentStyle: L.PolylineOptions = {
+          color: '#22d3ee',
+          weight: flightId === activeFlightId ? 3 : 2,
+          opacity: 0.9,
+          dashArray: '4 8',
+          className: 'flight-projection-intent',
+        };
+        if (planeProjectionIntents.current[flightId]) {
+          planeProjectionIntents.current[flightId].setLatLngs(intentLatLngs);
+          planeProjectionIntents.current[flightId].setStyle(intentStyle);
+        } else {
+          const line = L.polyline(intentLatLngs, intentStyle).addTo(map);
+          line.bindTooltip('ADS-B TC 29 selected heading');
+          planeProjectionIntents.current[flightId] = line;
+        }
+      } else {
+        removeLayer(planeProjectionIntents.current, flightId);
+      }
+    });
+  }, [filteredFlights, flights, activeFlightId, showAllPaths]);
 
   return (
     <div id="map-container">

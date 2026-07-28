@@ -8,6 +8,8 @@ import math
 import time
 from typing import Any
 
+from pyaerial.calc.projection import _sample_intent_path, _sample_track_path
+
 
 def _active_alert(alert_id: str, zone: str, rule: str, activated_at: float,
                   eta: float | None = None, mock_lifetime: float = 120.0) -> dict[str, Any]:
@@ -107,6 +109,8 @@ class MockStore:
                 "radius": 0.006,
                 "speed_rad": 0.04,
                 "phase": 0.0,
+                "mock_selected_heading": 35.0,
+                "mock_selected_altitude": 1500.0,
             },
             {
                 "flight_id": "mock_live_2",
@@ -431,6 +435,33 @@ class MockStore:
             flight["longitude"] = lon
             flight["heading"] = round(heading, 1)
             flight["timestamp"] = now
+
+            position = (lat, lon)
+            speed = float(flight["speed"])
+            track_path = _sample_track_path(
+                position, heading, speed, 0.0,
+                horizon_seconds=120, step_seconds=2, curved=False,
+            )
+            selected_heading = flight.get("mock_selected_heading")
+            if selected_heading is not None:
+                selected_heading = (heading + float(selected_heading)) % 360.0
+            intent_path = None
+            if selected_heading is not None:
+                intent_path = _sample_intent_path(
+                    position, heading, speed, 0.0, selected_heading,
+                    horizon_seconds=120, step_seconds=2,
+                )
+            flight["portal_projection"] = {
+                "horizon_seconds": 120,
+                "step_seconds": 2,
+                "track_path": track_path,
+                "intent_path": intent_path,
+                "selected_heading": selected_heading,
+                "selected_altitude": flight.get("mock_selected_altitude"),
+                "motion_heading": heading,
+                "motion_speed_kph": speed,
+                "turn_rate_deg_s": 0.0,
+            }
 
             point = {
                 "flight_id": flight["flight_id"],

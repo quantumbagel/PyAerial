@@ -26,6 +26,7 @@ from pyaerial.constants import (
     STORE_LAT,
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
+    STORE_PORTAL_PROJECTION,
     STORE_RECV_DATA,
 )
 from pyaerial.models import get_latest
@@ -309,6 +310,7 @@ class RedisLiveStore:
                 "country": doc.get("country") or info.get("country"),
                 "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type"),
                 "raw_messages": doc.get("raw_messages", []),
+                "portal_projection": doc.get("portal_projection"),
                 "is_live": True,
                 "status": "live",
             }
@@ -331,6 +333,7 @@ class RedisLiveStore:
                 "country": doc.get("country") or info.get("country"),
                 "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type"),
                 "raw_messages": doc.get("raw_messages", []),
+                "portal_projection": doc.get("portal_projection"),
                 "is_live": True,
                 "status": "live",
             }
@@ -533,6 +536,7 @@ class RedisLiveStore:
             "status": "live",
             "retained": False,
             "timestamp": timestamp,
+            "portal_projection": doc.get("portal_projection"),
         }
 
     def _upsert_live_flight(self, plane: dict) -> None:
@@ -558,6 +562,9 @@ class RedisLiveStore:
             "info": {str(k): v for k, v in info.items()},
             "raw_messages": plane.get("raw_messages", []),
         }
+        proj = plane.get(STORE_PORTAL_PROJECTION)
+        if proj:
+            flight_doc["portal_projection"] = proj
         self._mem_flights[flight_id] = flight_doc
         self._write_telemetry_points(plane, flight_id, icao)
 

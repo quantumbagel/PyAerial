@@ -34,6 +34,7 @@ STORE_MOST_RECENT_PACKET = "last_update"
 STORE_TOTAL_PACKETS = "packets"
 STORE_PACKET_TYPE = "packet_type"
 STORE_FIRST_PACKET = "first_packet"
+STORE_PORTAL_PROJECTION = "portal_projection"
 
 # --- Alert payload fields -----------------------------------------------------
 ALERT_CAT_TYPE = "type"

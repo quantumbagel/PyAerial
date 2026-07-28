@@ -148,6 +148,17 @@ def get_flight_detail(
         flight_data = live_store.get_flight(flight_id)
         if not flight_data:
             return None
+        telemetry = live_store.get_telemetry(flight_id)
+        if telemetry:
+            last = telemetry_point(telemetry[-1])
+            flight_data.update({
+                "latitude": last.get("latitude"),
+                "longitude": last.get("longitude"),
+                "altitude": last.get("altitude"),
+                "speed": last.get("speed"),
+                "heading": last.get("heading"),
+                "timestamp": last.get("timestamp"),
+            })
         return enrich_flight_detail(flight_data, flight_data.get("icao", ""), aircraft_db)
 
     doc = db.get_collection("flights").find_one({"_id": flight_id})
