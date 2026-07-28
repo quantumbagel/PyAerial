@@ -33,6 +33,8 @@ class TrackingConfig(_Strict):
     advanced_status: bool = True
     hz: float = Field(default=2, gt=0)
     duplicate_packet_merging: float = Field(default=5, ge=0)
+    use_kalman_eta: bool = False
+    curved_projection: bool = False
 
 
 class LoggingConfig(_Strict):
@@ -110,6 +112,7 @@ class RuleConfig(_Strict):
     when: dict[str, FieldConstraint] = Field(min_length=1)
     dwell_seconds: int = Field(gt=0)
     retain: bool = True
+    predict_seconds: float | None = Field(default=None, ge=0)
     on_activate: list[AlertActionConfig] = Field(default_factory=list)
     on_deactivate: list[AlertActionConfig] = Field(default_factory=list)
     while_active: WhileActiveConfig | None = None

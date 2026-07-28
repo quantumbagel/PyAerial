@@ -31,6 +31,8 @@ class KinematicKalmanFilter:
         self.lon = init_lon
         self.vn = init_vn  # North velocity (m/s)
         self.ve = init_ve  # East velocity (m/s)
+        self.turn_rate = 0.0  # degrees/second (smoothed angular velocity)
+        self._prev_heading: float | None = None
 
         # Covariance matrix diagonal terms
         self.p_lat = 0.0001
@@ -96,6 +98,14 @@ class KinematicKalmanFilter:
 
         speed_m_s = math.hypot(self.vn, self.ve)
         heading_deg = (math.degrees(math.atan2(self.ve, self.vn)) + 360.0) % 360.0
+
+        # Track turn rate (smoothed angular velocity)
+        if self._prev_heading is not None and dt > 0:
+            delta = (heading_deg - self._prev_heading + 540.0) % 360.0 - 180.0
+            raw_rate = delta / dt
+            alpha = 0.3
+            self.turn_rate = alpha * raw_rate + (1.0 - alpha) * self.turn_rate
+        self._prev_heading = heading_deg
 
         return self.lat, self.lon, speed_m_s, heading_deg
 

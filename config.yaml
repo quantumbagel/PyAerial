@@ -9,6 +9,8 @@ tracking:
   duplicate_packet_merging: 5
   status_message_top_planes: 5
   advanced_status: true
+  use_kalman_eta: true          # Use Kalman-smoothed velocity for more stable ETA
+  curved_projection: true       # Enable turn-rate-aware curved-path ETA projection
 
 logging:
   level: info

@@ -38,6 +38,7 @@ from pyaerial.constants import (
     STORE_LAT,
     STORE_LONG,
     STORE_RECV_DATA,
+    STORE_SELECTED_HEADING,
     STORE_VERT_SPEED,
 )
 from pyaerial.models import Datum, get_latest, patch_append
@@ -284,15 +285,62 @@ class PlaneCalculator:
         geofence_etas: dict[str, float] = {}
         matching: dict[tuple[str, str, str], tuple[str, RuleConfig, float]] = {}
 
+        # --- Improvement 1: optionally use Kalman-smoothed velocity for ETA ---
+        kf = self._kalman_filters.get(icao)
+        turn_rate = kf.turn_rate if kf else 0.0
+
+        if self.config.tracking.use_kalman_eta and kf is not None:
+            kalman_speed_mps = math.hypot(kf.vn, kf.ve)
+            eta_speed = kalman_speed_mps * 3.6  # m/s -> km/h
+            eta_heading = (math.degrees(math.atan2(kf.ve, kf.vn)) + 360.0) % 360.0
+        else:
+            eta_speed = speed
+            eta_heading = heading
+
+        use_curved = self.config.tracking.curved_projection
+
+        # --- Improvement 5: look up selected heading from TC 29 intent data ---
+        recv = plane.get(STORE_RECV_DATA, {})
+        sel_heading_series = recv.get(STORE_SELECTED_HEADING, [])
+        selected_heading: float | None = None
+        if sel_heading_series:
+            selected_heading = sel_heading_series[-1].value
+
         for zone_name, zone in self.config.zones.items():
             polygon = self.polygons[zone_name]
-            eta = geo.time_to_enter_geofence(position, heading, speed, polygon, _ETA_HORIZON)
+
+            # Choose the best ETA projection strategy:
+            # 1. Intent-based: simulate turn to selected heading, then straight
+            # 2. Curved: extrapolate current turn rate forward
+            # 3. Straight-line: default
+            if use_curved and selected_heading is not None:
+                eta = geo.time_to_enter_geofence_intent(
+                    position, eta_heading, eta_speed, turn_rate,
+                    selected_heading, polygon, _ETA_HORIZON,
+                )
+            elif use_curved and abs(turn_rate) >= 0.1:
+                eta = geo.time_to_enter_geofence_curved(
+                    position, eta_heading, eta_speed, turn_rate, polygon, _ETA_HORIZON,
+                )
+            else:
+                eta = geo.time_to_enter_geofence(
+                    position, eta_heading, eta_speed, polygon, _ETA_HORIZON,
+                )
             geofence_etas[zone_name] = eta
 
             resolver = evaluate.make_resolver(plane, eta, polygon, position)
             for rule in zone.rules:
-                if not evaluate.when_passes(rule.when, resolver):
-                    continue
+                # --- Improvement 4: predictive evaluation ---
+                if rule.predict_seconds is not None and rule.predict_seconds > 0:
+                    pred_resolver = evaluate.make_predicted_resolver(
+                        plane, polygon, position, eta_heading, eta_speed,
+                        turn_rate, rule.predict_seconds, curved=use_curved,
+                    )
+                    if not evaluate.when_passes(rule.when, pred_resolver):
+                        continue
+                else:
+                    if not evaluate.when_passes(rule.when, resolver):
+                        continue
                 key = (icao, zone_name, rule.name)
                 matching[key] = (zone_name, rule, eta)
 
