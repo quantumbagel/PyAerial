@@ -20,6 +20,7 @@ from shapely import Polygon
 from pyaerial.alerters import Alerter, create_alerter
 from pyaerial.calc import evaluate, geo
 from pyaerial.calc.projection import build_portal_projection
+from pyaerial.calc.motion import ResolvedMotion, estimate_turn_rate_deg_s, resolve_motion
 from pyaerial.calc.aircraft_db import AircraftDB
 from pyaerial.calc.kalman import KinematicKalmanFilter
 from pyaerial.config.schema import AlertActionConfig, Config, RuleConfig
@@ -73,6 +74,7 @@ class PlaneCalculator:
         self._pending_lookups: set[str] = set()
         self._lock = threading.Lock()
         self._kalman_filters: dict[str, KinematicKalmanFilter] = {}
+        self._smoothed_turn_rates: dict[str, float] = {}
         # (icao, zone, rule) -> {activated_at, last_periodic, alert_id}
         self._alert_state: dict[tuple[str, str, str], dict] = {}
 
@@ -155,15 +157,55 @@ class PlaneCalculator:
             kf.update(current[0], current[1], dt_kf)
             kf.last_update_time = current_time
 
+        window_dt = max(current_time - previous_time, 0.0)
+        window_start_heading = heading
+        lat_idx = 0 if len(lat_series) < self.backdate else len(lat_series) - self.backdate
+        if lat_idx >= 1:
+            lon_at = get_latest(STORE_RECV_DATA, STORE_LONG, plane, lat_series[lat_idx].time)
+            lon_before = get_latest(
+                STORE_RECV_DATA, STORE_LONG, plane, lat_series[lat_idx - 1].time,
+            )
+            if lon_at is not None and lon_before is not None:
+                p0 = (lat_series[lat_idx - 1].value, lon_before.value)
+                p1 = (lat_series[lat_idx].value, lon_at.value)
+                window_start_heading = geo.calculate_heading(p0, p1)
+
+        prev_turn = self._smoothed_turn_rates.get(icao)
+        smoothed_turn = estimate_turn_rate_deg_s(
+            final_heading,
+            window_start_heading,
+            window_dt,
+            prev_smoothed=prev_turn,
+        )
+        self._smoothed_turn_rates[icao] = smoothed_turn
+
+        display_motion = resolve_motion(
+            self.config,
+            track_heading=final_heading,
+            track_speed_kph=final_speed,
+            turn_rate_deg_s=smoothed_turn,
+            kf=kf,
+            for_display=True,
+        )
+        alert_motion = resolve_motion(
+            self.config,
+            track_heading=final_heading,
+            track_speed_kph=final_speed,
+            turn_rate_deg_s=smoothed_turn,
+            kf=kf,
+            for_display=False,
+        )
+        plane["_alert_motion"] = alert_motion
+
         patch_append(plane, STORE_CALC_DATA, STORE_HORIZ_SPEED,
                      Datum(final_speed, speed_time))
         patch_append(plane, STORE_CALC_DATA, STORE_HEADING,
                      Datum(final_heading, speed_time))
 
         callsign = self._resolve_callsign(plane)
-        self._check_alerts(plane, current, final_heading, final_speed, callsign)
+        self._check_alerts(plane, current, alert_motion, callsign)
         plane[STORE_PORTAL_PROJECTION] = build_portal_projection(
-            self.config, kf, current, final_heading, final_speed,
+            self.config, current, display_motion,
         )
 
     def deactivate_plane(self, plane: dict) -> None:
@@ -284,24 +326,16 @@ class PlaneCalculator:
                 self._pending_lookups.discard(icao)
 
     def _check_alerts(self, plane: dict, position: tuple[float, float],
-                      heading: float, speed: float, callsign: str) -> None:
+                      motion: ResolvedMotion, callsign: str) -> None:
         icao = plane[STORE_INFO][STORE_ICAO].lower()
         flight_id = flight_id_for_plane(plane)
         now = time.time()
         geofence_etas: dict[str, float] = {}
         matching: dict[tuple[str, str, str], tuple[str, RuleConfig, float]] = {}
 
-        # --- Improvement 1: optionally use Kalman-smoothed velocity for ETA ---
-        kf = self._kalman_filters.get(icao)
-        turn_rate = kf.turn_rate if kf else 0.0
-
-        if self.config.tracking.use_kalman_eta and kf is not None:
-            kalman_speed_mps = math.hypot(kf.vn, kf.ve)
-            eta_speed = kalman_speed_mps * 3.6  # m/s -> km/h
-            eta_heading = (math.degrees(math.atan2(kf.ve, kf.vn)) + 360.0) % 360.0
-        else:
-            eta_speed = speed
-            eta_heading = heading
+        eta_speed = motion.speed_kph
+        eta_heading = motion.heading_deg
+        turn_rate = motion.turn_rate_deg_s
 
         use_curved = self.config.tracking.curved_projection
 

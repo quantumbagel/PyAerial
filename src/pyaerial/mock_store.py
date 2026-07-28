@@ -8,6 +8,7 @@ import math
 import time
 from typing import Any
 
+from pyaerial.calc.motion import ResolvedMotion
 from pyaerial.calc.projection import _sample_track_path
 
 
@@ -438,9 +439,9 @@ class MockStore:
             position = (lat, lon)
             speed = float(flight["speed"])
             turn_rate = float(flight.get("mock_turn_rate_deg_s", 0.0))
+            motion = ResolvedMotion(heading_deg=heading, speed_kph=speed, turn_rate_deg_s=turn_rate)
             track_path = _sample_track_path(
-                position, heading, speed, turn_rate,
-                horizon_seconds=120, step_seconds=2,
+                position, motion, horizon_seconds=120, step_seconds=2,
             )
             flight["portal_projection"] = {
                 "horizon_seconds": 120,
