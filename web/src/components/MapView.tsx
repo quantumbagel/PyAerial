@@ -413,11 +413,12 @@ export function MapView({
       const projection = flight?.portal_projection;
       if (!projection?.track_path?.length) return;
 
+      const isSelected = flightId === activeFlightId;
       const trackLatLngs = projection.track_path.map(([lat, lon]) => [lat, lon] as L.LatLngExpression);
       const trackStyle: L.PolylineOptions = {
-        color: COLOR_HEX.accent,
-        weight: flightId === activeFlightId ? 3 : 2,
-        opacity: 0.8,
+        color: isSelected ? COLOR_HEX.accent : COLOR_HEX.default,
+        weight: isSelected ? 3 : 2,
+        opacity: isSelected ? 0.85 : 0.45,
         dashArray: '10 8',
         className: 'flight-projection-track',
       };

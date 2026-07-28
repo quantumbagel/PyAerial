@@ -19,12 +19,12 @@ def estimate_turn_rate_deg_s(
     elapsed_s: float,
     *,
     prev_smoothed: float | None = None,
-    smooth_alpha: float = 0.12,
-    straight_threshold: float = 0.35,
+    smooth_alpha: float = 0.22,
+    straight_threshold: float = 0.28,
     max_rate: float = 3.0,
 ) -> float:
     """
-    Turn rate from heading change over ``elapsed_s``, heavily smoothed.
+    Turn rate from heading change over ``elapsed_s``, smoothed over recent updates.
 
     Small rates are snapped to zero so straight tracks stay straight on the map
     and in curved ETA projection.
