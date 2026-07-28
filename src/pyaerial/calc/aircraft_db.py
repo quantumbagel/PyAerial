@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 
 log = logging.getLogger("pyaerial.aircraft_db")
@@ -63,18 +64,50 @@ class AircraftDB:
         if self.path.parent:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         
+        self._lock = threading.Lock()
         # Open in read-write mode to allow dynamic caching, and allow shared thread access
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA busy_timeout=5000")
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS aircraft (icao TEXT PRIMARY KEY, data TEXT)"
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn = sqlite3.connect(self.path, check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS aircraft (icao TEXT PRIMARY KEY, data TEXT)"
+            )
+            self._conn.commit()
 
     @property
     def available(self) -> bool:
         return self._conn is not None
+
+    def is_cached(self, icao: str) -> bool:
+        """Return True if aircraft metadata for icao is cached in SQLite (including photo check)."""
+        if self._conn is None:
+            return False
+        icao = icao.lower().strip()
+        if not icao:
+            return True
+        with self._lock:
+            record = self._read_cached_record(icao)
+        if record is _MISSING:
+            return False
+        if record is None:
+            return True
+        return "photo_checked" in record
+
+    def lookup_cached_fast(self, icao: str) -> dict | None:
+        """Return cached aircraft metadata from SQLite without making network requests."""
+        if self._conn is None:
+            return None
+        icao = icao.lower().strip()
+        if not icao:
+            return None
+        with self._lock:
+            record = self._read_cached_record(icao)
+        if record is _MISSING or record is None:
+            return None
+        if isinstance(record, dict):
+            return normalize_record_photos(record)
+        return None
 
     def lookup_cached(self, icao: str) -> dict | None:
         """Return aircraft metadata for an ICAO hex, checking local index first, then API."""
@@ -213,17 +246,20 @@ class AircraftDB:
     def _update_cache(self, icao: str, record: dict | None) -> None:
         try:
             val = json.dumps(record)
-            self._conn.execute(
-                "INSERT OR REPLACE INTO aircraft (icao, data) VALUES (?, ?)",
-                (icao, val)
-            )
-            self._conn.commit()
+            with self._lock:
+                if self._conn is not None:
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO aircraft (icao, data) VALUES (?, ?)",
+                        (icao, val)
+                    )
+                    self._conn.commit()
         except sqlite3.Error as e:
             log.warning("Failed to update SQLite cache for %s: %s", icao, e)
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
 

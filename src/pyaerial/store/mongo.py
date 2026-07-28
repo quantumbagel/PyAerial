@@ -240,6 +240,7 @@ class MongoStore:
         telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         alert_docs = [
             {
+                "_id": alert.get("alert_id") or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', alert.get('level', ''))}",
                 "alert_id": alert.get("alert_id") or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', alert.get('level', ''))}",
                 "flight_id": flight_id,
                 "icao": alert.get("icao", icao),
@@ -267,6 +268,12 @@ class MongoStore:
             if telemetry_docs:
                 self.db.get_collection("telemetry").insert_many(telemetry_docs, ordered=False)
             if alert_docs:
-                self.db.get_collection("alerts").insert_many(alert_docs, ordered=False)
+                alerts_col = self.db.get_collection("alerts")
+                for adoc in alert_docs:
+                    alerts_col.replace_one(
+                        {"_id": adoc["_id"]},
+                        adoc,
+                        upsert=True,
+                    )
         except PyMongoError as exc:
             log.error("Failed to persist completed flight %s: %s", flight_id, exc)

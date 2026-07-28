@@ -111,7 +111,10 @@ def _view_param(view: str) -> str:
 def _enrich_from_aircraft_db(icao: str, aircraft_db: AircraftDB | None) -> dict[str, str | None]:
     if not aircraft_db:
         return {}
-    meta = aircraft_db.lookup_cached(icao)
+    if aircraft_db.is_cached(icao):
+        meta = aircraft_db.lookup_cached(icao)
+    else:
+        meta = aircraft_db.lookup_cached_fast(icao)
     if not meta:
         return {}
     return {
@@ -598,6 +601,7 @@ class LiveBroadcaster:
         self.mock_store = mock_store
         self._clients: dict[WebSocket, float] = {}
         self._task: asyncio.Task | None = None
+        self._pending_lookups: set[str] = set()
         self._last_flights_sig: str | None = None
         self._last_alerts_sig: str | None = None
         self._last_stats_sig: str | None = None
@@ -641,17 +645,48 @@ class LiveBroadcaster:
     async def _run_loop(self) -> None:
         while True:
             try:
+                await self._background_tick()
                 if self._clients:
                     await self._broadcast_tick()
             except Exception:
                 log.exception("Live broadcaster tick failed")
             await asyncio.sleep(_LIVE_POLL_INTERVAL)
 
+    async def _background_tick(self) -> None:
+        if self.mock_store:
+            self.mock_store.update_live()
+            flights = self.mock_store.get_live_flights()
+        elif self.live_store:
+            flights = self.live_store.get_flights()
+        else:
+            flights = []
+
+        if self.aircraft_db and self.aircraft_db.available and flights:
+            for flight in flights:
+                icao = flight.get("icao")
+                if not icao:
+                    continue
+                icao_clean = str(icao).lower().strip()
+                if not icao_clean or icao_clean in self._pending_lookups:
+                    continue
+
+                if not self.aircraft_db.is_cached(icao_clean):
+                    self._pending_lookups.add(icao_clean)
+                    asyncio.create_task(self._bg_fetch_aircraft(icao_clean))
+
+    async def _bg_fetch_aircraft(self, icao: str) -> None:
+        try:
+            if self.aircraft_db:
+                await asyncio.to_thread(self.aircraft_db.lookup_cached, icao)
+        except Exception as exc:
+            log.warning("Background aircraft DB lookup failed for %s: %s", icao, exc)
+        finally:
+            self._pending_lookups.discard(icao)
+
     async def _broadcast_tick(self) -> None:
         now = time.time()
 
         if self.mock_store:
-            self.mock_store.update_live()
             flights = self.mock_store.get_live_flights()
             alerts = _get_mock_tracked_alerts(self.mock_store, flights, limit=50)
             stats = self.mock_store.get_stats()
