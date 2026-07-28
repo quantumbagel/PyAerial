@@ -141,15 +141,19 @@ class PlaneCalculator:
             cos_val = alpha * math.cos(rad_current) + (1.0 - alpha) * math.cos(rad_prev)
             final_heading = (math.degrees(math.atan2(sin_val, cos_val)) + 360.0) % 360.0
 
-        # Run Kalman filter update
+        # Run Kalman filter update (use consecutive fix interval, not backdate window)
         icao = plane[STORE_INFO][STORE_ICAO].lower()
         kf = self._kalman_filters.get(icao)
-        dt = current_time - previous_time if previous_time > 0 else 0.0
+        prev_fix = lat_series[-2]
+        dt_kf = max(0.0, current_time - prev_fix.time)
+        dt_kf = min(dt_kf, 30.0)
         if kf is None:
             kf = KinematicKalmanFilter(current[0], current[1])
             self._kalman_filters[icao] = kf
+            kf.last_update_time = current_time
         else:
-            kf.update(current[0], current[1], dt)
+            kf.update(current[0], current[1], dt_kf)
+            kf.last_update_time = current_time
 
         patch_append(plane, STORE_CALC_DATA, STORE_HORIZ_SPEED,
                      Datum(final_speed, speed_time))

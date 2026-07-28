@@ -37,21 +37,23 @@ def build_portal_projection(
     heading: float,
     speed_kph: float,
 ) -> dict[str, Any]:
-    """Build a forward path for the web map (Kalman turn rate + curved dead reckoning)."""
+    """Build a forward path for the web map (track speed + Kalman heading/turn rate)."""
     tracking = config.tracking
     horizon = tracking.projection_seconds
     step = tracking.projection_step_seconds
 
+    # Path length follows displayed track speed (stable over backdate window).
+    motion_speed = max(0.0, speed_kph)
     motion_heading = heading
-    motion_speed = speed_kph
     turn_rate = kf.turn_rate if kf is not None else 0.0
 
     if tracking.use_kalman_eta and kf is not None:
         kalman_speed_mps = math.hypot(kf.vn, kf.ve)
         kalman_speed_kph = kalman_speed_mps * 3.6
         if kalman_speed_kph >= 5.0:
-            motion_speed = kalman_speed_kph
             motion_heading = (math.degrees(math.atan2(kf.ve, kf.vn)) + 360.0) % 360.0
+        # Keep turn rate from Kalman but cap extreme values from noisy gaps.
+        turn_rate = max(-8.0, min(8.0, turn_rate))
 
     track_path = _sample_track_path(
         position,

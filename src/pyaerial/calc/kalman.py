@@ -69,6 +69,7 @@ class KinematicKalmanFilter:
         Incorporate position measurement and update state.
         Returns (filtered_lat, filtered_lon, speed_m_s, heading_deg).
         """
+        dt = min(max(dt, 0.0), 30.0)
         if dt > 0:
             self.predict(dt)
 
