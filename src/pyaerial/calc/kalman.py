@@ -108,27 +108,3 @@ class KinematicKalmanFilter:
         self._prev_heading = heading_deg
 
         return self.lat, self.lon, speed_m_s, heading_deg
-
-
-def dead_reckon_position(lat: float, lon: float, heading_deg: float,
-                         speed_knots: float, dt: float) -> tuple[float, float]:
-    """
-    Project position forward by dt seconds using heading and speed (dead reckoning).
-    """
-    if dt <= 0 or speed_knots <= 0:
-        return lat, lon
-
-    speed_m_s = speed_knots * 0.514444
-    dist_m = speed_m_s * dt
-
-    rad_heading = math.radians(heading_deg)
-    delta_north_m = dist_m * math.cos(rad_heading)
-    delta_east_m = dist_m * math.sin(rad_heading)
-
-    m_per_deg_lat = METERS_PER_DEG_LAT
-    m_per_deg_lon = max(_meters_per_deg_lon(lat), 1000.0)
-
-    new_lat = lat + (delta_north_m / m_per_deg_lat)
-    new_lon = lon + (delta_east_m / m_per_deg_lon)
-
-    return new_lat, new_lon

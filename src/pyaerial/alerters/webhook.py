@@ -134,8 +134,8 @@ class WebhookAlerter(Alerter):
         lat = _safe_num(payload.get("latitude"))
         lon = _safe_num(payload.get("longitude"))
         alt = _safe_num(payload.get("altitude"))
-        speed = _safe_num(payload.get("horizontal_speed")) if payload.get("horizontal_speed") is not None else _safe_num(payload.get("speed"))
-        heading = _safe_num(payload.get("direction")) if payload.get("direction") is not None else _safe_num(payload.get("heading"))
+        speed = _safe_num(payload.get("speed"))
+        heading = _safe_num(payload.get("heading"))
         vert_speed = _safe_num(payload.get("vertical_speed"))
         eta = _safe_num(meta.get("eta"))
 
@@ -169,8 +169,8 @@ class WebhookAlerter(Alerter):
         details = []
         if meta.get("registration"):
             details.append(f"**Reg:** {meta['registration']}")
-        if meta.get("model") or meta.get("typecode"):
-            model_str = f"{meta.get('model', '')} ({meta.get('typecode', '')})".strip(" ()")
+        if meta.get("model") or meta.get("aircraft_type"):
+            model_str = f"{meta.get('model', '')} ({meta.get('aircraft_type', '')})".strip(" ()")
             details.append(f"**Model:** {model_str}")
         if meta.get("manufacturer"):
             details.append(f"**Mfr:** {meta['manufacturer']}")
@@ -195,7 +195,7 @@ class WebhookAlerter(Alerter):
         rule_raw = meta.get("type", "unknown")
         embed = {
             "title": f'{callsign} ({icao}) triggered "{zone}/{rule_raw}"{hook_str}',
-            "description": f"Aircraft **{callsign}** (`{icao}`) met criteria for zone \"{zone}\", level \"{rule_raw}\".",
+            "description": f'Aircraft **{callsign}** (`{icao}`) met criteria for zone "{zone}", rule "{rule_raw}".',
             "fields": fields,
             "color": embed_color,
         }
@@ -218,8 +218,8 @@ class WebhookAlerter(Alerter):
         lat = _safe_num(payload.get("latitude"))
         lon = _safe_num(payload.get("longitude"))
         alt = _safe_num(payload.get("altitude"))
-        speed = _safe_num(payload.get("horizontal_speed")) if payload.get("horizontal_speed") is not None else _safe_num(payload.get("speed"))
-        heading = _safe_num(payload.get("direction")) if payload.get("direction") is not None else _safe_num(payload.get("heading"))
+        speed = _safe_num(payload.get("speed"))
+        heading = _safe_num(payload.get("heading"))
         vert_speed = _safe_num(payload.get("vertical_speed"))
         eta = _safe_num(meta.get("eta"))
 
@@ -230,7 +230,7 @@ class WebhookAlerter(Alerter):
         heading_str = f"{heading:.0f}°" if heading is not None else "N/A"
         vspeed_str = f"{vert_speed:+.0f} ft/min" if vert_speed is not None else "N/A"
 
-        slack_text = f"Aircraft `{callsign}` (`{icao}`) met criteria for zone \"{zone}\", level \"{rule_raw}\"."
+        slack_text = f'Aircraft `{callsign}` (`{icao}`) met criteria for zone "{zone}", rule "{rule_raw}".'
 
         fields = [
             {"type": "mrkdwn", "text": f"*Aircraft:* `{callsign}` ({icao})"},

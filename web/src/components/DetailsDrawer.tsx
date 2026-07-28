@@ -215,7 +215,7 @@ export function DetailsDrawer({
                 </span>
                 <span className="ui-field-label">Aircraft Type</span>
                 <span className="ui-field-value" id="detail-type">
-                  {flightDetail?.aircraft_type || flightDetail?.typecode || '—'}
+                  {flightDetail?.aircraft_type || '—'}
                 </span>
                 <span className="ui-field-label">Owner</span>
                 <span className="ui-field-value" id="detail-owner">

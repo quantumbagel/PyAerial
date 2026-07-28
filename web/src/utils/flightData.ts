@@ -46,7 +46,7 @@ export function getFlightDuration(flight: FlightSummary): number {
 }
 
 function getFlightAircraftType(flight: FlightSummary): string {
-  return (flight.aircraft_type || flight.typecode || '').toLowerCase();
+  return (flight.aircraft_type || '').toLowerCase();
 }
 
 function isFiniteSortNumber(value: unknown): value is number {

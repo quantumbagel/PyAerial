@@ -233,22 +233,21 @@ class MongoStore:
             "model": info.get("model") or "",
             "owner": info.get("owner") or "",
             "country": info.get("country") or "",
-            "aircraft_type": info.get("aircraft_type") or info.get("typecode") or "",
-            "typecode": info.get("typecode") or "",
+            "aircraft_type": info.get("aircraft_type") or "",
             "info": {str(k): v for k, v in info.items()},
         }
         telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         alert_docs = [
             {
-                "_id": alert.get("alert_id") or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', alert.get('level', ''))}",
-                "alert_id": alert.get("alert_id") or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', alert.get('level', ''))}",
+                "_id": alert.get("alert_id") or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', '')}",
+                "alert_id": alert.get("alert_id") or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', '')}",
                 "flight_id": flight_id,
                 "icao": alert.get("icao", icao),
                 "callsign": alert.get("callsign") or info.get(STORE_CALLSIGN) or "",
                 "zone": alert.get("zone", ""),
-                "rule": alert.get("rule", alert.get("level", "")),
+                "rule": alert.get("rule", ""),
                 "active": alert.get("active", False),
-                "activated_at": alert.get("activated_at", alert.get("timestamp")),
+                "activated_at": alert.get("activated_at"),
                 "deactivated_at": alert.get("deactivated_at"),
                 "eta": alert.get("eta"),
                 "reason": alert.get("reason"),

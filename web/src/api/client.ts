@@ -22,7 +22,6 @@ export function fetchAlerts(
   opts: {
     since?: number;
     flightId?: string;
-    level?: string;
     rule?: string;
     limit?: number;
     skip?: number;

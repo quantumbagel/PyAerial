@@ -450,7 +450,7 @@ class MockStore:
             self.live_telemetry_stream.append(point)
         return new_points
 
-    def get_live_flights(self) -> list[dict[str, Any]]:
+    def get_flights(self) -> list[dict[str, Any]]:
         now = time.time()
         results = []
         for flight in self.live_flights:
@@ -529,7 +529,7 @@ class MockStore:
         return alerts
 
     def get_stats(self) -> dict[str, int]:
-        live_flights = len(self.get_live_flights())
+        live_flights = len(self.get_flights())
         active_alerts = len(self.get_alerts("live", active_only=True))
         retained_flights = len(self.history_flights)
         historical_alerts = len(self.history_alerts)

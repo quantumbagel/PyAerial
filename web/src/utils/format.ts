@@ -132,9 +132,6 @@ export function normalizeAlertRule(rule?: unknown): NormalizedAlertLevel {
   return 'info';
 }
 
-/** @deprecated use normalizeAlertRule */
-export const normalizeAlertLevel = normalizeAlertRule;
-
 export function flightAlertSeverity(
   alerts?: { rule?: string }[] | null,
 ): NormalizedAlertLevel | null {

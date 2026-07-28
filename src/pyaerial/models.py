@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any, TypedDict
 
 
 @dataclass(slots=True)
@@ -27,7 +28,18 @@ class Datum:
         return f"Datum({self.value}, {self.time})"
 
 
-def get_latest(information_type: str, information_datum: str, plane_data: dict,
+class PlaneState(TypedDict, total=False):
+    """In-memory plane document keyed by telemetry buckets."""
+
+    info: dict[str, Any]
+    received_data: dict[str, list[Datum]]
+    calculated_data: dict[str, list[Datum]]
+    internal: dict[str, Any]
+    active_alerts: list[dict[str, Any]]
+    raw_messages: list[Any]
+
+
+def get_latest(information_type: str, information_datum: str, plane_data: PlaneState | dict,
                after_time: float | None = None) -> Datum | None:
     """
     Return the most relevant :class:`Datum` for a field.
@@ -61,7 +73,7 @@ def get_latest(information_type: str, information_datum: str, plane_data: dict,
     return best
 
 
-def patch_append(plane: dict, bucket: str, field: str, datum: Datum) -> bool:
+def patch_append(plane: PlaneState | dict, bucket: str, field: str, datum: Datum) -> bool:
     """
     Append ``datum`` to ``plane[bucket][field]`` unless it duplicates the latest
     value already stored there.

@@ -32,9 +32,7 @@ _PROXIMITY_KEY = "_proximity"
 
 _FIELD_ALIASES = {
     "speed": STORE_HORIZ_SPEED,
-    "horizontal_speed": STORE_HORIZ_SPEED,
     "heading": STORE_HEADING,
-    "direction": STORE_HEADING,
     "alt": STORE_ALT,
     "altitude": STORE_ALT,
     "vert_speed": STORE_VERT_SPEED,

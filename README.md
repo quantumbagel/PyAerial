@@ -151,7 +151,7 @@ docker compose -f docker-compose.mock.yml up --build
 |---------|---------------------|--------------------------------------------------|
 | `sdr`   | `pyrtlsdr`, `numpy` | Native `py1090` RTL-SDR hardware receiver plugin |
 | `kafka` | `kafka-python-ng`   | Kafka alert publisher plugin                     |
-| `dev`   | `pytest`, `httpx`   | Unit testing suite and API testing tools         |
+| `dev`   | `pytest`, `httpx`   | Development tooling (optional test runner, HTTP client) |
 | `all`   | all above           | Full feature set                                 |
 
 To install all extras:

@@ -262,7 +262,6 @@ class PlaneCalculator:
             plane[STORE_INFO]["owner"] = owner
             plane[STORE_INFO]["country"] = country
             plane[STORE_INFO]["aircraft_type"] = aircraft_type
-            plane[STORE_INFO]["typecode"] = aircraft_type
             plane[STORE_INFO]["metadata_resolved"] = True
         except Exception as exc:
             log.debug("Background metadata lookup failed for %s: %s", icao, exc)
@@ -271,7 +270,6 @@ class PlaneCalculator:
             plane[STORE_INFO].setdefault("owner", "")
             plane[STORE_INFO].setdefault("country", "")
             plane[STORE_INFO].setdefault("aircraft_type", "")
-            plane[STORE_INFO].setdefault("typecode", "")
             plane[STORE_INFO]["metadata_resolved"] = True
         finally:
             with self._lock:
@@ -426,7 +424,7 @@ class PlaneCalculator:
                 "hook": hook,
             },
         }
-        for field in ("registration", "manufacturer", "manufacturer_name", "model", "owner", "typecode", "photo_url", "country", "operator_callsign"):
+        for field in ("registration", "manufacturer", "manufacturer_name", "model", "owner", "aircraft_type", "photo_url", "country", "operator_callsign"):
             val = info.get(field)
             if val:
                 meta[field] = val

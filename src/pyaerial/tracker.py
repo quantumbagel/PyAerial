@@ -23,7 +23,7 @@ from pyaerial.constants import (
     STORE_RECV_DATA,
     STORE_TOTAL_PACKETS,
 )
-from pyaerial.models import Datum
+from pyaerial.models import Datum, PlaneState
 
 log = logging.getLogger("pyaerial.tracker")
 
@@ -33,7 +33,7 @@ class Tracker:
 
     def __init__(self, config: Config):
         self.config = config
-        self.planes: dict[str, dict] = {}
+        self.planes: dict[str, PlaneState] = {}
         # hex -> most recent timestamp we have seen for that hex
         self._recent: dict[str, float] = {}
         self._dirty_icaos: set[str] = set()

@@ -119,30 +119,6 @@ export function LevelBadge({ flight, zones, alertColors }: LevelBadgeProps) {
   return <Badge variant="neutral">Clear</Badge>;
 }
 
-/** @deprecated use ZoneBadge with zone name */
-export function AlertRuleBadge({
-  rule,
-  zone,
-  zones,
-  alertColors,
-}: {
-  rule?: string;
-  zone?: string;
-  zones?: Zone[];
-  alertColors?: Record<string, string>;
-}) {
-  return <ZoneBadge zone={zone || 'zone'} rule={rule} zones={zones} alertColors={alertColors} />;
-}
-
-/** @deprecated use LiveBadge or omit for ended episodes */
-export function AlertStatusBadge({ active }: { active?: boolean }) {
-  if (!active) return null;
-  return <LiveBadge />;
-}
-
-/** @deprecated use AlertRuleBadge */
-export const AlertLevelBadge = AlertRuleBadge;
-
 export function flightSortValueLabel(
   flight: FlightSummary,
   sortField: FlightSortField,
@@ -171,7 +147,7 @@ export function flightSortValueLabel(
     case 'model':
       return flight.model?.trim() || 'N/A';
     case 'type':
-      return (flight.aircraft_type || flight.typecode)?.trim() || 'N/A';
+      return flight.aircraft_type?.trim() || 'N/A';
     case 'duration': {
       const start = flight.start_time ?? 0;
       const end = flight.end_time ?? flight.timestamp ?? start;

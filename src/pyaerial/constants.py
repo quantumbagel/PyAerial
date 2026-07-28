@@ -18,8 +18,8 @@ STORE_LAT = "latitude"
 STORE_LONG = "longitude"
 STORE_ALT = "altitude"
 STORE_VERT_SPEED = "vertical_speed"
-STORE_HORIZ_SPEED = "horizontal_speed"
-STORE_HEADING = "direction"
+STORE_HORIZ_SPEED = "speed"
+STORE_HEADING = "heading"
 STORE_SELECTED_HEADING = "selected_heading"
 STORE_SELECTED_ALTITUDE = "selected_altitude"
 STORE_DISTANCE = "distance"
@@ -49,9 +49,6 @@ STORE_DATA_TYPES = {
     STORE_CALC_DATA: [STORE_HORIZ_SPEED, STORE_HEADING],
 }
 
-# Maps an internal bucket to the config key used to describe its save method.
-STORE_DATA_CONFIG_NAMING = {STORE_RECV_DATA: "telemetry", STORE_CALC_DATA: "calculated"}
-
 # Human-readable plane category lookup keyed by (typecode_category, category_code).
 STORE_PLANE_CATEGORY_CONVERSION = {
     2: {1: "Surface Emergency Vehicle", 3: "Surface Service Vehicle",
@@ -76,32 +73,6 @@ CONFIG_COMP_FUNCTIONS = {
     CONFIG_COMP_CTYPE_MINIMUM: operator.ge,
 }
 
-# --- Save method identifiers --------------------------------------------------
-CONFIG_CAT_SAVE_METHOD_DECIMATE = "decimate"
-CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE = "sdecimate"
-CONFIG_CAT_SAVE_METHOD_ALL = "all"
-CONFIG_CAT_SAVE_METHOD_NONE = "none"
-CONFIG_CAT_DEFAULT_SAVE_METHOD = "default"
-
-# Number of numeric arguments each parametrized save method expects.
-CONFIG_CAT_SAVE_METHOD_ARGS = {
-    CONFIG_CAT_SAVE_METHOD_DECIMATE: 1,
-    CONFIG_CAT_SAVE_METHOD_SMART_DECIMATE: 2,
-    CONFIG_CAT_SAVE_METHOD_ALL: 0,
-    CONFIG_CAT_SAVE_METHOD_NONE: 0,
-}
-
-# --- Alert methods ------------------------------------------------------------
-CONFIG_CAT_ALERT_METHOD_PRINT = "print"
-CONFIG_CAT_ALERT_METHOD_KAFKA = "kafka"
-
-# --- MongoDB document keys ----------------------------------------------------
-STORAGE_CATEGORY = "category"
-STORAGE_DATA_TYPE = "type"
-STORAGE_DATA = "data"
-STORAGE_LEVEL = "level"
-STORAGE_ZONE = "zone"
-
 # --- Logging ------------------------------------------------------------------
 LOGGING_LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
 
@@ -109,4 +80,3 @@ LOGGING_LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
 from pathlib import Path
 DEFAULT_CONFIG_FILE = "config.yaml"
 DEFAULT_AIRCRAFT_DB = str((Path(__file__).resolve().parent / ".." / ".." / ".." / "aircraft.db").resolve())
-

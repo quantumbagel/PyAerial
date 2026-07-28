@@ -162,7 +162,7 @@ export function usePortalApp() {
       const callsign = (flight.callsign || '').toLowerCase();
       const icao = (flight.icao || '').toLowerCase();
       const model = (flight.model || '').toLowerCase();
-      const aircraftType = (flight.aircraft_type || flight.typecode || '').toLowerCase();
+      const aircraftType = (flight.aircraft_type || '').toLowerCase();
       const activeAlertText = (flight.active_alerts ?? [])
         .map((a) => `${a.zone} ${a.rule}`)
         .join(' ')

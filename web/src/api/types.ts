@@ -24,7 +24,6 @@ export interface FlightSummary {
   owner?: string | null;
   country?: string | null;
   aircraft_type?: string | null;
-  typecode?: string | null;
   latitude?: number | null;
   longitude?: number | null;
   altitude?: number | null;
