@@ -288,19 +288,12 @@ export function DetailsDrawer({
                 <span className="ui-field-value" id="detail-heading">
                   {lastPoint ? formatHeading(lastPoint.heading) : 'N/A'}
                 </span>
-                {displayFlight?.portal_projection?.selected_heading != null && (
+                {displayFlight?.portal_projection?.turn_rate_deg_s != null &&
+                  Math.abs(displayFlight.portal_projection.turn_rate_deg_s) >= 0.05 && (
                   <>
-                    <span className="ui-field-label">Selected heading (TC 29)</span>
-                    <span className="ui-field-value" id="detail-selected-heading">
-                      {formatHeading(displayFlight.portal_projection.selected_heading)}
-                    </span>
-                  </>
-                )}
-                {displayFlight?.portal_projection?.selected_altitude != null && (
-                  <>
-                    <span className="ui-field-label">Selected altitude (TC 29)</span>
-                    <span className="ui-field-value" id="detail-selected-altitude">
-                      {formatAltitude(displayFlight.portal_projection.selected_altitude)}
+                    <span className="ui-field-label">Turn rate</span>
+                    <span className="ui-field-value" id="detail-turn-rate">
+                      {displayFlight.portal_projection.turn_rate_deg_s.toFixed(1)}°/s
                     </span>
                   </>
                 )}

@@ -25,8 +25,6 @@ from pyaerial.constants import (
     STORE_LONG,
     STORE_PLANE_CATEGORY,
     STORE_RECV_DATA,
-    STORE_SELECTED_ALTITUDE,
-    STORE_SELECTED_HEADING,
     STORE_VERT_SPEED,
 )
 
@@ -161,24 +159,8 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
         }
         category = CAT_VELOCITY
 
-    elif typecode in (28, 31):
+    elif typecode in (28, 29, 31):
         return None
-
-    elif typecode == 29:
-        try:
-            decoded = pms.decode(msg)
-        except Exception:
-            return None
-        sel_heading = decoded.get("selected_heading")
-        sel_altitude = decoded.get("selected_altitude")
-        data = {
-            STORE_INFO: {STORE_ICAO: icao},
-            STORE_RECV_DATA: {
-                STORE_SELECTED_HEADING: sel_heading,
-                STORE_SELECTED_ALTITUDE: sel_altitude * 0.3048 if sel_altitude is not None else None,
-            },
-        }
-        category = CAT_TARGET_STATE
 
     if data is None:
         log.warning("Unsupported typecode %s (msg=%s)", typecode, msg)

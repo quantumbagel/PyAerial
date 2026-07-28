@@ -40,7 +40,6 @@ from pyaerial.constants import (
     STORE_LONG,
     STORE_PORTAL_PROJECTION,
     STORE_RECV_DATA,
-    STORE_SELECTED_HEADING,
     STORE_VERT_SPEED,
 )
 from pyaerial.models import Datum, get_latest, patch_append
@@ -160,7 +159,7 @@ class PlaneCalculator:
         callsign = self._resolve_callsign(plane)
         self._check_alerts(plane, current, final_heading, final_speed, callsign)
         plane[STORE_PORTAL_PROJECTION] = build_portal_projection(
-            plane, self.config, kf, current, final_heading, final_speed,
+            self.config, kf, current, final_heading, final_speed,
         )
 
     def deactivate_plane(self, plane: dict) -> None:
@@ -302,26 +301,10 @@ class PlaneCalculator:
 
         use_curved = self.config.tracking.curved_projection
 
-        # --- Improvement 5: look up selected heading from TC 29 intent data ---
-        recv = plane.get(STORE_RECV_DATA, {})
-        sel_heading_series = recv.get(STORE_SELECTED_HEADING, [])
-        selected_heading: float | None = None
-        if sel_heading_series:
-            selected_heading = sel_heading_series[-1].value
-
         for zone_name, zone in self.config.zones.items():
             polygon = self.polygons[zone_name]
 
-            # Choose the best ETA projection strategy:
-            # 1. Intent-based: simulate turn to selected heading, then straight
-            # 2. Curved: extrapolate current turn rate forward
-            # 3. Straight-line: default
-            if use_curved and selected_heading is not None:
-                eta = geo.time_to_enter_geofence_intent(
-                    position, eta_heading, eta_speed, turn_rate,
-                    selected_heading, polygon, _ETA_HORIZON,
-                )
-            elif use_curved and abs(turn_rate) >= 0.1:
+            if use_curved and abs(turn_rate) >= 0.1:
                 eta = geo.time_to_enter_geofence_curved(
                     position, eta_heading, eta_speed, turn_rate, polygon, _ETA_HORIZON,
                 )

@@ -103,7 +103,6 @@ export function MapView({
   const planePaths = useRef<Record<string, L.Polyline>>({});
   const planeAlertPaths = useRef<Record<string, L.Polyline[]>>({});
   const planeProjectionTracks = useRef<Record<string, L.Polyline>>({});
-  const planeProjectionIntents = useRef<Record<string, L.Polyline>>({});
   const zoneLayers = useRef<L.Layer[]>([]);
   const selectedTelemetryMarker = useRef<L.CircleMarker | null>(null);
   const onFollowDisabledRef = useRef(onFollowDisabled);
@@ -406,7 +405,6 @@ export function MapView({
     Object.keys(planeProjectionTracks.current).forEach((flightId) => {
       if (!visibleProjectionIds.has(flightId)) {
         removeLayer(planeProjectionTracks.current, flightId);
-        removeLayer(planeProjectionIntents.current, flightId);
       }
     });
 
@@ -428,30 +426,8 @@ export function MapView({
         planeProjectionTracks.current[flightId].setStyle(trackStyle);
       } else {
         const line = L.polyline(trackLatLngs, trackStyle).addTo(map);
-        line.bindTooltip('Projected track (server)');
+        line.bindTooltip('Projected path (turn rate)');
         planeProjectionTracks.current[flightId] = line;
-      }
-
-      const intent = projection.intent_path;
-      if (intent && intent.length >= 2) {
-        const intentLatLngs = intent.map(([lat, lon]) => [lat, lon] as L.LatLngExpression);
-        const intentStyle: L.PolylineOptions = {
-          color: '#22d3ee',
-          weight: flightId === activeFlightId ? 3 : 2,
-          opacity: 0.9,
-          dashArray: '4 8',
-          className: 'flight-projection-intent',
-        };
-        if (planeProjectionIntents.current[flightId]) {
-          planeProjectionIntents.current[flightId].setLatLngs(intentLatLngs);
-          planeProjectionIntents.current[flightId].setStyle(intentStyle);
-        } else {
-          const line = L.polyline(intentLatLngs, intentStyle).addTo(map);
-          line.bindTooltip('ADS-B TC 29 selected heading');
-          planeProjectionIntents.current[flightId] = line;
-        }
-      } else {
-        removeLayer(planeProjectionIntents.current, flightId);
       }
     });
   }, [filteredFlights, flights, activeFlightId, showAllPaths]);

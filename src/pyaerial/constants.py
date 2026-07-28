@@ -20,8 +20,6 @@ STORE_ALT = "altitude"
 STORE_VERT_SPEED = "vertical_speed"
 STORE_HORIZ_SPEED = "speed"
 STORE_HEADING = "heading"
-STORE_SELECTED_HEADING = "selected_heading"
-STORE_SELECTED_ALTITUDE = "selected_altitude"
 STORE_DISTANCE = "distance"
 
 # --- Plane information fields --------------------------------------------------
