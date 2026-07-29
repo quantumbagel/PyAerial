@@ -3,7 +3,7 @@ import * as api from '../api/client';
 import { connectLiveSocket } from '../api/liveSocket';
 import type { Alert, AppConfig, FlightSummary, PortalView, ServerStats, TelemetryPoint, ZonesData } from '../api/types';
 import type { SidebarTab } from '../components/Sidebar';
-import { dedupeAlerts } from '../utils/alertData';
+import { alertEpisodeIdentity, dedupeAlerts } from '../utils/alertData';
 import { applyTelemetryPoint, mergeLiveFlights, sortFlights } from '../utils/flightData';
 
 const ALERTS_LIMIT = 50;
@@ -299,12 +299,13 @@ export function usePortalData({
               return dedupedIncoming;
             }
 
-            const prevMap = new Map(prev.map((a) => [a.alert_id, a]));
+            const prevMap = new Map(prev.map((a) => [alertEpisodeIdentity(a), a]));
             const events: { alert: Alert; eventType: 'activated' | 'deactivated' }[] = [];
             const newlyActivated: Alert[] = [];
 
             dedupedIncoming.forEach((curr: Alert) => {
-              const prevAlert = prevMap.get(curr.alert_id);
+              const key = alertEpisodeIdentity(curr);
+              const prevAlert = prevMap.get(key);
               const isCurrActive = curr.active !== false && !curr.deactivated_at;
               if (!prevAlert) {
                 if (isCurrActive) {

@@ -1,6 +1,7 @@
 import type { Alert, TelemetryPoint } from '../api/types';
 import type { NormalizedAlertLevel } from './format';
 import { normalizeAlertRule } from './format';
+import { alertEpisodeIdentity } from './alertData';
 
 export interface AlertPathSegment {
   latlngs: [number, number][];
@@ -21,31 +22,34 @@ export interface NormalizedAlertEpisode {
 export function normalizeAlertEpisodes(alerts: Alert[]): NormalizedAlertEpisode[] {
   const byId = new Map<string, NormalizedAlertEpisode>();
   for (const alert of alerts) {
-    if (!alert.alert_id) continue;
-    const existing = byId.get(alert.alert_id);
+    const key = alertEpisodeIdentity(alert);
+    if (!key) continue;
+    const existing = byId.get(key);
     const activated = alert.activated_at ?? 0;
     const deactivated = alert.deactivated_at ?? null;
+    const isEnded = alert.active === false || deactivated != null;
     if (!existing) {
-      byId.set(alert.alert_id, {
-        alert_id: alert.alert_id,
+      byId.set(key, {
+        alert_id: alert.alert_id || key,
         zone: alert.zone,
         rule: alert.rule,
         activated_at: activated,
         deactivated_at: deactivated,
-        active: alert.active,
+        active: !isEnded,
       });
       continue;
     }
-    byId.set(alert.alert_id, {
+    const mergedDeactivated =
+      existing.deactivated_at == null && deactivated == null
+        ? null
+        : Math.max(existing.deactivated_at ?? 0, deactivated ?? 0);
+    byId.set(key, {
       ...existing,
       zone: existing.zone || alert.zone,
       rule: existing.rule || alert.rule,
-      activated_at: Math.min(existing.activated_at, activated || existing.activated_at),
-      deactivated_at:
-        existing.deactivated_at == null && deactivated == null
-          ? null
-          : Math.max(existing.deactivated_at ?? 0, deactivated ?? 0),
-      active: existing.active || alert.active,
+      activated_at: Math.min(existing.activated_at || activated, activated || existing.activated_at),
+      deactivated_at: mergedDeactivated,
+      active: isEnded ? false : (existing.active && alert.active !== false),
     });
   }
   return [...byId.values()].sort((a, b) => a.activated_at - b.activated_at);

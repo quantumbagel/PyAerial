@@ -23,16 +23,13 @@ export type SortDirection = 'asc' | 'desc';
 /** Stable identity for an alert episode (does not change when moving between active and ended states). */
 export function alertEpisodeIdentity(alert: Alert): string {
   if (alert.alert_id) {
-    if (alert.activated_at != null) {
-      return `${alert.alert_id}:${alert.activated_at}`;
-    }
     return alert.alert_id;
   }
-  if (alert.flight_id && alert.zone && alert.rule && alert.activated_at != null) {
-    return `${alert.flight_id}:${alert.zone}:${alert.rule}:${alert.activated_at}`;
+  if (alert.flight_id && alert.zone && alert.rule) {
+    return `${alert.flight_id}:${alert.zone}:${alert.rule}`;
   }
   if (alert.activated_at != null) {
-    return `episode:${alert.activated_at}`;
+    return `episode:${Math.round(alert.activated_at)}`;
   }
   return `episode:${alert.icao || alert.callsign || ''}:${alert.zone || ''}:${alert.rule || ''}`;
 }
