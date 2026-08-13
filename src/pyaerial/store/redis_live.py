@@ -162,8 +162,10 @@ class RedisLiveStore:
                 pipe.hset(_KEY_ACTIVE_ALERTS, alert_id, encoded)
             else:
                 pipe.hdel(_KEY_ACTIVE_ALERTS, alert_id)
-            self._upsert_redis_alert_entry(pipe, alerts_key, alert_id, encoded)
-            self._upsert_redis_alert_entry(pipe, _KEY_ALERT_EPISODES, alert_id, encoded)
+            # Both per-flight alerts and the shared episode index are hashes
+            # keyed by alert_id, so upserts are O(1) instead of a list scan.
+            pipe.hset(alerts_key, alert_id, encoded)
+            pipe.hset(_KEY_ALERT_EPISODES, alert_id, encoded)
             pipe.execute()
         except RedisError as exc:
             log.error("Failed to record alert episode for %s: %s", flight_id, exc)
@@ -215,33 +217,17 @@ class RedisLiveStore:
                 doc["activated_at"] = stored.get("activated_at", activated_at)
             pipe = self.client.pipeline()
             pipe.hset(_KEY_ACTIVE_ALERTS, alert_id, json.dumps(doc, separators=(",", ":")))
-            self._upsert_redis_alert_entry(
-                pipe, _KEY_ALERTS.format(flight_id=flight_id), alert_id,
+            pipe.hset(
+                _KEY_ALERTS.format(flight_id=flight_id), alert_id,
                 json.dumps(doc, separators=(",", ":")),
             )
-            self._upsert_redis_alert_entry(
-                pipe, _KEY_ALERT_EPISODES, alert_id,
+            pipe.hset(
+                _KEY_ALERT_EPISODES, alert_id,
                 json.dumps(doc, separators=(",", ":")),
             )
             pipe.execute()
         except RedisError as exc:
             log.error("Failed to update active alert %s: %s", alert_id, exc)
-
-    def _upsert_redis_alert_entry(self, pipe, key: str, alert_id: str, encoded: str) -> None:
-        """Insert or replace ``encoded`` in a Redis alert list keyed by ``alert_id``."""
-        existing_raw = self.client.lrange(key, 0, -1)
-        for i, raw in enumerate(existing_raw):
-            try:
-                entry = json.loads(raw)
-            except (ValueError, TypeError):
-                continue
-            if entry.get("alert_id") == alert_id:
-                pipe.lset(key, i, encoded)
-                return
-        if key == _KEY_ALERT_EPISODES:
-            pipe.lpush(key, encoded)
-        else:
-            pipe.rpush(key, encoded)
 
     def _alert_doc(self, plane: dict, meta: dict[str, Any], payload: dict[str, Any], *,
                    alert_id: str, activated_at: float, active: bool,
@@ -424,9 +410,9 @@ class RedisLiveStore:
                         if json.loads(v).get("flight_id") == flight_id
                     ]
                 else:
-                    raw_alerts = self.client.lrange(_KEY_ALERTS.format(flight_id=flight_id), 0, -1)
+                    raw_alerts = self.client.hvals(_KEY_ALERTS.format(flight_id=flight_id))
             else:
-                raw_alerts = self.client.lrange(_KEY_ALERT_EPISODES, 0, -1)
+                raw_alerts = self.client.hvals(_KEY_ALERT_EPISODES)
             alerts = [json.loads(raw) for raw in raw_alerts]
             if since:
                 alerts = [
@@ -467,7 +453,8 @@ class RedisLiveStore:
         assert self.client is not None
         try:
             raw_flight = self.client.get(_KEY_FLIGHT.format(flight_id=flight_id))
-            raw_alerts = self.client.lrange(_KEY_ALERTS.format(flight_id=flight_id), 0, -1)
+            flight_alerts_raw = self.client.hgetall(_KEY_ALERTS.format(flight_id=flight_id))
+            raw_alerts = list(flight_alerts_raw.values())
             active_raw = {
                 k: v for k, v in self.client.hgetall(_KEY_ACTIVE_ALERTS).items()
                 if json.loads(v).get("flight_id") == flight_id
@@ -481,8 +468,8 @@ class RedisLiveStore:
             )
             for alert_id in active_raw:
                 pipe.hdel(_KEY_ACTIVE_ALERTS, alert_id)
-            for alert_raw in raw_alerts:
-                pipe.lrem(_KEY_ALERT_EPISODES, 0, alert_raw)
+            if flight_alerts_raw:
+                pipe.hdel(_KEY_ALERT_EPISODES, *flight_alerts_raw.keys())
             pipe.execute()
             self._last_telemetry_ts.pop(flight_id, None)
             return {

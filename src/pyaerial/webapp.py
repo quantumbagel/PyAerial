@@ -172,6 +172,10 @@ def run_webapp(config_path: str = "config.yaml", *,
         try:
             config = load_config(config_path)
         except Exception:
+            log.warning(
+                "Could not load configuration %s; falling back to defaults", config_path,
+                exc_info=True,
+            )
             from pyaerial.config.schema import Config, HomeConfig, TrackingConfig
             config = Config(home=HomeConfig(latitude=35.7275, longitude=-78.6959), tracking=TrackingConfig(), receivers={})
 

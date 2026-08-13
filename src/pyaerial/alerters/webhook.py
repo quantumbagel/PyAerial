@@ -5,6 +5,12 @@ from pyaerial.alerters import Alerter, register_alerter
 
 log = logging.getLogger("pyaerial.alerter.webhook")
 
+# Alert payload telemetry arrives in SI units (altitude m, speed km/h,
+# vertical speed m/s). Convert to ft / kt / ft-per-min for display.
+_ALT_M_TO_FT = 3.28084
+_SPEED_KMH_TO_KT = 0.539957
+_VS_MPS_TO_FT_PER_MIN = 196.8504
+
 
 def build_tracker_links(icao: str, callsign: str | None = None, registration: str | None = None) -> dict[str, str]:
     """Generate direct links to aircraft matching the webapp's external trackers (FlightAware, ADS-B Exchange, RadarBox)."""
@@ -82,7 +88,7 @@ class WebhookAlerter(Alerter):
         if not self.url:
             raise ValueError("webhook URL must be provided in alerter options")
         self.headers = arguments.get("headers", {})
-        self.method = arguments.get("method", "POST")
+        self.http_method = arguments.get("method", "POST")
         self.payload_format = arguments.get("format", "json")  # json, discord, slack
 
     def alert(self, meta: dict, payload: dict) -> None:
@@ -113,7 +119,7 @@ class WebhookAlerter(Alerter):
 
         try:
             resp = requests.request(
-                self.method,
+                self.http_method,
                 self.url,
                 json=body,
                 headers=self.headers,
@@ -152,13 +158,13 @@ class WebhookAlerter(Alerter):
         else:
             fields.append({"name": "Location (Lat, Lon)", "value": "N/A", "inline": True})
 
-        fields.append({"name": "Altitude", "value": f"{int(alt)} ft" if alt is not None else "N/A", "inline": True})
+        fields.append({"name": "Altitude", "value": f"{int(alt * _ALT_M_TO_FT)} ft" if alt is not None else "N/A", "inline": True})
         fields.append({"name": "ETA", "value": f"{int(eta)}s" if eta is not None else "N/A", "inline": True})
 
         # Telemetry Summary
-        speed_str = f"{speed:.1f} kt" if speed is not None else "N/A"
+        speed_str = f"{speed * _SPEED_KMH_TO_KT:.1f} kt" if speed is not None else "N/A"
         heading_str = f"{heading:.0f}°" if heading is not None else "N/A"
-        vspeed_str = f"{vert_speed:+.0f} ft/min" if vert_speed is not None else "N/A"
+        vspeed_str = f"{vert_speed * _VS_MPS_TO_FT_PER_MIN:+.0f} ft/min" if vert_speed is not None else "N/A"
         fields.append({
             "name": "Telemetry (Speed / Heading / VertSpeed)",
             "value": f"{speed_str} | {heading_str} | {vspeed_str}",
@@ -224,11 +230,11 @@ class WebhookAlerter(Alerter):
         eta = _safe_num(meta.get("eta"))
 
         pos_str = f"<https://www.google.com/maps?q={lat},{lon}|{lat:.5f}, {lon:.5f}>" if lat is not None and lon is not None else "N/A"
-        alt_str = f"{int(alt)} ft" if alt is not None else "N/A"
+        alt_str = f"{int(alt * _ALT_M_TO_FT)} ft" if alt is not None else "N/A"
         eta_str = f"{int(eta)}s" if eta is not None else "N/A"
-        speed_str = f"{speed:.1f} kt" if speed is not None else "N/A"
+        speed_str = f"{speed * _SPEED_KMH_TO_KT:.1f} kt" if speed is not None else "N/A"
         heading_str = f"{heading:.0f}°" if heading is not None else "N/A"
-        vspeed_str = f"{vert_speed:+.0f} ft/min" if vert_speed is not None else "N/A"
+        vspeed_str = f"{vert_speed * _VS_MPS_TO_FT_PER_MIN:+.0f} ft/min" if vert_speed is not None else "N/A"
 
         slack_text = f'Aircraft `{callsign}` (`{icao}`) met criteria for zone "{zone}", rule "{rule_raw}".'
 

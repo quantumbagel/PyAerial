@@ -34,7 +34,7 @@ class Tracker:
     def __init__(self, config: Config):
         self.config = config
         self.planes: dict[str, PlaneState] = {}
-        # hex -> most recent timestamp we have seen for that hex
+        # full frame hex -> most recent timestamp we have seen for that exact frame
         self._recent: dict[str, float] = {}
         self._dirty_icaos: set[str] = set()
 
@@ -64,8 +64,11 @@ class Tracker:
         """
         Deduplicate ``incoming`` against recently seen messages.
 
-        A message is considered new if we have never seen its hex, or if the
-        same hex was last seen longer ago than ``duplicate_packet_merging``.
+        A message is considered new if we have never seen that exact frame, or
+        if the same frame was last seen longer ago than
+        ``duplicate_packet_merging`` seconds. Note that ``msg_hex`` here is the
+        full 28/14-character frame, so distinct frames from the same aircraft
+        (position vs. velocity vs. callsign) are not merged together.
         """
         merge_window = self.config.tracking.duplicate_packet_merging
         to_process: list[tuple[str, float]] = []

@@ -49,10 +49,12 @@ class KafkaAlerter(Alerter):
             ALERT_CAT_PAYLOAD: payload,
         }
         try:
+            # send() is asynchronous; the producer's background thread delivers
+            # buffered records and close() flushes on shutdown. Avoiding a
+            # per-alert flush() keeps the alert dispatch pool non-blocking.
             producer.send(meta[ALERT_CAT_TYPE],
                           key=meta[STORE_ICAO].encode("utf-8"),
                           value=json.dumps(data).encode("utf-8"))
-            producer.flush()
         except KafkaError as exc:
             self.log.error("Failed to send Kafka alert for %s: %s", meta[STORE_ICAO], exc)
             self._producer = None  # force reconnect next time

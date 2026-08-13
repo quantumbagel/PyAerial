@@ -112,7 +112,7 @@ class MongoStore:
                     self.db = self.client.get_database("pyaerial")
             self._ensure_indexes()
             log.info("Connected to MongoDB database '%s' at %s", self.db.name, self.uri)
-        except (PyMongoError, Exception) as exc:
+        except Exception as exc:
             log.info("MongoDB unavailable at %s; operating in offline mode.", self.uri)
             self.client = None
             self.db = None

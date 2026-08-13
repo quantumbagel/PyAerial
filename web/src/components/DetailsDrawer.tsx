@@ -72,7 +72,13 @@ export function DetailsDrawer({
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key !== 'Escape') return;
+      // Don't steal Escape from inputs (search box, sort dropdowns, etc.).
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) {
+        return;
+      }
+      onClose();
     };
     window.addEventListener('keydown', onKeyDown);
     drawerRef.current?.focus();

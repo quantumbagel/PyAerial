@@ -51,6 +51,7 @@ class Engine:
         self._receivers: dict[str, _ReceiverHandle] = {}
         self._running = False
         self._shutdown = threading.Event()
+        self._shutdown_done = False
 
     def start_receivers(self) -> None:
         for name, receiver_cfg in self.config.receivers.items():
@@ -173,8 +174,9 @@ class Engine:
 
     def shutdown(self) -> None:
         """Stop receivers and finalize any remaining live flights."""
-        if not self._running and self._shutdown.is_set():
+        if self._shutdown_done:
             return
+        self._shutdown_done = True
         self._running = False
         self._shutdown.set()
         log.info("Shutting down...")

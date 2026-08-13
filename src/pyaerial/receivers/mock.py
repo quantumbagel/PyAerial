@@ -65,9 +65,9 @@ def encode_callsign(icao: str, callsign: str) -> str:
 
 def encode_velocity(icao: str, speed_kmh: float, heading_deg: float, vert_rate_fps: float = 0.0) -> str:
     tc = 19
-    st = 1
-    ic = 0
-    resv = 0
+    st = 1  # subsonic ground speed
+    ic = 0  # intent change flag
+    ifr = 0
     nac = 1
 
     speed_kts = speed_kmh * 0.539957
@@ -81,10 +81,20 @@ def encode_velocity(icao: str, speed_kmh: float, heading_deg: float, vert_rate_f
     dir_ns = 1 if v_ns < 0 else 0
     val_ns = int(round(abs(v_ns))) + 1
 
+    vr_source = 0  # GNSS
     vr_dir = 1 if vert_rate_fps < 0 else 0
     vr_val = int(round(abs(vert_rate_fps) / 64.0)) + 1
 
-    me = (tc << 51) | (st << 48) | (ic << 47) | (resv << 46) | (nac << 43) | (dir_ew << 42) | ((val_ew & 0x3FF) << 32) | (dir_ns << 31) | ((vr_dir) << 10) | ((vr_val & 0x1FF) << 1)
+    # BDS 0,9 (TC=19) payload layout, MSB-first (see pyModeS decoder/bds/bds09.py):
+    #   bits 0-4 TC | 5-7 subtype | 8 intent | 9 IFR | 10-12 NAC_v |
+    #   13 ew-dir | 14-23 ew-mag | 24 ns-dir | 25-34 ns-mag |
+    #   35 vr-source | 36 vr-sign | 37-45 vr-mag | 46-55 reserved/diff
+    me = (
+        (tc << 51) | (st << 48) | (ic << 47) | (ifr << 46) | (nac << 43)
+        | (dir_ew << 42) | ((val_ew & 0x3FF) << 32)
+        | (dir_ns << 31) | ((val_ns & 0x3FF) << 21)
+        | (vr_source << 20) | (vr_dir << 19) | ((vr_val & 0x1FF) << 10)
+    )
     return f"8D{icao.upper()}{me:014X}000000"
 
 

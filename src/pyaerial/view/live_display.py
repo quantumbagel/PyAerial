@@ -28,10 +28,12 @@ def format_dump1090_table(live_flights: list[dict[str, Any]], aircraft_db: Aircr
         flight_id = flight.get("flight_id") or "N/A"
 
         alt = flight.get("altitude")
-        alt_str = f"{int(alt):,}" if alt is not None else "N/A"
+        # altitude is stored in meters; display as feet to match the header.
+        alt_str = f"{int(alt * 3.28084):,}" if alt is not None else "N/A"
 
         spd = flight.get("speed")
-        spd_str = f"{int(spd)}" if spd is not None else "N/A"
+        # speed is stored in km/h; display as knots to match the header.
+        spd_str = f"{int(spd * 0.539957)}" if spd is not None else "N/A"
 
         hdg = flight.get("heading")
         hdg_str = f"{int(hdg):03d}°" if hdg is not None else "N/A"

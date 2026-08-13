@@ -59,7 +59,7 @@ export function AlertListItem({
       >
         <div className="ui-row__line">
           <span className="ui-row__title">{displayCallsign}</span>
-          <Chip>{(alert.icao || '').toUpperCase()}</Chip>
+          {alert.icao && <Chip>{alert.icao.toUpperCase()}</Chip>}
         </div>
         <div className="ui-row__line">
           <ZoneBadge

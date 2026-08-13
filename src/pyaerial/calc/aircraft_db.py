@@ -118,7 +118,8 @@ class AircraftDB:
         if not icao:
             return None
 
-        record = self._read_cached_record(icao)
+        with self._lock:
+            record = self._read_cached_record(icao)
         if record is not _MISSING:
             if record is None:
                 return None

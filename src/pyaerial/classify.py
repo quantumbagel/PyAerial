@@ -50,8 +50,8 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
     """
     Classify a single ADS-B message.
 
-  Assumes downlink format 17 or 18. Returns ``None`` for messages that should
-  be ignored (invalid ICAO, unsupported typecode, etc.).
+    Assumes downlink format 17 or 18. Returns ``None`` for messages that should
+    be ignored (invalid ICAO, unsupported typecode, etc.).
     """
     try:
         typecode = pms_typecode(msg)

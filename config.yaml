@@ -16,7 +16,7 @@ logging:
   level: info
 
 home:
-  latitude: 35.72748800696312:;
+  latitude: 35.72748800696312
   longitude: -78.69594225530933
 
 alert_colors:
