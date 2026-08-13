@@ -3,7 +3,7 @@ import * as api from '../api/client';
 import { connectLiveSocket } from '../api/liveSocket';
 import type { Alert, AppConfig, FlightSummary, PortalView, ServerStats, TelemetryPoint, ZonesData } from '../api/types';
 import type { SidebarTab } from '../components/Sidebar';
-import { alertEpisodeIdentity, dedupeAlerts } from '../utils/alertData';
+import { alertEpisodeIdentity, dedupeAlerts, mergeAlertsByEpisode } from '../utils/alertData';
 import { applyTelemetryPoint, mergeLiveFlights, sortFlights } from '../utils/flightData';
 
 const ALERTS_LIMIT = 50;
@@ -62,6 +62,7 @@ export function usePortalData({
   const hasMoreAlerts = useRef(true);
   const isFetchingAlerts = useRef(false);
   const isInitialAlertsLoad = useRef(true);
+  const alertsFetchedCount = useRef(0);
   const historyRefreshVersion = useRef(0);
   const portalViewRef = useRef<PortalView>(portalView);
   const sidebarTabRef = useRef(sidebarTab);
@@ -132,6 +133,7 @@ export function usePortalData({
       setFlightsData(sortFlights(flights));
       if (!isFetchingAlerts.current) {
         setAlertsData(dedupeAlerts(alerts));
+        alertsFetchedCount.current = alerts.length;
         hasMoreAlerts.current = alerts.length >= ALERTS_LIMIT;
       }
       if (stats) setServerStats(stats);
@@ -156,17 +158,21 @@ export function usePortalData({
     isFetchingAlerts.current = true;
     const version = historyRefreshVersion.current;
     try {
-      const skip = append ? alertsData.length : 0;
-      const limit = append ? ALERTS_LIMIT : Math.max(ALERTS_LIMIT, alertsData.length);
+      // Paginate against the number of alerts actually fetched from the server,
+      // not the deduped client-side list (whose length can differ after merging).
+      const skip = append ? alertsFetchedCount.current : 0;
+      const limit = append ? ALERTS_LIMIT : Math.max(ALERTS_LIMIT, alertsFetchedCount.current);
       const data = await api.fetchAlerts('history', { limit, skip });
       if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
         return;
       }
       if (append) {
         if (data.length < ALERTS_LIMIT) hasMoreAlerts.current = false;
+        alertsFetchedCount.current += data.length;
         setAlertsData((prev) => dedupeAlerts([...prev, ...data]));
       } else {
         setAlertsData(dedupeAlerts(data));
+        alertsFetchedCount.current = data.length;
         hasMoreAlerts.current = data.length >= ALERTS_LIMIT;
       }
       setAlertsError(null);
@@ -177,7 +183,7 @@ export function usePortalData({
     } finally {
       isFetchingAlerts.current = false;
     }
-  }, [alertsData.length]);
+  }, []);
 
   const switchPortalView = useCallback(
     (view: PortalView) => {
@@ -185,6 +191,8 @@ export function usePortalData({
       stopDetailPoll();
       historyRefreshVersion.current += 1;
       isInitialAlertsLoad.current = true;
+      alertsFetchedCount.current = 0;
+      setUnreadAlertsCount(0);
       setPortalView(view);
       resetSelection();
       setFlightsData([]);
@@ -264,6 +272,24 @@ export function usePortalData({
           setFlightsData((prev) => sortFlights(mergeLiveFlights(prev, message.flights)));
           setFlightsError(null);
 
+          // The live store drops alerts once their flight is no longer tracked,
+          // so prune them from the client list to match.
+          const trackedFlightIds = new Set(message.flights.map((f) => f.flight_id));
+          setAlertsData((prev) => {
+            if (prev.length === 0) return prev;
+            let needsPrune = false;
+            for (const alert of prev) {
+              if (alert.flight_id && !trackedFlightIds.has(alert.flight_id)) {
+                needsPrune = true;
+                break;
+              }
+            }
+            if (!needsPrune) return prev;
+            return prev.filter(
+              (alert) => !alert.flight_id || trackedFlightIds.has(alert.flight_id),
+            );
+          });
+
           setPathCoordsRef.current((prev) => {
             let next = prev;
             let updated = false;
@@ -332,7 +358,10 @@ export function usePortalData({
                 setUnreadAlertsCount((c) => c + activatedCount);
               }
             }
-            return dedupedIncoming;
+            // Merge rather than replace: the WS snapshot only covers currently
+            // tracked flights, so replacement would drop ended episodes for
+            // flights still being tracked (or clamp the list to the WS limit).
+            return mergeAlertsByEpisode(prev, dedupedIncoming);
           });
           setAlertsError(null);
         } else if (message.type === 'telemetry') {

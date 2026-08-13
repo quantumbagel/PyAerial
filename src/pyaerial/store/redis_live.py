@@ -162,35 +162,8 @@ class RedisLiveStore:
                 pipe.hset(_KEY_ACTIVE_ALERTS, alert_id, encoded)
             else:
                 pipe.hdel(_KEY_ACTIVE_ALERTS, alert_id)
-
-            existing_raw = self.client.lrange(alerts_key, 0, -1)
-            updated = False
-            for i, raw in enumerate(existing_raw):
-                try:
-                    entry = json.loads(raw)
-                except (ValueError, TypeError):
-                    continue
-                if entry.get("alert_id") == alert_id:
-                    pipe.lset(alerts_key, i, encoded)
-                    updated = True
-                    break
-            if not updated:
-                pipe.rpush(alerts_key, encoded)
-
-            episodes_raw = self.client.lrange(_KEY_ALERT_EPISODES, 0, -1)
-            ep_updated = False
-            for i, raw in enumerate(episodes_raw):
-                try:
-                    entry = json.loads(raw)
-                except (ValueError, TypeError):
-                    continue
-                if entry.get("alert_id") == alert_id:
-                    pipe.lset(_KEY_ALERT_EPISODES, i, encoded)
-                    ep_updated = True
-                    break
-            if not ep_updated:
-                pipe.lpush(_KEY_ALERT_EPISODES, encoded)
-
+            self._upsert_redis_alert_entry(pipe, alerts_key, alert_id, encoded)
+            self._upsert_redis_alert_entry(pipe, _KEY_ALERT_EPISODES, alert_id, encoded)
             pipe.execute()
         except RedisError as exc:
             log.error("Failed to record alert episode for %s: %s", flight_id, exc)
@@ -240,9 +213,35 @@ class RedisLiveStore:
             if raw:
                 stored = json.loads(raw)
                 doc["activated_at"] = stored.get("activated_at", activated_at)
-            self.client.hset(_KEY_ACTIVE_ALERTS, alert_id, json.dumps(doc, separators=(",", ":")))
+            pipe = self.client.pipeline()
+            pipe.hset(_KEY_ACTIVE_ALERTS, alert_id, json.dumps(doc, separators=(",", ":")))
+            self._upsert_redis_alert_entry(
+                pipe, _KEY_ALERTS.format(flight_id=flight_id), alert_id,
+                json.dumps(doc, separators=(",", ":")),
+            )
+            self._upsert_redis_alert_entry(
+                pipe, _KEY_ALERT_EPISODES, alert_id,
+                json.dumps(doc, separators=(",", ":")),
+            )
+            pipe.execute()
         except RedisError as exc:
             log.error("Failed to update active alert %s: %s", alert_id, exc)
+
+    def _upsert_redis_alert_entry(self, pipe, key: str, alert_id: str, encoded: str) -> None:
+        """Insert or replace ``encoded`` in a Redis alert list keyed by ``alert_id``."""
+        existing_raw = self.client.lrange(key, 0, -1)
+        for i, raw in enumerate(existing_raw):
+            try:
+                entry = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if entry.get("alert_id") == alert_id:
+                pipe.lset(key, i, encoded)
+                return
+        if key == _KEY_ALERT_EPISODES:
+            pipe.lpush(key, encoded)
+        else:
+            pipe.rpush(key, encoded)
 
     def _alert_doc(self, plane: dict, meta: dict[str, Any], payload: dict[str, Any], *,
                    alert_id: str, activated_at: float, active: bool,
@@ -452,6 +451,10 @@ class RedisLiveStore:
         """Return buffered flight data and delete Redis keys for the flight."""
         mem_flight = self._mem_flights.pop(flight_id, None)
         mem_alerts = self._mem_alerts.pop(flight_id, [])
+        self._mem_alert_episodes = [
+            a for a in self._mem_alert_episodes
+            if a.get("flight_id") != flight_id
+        ]
         for a in list(self._mem_active_alerts.values()):
             if a.get("flight_id") == flight_id:
                 self._mem_active_alerts.pop(a["alert_id"], None)

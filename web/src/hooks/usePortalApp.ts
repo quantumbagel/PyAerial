@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { PortalView, TelemetryPoint } from '../api/types';
+import type { Alert, PortalView, TelemetryPoint } from '../api/types';
+import { mergeAlertsByEpisode } from '../utils/alertData';
 import type { DrawerTab } from '../components/DetailsDrawer';
 import type { MapViewHandle } from '../components/MapView';
 import type { SidebarTab } from '../components/Sidebar';
@@ -137,25 +138,6 @@ export function usePortalApp() {
 
   onSelectAlertTabRef.current = () => portal.setSidebarTab('alerts');
 
-  const alertCountByFlight = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const flight of portal.flightsData) {
-      const count =
-        flight.active_alerts?.length ??
-        flight.alert_stats?.episode_count ??
-        0;
-      if (count > 0) {
-        map.set(flight.flight_id, count);
-      }
-    }
-    for (const alert of portal.alertsData) {
-      if (alert.flight_id) {
-        map.set(alert.flight_id, (map.get(alert.flight_id) ?? 0) + 1);
-      }
-    }
-    return map;
-  }, [portal.flightsData, portal.alertsData]);
-
   const filteredFlights = useMemo(() => {
     const q = searchQuery.toLowerCase();
     const filtered = portal.flightsData.filter((flight) => {
@@ -175,8 +157,8 @@ export function usePortalApp() {
         activeAlertText.includes(q)
       );
     });
-    return sortFlightsBy(filtered, flightSortField, flightSortDirection, alertCountByFlight);
-  }, [portal.flightsData, searchQuery, flightSortField, flightSortDirection, alertCountByFlight]);
+    return sortFlightsBy(filtered, flightSortField, flightSortDirection);
+  }, [portal.flightsData, searchQuery, flightSortField, flightSortDirection]);
 
   const paths = useFlightPaths(portalView, selection.activeFlightId, filteredFlights);
 
@@ -237,6 +219,40 @@ export function usePortalApp() {
       syncFlightAlerts(portal.alertsData);
     }
   }, [portal.alertsData, portalView, activeFlightId, syncFlightAlerts]);
+
+  // Keep the map's alert-path overlays in sync with live alert updates so newly
+  // activated/deactivated episodes are reflected without re-fetching the path.
+  useEffect(() => {
+    if (portalView !== 'live') return;
+    const byFlight = new Map<string, Alert[]>();
+    for (const alert of portal.alertsData) {
+      if (!alert.flight_id) continue;
+      const arr = byFlight.get(alert.flight_id);
+      if (arr) {
+        arr.push(alert);
+      } else {
+        byFlight.set(alert.flight_id, [alert]);
+      }
+    }
+    if (byFlight.size === 0) return;
+    paths.setPathAlerts((prev) => {
+      let next = prev;
+      let updated = false;
+      for (const [flightId, alerts] of byFlight) {
+        const existing = prev[flightId];
+        if (!existing || existing.length === 0) continue;
+        const merged = mergeAlertsByEpisode(existing, alerts);
+        if (merged.length !== existing.length || merged.some((a, i) => a !== existing[i])) {
+          if (!updated) {
+            next = { ...next };
+            updated = true;
+          }
+          next[flightId] = merged;
+        }
+      }
+      return next;
+    });
+  }, [portal.alertsData, portalView, paths.setPathAlerts]);
 
   const disableFollow = useCallback(
     () => setFollowSelectedPlane(false),

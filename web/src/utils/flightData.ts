@@ -53,14 +53,13 @@ function isFiniteSortNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function activeAlertCount(flight: FlightSummary, alertCountMap?: Map<string, number>): number {
-  if (flight.active_alerts !== undefined) {
+function activeAlertCount(flight: FlightSummary): number {
+  if (flight.active_alerts && flight.active_alerts.length > 0) {
     return flight.active_alerts.length;
   }
-  if (flight.alert_stats?.episode_count) {
-    return flight.alert_stats.episode_count;
-  }
-  return alertCountMap?.get(flight.flight_id) ?? 0;
+  // Completed flights always carry an (empty) active_alerts array, so alert
+  // episode counts for history must come from alert_stats.
+  return flight.alert_stats?.episode_count ?? 0;
 }
 
 export function isFlightSortValueMissing(flight: FlightSummary, field: FlightSortField): boolean {
@@ -92,12 +91,11 @@ function compareFlightsByField(
   a: FlightSummary,
   b: FlightSummary,
   field: FlightSortField,
-  alertCountMap?: Map<string, number>,
 ): number {
   switch (field) {
     case 'alerts': {
-      const aCount = activeAlertCount(a, alertCountMap);
-      const bCount = activeAlertCount(b, alertCountMap);
+      const aCount = activeAlertCount(a);
+      const bCount = activeAlertCount(b);
       return aCount - bCount;
     }
     case 'last_seen':
@@ -131,7 +129,6 @@ export function sortFlightsBy(
   flights: FlightSummary[],
   field: FlightSortField,
   direction: SortDirection,
-  alertCountMap?: Map<string, number>,
 ): FlightSummary[] {
   const mult = direction === 'asc' ? 1 : -1;
   return [...flights].sort((a, b) => {
@@ -141,7 +138,7 @@ export function sortFlightsBy(
     if (aMissing) return 1;
     if (bMissing) return -1;
 
-    const cmp = compareFlightsByField(a, b, field, alertCountMap);
+    const cmp = compareFlightsByField(a, b, field);
     if (cmp !== 0) return cmp * mult;
     return compareFlightsByLastSeenDesc(a, b);
   });

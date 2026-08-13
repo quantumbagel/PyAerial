@@ -372,7 +372,10 @@ class PlaneCalculator:
         for key, (zone_name, rule, eta) in matching.items():
             state = self._alert_state.get(key)
             if state is None:
-                alert_id = f"{flight_id}:{zone_name}:{rule.name}"
+                # Include the activation time in the alert id so a re-entry into the
+                # same zone/rule starts a new episode instead of overwriting the
+                # previous one in the live store and in Mongo.
+                alert_id = f"{flight_id}:{zone_name}:{rule.name}:{int(now)}"
                 state = {
                     "activated_at": now,
                     "last_periodic": 0.0,

@@ -19,17 +19,23 @@ def _sample_track_path(
         return [[position[0], position[1]]]
 
     points: list[list[float]] = [[position[0], position[1]]]
-    t = step_seconds
-    while t <= horizon_seconds + 1e-9:
+    t = 0.0
+    while True:
+        # Sample at regular steps but clamp the final step so the projected
+        # path always reaches exactly ``horizon_seconds``, even when the
+        # horizon is not a multiple of the step size.
+        next_t = min(t + step_seconds, horizon_seconds)
         lat, lon = geo.dead_reckon_curved(
             position,
             motion.heading_deg,
             motion.speed_kph,
             motion.turn_rate_deg_s,
-            t,
+            next_t,
         )
         points.append([lat, lon])
-        t += step_seconds
+        if next_t >= horizon_seconds - 1e-9:
+            break
+        t = next_t
     return points
 
 
