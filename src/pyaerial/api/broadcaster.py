@@ -11,9 +11,8 @@ from fastapi import WebSocket
 
 from pyaerial.api.payloads import sanitize_for_json
 from pyaerial.api.protocol import LiveStore
-from pyaerial.api.queries import get_live_flights, get_mock_tracked_alerts, get_stats, get_tracked_live_alerts
+from pyaerial.api.queries import get_live_flights, get_stats, get_tracked_live_alerts
 from pyaerial.calc.aircraft_db import AircraftDB
-from pyaerial.mock_store import MockStore
 
 log = logging.getLogger("pyaerial.webapp")
 
@@ -21,13 +20,11 @@ _LIVE_POLL_INTERVAL = 1.0
 
 
 class LiveBroadcaster:
-    """Poll Redis or MockStore and push live updates to connected WebSocket clients."""
+    """Poll the live store and push updates to connected WebSocket clients."""
 
-    def __init__(self, live_store: LiveStore | None, aircraft_db: AircraftDB | None,
-                 mock_store: MockStore | None = None):
+    def __init__(self, live_store: LiveStore | None, aircraft_db: AircraftDB | None):
         self.live_store = live_store
         self.aircraft_db = aircraft_db
-        self.mock_store = mock_store
         self._clients: dict[WebSocket, float] = {}
         self._task: asyncio.Task | None = None
         self._pending_lookups: set[str] = set()
@@ -56,17 +53,12 @@ class LiveBroadcaster:
         self._clients.pop(websocket, None)
 
     async def _send_snapshot(self, websocket: WebSocket) -> None:
-        if self.mock_store:
-            flights = self.mock_store.get_flights()
-            alerts = get_mock_tracked_alerts(self.mock_store, flights, limit=50)
-            stats = self.mock_store.get_stats()
-        else:
-            flights = get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
-            alerts = (
-                get_tracked_live_alerts(self.live_store, flights, limit=50)
-                if self.live_store else []
-            )
-            stats = get_stats(self.live_store, None, self.aircraft_db)
+        flights = get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
+        alerts = (
+            get_tracked_live_alerts(self.live_store, flights, limit=50)
+            if self.live_store else []
+        )
+        stats = get_stats(self.live_store, None, self.aircraft_db)
         await websocket.send_json({"type": "flights", "flights": sanitize_for_json(flights)})
         await websocket.send_json({"type": "alerts", "alerts": sanitize_for_json(alerts)})
         await websocket.send_json({"type": "stats", "stats": sanitize_for_json(stats)})
@@ -82,13 +74,7 @@ class LiveBroadcaster:
             await asyncio.sleep(_LIVE_POLL_INTERVAL)
 
     async def _background_tick(self) -> None:
-        if self.mock_store:
-            self.mock_store.update_live()
-            flights = self.mock_store.get_flights()
-        elif self.live_store:
-            flights = self.live_store.get_flights()
-        else:
-            flights = []
+        flights = self.live_store.get_flights() if self.live_store else []
 
         if self.aircraft_db and self.aircraft_db.available and flights:
             for flight in flights:
@@ -115,17 +101,12 @@ class LiveBroadcaster:
     async def _broadcast_tick(self) -> None:
         now = time.time()
 
-        if self.mock_store:
-            flights = self.mock_store.get_flights()
-            alerts = get_mock_tracked_alerts(self.mock_store, flights, limit=50)
-            stats = self.mock_store.get_stats()
-        else:
-            flights = get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
-            alerts = (
-                get_tracked_live_alerts(self.live_store, flights, limit=50)
-                if self.live_store else []
-            )
-            stats = get_stats(self.live_store, None, self.aircraft_db)
+        flights = get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
+        alerts = (
+            get_tracked_live_alerts(self.live_store, flights, limit=50)
+            if self.live_store else []
+        )
+        stats = get_stats(self.live_store, None, self.aircraft_db)
 
         flights_sig = json.dumps(sanitize_for_json(flights), sort_keys=True, default=str)
         if flights_sig != self._last_flights_sig:
@@ -146,12 +127,7 @@ class LiveBroadcaster:
             await self._broadcast(msg)
 
         for websocket, since in list(self._clients.items()):
-            if self.mock_store:
-                points = self.mock_store.get_live_telemetry(since)
-            elif self.live_store:
-                points = self.live_store.get_live_telemetry(since)
-            else:
-                points = []
+            points = self.live_store.get_live_telemetry(since) if self.live_store else []
 
             if points:
                 payload = {

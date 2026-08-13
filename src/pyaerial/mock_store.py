@@ -79,11 +79,10 @@ def _enrich_mock_photo(res: dict[str, Any], aircraft_db: Any) -> None:
 class MockStore:
     """Simulates Redis and MongoDB stores with realistic generated flight data."""
 
-    def __init__(self, home_lat: float = 35.7275, home_lon: float = -78.6959, simulated_delay: float = 0.0,
+    def __init__(self, home_lat: float = 35.7275, home_lon: float = -78.6959,
                  aircraft_db: Any = None):
         self.home_lat = home_lat
         self.home_lon = home_lon
-        self.simulated_delay = simulated_delay
         self.aircraft_db = aircraft_db
         self._start_time = time.time()
 

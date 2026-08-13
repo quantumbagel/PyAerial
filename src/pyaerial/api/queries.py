@@ -13,12 +13,10 @@ from pyaerial.api.payloads import (
     flight_summary,
     format_active_alerts,
     format_alert,
-    live_alert_stats,
     telemetry_point,
 )
 from pyaerial.api.protocol import LiveStore
 from pyaerial.calc.aircraft_db import AircraftDB
-from pyaerial.mock_store import MockStore
 
 _FLIGHT_STATUS_LIVE = "live"
 
@@ -112,23 +110,6 @@ def get_tracked_live_alerts(
     if not flight_ids:
         return []
     alerts = get_live_alerts(live_store, active_only=False)
-    filtered = [alert for alert in alerts if alert.get("flight_id") in flight_ids]
-    filtered.sort(key=lambda alert: alert.get("activated_at") or 0, reverse=True)
-    if limit:
-        filtered = filtered[:limit]
-    return filtered
-
-
-def get_mock_tracked_alerts(
-    mock_store: MockStore,
-    flights: list[dict[str, Any]],
-    *,
-    limit: int = 0,
-) -> list[dict[str, Any]]:
-    flight_ids = {flight_id for flight in flights if (flight_id := flight.get("flight_id"))}
-    if not flight_ids:
-        return []
-    alerts = mock_store.get_alerts("live", active_only=False)
     filtered = [alert for alert in alerts if alert.get("flight_id") in flight_ids]
     filtered.sort(key=lambda alert: alert.get("activated_at") or 0, reverse=True)
     if limit:

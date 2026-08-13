@@ -9,7 +9,6 @@ from __future__ import annotations
 import datetime
 import json
 import logging
-import sys
 import time
 from typing import Any
 
@@ -27,8 +26,6 @@ from pyaerial.view.live_display import run_live_loop
 from pyaerial.view.store import get_live_store
 
 log = logging.getLogger("pyaerial.view")
-
-EXCLUDED_DATABASES = {"admin", "config", "local"}
 
 HELP_TEXT = """
 PyAerial Flight Viewer

@@ -14,7 +14,6 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-import requests
 from shapely import Polygon
 
 from pyaerial.alerters import Alerter, create_alerter

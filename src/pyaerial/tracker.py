@@ -13,7 +13,6 @@ from collections import defaultdict
 from pyaerial.classify import ClassifiedMessage, classify
 from pyaerial.config.schema import Config
 from pyaerial.constants import (
-    STORE_CALC_DATA,
     STORE_FIRST_PACKET,
     STORE_ICAO,
     STORE_INFO,

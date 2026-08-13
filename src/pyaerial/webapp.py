@@ -28,7 +28,6 @@ from pyaerial.calc.aircraft_db import AircraftDB
 from pyaerial.config import load_config
 from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
-from pyaerial.mock_store import MockStore
 from pyaerial.store.redis_live import RedisLiveStore
 
 log = logging.getLogger("pyaerial.webapp")
@@ -50,9 +49,8 @@ def _safe_static_path(full_path: str) -> Path | None:
 
 
 def create_app(*, config: Config, db: pymongo.database.Database | None = None,
-               live_store: RedisLiveStore | None = None, aircraft_db: AircraftDB | None = None,
-               mock_store: MockStore | None = None) -> FastAPI:
-    broadcaster = LiveBroadcaster(live_store, aircraft_db, mock_store=mock_store)
+               live_store: RedisLiveStore | None = None, aircraft_db: AircraftDB | None = None) -> FastAPI:
+    broadcaster = LiveBroadcaster(live_store, aircraft_db)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -78,7 +76,6 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
             db=db,
             live_store=live_store,
             aircraft_db=aircraft_db,
-            mock_store=mock_store,
         )
 
     @app.websocket("/ws/live")
@@ -156,8 +153,7 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
 def run_webapp(config_path: str = "config.yaml", *,
                aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
                host: str = "0.0.0.0", port: int = 10090,
-               mock: bool = False,
-               mock_delay: float = 0.5) -> None:
+               mock: bool = False) -> None:
     try:
         aircraft_db = AircraftDB(aircraft_db_path) if aircraft_db_path else None
     except Exception as e:

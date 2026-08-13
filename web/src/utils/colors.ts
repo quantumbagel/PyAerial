@@ -1,16 +1,3 @@
-export const MAP_COLORS = {
-  warn: 'var(--warn)',
-  warnDark: 'var(--warn-dark)',
-  alert: 'var(--alert)',
-  alertDark: 'var(--alert-dark)',
-  live: 'var(--status-live)',
-  liveDark: 'var(--status-live-dark)',
-  accent: 'var(--accent)',
-  accentDark: 'var(--accent-active-bg)',
-  default: 'var(--neutral)',
-  defaultDark: 'var(--neutral-dark)',
-} as const;
-
 /** Resolved hex values for Leaflet/SVG rendering. */
 export const COLOR_HEX = {
   warn: '#f59e0b',

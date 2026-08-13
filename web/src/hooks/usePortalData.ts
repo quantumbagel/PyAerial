@@ -26,7 +26,6 @@ interface UsePortalDataOptions {
   setPathTelemetry?: React.Dispatch<React.SetStateAction<Record<string, TelemetryPoint[]>>>;
   appendSelectedTelemetry: (points: TelemetryPoint[]) => void;
   loadFlightAlerts: (flightId: string, view: PortalView, merge?: boolean) => Promise<Alert[]>;
-  onNewAlerts?: (alerts: Alert[]) => void;
   resetSelection: () => void;
   resetPaths: () => void;
   stopDetailPoll: () => void;
@@ -41,7 +40,6 @@ export function usePortalData({
   setPathTelemetry,
   appendSelectedTelemetry,
   loadFlightAlerts,
-  onNewAlerts,
   resetSelection,
   resetPaths,
   stopDetailPoll,
@@ -67,7 +65,6 @@ export function usePortalData({
   const portalViewRef = useRef<PortalView>(portalView);
   const sidebarTabRef = useRef(sidebarTab);
   const appendSelectedTelemetryRef = useRef(appendSelectedTelemetry);
-  const onNewAlertsRef = useRef(onNewAlerts);
   const loadFlightAlertsRef = useRef(loadFlightAlerts);
   const setPathCoordsRef = useRef(setPathCoords);
   const setPathTelemetryRef = useRef(setPathTelemetry);
@@ -81,9 +78,6 @@ export function usePortalData({
   useEffect(() => {
     appendSelectedTelemetryRef.current = appendSelectedTelemetry;
   }, [appendSelectedTelemetry]);
-  useEffect(() => {
-    onNewAlertsRef.current = onNewAlerts;
-  }, [onNewAlerts]);
   useEffect(() => {
     loadFlightAlertsRef.current = loadFlightAlerts;
   }, [loadFlightAlerts]);
@@ -327,7 +321,6 @@ export function usePortalData({
 
             const prevMap = new Map(prev.map((a) => [alertEpisodeIdentity(a), a]));
             const events: { alert: Alert; eventType: 'activated' | 'deactivated' }[] = [];
-            const newlyActivated: Alert[] = [];
 
             dedupedIncoming.forEach((curr: Alert) => {
               const key = alertEpisodeIdentity(curr);
@@ -336,13 +329,11 @@ export function usePortalData({
               if (!prevAlert) {
                 if (isCurrActive) {
                   events.push({ alert: curr, eventType: 'activated' });
-                  newlyActivated.push(curr);
                 }
               } else {
                 const isPrevActive = prevAlert.active !== false && !prevAlert.deactivated_at;
                 if (!isPrevActive && isCurrActive) {
                   events.push({ alert: curr, eventType: 'activated' });
-                  newlyActivated.push(curr);
                 } else if (isPrevActive && !isCurrActive) {
                   events.push({ alert: curr, eventType: 'deactivated' });
                 }
@@ -350,9 +341,6 @@ export function usePortalData({
             });
 
             if (events.length > 0) {
-              if (newlyActivated.length > 0 && onNewAlertsRef.current) {
-                onNewAlertsRef.current(newlyActivated);
-              }
               const activatedCount = events.filter((e) => e.eventType === 'activated').length;
               if (activatedCount > 0 && sidebarTabRef.current !== 'alerts') {
                 setUnreadAlertsCount((c) => c + activatedCount);
