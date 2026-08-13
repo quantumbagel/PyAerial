@@ -114,11 +114,20 @@ def time_to_enter_geofence_curved(
     steps: int = 30,
 ) -> float:
     """
-    Estimate seconds until a plane enters the geofence using a curved trajectory
+    Estimate seconds until a plane enters the geofence along a curved trajectory
     that accounts for *turn_rate* (degrees/second).
 
-    Falls back to :func:`time_to_enter_geofence` when turn rate is negligible.
-    Uses flat-earth approximation for the stepping loop (accurate for <100 km).
+    Constant speed with a constant turn rate produces a perfect circular path, so
+    the entry time is solved analytically by intersecting the turn circle with
+    the geofence edges -- no time stepping, hence no discretization error. Falls
+    back to :func:`time_to_enter_geofence` when the turn rate is negligible.
+
+    Returns the *earliest* plausible entry: when the turn circle misses the
+    geofence (small turn rates imply huge circles), the straight-line estimate is
+    reported instead so transient heading noise or the start of a maneuver never
+    erases alert forewarning.
+
+    ``steps`` is accepted for backward compatibility but is no longer used.
     """
     point = Point(position)
     if polygon.intersects(point) or polygon.covers(point):
@@ -131,7 +140,9 @@ def time_to_enter_geofence_curved(
     if abs(turn_rate) < 0.1:
         return time_to_enter_geofence(position, heading, speed, polygon, max_time)
 
-    # Bounding-box early return (same logic as straight-line version)
+    # Bounding-box lower-bound check: within max_time the aircraft can cover at
+    # most max_time * speed, so if even the straight-line distance to the box
+    # exceeds that, the geofence is unreachable.
     min_lat, min_lon, max_lat, max_lon = polygon.bounds
     lat_diff = max(0.0, min_lat - position[0], position[0] - max_lat)
     max_abs_lat = max(abs(position[0]), abs(min_lat), abs(max_lat))
@@ -143,43 +154,95 @@ def time_to_enter_geofence_curved(
     else:
         min_dist_lb = lat_diff * 110.5
 
-    distance_approx = max_time * speed / 3600  # km
-    if min_dist_lb > distance_approx:
+    if min_dist_lb > max_time * speed / 3600:
         return math.inf
 
-    # Step forward along curved trajectory
-    dt = max_time / steps
-    lat, lon = position
-    cur_heading = heading
-    speed_m_s = speed / 3.6
+    # The straight-line ETA acts as a floor: a small turn rate (heading noise or
+    # the start of a maneuver) implies a huge circle that may miss a small
+    # geofence even though the aircraft could reach it by holding course, so
+    # report whichever model predicts the earliest entry.
+    straight_eta = time_to_enter_geofence(
+        position, heading, speed, polygon, max_time
+    )
+
+    # --- Analytic turn-circle intersection (flat-earth, accurate <100 km) ---
     m_per_deg_lat = 111_000.0
+    m_per_deg_lon = max(111_000.0 * math.cos(math.radians(position[0])), 1000.0)
+    lat0, lon0 = position
 
-    prev_lat, prev_lon = lat, lon
-    for i in range(1, steps + 1):
-        cur_heading += turn_rate * dt
-        dist_m = speed_m_s * dt
-        rad_h = math.radians(cur_heading)
-        m_per_deg_lon = max(111_000.0 * math.cos(math.radians(lat)), 1000.0)
-        lat += (dist_m * math.cos(rad_h)) / m_per_deg_lat
-        lon += (dist_m * math.sin(rad_h)) / m_per_deg_lon
+    omega = math.radians(turn_rate)  # signed rad/s; positive = right turn
+    v_ms = speed / 3.6
+    radius = v_ms / abs(omega)
+    period = 2.0 * math.pi / abs(omega)
+    hdg = math.radians(heading)
 
-        segment = LineString([Point(prev_lat, prev_lon), Point(lat, lon)])
-        if segment.intersects(polygon):
-            # Binary-search for a more precise entry time
-            lo_t = dt * (i - 1)
-            hi_t = dt * i
-            for _ in range(8):
-                mid_t = (lo_t + hi_t) / 2
-                mid_pos = dead_reckon_curved(position, heading, speed, turn_rate, mid_t)
-                if polygon.intersects(Point(mid_pos)):
-                    hi_t = mid_t
-                else:
-                    lo_t = mid_t
-            return (lo_t + hi_t) / 2
+    # Turn-circle center in local planar (east, north) meters, plus the aircraft's
+    # starting angle on the circle: the center sits to the right of the velocity
+    # for a right turn and to the left for a left turn.
+    if omega > 0:
+        cx, cy = radius * math.cos(hdg), -radius * math.sin(hdg)
+        alpha0 = math.pi - hdg
+    else:
+        cx, cy = -radius * math.cos(hdg), radius * math.sin(hdg)
+        alpha0 = -hdg
 
-        prev_lat, prev_lon = lat, lon
+    def position_at(t: float) -> tuple[float, float]:
+        """Aircraft position after t seconds along the turn circle."""
+        alpha = alpha0 - omega * t
+        east = cx + radius * math.cos(alpha)
+        north = cy + radius * math.sin(alpha)
+        return lat0 + north / m_per_deg_lat, lon0 + east / m_per_deg_lon
 
-    return math.inf
+    def inside_at(t: float) -> bool:
+        return polygon.intersects(Point(position_at(t)))
+
+    # Collect every time within one revolution at which the circle crosses a
+    # geofence edge, by intersecting the circle with each edge segment.
+    geoms = polygon.geoms if hasattr(polygon, "geoms") else [polygon]
+    rings: list[list[tuple[float, float]]] = []
+    for geom in geoms:
+        rings.append(list(geom.exterior.coords))
+        rings.extend(list(interior.coords) for interior in geom.interiors)
+
+    candidates: list[float] = []
+    for ring in rings:
+        local = [
+            ((lon - lon0) * m_per_deg_lon, (lat - lat0) * m_per_deg_lat)
+            for lat, lon in ring
+        ]
+        for (ax, ay), (bx, by) in zip(local, local[1:]):
+            dx, dy = bx - ax, by - ay
+            fx, fy = ax - cx, ay - cy
+            aa = dx * dx + dy * dy
+            if aa <= 0:
+                continue
+            bb = 2.0 * (fx * dx + fy * dy)
+            cc = fx * fx + fy * fy - radius * radius
+            disc = bb * bb - 4.0 * aa * cc
+            if disc < 0:
+                continue
+            sq = math.sqrt(disc)
+            for root in ((-bb - sq) / (2.0 * aa), (-bb + sq) / (2.0 * aa)):
+                if root < 0.0 or root > 1.0:
+                    continue
+                pe = ax + root * dx
+                pn = ay + root * dy
+                alpha = math.atan2(pn - cy, pe - cx)
+                t = (alpha0 - alpha) / omega
+                t %= period
+                if t <= 1e-6:
+                    t += period
+                if t <= max_time:
+                    candidates.append(t)
+
+    candidates.sort()
+    # The aircraft starts outside the geofence, so the first crossing after which
+    # it is inside is the entry time.
+    probe_delta = 1e-6
+    for t in candidates:
+        if inside_at(t + probe_delta):
+            return min(t, straight_eta)
+    return straight_eta
 
 
 def dead_reckon_curved(
