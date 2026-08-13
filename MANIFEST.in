@@ -1,0 +1,4 @@
+include README.md
+graft src/pyaerial/static
+graft src/pyaerial/examples
+recursive-include src/pyaerial/static *
