@@ -40,6 +40,9 @@ services:
     image: redis:7-alpine
     container_name: pyaerial_redis
     restart: always
+    # Pure in-memory live cache (Mongo is the durable store). Disabling RDB/AOF
+    # persistence avoids MISCONF write-refusals when a bgsave fails (e.g. full disk).
+    command: redis-server --save "" --appendonly no
     ports:
       - "6379:6379"
     network_mode: host

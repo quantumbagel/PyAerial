@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -56,26 +57,57 @@ class RedisLiveStore:
         self._mem_alerts: dict[str, list[dict]] = defaultdict(list)
         self._mem_active_alerts: dict[str, dict] = {}
         self._mem_alert_episodes: list[dict] = []
+        self._last_connect_attempt = 0.0
+        self._reported_down = False
         self._connect()
 
     def _connect(self) -> None:
+        """Create the Redis client and verify connectivity.
+
+        Safe to call repeatedly: on failure the store keeps running with the
+        in-memory buffer and retries later via :meth:`_ensure_connected`.
+        """
         try:
             self.client = redis.Redis.from_url(
                 self.uri,
                 decode_responses=True,
-                socket_connect_timeout=1,
-                socket_timeout=1,
+                socket_connect_timeout=2,
+                socket_timeout=2,
             )
             self.client.ping()
-            log.info("Connected to Redis at %s", self.uri)
-        except RedisError:
-            log.info(
-                "Redis unavailable at %s; operating with in-memory live buffer.",
-                self.uri,
-            )
+            if self._reported_down:
+                log.info("Reconnected to Redis at %s", self.uri)
+                # Points buffered in memory while Redis was down were never
+                # written; reset the cursor so they are backfilled on the next
+                # write_live_planes call.
+                self._last_telemetry_ts.clear()
+            else:
+                log.info("Connected to Redis at %s", self.uri)
+            self._reported_down = False
+        except RedisError as exc:
+            if not self._reported_down:
+                log.warning(
+                    "Redis unavailable at %s; operating with in-memory live "
+                    "buffer. Reason: %s",
+                    self.uri,
+                    exc,
+                )
+                self._reported_down = True
             self.client = None
 
     def _ensure_connected(self) -> bool:
+        if self.client is None:
+            # Reconnect automatically (throttled) so a Redis that comes up after
+            # startup -- or that recovers from an outage -- is picked up without
+            # restarting the process.
+            now = time.monotonic()
+            if now - self._last_connect_attempt >= _RECONNECT_DELAY:
+                self._last_connect_attempt = now
+                try:
+                    self._connect()
+                except Exception:  # pragma: no cover - defensive
+                    log.debug("Redis reconnect attempt failed", exc_info=True)
+                    self.client = None
         if self.client is None:
             return False
         try:
@@ -83,6 +115,7 @@ class RedisLiveStore:
             return True
         except RedisError:
             log.warning("Lost Redis connection; operating with in-memory live buffer.")
+            self.client.close()
             self.client = None
             return False
 
