@@ -1,4 +1,5 @@
 """Map projection polylines (turn-rate curved forward extrapolation)."""
+
 from __future__ import annotations
 
 from typing import Any

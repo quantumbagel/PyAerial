@@ -5,6 +5,7 @@ All modules obtain loggers via :func:`logging.getLogger` under the ``pyaerial``
 namespace; this module wires up a single console handler (and optionally a
 rotating file handler) with a consistent format.
 """
+
 from __future__ import annotations
 
 import logging
@@ -16,8 +17,13 @@ _LOG_FORMAT = "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-def setup_logging(level: str = "info", *, log_file: str | None = None,
-                  max_bytes: int = 5 * 1024 * 1024, backups: int = 3) -> None:
+def setup_logging(
+    level: str = "info",
+    *,
+    log_file: str | None = None,
+    max_bytes: int = 5 * 1024 * 1024,
+    backups: int = 3,
+) -> None:
     """
     Configure the root logger for the process.
 
@@ -41,8 +47,9 @@ def setup_logging(level: str = "info", *, log_file: str | None = None,
     root.addHandler(console)
 
     if log_file:
-        file_handler = RotatingFileHandler(log_file, maxBytes=max_bytes,
-                                           backupCount=backups)
+        file_handler = RotatingFileHandler(
+            log_file, maxBytes=max_bytes, backupCount=backups
+        )
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
 

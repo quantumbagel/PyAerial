@@ -1,8 +1,10 @@
 """Redis-backed live flight, telemetry, and alert buffer."""
+
 from __future__ import annotations
 
 import json
 import logging
+from collections import defaultdict
 from typing import Any
 
 import redis
@@ -42,8 +44,6 @@ _KEY_ALERT_EPISODES = "live:alert_episodes"
 _RECONNECT_DELAY = 2.0
 
 
-from collections import defaultdict
-
 class RedisLiveStore:
     """Shared in-memory live store for engine writes and web portal reads."""
 
@@ -68,8 +68,11 @@ class RedisLiveStore:
             )
             self.client.ping()
             log.info("Connected to Redis at %s", self.uri)
-        except RedisError as exc:
-            log.info("Redis unavailable at %s; operating with in-memory live buffer.", self.uri)
+        except RedisError:
+            log.info(
+                "Redis unavailable at %s; operating with in-memory live buffer.",
+                self.uri,
+            )
             self.client = None
 
     def _ensure_connected(self) -> bool:
@@ -116,10 +119,17 @@ class RedisLiveStore:
         for plane in planes.values():
             self._upsert_live_flight(plane)
 
-    def record_alert_episode(self, plane: dict, meta: dict[str, Any], payload: dict[str, Any],
-                             *, alert_id: str, activated_at: float,
-                             active: bool = True,
-                             deactivated_at: float | None = None) -> None:
+    def record_alert_episode(
+        self,
+        plane: dict,
+        meta: dict[str, Any],
+        payload: dict[str, Any],
+        *,
+        alert_id: str,
+        activated_at: float,
+        active: bool = True,
+        deactivated_at: float | None = None,
+    ) -> None:
         """Record alert activation/deactivation and update the live active set.
 
         On activation (active=True) or deactivation (active=False), the existing
@@ -127,9 +137,15 @@ class RedisLiveStore:
         one document per alert episode.
         """
         flight_id = flight_id_for_plane(plane)
-        doc = self._alert_doc(plane, meta, payload, alert_id=alert_id,
-                              activated_at=activated_at, active=active,
-                              deactivated_at=deactivated_at)
+        doc = self._alert_doc(
+            plane,
+            meta,
+            payload,
+            alert_id=alert_id,
+            activated_at=activated_at,
+            active=active,
+            deactivated_at=deactivated_at,
+        )
         if active:
             self._mem_active_alerts[alert_id] = doc
         else:
@@ -169,23 +185,37 @@ class RedisLiveStore:
         except RedisError as exc:
             log.error("Failed to record alert episode for %s: %s", flight_id, exc)
 
-    def update_active_alert(self, plane: dict, alert_id: str, meta: dict[str, Any],
-                            payload: dict[str, Any], timestamp: float) -> None:
+    def update_active_alert(
+        self,
+        plane: dict,
+        alert_id: str,
+        meta: dict[str, Any],
+        payload: dict[str, Any],
+        timestamp: float,
+    ) -> None:
         """Refresh ETA, position, and telemetry on an active alert."""
         existing = self._mem_active_alerts.get(alert_id)
-        activated_at = existing.get("activated_at", timestamp) if existing else timestamp
+        activated_at = (
+            existing.get("activated_at", timestamp) if existing else timestamp
+        )
         if existing is not None:
             doc = dict(existing)
-            doc.update(self._alert_doc(
-                plane, meta, payload,
-                alert_id=alert_id,
-                activated_at=activated_at,
-                active=True,
-                deactivated_at=None,
-            ))
+            doc.update(
+                self._alert_doc(
+                    plane,
+                    meta,
+                    payload,
+                    alert_id=alert_id,
+                    activated_at=activated_at,
+                    active=True,
+                    deactivated_at=None,
+                )
+            )
         else:
             doc = self._alert_doc(
-                plane, meta, payload,
+                plane,
+                meta,
+                payload,
                 alert_id=alert_id,
                 activated_at=activated_at,
                 active=True,
@@ -215,22 +245,34 @@ class RedisLiveStore:
                 stored = json.loads(raw)
                 doc["activated_at"] = stored.get("activated_at", activated_at)
             pipe = self.client.pipeline()
-            pipe.hset(_KEY_ACTIVE_ALERTS, alert_id, json.dumps(doc, separators=(",", ":")))
             pipe.hset(
-                _KEY_ALERTS.format(flight_id=flight_id), alert_id,
+                _KEY_ACTIVE_ALERTS, alert_id, json.dumps(doc, separators=(",", ":"))
+            )
+            pipe.hset(
+                _KEY_ALERTS.format(flight_id=flight_id),
+                alert_id,
                 json.dumps(doc, separators=(",", ":")),
             )
             pipe.hset(
-                _KEY_ALERT_EPISODES, alert_id,
+                _KEY_ALERT_EPISODES,
+                alert_id,
                 json.dumps(doc, separators=(",", ":")),
             )
             pipe.execute()
         except RedisError as exc:
             log.error("Failed to update active alert %s: %s", alert_id, exc)
 
-    def _alert_doc(self, plane: dict, meta: dict[str, Any], payload: dict[str, Any], *,
-                   alert_id: str, activated_at: float, active: bool,
-                   deactivated_at: float | None = None) -> dict[str, Any]:
+    def _alert_doc(
+        self,
+        plane: dict,
+        meta: dict[str, Any],
+        payload: dict[str, Any],
+        *,
+        alert_id: str,
+        activated_at: float,
+        active: bool,
+        deactivated_at: float | None = None,
+    ) -> dict[str, Any]:
         flight_id = flight_id_for_plane(plane)
         return {
             "alert_id": alert_id,
@@ -256,7 +298,11 @@ class RedisLiveStore:
         if not self._ensure_connected():
             results: list[dict[str, Any]] = []
             for doc in self._mem_flights.values():
-                last_tel = self._mem_telemetry[doc["flight_id"]][-1] if self._mem_telemetry.get(doc["flight_id"]) else None
+                last_tel = (
+                    self._mem_telemetry[doc["flight_id"]][-1]
+                    if self._mem_telemetry.get(doc["flight_id"])
+                    else None
+                )
                 results.append(self._flight_summary(doc, last_tel))
             results.sort(key=lambda item: item.get("start_time") or 0, reverse=True)
             return results
@@ -325,7 +371,9 @@ class RedisLiveStore:
             log.error("Failed to read live flight %s: %s", flight_id, exc)
             return None
 
-    def get_telemetry(self, flight_id: str, *, since: float = 0.0) -> list[dict[str, Any]]:
+    def get_telemetry(
+        self, flight_id: str, *, since: float = 0.0
+    ) -> list[dict[str, Any]]:
         if not self._ensure_connected():
             points = self._mem_telemetry.get(flight_id, [])
             if since > 0:
@@ -351,12 +399,14 @@ class RedisLiveStore:
                 for point in self._mem_telemetry.get(flight_id, []):
                     if since > 0 and point.get("timestamp", 0) <= since:
                         continue
-                    points.append({
-                        "flight_id": flight_id,
-                        "icao": point.get("icao"),
-                        "active_alerts": active_alerts,
-                        **point,
-                    })
+                    points.append(
+                        {
+                            "flight_id": flight_id,
+                            "icao": point.get("icao"),
+                            "active_alerts": active_alerts,
+                            **point,
+                        }
+                    )
             points.sort(key=lambda item: item.get("timestamp") or 0)
             return points
         assert self.client is not None
@@ -367,36 +417,57 @@ class RedisLiveStore:
                 flight_doc = json.loads(raw_flight) if raw_flight else {}
                 active_alerts = flight_doc.get("active_alerts") or []
                 for point in self.get_telemetry(flight_id, since=since):
-                    points.append({
-                        "flight_id": flight_id,
-                        "icao": point.get("icao"),
-                        "active_alerts": active_alerts,
-                        **point,
-                    })
+                    points.append(
+                        {
+                            "flight_id": flight_id,
+                            "icao": point.get("icao"),
+                            "active_alerts": active_alerts,
+                            **point,
+                        }
+                    )
         except RedisError as exc:
             log.error("Failed to read live telemetry: %s", exc)
         points.sort(key=lambda item: item.get("timestamp") or 0)
         return points
 
-    def get_alerts(self, *, since: float = 0.0, flight_id: str | None = None,
-                   rule: str | None = None, active_only: bool = True) -> list[dict[str, Any]]:
+    def get_alerts(
+        self,
+        *,
+        since: float = 0.0,
+        flight_id: str | None = None,
+        rule: str | None = None,
+        active_only: bool = True,
+    ) -> list[dict[str, Any]]:
         if not self._ensure_connected():
             if active_only and not flight_id:
                 alerts = list(self._mem_active_alerts.values())
             elif flight_id:
                 if active_only:
-                    alerts = [a for a in self._mem_active_alerts.values() if a.get("flight_id") == flight_id]
+                    alerts = [
+                        a
+                        for a in self._mem_active_alerts.values()
+                        if a.get("flight_id") == flight_id
+                    ]
                 else:
                     alerts = list(self._mem_alerts.get(flight_id, []))
             else:
                 alerts = list(self._mem_alert_episodes)
             if since:
-                alerts = [a for a in alerts if (a.get("activated_at") or a.get("last_updated") or 0) > since]
+                alerts = [
+                    a
+                    for a in alerts
+                    if (a.get("activated_at") or a.get("last_updated") or 0) > since
+                ]
             if rule:
                 alerts = [a for a in alerts if a.get("rule") == rule]
             if active_only:
                 alerts = [a for a in alerts if a.get("active", True)]
-            alerts.sort(key=lambda item: item.get("activated_at") or item.get("last_updated") or 0, reverse=True)
+            alerts.sort(
+                key=lambda item: (
+                    item.get("activated_at") or item.get("last_updated") or 0
+                ),
+                reverse=True,
+            )
             return alerts
         assert self.client is not None
         try:
@@ -405,25 +476,32 @@ class RedisLiveStore:
             elif flight_id:
                 if active_only:
                     raw_alerts = [
-                        v for v in self.client.hvals(_KEY_ACTIVE_ALERTS)
+                        v
+                        for v in self.client.hvals(_KEY_ACTIVE_ALERTS)
                         if json.loads(v).get("flight_id") == flight_id
                     ]
                 else:
-                    raw_alerts = self.client.hvals(_KEY_ALERTS.format(flight_id=flight_id))
+                    raw_alerts = self.client.hvals(
+                        _KEY_ALERTS.format(flight_id=flight_id)
+                    )
             else:
                 raw_alerts = self.client.hvals(_KEY_ALERT_EPISODES)
             alerts = [json.loads(raw) for raw in raw_alerts]
             if since:
                 alerts = [
-                    alert for alert in alerts
-                    if (alert.get("activated_at") or alert.get("last_updated") or 0) > since
+                    alert
+                    for alert in alerts
+                    if (alert.get("activated_at") or alert.get("last_updated") or 0)
+                    > since
                 ]
             if rule:
                 alerts = [alert for alert in alerts if alert.get("rule") == rule]
             if active_only:
                 alerts = [alert for alert in alerts if alert.get("active", True)]
             alerts.sort(
-                key=lambda item: item.get("activated_at") or item.get("last_updated") or 0,
+                key=lambda item: (
+                    item.get("activated_at") or item.get("last_updated") or 0
+                ),
                 reverse=True,
             )
             return alerts
@@ -431,14 +509,12 @@ class RedisLiveStore:
             log.error("Failed to read live alerts: %s", exc)
             return []
 
-
     def pop_flight(self, flight_id: str) -> dict[str, Any]:
         """Return buffered flight data and delete Redis keys for the flight."""
         mem_flight = self._mem_flights.pop(flight_id, None)
         mem_alerts = self._mem_alerts.pop(flight_id, [])
         self._mem_alert_episodes = [
-            a for a in self._mem_alert_episodes
-            if a.get("flight_id") != flight_id
+            a for a in self._mem_alert_episodes if a.get("flight_id") != flight_id
         ]
         for a in list(self._mem_active_alerts.values()):
             if a.get("flight_id") == flight_id:
@@ -452,10 +528,13 @@ class RedisLiveStore:
         assert self.client is not None
         try:
             raw_flight = self.client.get(_KEY_FLIGHT.format(flight_id=flight_id))
-            flight_alerts_raw = self.client.hgetall(_KEY_ALERTS.format(flight_id=flight_id))
+            flight_alerts_raw = self.client.hgetall(
+                _KEY_ALERTS.format(flight_id=flight_id)
+            )
             raw_alerts = list(flight_alerts_raw.values())
             active_raw = {
-                k: v for k, v in self.client.hgetall(_KEY_ACTIVE_ALERTS).items()
+                k: v
+                for k, v in self.client.hgetall(_KEY_ACTIVE_ALERTS).items()
                 if json.loads(v).get("flight_id") == flight_id
             }
             pipe = self.client.pipeline()
@@ -473,7 +552,9 @@ class RedisLiveStore:
             self._last_telemetry_ts.pop(flight_id, None)
             return {
                 "flight": json.loads(raw_flight) if raw_flight else mem_flight,
-                "alerts": [json.loads(raw) for raw in raw_alerts] if raw_alerts else mem_alerts,
+                "alerts": [json.loads(raw) for raw in raw_alerts]
+                if raw_alerts
+                else mem_alerts,
             }
         except RedisError as exc:
             log.error("Failed to pop live flight %s: %s", flight_id, exc)
@@ -494,7 +575,9 @@ class RedisLiveStore:
             return None
         return json.loads(raw_points[0])
 
-    def _flight_summary(self, doc: dict[str, Any], last_tel: dict[str, Any] | None) -> dict[str, Any]:
+    def _flight_summary(
+        self, doc: dict[str, Any], last_tel: dict[str, Any] | None
+    ) -> dict[str, Any]:
         info = doc.get("info", {})
         lat = lon = alt = speed = heading = timestamp = None
         if last_tel:
@@ -576,7 +659,11 @@ class RedisLiveStore:
             return
 
         wrote = False
-        pipe = self.client.pipeline() if self._ensure_connected() and self.client is not None else None
+        pipe = (
+            self.client.pipeline()
+            if self._ensure_connected() and self.client is not None
+            else None
+        )
         key = _KEY_TELEMETRY.format(flight_id=flight_id) if pipe else None
 
         for lat_datum in lat_series:
@@ -586,14 +673,12 @@ class RedisLiveStore:
             if lon_datum is None:
                 continue
             alt_datum = get_latest(STORE_RECV_DATA, STORE_ALT, plane, lat_datum.time)
-            speed_datum = (
-                get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
-                or get_latest(STORE_RECV_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
-            )
-            heading_datum = (
-                get_latest(STORE_CALC_DATA, STORE_HEADING, plane, lat_datum.time)
-                or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, lat_datum.time)
-            )
+            speed_datum = get_latest(
+                STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time
+            ) or get_latest(STORE_RECV_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
+            heading_datum = get_latest(
+                STORE_CALC_DATA, STORE_HEADING, plane, lat_datum.time
+            ) or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, lat_datum.time)
             point: dict[str, Any] = {
                 "icao": icao,
                 "timestamp": lat_datum.time,
@@ -609,7 +694,9 @@ class RedisLiveStore:
 
             self._mem_telemetry[flight_id].append(point)
             if pipe and key:
-                pipe.zadd(key, {json.dumps(point, separators=(",", ":")): lat_datum.time})
+                pipe.zadd(
+                    key, {json.dumps(point, separators=(",", ":")): lat_datum.time}
+                )
             last_written = max(last_written, lat_datum.time)
             wrote = True
 

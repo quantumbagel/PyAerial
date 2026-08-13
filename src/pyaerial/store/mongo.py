@@ -1,4 +1,5 @@
 """MongoDB persistence for retained historical flights, telemetry, and alerts."""
+
 from __future__ import annotations
 
 import logging
@@ -41,7 +42,9 @@ def flight_id_for_plane(plane: dict) -> str:
     return f"{icao}-{int(first_packet)}"
 
 
-def build_telemetry_docs(plane: dict, flight_id: str, icao: str) -> list[dict[str, Any]]:
+def build_telemetry_docs(
+    plane: dict, flight_id: str, icao: str
+) -> list[dict[str, Any]]:
     """Build telemetry documents from a plane's in-memory time series."""
     lat_series = plane.get(STORE_RECV_DATA, {}).get(STORE_LAT, [])
     if not lat_series:
@@ -53,14 +56,12 @@ def build_telemetry_docs(plane: dict, flight_id: str, icao: str) -> list[dict[st
         if lon_datum is None:
             continue
         alt_datum = get_latest(STORE_RECV_DATA, STORE_ALT, plane, lat_datum.time)
-        speed_datum = (
-            get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
-            or get_latest(STORE_RECV_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
-        )
-        heading_datum = (
-            get_latest(STORE_CALC_DATA, STORE_HEADING, plane, lat_datum.time)
-            or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, lat_datum.time)
-        )
+        speed_datum = get_latest(
+            STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time
+        ) or get_latest(STORE_RECV_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
+        heading_datum = get_latest(
+            STORE_CALC_DATA, STORE_HEADING, plane, lat_datum.time
+        ) or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, lat_datum.time)
         doc: dict[str, Any] = {
             "flight_id": flight_id,
             "icao": icao,
@@ -111,7 +112,7 @@ class MongoStore:
                     self.db = self.client.get_database("pyaerial")
             self._ensure_indexes()
             log.info("Connected to MongoDB database '%s' at %s", self.db.name, self.uri)
-        except Exception as exc:
+        except Exception:
             log.info("MongoDB unavailable at %s; operating in offline mode.", self.uri)
             self.client = None
             self.db = None
@@ -126,14 +127,22 @@ class MongoStore:
         flights.create_index([("retained", pymongo.ASCENDING)])
 
         telemetry = self.db.get_collection("telemetry")
-        telemetry.create_index([("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)])
-        telemetry.create_index([("icao", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)])
+        telemetry.create_index(
+            [("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)]
+        )
+        telemetry.create_index(
+            [("icao", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)]
+        )
         telemetry.create_index([("position", pymongo.GEOSPHERE)])
 
         alerts = self.db.get_collection("alerts")
         alerts.create_index([("timestamp", pymongo.DESCENDING)])
-        alerts.create_index([("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)])
-        alerts.create_index([("icao", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)])
+        alerts.create_index(
+            [("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)]
+        )
+        alerts.create_index(
+            [("icao", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)]
+        )
 
     def _ensure_connected(self) -> bool:
         if self.client is None or self.db is None:
@@ -147,7 +156,9 @@ class MongoStore:
             self.db = None
             return False
 
-    def finalize_plane(self, plane: dict, *, alerts: list[dict[str, Any]] | None = None) -> None:
+    def finalize_plane(
+        self, plane: dict, *, alerts: list[dict[str, Any]] | None = None
+    ) -> None:
         """Persist a completed flight to Mongo if retention rules are met."""
         if not self._ensure_connected():
             return
@@ -188,14 +199,26 @@ class MongoStore:
                 if not rule.retain:
                     continue
                 valid = self._count_valid_ticks(
-                    plane, zone_name, polygon, rule.when, first_time, last_time,
+                    plane,
+                    zone_name,
+                    polygon,
+                    rule.when,
+                    first_time,
+                    last_time,
                 )
                 if valid >= rule.dwell_seconds:
                     return True
         return False
 
-    def _count_valid_ticks(self, plane: dict, zone_name: str, polygon: Polygon,
-                          when: dict, first_time: float, last_time: float) -> int:
+    def _count_valid_ticks(
+        self,
+        plane: dict,
+        zone_name: str,
+        polygon: Polygon,
+        when: dict,
+        first_time: float,
+        last_time: float,
+    ) -> int:
         valid = 0
         for tick in range(int(first_time) + 1, int(last_time) + 1):
             lat = get_latest(STORE_RECV_DATA, STORE_LAT, plane, tick)
@@ -205,8 +228,9 @@ class MongoStore:
             if None in (lat, lon, heading, speed):
                 continue
             position = (lat.value, lon.value)
-            eta = geo.time_to_enter_geofence(position, heading.value, speed.value,
-                                             polygon, _ETA_HORIZON)
+            eta = geo.time_to_enter_geofence(
+                position, heading.value, speed.value, polygon, _ETA_HORIZON
+            )
             if eta is math.inf:
                 eta = math.inf
             resolver = evaluate.make_resolver(plane, eta, polygon, position, tick)
@@ -214,8 +238,9 @@ class MongoStore:
                 valid += 1
         return valid
 
-    def _persist_completed_flight(self, plane: dict, flight_id: str,
-                                  alerts: list[dict[str, Any]]) -> None:
+    def _persist_completed_flight(
+        self, plane: dict, flight_id: str, alerts: list[dict[str, Any]]
+    ) -> None:
         assert self.db is not None
         info = plane.get(STORE_INFO, {})
         internal = plane[STORE_INTERNAL]
@@ -238,8 +263,10 @@ class MongoStore:
         telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         alert_docs = [
             {
-                "_id": alert.get("alert_id") or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', '')}",
-                "alert_id": alert.get("alert_id") or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', '')}",
+                "_id": alert.get("alert_id")
+                or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', '')}",
+                "alert_id": alert.get("alert_id")
+                or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', '')}",
                 "flight_id": flight_id,
                 "icao": alert.get("icao", icao),
                 "callsign": alert.get("callsign") or info.get(STORE_CALLSIGN) or "",
@@ -264,7 +291,9 @@ class MongoStore:
                 upsert=True,
             )
             if telemetry_docs:
-                self.db.get_collection("telemetry").insert_many(telemetry_docs, ordered=False)
+                self.db.get_collection("telemetry").insert_many(
+                    telemetry_docs, ordered=False
+                )
             if alert_docs:
                 alerts_col = self.db.get_collection("alerts")
                 for adoc in alert_docs:

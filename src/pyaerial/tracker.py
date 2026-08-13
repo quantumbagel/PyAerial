@@ -4,6 +4,7 @@ Plane tracking: deduplication, state updates, and expiry.
 Receivers emit raw ``(hex, timestamp)`` pairs; this module deduplicates them,
 classifies new messages, and maintains the in-memory plane store.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,7 +44,6 @@ class Tracker:
         self._dirty_icaos.clear()
         return dirty
 
-
     def ingest(self, messages: list[tuple[str, float]]) -> int:
         """Classify and merge ``messages`` into the plane store. Returns count processed."""
         processed = 0
@@ -59,7 +59,9 @@ class Tracker:
             processed += 1
         return processed
 
-    def collect_new_messages(self, incoming: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    def collect_new_messages(
+        self, incoming: list[tuple[str, float]]
+    ) -> list[tuple[str, float]]:
         """
         Deduplicate ``incoming`` against recently seen messages.
 
@@ -136,7 +138,9 @@ class Tracker:
         label = "All" if top_n == -1 else f"Top {min(top_n, len(sorted_planes))}"
         return f"{label}: {', '.join(parts)}"
 
-    def _merge(self, classified: ClassifiedMessage, timestamp: float, msg_hex: str) -> None:
+    def _merge(
+        self, classified: ClassifiedMessage, timestamp: float, msg_hex: str
+    ) -> None:
         message_data = classified.data
         typecode_cat = classified.typecode_category
         icao = message_data[STORE_INFO][STORE_ICAO]
@@ -159,13 +163,15 @@ class Tracker:
                 if not series or series[-1].value != datum.value:
                     series.append(datum)
 
-
-        internal = plane.setdefault(STORE_INTERNAL, {
-            STORE_MOST_RECENT_PACKET: timestamp,
-            STORE_FIRST_PACKET: timestamp,
-            STORE_TOTAL_PACKETS: 0,
-            STORE_PACKET_TYPE: defaultdict(int),
-        })
+        internal = plane.setdefault(
+            STORE_INTERNAL,
+            {
+                STORE_MOST_RECENT_PACKET: timestamp,
+                STORE_FIRST_PACKET: timestamp,
+                STORE_TOTAL_PACKETS: 0,
+                STORE_PACKET_TYPE: defaultdict(int),
+            },
+        )
         internal[STORE_MOST_RECENT_PACKET] = timestamp
         internal[STORE_TOTAL_PACKETS] += 1
         pkt_types = internal[STORE_PACKET_TYPE]

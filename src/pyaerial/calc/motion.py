@@ -1,4 +1,5 @@
 """Shared track motion estimates for map projection and geofence ETA."""
+
 from __future__ import annotations
 
 import math

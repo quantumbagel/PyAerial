@@ -12,7 +12,9 @@ _SPEED_KMH_TO_KT = 0.539957
 _VS_MPS_TO_FT_PER_MIN = 196.8504
 
 
-def build_tracker_links(icao: str, callsign: str | None = None, registration: str | None = None) -> dict[str, str]:
+def build_tracker_links(
+    icao: str, callsign: str | None = None, registration: str | None = None
+) -> dict[str, str]:
     """Generate direct links to aircraft matching the webapp's external trackers (FlightAware, ADS-B Exchange, RadarBox)."""
     icao_clean = (icao or "").strip().lower()
     callsign_clean = (callsign or "").strip()
@@ -47,7 +49,12 @@ def build_map_links(latitude: float | None, longitude: float | None) -> dict[str
     try:
         lat_f = float(latitude)
         lon_f = float(longitude)
-        if math.isnan(lat_f) or math.isnan(lon_f) or math.isinf(lat_f) or math.isinf(lon_f):
+        if (
+            math.isnan(lat_f)
+            or math.isnan(lon_f)
+            or math.isinf(lat_f)
+            or math.isinf(lon_f)
+        ):
             return {}
         return {
             "google_maps": f"https://www.google.com/maps?q={lat_f},{lon_f}",
@@ -99,7 +106,9 @@ class WebhookAlerter(Alerter):
         lat = _safe_num(payload.get("latitude"))
         lon = _safe_num(payload.get("longitude"))
 
-        tracker_links = meta.get("tracker_links") or build_tracker_links(icao, callsign, registration)
+        tracker_links = meta.get("tracker_links") or build_tracker_links(
+            icao, callsign, registration
+        )
         map_links = meta.get("map_links") or build_map_links(lat, lon)
 
         alert_data = {
@@ -119,17 +128,19 @@ class WebhookAlerter(Alerter):
 
         try:
             resp = requests.request(
-                self.http_method,
-                self.url,
-                json=body,
-                headers=self.headers,
-                timeout=5
+                self.http_method, self.url, json=body, headers=self.headers, timeout=5
             )
             resp.raise_for_status()
         except Exception as exc:
             log.error("Failed to deliver webhook alert: %s", exc)
 
-    def _format_discord(self, meta: dict, payload: dict, tracker_links: dict[str, str], map_links: dict[str, str]) -> dict:
+    def _format_discord(
+        self,
+        meta: dict,
+        payload: dict,
+        tracker_links: dict[str, str],
+        map_links: dict[str, str],
+    ) -> dict:
         icao = (meta.get("icao") or "").upper()
         callsign = meta.get("callsign") or "Unknown"
         zone = meta.get("zone", "Unknown")
@@ -149,34 +160,62 @@ class WebhookAlerter(Alerter):
 
         # Position Field
         if lat is not None and lon is not None:
-            gmap_url = map_links.get("google_maps", f"https://www.google.com/maps?q={lat},{lon}")
-            fields.append({
-                "name": "Location (Lat, Lon)",
-                "value": f"[{lat:.5f}, {lon:.5f}]({gmap_url})",
-                "inline": True,
-            })
+            gmap_url = map_links.get(
+                "google_maps", f"https://www.google.com/maps?q={lat},{lon}"
+            )
+            fields.append(
+                {
+                    "name": "Location (Lat, Lon)",
+                    "value": f"[{lat:.5f}, {lon:.5f}]({gmap_url})",
+                    "inline": True,
+                }
+            )
         else:
-            fields.append({"name": "Location (Lat, Lon)", "value": "N/A", "inline": True})
+            fields.append(
+                {"name": "Location (Lat, Lon)", "value": "N/A", "inline": True}
+            )
 
-        fields.append({"name": "Altitude", "value": f"{int(alt * _ALT_M_TO_FT)} ft" if alt is not None else "N/A", "inline": True})
-        fields.append({"name": "ETA", "value": f"{int(eta)}s" if eta is not None else "N/A", "inline": True})
+        fields.append(
+            {
+                "name": "Altitude",
+                "value": f"{int(alt * _ALT_M_TO_FT)} ft" if alt is not None else "N/A",
+                "inline": True,
+            }
+        )
+        fields.append(
+            {
+                "name": "ETA",
+                "value": f"{int(eta)}s" if eta is not None else "N/A",
+                "inline": True,
+            }
+        )
 
         # Telemetry Summary
         speed_str = f"{speed * _SPEED_KMH_TO_KT:.1f} kt" if speed is not None else "N/A"
         heading_str = f"{heading:.0f}°" if heading is not None else "N/A"
-        vspeed_str = f"{vert_speed * _VS_MPS_TO_FT_PER_MIN:+.0f} ft/min" if vert_speed is not None else "N/A"
-        fields.append({
-            "name": "Telemetry (Speed / Heading / VertSpeed)",
-            "value": f"{speed_str} | {heading_str} | {vspeed_str}",
-            "inline": False,
-        })
+        vspeed_str = (
+            f"{vert_speed * _VS_MPS_TO_FT_PER_MIN:+.0f} ft/min"
+            if vert_speed is not None
+            else "N/A"
+        )
+        fields.append(
+            {
+                "name": "Telemetry (Speed / Heading / VertSpeed)",
+                "value": f"{speed_str} | {heading_str} | {vspeed_str}",
+                "inline": False,
+            }
+        )
 
         # Aircraft Details
         details = []
         if meta.get("registration"):
             details.append(f"**Reg:** {meta['registration']}")
         if meta.get("model") or meta.get("aircraft_type"):
-            model_str = f"{meta.get('model', '')} ({meta.get('aircraft_type', '')})".strip(" ()")
+            model_str = (
+                f"{meta.get('model', '')} ({meta.get('aircraft_type', '')})".strip(
+                    " ()"
+                )
+            )
             details.append(f"**Model:** {model_str}")
         if meta.get("manufacturer"):
             details.append(f"**Mfr:** {meta['manufacturer']}")
@@ -184,7 +223,9 @@ class WebhookAlerter(Alerter):
             details.append(f"**Owner:** {meta['owner']}")
 
         if details:
-            fields.append({"name": "Aircraft Info", "value": " • ".join(details), "inline": False})
+            fields.append(
+                {"name": "Aircraft Info", "value": " • ".join(details), "inline": False}
+            )
 
         # Plane Trackers Field
         tracker_names = {
@@ -192,9 +233,18 @@ class WebhookAlerter(Alerter):
             "adsbexchange": "ADS-B Exchange",
             "radarbox": "RadarBox",
         }
-        tracker_md = [f"[{tracker_names.get(k, k.capitalize())}]({v})" for k, v in tracker_links.items()]
+        tracker_md = [
+            f"[{tracker_names.get(k, k.capitalize())}]({v})"
+            for k, v in tracker_links.items()
+        ]
         if tracker_md:
-            fields.append({"name": "Plane Trackers", "value": " | ".join(tracker_md), "inline": False})
+            fields.append(
+                {
+                    "name": "Plane Trackers",
+                    "value": " | ".join(tracker_md),
+                    "inline": False,
+                }
+            )
 
         embed_color = _hex_to_int(meta.get("color"), default=15680580)
 
@@ -212,7 +262,13 @@ class WebhookAlerter(Alerter):
 
         return {"embeds": [embed]}
 
-    def _format_slack(self, meta: dict, payload: dict, tracker_links: dict[str, str], map_links: dict[str, str]) -> dict:
+    def _format_slack(
+        self,
+        meta: dict,
+        payload: dict,
+        tracker_links: dict[str, str],
+        map_links: dict[str, str],
+    ) -> dict:
         icao = (meta.get("icao") or "").upper()
         callsign = meta.get("callsign") or "Unknown"
         zone = meta.get("zone", "Unknown")
@@ -229,12 +285,20 @@ class WebhookAlerter(Alerter):
         vert_speed = _safe_num(payload.get("vertical_speed"))
         eta = _safe_num(meta.get("eta"))
 
-        pos_str = f"<https://www.google.com/maps?q={lat},{lon}|{lat:.5f}, {lon:.5f}>" if lat is not None and lon is not None else "N/A"
+        pos_str = (
+            f"<https://www.google.com/maps?q={lat},{lon}|{lat:.5f}, {lon:.5f}>"
+            if lat is not None and lon is not None
+            else "N/A"
+        )
         alt_str = f"{int(alt * _ALT_M_TO_FT)} ft" if alt is not None else "N/A"
         eta_str = f"{int(eta)}s" if eta is not None else "N/A"
         speed_str = f"{speed * _SPEED_KMH_TO_KT:.1f} kt" if speed is not None else "N/A"
         heading_str = f"{heading:.0f}°" if heading is not None else "N/A"
-        vspeed_str = f"{vert_speed * _VS_MPS_TO_FT_PER_MIN:+.0f} ft/min" if vert_speed is not None else "N/A"
+        vspeed_str = (
+            f"{vert_speed * _VS_MPS_TO_FT_PER_MIN:+.0f} ft/min"
+            if vert_speed is not None
+            else "N/A"
+        )
 
         slack_text = f'Aircraft `{callsign}` (`{icao}`) met criteria for zone "{zone}", rule "{rule_raw}".'
 
@@ -252,7 +316,10 @@ class WebhookAlerter(Alerter):
         blocks = [
             {
                 "type": "header",
-                "text": {"type": "plain_text", "text": f'{callsign} ({icao}) triggered "{zone}/{rule_raw}"{hook_str}'},
+                "text": {
+                    "type": "plain_text",
+                    "text": f'{callsign} ({icao}) triggered "{zone}/{rule_raw}"{hook_str}',
+                },
             },
             {
                 "type": "section",
@@ -265,15 +332,20 @@ class WebhookAlerter(Alerter):
             "adsbexchange": "ADS-B Exchange",
             "radarbox": "RadarBox",
         }
-        tracker_slack = [f"<{v}|{tracker_names.get(k, k.capitalize())}>" for k, v in tracker_links.items()]
+        tracker_slack = [
+            f"<{v}|{tracker_names.get(k, k.capitalize())}>"
+            for k, v in tracker_links.items()
+        ]
         if tracker_slack:
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Plane Trackers:* " + " | ".join(tracker_slack),
-                },
-            })
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "*Plane Trackers:* " + " | ".join(tracker_slack),
+                    },
+                }
+            )
 
         return {
             "text": slack_text,

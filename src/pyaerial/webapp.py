@@ -4,6 +4,7 @@ FastAPI web portal for live flight tracking.
 Reads live flights from Redis and retained historical flights from MongoDB.
 Serves a React SPA from pyaerial/static and pushes live updates over WebSocket.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -48,8 +49,13 @@ def _safe_static_path(full_path: str) -> Path | None:
     return candidate
 
 
-def create_app(*, config: Config, db: pymongo.database.Database | None = None,
-               live_store: RedisLiveStore | None = None, aircraft_db: AircraftDB | None = None) -> FastAPI:
+def create_app(
+    *,
+    config: Config,
+    db: pymongo.database.Database | None = None,
+    live_store: RedisLiveStore | None = None,
+    aircraft_db: AircraftDB | None = None,
+) -> FastAPI:
     broadcaster = LiveBroadcaster(live_store, aircraft_db)
 
     @asynccontextmanager
@@ -91,21 +97,29 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
                         action = req.get("action")
                         params = req.get("params", {})
                         try:
-                            res_data = await asyncio.to_thread(ws_request_handler, action, params)
-                            await websocket.send_json({
-                                "type": "response",
-                                "id": req_id,
-                                "success": True,
-                                "data": sanitize_for_json(res_data)
-                            })
+                            res_data = await asyncio.to_thread(
+                                ws_request_handler, action, params
+                            )
+                            await websocket.send_json(
+                                {
+                                    "type": "response",
+                                    "id": req_id,
+                                    "success": True,
+                                    "data": sanitize_for_json(res_data),
+                                }
+                            )
                         except Exception as inner_exc:
-                            log.error("Error executing action %s: %s", action, inner_exc)
-                            await websocket.send_json({
-                                "type": "response",
-                                "id": req_id,
-                                "success": False,
-                                "error": str(inner_exc)
-                            })
+                            log.error(
+                                "Error executing action %s: %s", action, inner_exc
+                            )
+                            await websocket.send_json(
+                                {
+                                    "type": "response",
+                                    "id": req_id,
+                                    "success": False,
+                                    "error": str(inner_exc),
+                                }
+                            )
                 except Exception as parse_exc:
                     log.error("Error parsing WS message: %s", parse_exc)
         except WebSocketDisconnect:
@@ -150,10 +164,14 @@ def create_app(*, config: Config, db: pymongo.database.Database | None = None,
     return app
 
 
-def run_webapp(config_path: str = "config.yaml", *,
-               aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
-               host: str = "0.0.0.0", port: int = 10090,
-               mock: bool = False) -> None:
+def run_webapp(
+    config_path: str = "config.yaml",
+    *,
+    aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
+    host: str = "0.0.0.0",
+    port: int = 10090,
+    mock: bool = False,
+) -> None:
     try:
         aircraft_db = AircraftDB(aircraft_db_path) if aircraft_db_path else None
     except Exception as e:
@@ -164,16 +182,24 @@ def run_webapp(config_path: str = "config.yaml", *,
     engine = None
 
     if mock:
-        log.info("Running in MOCK mode with simulated ADS-B feeder feeding real tracking & alerting engine.")
+        log.info(
+            "Running in MOCK mode with simulated ADS-B feeder feeding real tracking & alerting engine."
+        )
         try:
             config = load_config(config_path)
         except Exception:
             log.warning(
-                "Could not load configuration %s; falling back to defaults", config_path,
+                "Could not load configuration %s; falling back to defaults",
+                config_path,
                 exc_info=True,
             )
             from pyaerial.config.schema import Config, HomeConfig, TrackingConfig
-            config = Config(home=HomeConfig(latitude=35.7275, longitude=-78.6959), tracking=TrackingConfig(), receivers={})
+
+            config = Config(
+                home=HomeConfig(latitude=35.7275, longitude=-78.6959),
+                tracking=TrackingConfig(),
+                receivers={},
+            )
 
         from pyaerial.config.schema import ReceiverConfig
         from pyaerial.engine import Engine
@@ -181,16 +207,31 @@ def run_webapp(config_path: str = "config.yaml", *,
 
         config.receivers = {"mock": ReceiverConfig(type="mock")}
         engine = Engine(config, aircraft_db_path=aircraft_db_path)
-        engine_thread = threading.Thread(target=engine.run, daemon=True, name="mock-engine")
+        engine_thread = threading.Thread(
+            target=engine.run, daemon=True, name="mock-engine"
+        )
         engine_thread.start()
 
-        db_ref = engine.mongo_store.db if engine.mongo_store and hasattr(engine.mongo_store, "db") else None
-        app = create_app(config=config, db=db_ref, live_store=engine.live_store, aircraft_db=aircraft_db)
+        db_ref = (
+            engine.mongo_store.db
+            if engine.mongo_store and hasattr(engine.mongo_store, "db")
+            else None
+        )
+        app = create_app(
+            config=config,
+            db=db_ref,
+            live_store=engine.live_store,
+            aircraft_db=aircraft_db,
+        )
     else:
         config, client, db, live_store = connect_stores(config_path)
-        app = create_app(config=config, db=db, live_store=live_store, aircraft_db=aircraft_db)
+        app = create_app(
+            config=config, db=db, live_store=live_store, aircraft_db=aircraft_db
+        )
 
-    print(f"Starting PyAerial web portal {'[MOCK FEEDER MODE] ' if mock else ''}on http://localhost:{port}")
+    print(
+        f"Starting PyAerial web portal {'[MOCK FEEDER MODE] ' if mock else ''}on http://localhost:{port}"
+    )
     try:
         uvicorn.run(app, host=host, port=port, log_level="info")
     except KeyboardInterrupt:

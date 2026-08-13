@@ -1,6 +1,7 @@
 """
 PyAerial main engine: receiver management, main loop, and graceful shutdown.
 """
+
 from __future__ import annotations
 
 import logging
@@ -46,7 +47,9 @@ class Engine:
         self.live_store = RedisLiveStore(config.database.redis_uri)
         self.live_store.clear_all()
         self.mongo_store = MongoStore(config, self.polygons)
-        self.calculator = PlaneCalculator(config, self.polygons, self.aircraft_db, self.live_store)
+        self.calculator = PlaneCalculator(
+            config, self.polygons, self.aircraft_db, self.live_store
+        )
         self._message_queue: queue.Queue[tuple[str, float, str]] = queue.Queue()
         self._receivers: dict[str, _ReceiverHandle] = {}
         self._running = False
@@ -55,7 +58,9 @@ class Engine:
 
     def start_receivers(self) -> None:
         for name, receiver_cfg in self.config.receivers.items():
-            self._start_receiver(name, receiver_cfg.type, receiver_cfg.receiver_arguments())
+            self._start_receiver(
+                name, receiver_cfg.type, receiver_cfg.receiver_arguments()
+            )
 
         if not self._receivers:
             raise RuntimeError("no receivers could be started")
@@ -99,8 +104,12 @@ class Engine:
                 continue
             if self._shutdown.is_set():
                 return
-            log.warning("Restarting receiver %r (%s)%s", name, handle.method,
-                        f": {handle.last_error}" if handle.last_error else "")
+            log.warning(
+                "Restarting receiver %r (%s)%s",
+                name,
+                handle.method,
+                f": {handle.last_error}" if handle.last_error else "",
+            )
             handle.receiver.stop()
             cfg = self.config.receivers[name]
             self._receivers.pop(name, None)
@@ -126,7 +135,8 @@ class Engine:
         tick_budget = 1.0 / hz
         log.info(
             "PyAerial running at up to %.1f Hz with %d receiver(s), store=redis+mongodb",
-            hz, len(self._receivers),
+            hz,
+            len(self._receivers),
         )
         log.info("Receivers available: %s", available_receivers())
         log.info("Alerters available: %s", available_alerters())
@@ -141,7 +151,9 @@ class Engine:
                 processed = self.tracker.ingest(new_messages)
                 dirty_icaos = self.tracker.get_and_clear_dirty_icaos()
 
-                self.calculator.calculate_all(self.tracker.planes, dirty_icaos=dirty_icaos)
+                self.calculator.calculate_all(
+                    self.tracker.planes, dirty_icaos=dirty_icaos
+                )
                 self.live_store.write_live_planes(self.tracker.planes)
 
                 now = time.time()
@@ -154,8 +166,12 @@ class Engine:
 
                 summary = self.tracker.top_planes_summary()
                 status = f"processed {processed} msg(s). " if processed else ""
-                log.info("%sTracking %d plane(s). %s", status,
-                         len(self.tracker.planes), summary)
+                log.info(
+                    "%sTracking %d plane(s). %s",
+                    status,
+                    len(self.tracker.planes),
+                    summary,
+                )
 
                 elapsed = time.time() - start
                 sleep_for = tick_budget - elapsed
@@ -165,7 +181,9 @@ class Engine:
                 else:
                     log.warning(
                         "Main loop behind by %.2fs (%.2fs/%.2fs budget)",
-                        -sleep_for, elapsed, tick_budget,
+                        -sleep_for,
+                        elapsed,
+                        tick_budget,
                     )
         except KeyboardInterrupt:
             log.info("Keyboard interrupt received")

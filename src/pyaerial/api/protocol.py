@@ -1,4 +1,5 @@
 """Live and mock store interfaces used by the web portal."""
+
 from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
@@ -19,7 +20,9 @@ class LiveStore(Protocol):
         active_only: bool = True,
     ) -> list[dict[str, Any]]: ...
 
-    def get_telemetry(self, flight_id: str, *, since: float = 0.0) -> list[dict[str, Any]]: ...
+    def get_telemetry(
+        self, flight_id: str, *, since: float = 0.0
+    ) -> list[dict[str, Any]]: ...
 
     def get_live_telemetry(self, since: float = 0.0) -> list[dict[str, Any]]: ...
 

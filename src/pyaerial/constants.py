@@ -5,7 +5,9 @@ These are stable identifiers for data fields, message categories, and database
 keys. Anything that is user-configurable now lives in the typed configuration
 schema (:mod:`pyaerial.config`) rather than here.
 """
+
 import operator
+from pathlib import Path
 
 # --- Top-level buckets stored per plane ---------------------------------------
 STORE_INFO = "info"
@@ -53,6 +55,7 @@ CONFIG_COMP_FUNCTIONS = {
 LOGGING_LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
 
 # --- Defaults -----------------------------------------------------------------
-from pathlib import Path
 DEFAULT_CONFIG_FILE = "config.yaml"
-DEFAULT_AIRCRAFT_DB = str((Path(__file__).resolve().parent / ".." / ".." / ".." / "aircraft.db").resolve())
+DEFAULT_AIRCRAFT_DB = str(
+    (Path(__file__).resolve().parent / ".." / ".." / ".." / "aircraft.db").resolve()
+)

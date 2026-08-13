@@ -6,6 +6,7 @@ and emits ``(hex, timestamp)`` pairs via the ``emit`` callback given to it. New
 receivers register themselves with :func:`register_receiver` and are then
 selectable by name from the configuration.
 """
+
 from __future__ import annotations
 
 import abc
@@ -51,9 +52,11 @@ class Receiver(abc.ABC):
 
 def register_receiver(name: str) -> Callable[[type[Receiver]], type[Receiver]]:
     """Class decorator that registers a receiver under ``name``."""
+
     def decorator(cls: type[Receiver]) -> type[Receiver]:
         _REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
@@ -77,4 +80,6 @@ from pyaerial.receivers import mock as _mock  # noqa: E402,F401
 try:  # pyrtlsdr / librtlsdr may be unavailable on some systems.
     from pyaerial.receivers import py1090 as _py1090  # noqa: E402,F401
 except Exception as _exc:  # pragma: no cover - optional dependency
-    logging.getLogger("pyaerial.receiver").debug("py1090 receiver unavailable: %s", _exc)
+    logging.getLogger("pyaerial.receiver").debug(
+        "py1090 receiver unavailable: %s", _exc
+    )

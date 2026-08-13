@@ -1,4 +1,5 @@
 """Alerter that publishes alerts to a Kafka topic (topic == alert level)."""
+
 from __future__ import annotations
 
 import json
@@ -33,7 +34,9 @@ class KafkaAlerter(Alerter):
             try:
                 self._producer = kafka.KafkaProducer(bootstrap_servers=[self.server])
             except NoBrokersAvailable:
-                self.log.error("No Kafka brokers available at %s; alert dropped.", self.server)
+                self.log.error(
+                    "No Kafka brokers available at %s; alert dropped.", self.server
+                )
                 return None
         return self._producer
 
@@ -52,11 +55,15 @@ class KafkaAlerter(Alerter):
             # send() is asynchronous; the producer's background thread delivers
             # buffered records and close() flushes on shutdown. Avoiding a
             # per-alert flush() keeps the alert dispatch pool non-blocking.
-            producer.send(meta[ALERT_CAT_TYPE],
-                          key=meta[STORE_ICAO].encode("utf-8"),
-                          value=json.dumps(data).encode("utf-8"))
+            producer.send(
+                meta[ALERT_CAT_TYPE],
+                key=meta[STORE_ICAO].encode("utf-8"),
+                value=json.dumps(data).encode("utf-8"),
+            )
         except KafkaError as exc:
-            self.log.error("Failed to send Kafka alert for %s: %s", meta[STORE_ICAO], exc)
+            self.log.error(
+                "Failed to send Kafka alert for %s: %s", meta[STORE_ICAO], exc
+            )
             self._producer = None  # force reconnect next time
 
     def close(self) -> None:

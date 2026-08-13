@@ -4,6 +4,7 @@ Interactive flight viewer and live telemetry browser for PyAerial.
 Supports browsing saved flights in MongoDB as well as live flights from Redis
 or MockStore, with a dump1090-like live flight display mode.
 """
+
 from __future__ import annotations
 
 import datetime
@@ -41,7 +42,9 @@ live      - start live flight display
 """.strip()
 
 
-def _get_mongo_db(client: pymongo.MongoClient | None) -> pymongo.database.Database | None:
+def _get_mongo_db(
+    client: pymongo.MongoClient | None,
+) -> pymongo.database.Database | None:
     if client is None:
         return None
     try:
@@ -55,9 +58,12 @@ def _get_mongo_db(client: pymongo.MongoClient | None) -> pymongo.database.Databa
             return None
 
 
-def run_view(config_path: str = "config.yaml", *,
-             aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
-             mock: bool = False) -> None:
+def run_view(
+    config_path: str = "config.yaml",
+    *,
+    aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
+    mock: bool = False,
+) -> None:
     """Run interactive flight viewer command-line session."""
     config = load_config(config_path)
     aircraft_db = AircraftDB(aircraft_db_path)
@@ -85,21 +91,35 @@ def run_view(config_path: str = "config.yaml", *,
             continue
 
         verb = parts[0].lower()
-        if verb not in {"about", "status", "plane", "list", "history", "help",
-                        "dump", "reset", "exit", "live"}:
+        if verb not in {
+            "about",
+            "status",
+            "plane",
+            "list",
+            "history",
+            "help",
+            "dump",
+            "reset",
+            "exit",
+            "live",
+        }:
             print(f"[err] Invalid verb: {verb}")
             last_reset = False
             continue
 
         if verb == "about":
-            print("PyAerial by Julian Reder (quantumbagel). "
-                  "Source: https://github.com/quantumbagel/PyAerial")
+            print(
+                "PyAerial by Julian Reder (quantumbagel). "
+                "Source: https://github.com/quantumbagel/PyAerial"
+            )
         elif verb == "status":
             _cmd_status(client, live_store=live_store)
         elif verb == "list":
             _cmd_list(client, parts, aircraft_db, live_store=live_store)
         elif verb == "reset":
-            last_reset, reset_for = _cmd_reset(client, parts, last_reset, reset_for, live_store=live_store)
+            last_reset, reset_for = _cmd_reset(
+                client, parts, last_reset, reset_for, live_store=live_store
+            )
         elif verb == "exit":
             print("logout")
             return
@@ -119,7 +139,7 @@ def run_view(config_path: str = "config.yaml", *,
 
 def _cmd_status(client: pymongo.MongoClient | None, live_store: Any = None) -> None:
     db = _get_mongo_db(client)
-    
+
     # Saved MongoDB stats
     if db is not None:
         try:
@@ -145,9 +165,11 @@ def _cmd_status(client: pymongo.MongoClient | None, live_store: Any = None) -> N
         print(mongo_summary)
 
 
-def _verify_plane(client: pymongo.MongoClient | None, plane_id: str, live_store: Any = None) -> bool:
+def _verify_plane(
+    client: pymongo.MongoClient | None, plane_id: str, live_store: Any = None
+) -> bool:
     plane_id_lower = plane_id.lower()
-    
+
     # Check live store first
     if live_store is not None:
         try:
@@ -168,7 +190,12 @@ def _verify_plane(client: pymongo.MongoClient | None, plane_id: str, live_store:
     return False
 
 
-def _verify_flight(client: pymongo.MongoClient | None, plane_id: str, flight_id: str, live_store: Any = None) -> bool:
+def _verify_flight(
+    client: pymongo.MongoClient | None,
+    plane_id: str,
+    flight_id: str,
+    live_store: Any = None,
+) -> bool:
     plane_id_lower = plane_id.lower()
 
     # Check live store
@@ -183,7 +210,9 @@ def _verify_flight(client: pymongo.MongoClient | None, plane_id: str, flight_id:
     # Check MongoDB
     db = _get_mongo_db(client)
     if db is not None:
-        record = db.get_collection("flights").find_one({"icao": plane_id_lower, "_id": flight_id})
+        record = db.get_collection("flights").find_one(
+            {"icao": plane_id_lower, "_id": flight_id}
+        )
         if record is not None:
             return True
 
@@ -220,8 +249,12 @@ def _format_duration(seconds: float) -> str:
     return " ".join(parts)
 
 
-def _cmd_list(client: pymongo.MongoClient | None, parts: list[str],
-              aircraft_db: AircraftDB, live_store: Any = None) -> None:
+def _cmd_list(
+    client: pymongo.MongoClient | None,
+    parts: list[str],
+    aircraft_db: AircraftDB,
+    live_store: Any = None,
+) -> None:
     if len(parts) < 2:
         print("[err] No argument supplied to command list!")
         return
@@ -232,7 +265,7 @@ def _cmd_list(client: pymongo.MongoClient | None, parts: list[str],
     if arg == "planes":
         planes_set: set[str] = set()
         live_planes_set: set[str] = set()
-        
+
         # Get live planes
         if live_store is not None:
             try:
@@ -271,7 +304,7 @@ def _cmd_list(client: pymongo.MongoClient | None, parts: list[str],
             return
 
         flights: list[str] = []
-        
+
         # Live flight check
         if live_store is not None:
             try:
@@ -287,7 +320,9 @@ def _cmd_list(client: pymongo.MongoClient | None, parts: list[str],
         # Saved flights check
         if db is not None:
             try:
-                cursor = db.get_collection("flights").find({"icao": plane_id}, {"_id": 1})
+                cursor = db.get_collection("flights").find(
+                    {"icao": plane_id}, {"_id": 1}
+                )
                 flights.extend(doc["_id"] for doc in cursor)
             except Exception:
                 pass
@@ -308,8 +343,12 @@ def _cmd_list(client: pymongo.MongoClient | None, parts: list[str],
         print(f"I don't know the argument {arg!r}!")
 
 
-def _display_plane_details(client: pymongo.MongoClient | None, live_store: Any,
-                           plane_id: str, aircraft_db: AircraftDB) -> None:
+def _display_plane_details(
+    client: pymongo.MongoClient | None,
+    live_store: Any,
+    plane_id: str,
+    aircraft_db: AircraftDB,
+) -> None:
     """Format and print detailed plane statistics according to statviewer_formatting specification."""
     db = _get_mongo_db(client)
 
@@ -318,7 +357,7 @@ def _display_plane_details(client: pymongo.MongoClient | None, live_store: Any,
     if not meta:
         meta = {}
     callsign = meta.get("callsign") or "n/a"
-    model = meta.get("model") or "n/a"
+    meta.get("model") or "n/a"
     category = meta.get("category") or meta.get("aircraft_type") or "n/a"
 
     # 2. Gather flights & telemetry
@@ -369,29 +408,54 @@ def _display_plane_details(client: pymongo.MongoClient | None, live_store: Any,
                     first_seen = ts
                 if last_seen is None or ts > last_seen:
                     last_seen = ts
-            
+
             total_bytes += 128  # avg estimated doc size
-            for k in ("latitude", "longitude", "altitude", "speed", "heading", "vertical_speed"):
+            for k in (
+                "latitude",
+                "longitude",
+                "altitude",
+                "speed",
+                "heading",
+                "vertical_speed",
+            ):
                 if k in tdoc:
                     name = _packet_field_name(k)
                     overall_packets[name] = overall_packets.get(name, 0) + 1
 
     # Most recent flight info from saved
     if saved_flights and not live_flight:
-        latest_flight = max(saved_flights, key=lambda f: f.get("start_time") or f.get("internal", {}).get("first_packet") or 0)
+        latest_flight = max(
+            saved_flights,
+            key=lambda f: (
+                f.get("start_time") or f.get("internal", {}).get("first_packet") or 0
+            ),
+        )
         fid = latest_flight["_id"]
-        st = latest_flight.get("start_time") or latest_flight.get("internal", {}).get("first_packet")
-        et = latest_flight.get("end_time") or latest_flight.get("internal", {}).get("most_recent_packet")
+        st = latest_flight.get("start_time") or latest_flight.get("internal", {}).get(
+            "first_packet"
+        )
+        et = latest_flight.get("end_time") or latest_flight.get("internal", {}).get(
+            "most_recent_packet"
+        )
         if st and et:
             most_recent_duration = max(0.0, et - st)
         most_recent_status = "completed"
         if db is not None:
             tel_docs = list(db.get_collection("telemetry").find({"flight_id": fid}))
             for tdoc in tel_docs:
-                for k in ("latitude", "longitude", "altitude", "speed", "heading", "vertical_speed"):
+                for k in (
+                    "latitude",
+                    "longitude",
+                    "altitude",
+                    "speed",
+                    "heading",
+                    "vertical_speed",
+                ):
                     if k in tdoc:
                         name = _packet_field_name(k)
-                        recent_flight_packets[name] = recent_flight_packets.get(name, 0) + 1
+                        recent_flight_packets[name] = (
+                            recent_flight_packets.get(name, 0) + 1
+                        )
 
     # Process live flight
     if live_flight:
@@ -411,7 +475,7 @@ def _display_plane_details(client: pymongo.MongoClient | None, live_store: Any,
                 live_tels = live_store.get_telemetry(fid)
             except Exception:
                 pass
-        
+
         for p in live_tels:
             total_bytes += 64
             for k in ("latitude", "longitude", "altitude", "speed", "heading"):
@@ -427,20 +491,24 @@ def _display_plane_details(client: pymongo.MongoClient | None, live_store: Any,
 
     print(f"Plane: {plane_id}")
     print(f"Callsign: {callsign}")
-    print(f"Flown: {total_flights_count} flight{'s' if total_flights_count != 1 else ''}")
+    print(
+        f"Flown: {total_flights_count} flight{'s' if total_flights_count != 1 else ''}"
+    )
     print(f"Storage: {_format_size(total_bytes)}")
     print(f"Plane Category: {category}")
     print(f"First Discovered: {_format_timestamp(first_seen)}")
     print(f"Last Updated: {_format_timestamp(last_seen)}")
-    print(f"Most recent flight duration: {_format_duration(most_recent_duration)} ({most_recent_status})")
+    print(
+        f"Most recent flight duration: {_format_duration(most_recent_duration)} ({most_recent_status})"
+    )
     print("Packet breakdown (most recent flight):")
     for pkt_name, count in recent_flight_packets.items():
         print(f"{count} {pkt_name}")
     print("\nPacket breakdown (overall):")
     for pkt_name, count in overall_packets.items():
         print(f"{count} {pkt_name}")
-    print(f"\nTo display this plane's raw data, run \"dump {plane_id}\"")
-    print(f"To delete this plane, run \"reset {plane_id}\"")
+    print(f'\nTo display this plane\'s raw data, run "dump {plane_id}"')
+    print(f'To delete this plane, run "reset {plane_id}"')
 
 
 def _packet_field_name(field: str) -> str:
@@ -455,46 +523,59 @@ def _packet_field_name(field: str) -> str:
     return mapping.get(field, field.capitalize())
 
 
-def _cmd_reset(client: pymongo.MongoClient | None, parts: list[str],
-               last_reset: bool = False, reset_for: str = "", live_store: Any = None) -> tuple[bool, str]:
+def _cmd_reset(
+    client: pymongo.MongoClient | None,
+    parts: list[str],
+    last_reset: bool = False,
+    reset_for: str = "",
+    live_store: Any = None,
+) -> tuple[bool, str]:
     db = _get_mongo_db(client)
 
     if len(parts) == 1:
         if not last_reset or reset_for:
-            print('[confirmation] Are you sure you want to reset the database? '
-                  'Run "reset" again to confirm.')
+            print(
+                "[confirmation] Are you sure you want to reset the database? "
+                'Run "reset" again to confirm.'
+            )
             return True, ""
 
         if db is not None:
             db.drop_collection("flights")
             db.drop_collection("telemetry")
             db.drop_collection("alerts")
-            
+
             db.get_collection("flights").create_index([("icao", pymongo.ASCENDING)])
             db.get_collection("flights").create_index([("status", pymongo.ASCENDING)])
-            db.get_collection("telemetry").create_index([
-                ("flight_id", pymongo.ASCENDING),
-                ("timestamp", pymongo.ASCENDING)
-            ])
-            db.get_collection("telemetry").create_index([
-                ("icao", pymongo.ASCENDING),
-                ("timestamp", pymongo.ASCENDING)
-            ])
-            db.get_collection("telemetry").create_index([("position", pymongo.GEOSPHERE)])
-            db.get_collection("alerts").create_index([("timestamp", pymongo.DESCENDING)])
-            db.get_collection("alerts").create_index([("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)])
+            db.get_collection("telemetry").create_index(
+                [("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)]
+            )
+            db.get_collection("telemetry").create_index(
+                [("icao", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)]
+            )
+            db.get_collection("telemetry").create_index(
+                [("position", pymongo.GEOSPHERE)]
+            )
+            db.get_collection("alerts").create_index(
+                [("timestamp", pymongo.DESCENDING)]
+            )
+            db.get_collection("alerts").create_index(
+                [("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)]
+            )
 
         if live_store is not None and hasattr(live_store, "clear_all"):
             live_store.clear_all()
-        
+
         print("[success] Database reset. Dropped all planes and flights.")
         return False, ""
 
     target = parts[1].lower()
     if not last_reset or reset_for != target:
-        print(f'[confirmation] Delete plane {target}? Run "reset {target}" again to confirm.')
+        print(
+            f'[confirmation] Delete plane {target}? Run "reset {target}" again to confirm.'
+        )
         return True, target
-    
+
     if db is not None:
         db.get_collection("flights").delete_many({"icao": target})
         db.get_collection("telemetry").delete_many({"icao": target})
@@ -503,10 +584,16 @@ def _cmd_reset(client: pymongo.MongoClient | None, parts: list[str],
     return False, ""
 
 
-def _cmd_dump(client: pymongo.MongoClient | None, parts: list[str],
-              aircraft_db: AircraftDB, live_store: Any = None) -> None:
+def _cmd_dump(
+    client: pymongo.MongoClient | None,
+    parts: list[str],
+    aircraft_db: AircraftDB,
+    live_store: Any = None,
+) -> None:
     if len(parts) < 2:
-        print("[err] dump requires a subcommand or plane id (plane, flight, live, all, opensky)")
+        print(
+            "[err] dump requires a subcommand or plane id (plane, flight, live, all, opensky)"
+        )
         return
 
     db = _get_mongo_db(client)
@@ -548,7 +635,9 @@ def _cmd_dump(client: pymongo.MongoClient | None, parts: list[str],
                 distinct_planes = db.get_collection("flights").distinct("icao")
                 for plane_id in distinct_planes:
                     if plane_id.lower() not in data:
-                        data[plane_id.lower()] = _dump_plane(client, plane_id.lower(), live_store=live_store)
+                        data[plane_id.lower()] = _dump_plane(
+                            client, plane_id.lower(), live_store=live_store
+                        )
             except Exception:
                 pass
 
@@ -556,11 +645,19 @@ def _cmd_dump(client: pymongo.MongoClient | None, parts: list[str],
         return
 
     # Check if arg is 'plane' or a direct plane_id (e.g. 'dump a3809r8s')
-    if arg == "plane" or (len(parts) == 2 and arg not in {"flight", "all", "opensky", "live"}):
+    if arg == "plane" or (
+        len(parts) == 2 and arg not in {"flight", "all", "opensky", "live"}
+    ):
         plane_id = parts[2] if arg == "plane" else parts[1]
         if not _verify_plane(client, plane_id, live_store=live_store):
             return
-        print(json.dumps({plane_id: _dump_plane(client, plane_id, live_store=live_store)}, indent=2, default=str))
+        print(
+            json.dumps(
+                {plane_id: _dump_plane(client, plane_id, live_store=live_store)},
+                indent=2,
+                default=str,
+            )
+        )
         return
 
     if arg == "flight":
@@ -568,16 +665,31 @@ def _cmd_dump(client: pymongo.MongoClient | None, parts: list[str],
             print("[err] dump flight requires plane id and flight id")
             return
         plane_id, flight_id = parts[2], parts[3]
-        if not _verify_plane(client, plane_id, live_store=live_store) or not _verify_flight(client, plane_id, flight_id, live_store=live_store):
+        if not _verify_plane(
+            client, plane_id, live_store=live_store
+        ) or not _verify_flight(client, plane_id, flight_id, live_store=live_store):
             return
-        print(json.dumps({plane_id: {flight_id: _dump_flight(client, plane_id, flight_id, live_store=live_store)}},
-                         indent=2, default=str))
+        print(
+            json.dumps(
+                {
+                    plane_id: {
+                        flight_id: _dump_flight(
+                            client, plane_id, flight_id, live_store=live_store
+                        )
+                    }
+                },
+                indent=2,
+                default=str,
+            )
+        )
         return
 
     print(f"[err] Unknown dump subcommand {arg!r}")
 
 
-def _dump_plane(client: pymongo.MongoClient | None, plane_id: str, live_store: Any = None) -> dict:
+def _dump_plane(
+    client: pymongo.MongoClient | None, plane_id: str, live_store: Any = None
+) -> dict:
     db = _get_mongo_db(client)
     plane_id_lower = plane_id.lower()
     results: dict = {}
@@ -589,37 +701,58 @@ def _dump_plane(client: pymongo.MongoClient | None, plane_id: str, live_store: A
             for lf in live_flights:
                 if lf.get("icao", "").lower() == plane_id_lower:
                     fid = lf.get("flight_id", f"{plane_id_lower}-live")
-                    results[fid] = _dump_flight(client, plane_id_lower, fid, live_store=live_store)
+                    results[fid] = _dump_flight(
+                        client, plane_id_lower, fid, live_store=live_store
+                    )
         except Exception:
             pass
 
     # Check mongo
     if db is not None:
         try:
-            cursor = db.get_collection("flights").find({"icao": plane_id_lower}, {"_id": 1})
+            cursor = db.get_collection("flights").find(
+                {"icao": plane_id_lower}, {"_id": 1}
+            )
             for doc in cursor:
                 fid = doc["_id"]
                 if fid not in results:
-                    results[fid] = _dump_flight(client, plane_id_lower, fid, live_store=live_store)
+                    results[fid] = _dump_flight(
+                        client, plane_id_lower, fid, live_store=live_store
+                    )
         except Exception:
             pass
 
     return results
 
 
-def _dump_flight(client: pymongo.MongoClient | None, plane_id: str, flight_id: str, live_store: Any = None) -> dict:
+def _dump_flight(
+    client: pymongo.MongoClient | None,
+    plane_id: str,
+    flight_id: str,
+    live_store: Any = None,
+) -> dict:
     db = _get_mongo_db(client)
-    
+
     # First check live store
     if live_store is not None:
         try:
-            live_flight = live_store.get_flight(flight_id) if hasattr(live_store, "get_flight") else None
+            live_flight = (
+                live_store.get_flight(flight_id)
+                if hasattr(live_store, "get_flight")
+                else None
+            )
             if not live_flight:
                 live_flights = live_store.get_flights()
-                live_flight = next((f for f in live_flights if f.get("flight_id") == flight_id), None)
-                
+                live_flight = next(
+                    (f for f in live_flights if f.get("flight_id") == flight_id), None
+                )
+
             if live_flight:
-                tels = live_store.get_telemetry(flight_id) if hasattr(live_store, "get_telemetry") else []
+                tels = (
+                    live_store.get_telemetry(flight_id)
+                    if hasattr(live_store, "get_telemetry")
+                    else []
+                )
                 series_data: dict[str, list] = {}
                 for tdoc in tels:
                     ts = tdoc.get("timestamp", time.time())
@@ -630,9 +763,17 @@ def _dump_flight(client: pymongo.MongoClient | None, plane_id: str, flight_id: s
 
                 res: dict = {}
                 for k, points in series_data.items():
-                    cat = STORE_RECV_DATA if k in ("latitude", "longitude", "altitude", "vertical_speed") else STORE_CALC_DATA
-                    res.setdefault(cat, {})[k] = {"category": cat, "type": k, "data": points}
-                
+                    cat = (
+                        STORE_RECV_DATA
+                        if k in ("latitude", "longitude", "altitude", "vertical_speed")
+                        else STORE_CALC_DATA
+                    )
+                    res.setdefault(cat, {})[k] = {
+                        "category": cat,
+                        "type": k,
+                        "data": points,
+                    }
+
                 res[STORE_INFO] = {
                     "category": "info",
                     "callsign": live_flight.get("callsign"),
@@ -652,8 +793,12 @@ def _dump_flight(client: pymongo.MongoClient | None, plane_id: str, flight_id: s
     if not flight_doc:
         return {}
 
-    telemetry_cursor = db.get_collection("telemetry").find({"flight_id": flight_id}).sort("timestamp", pymongo.ASCENDING)
-    
+    telemetry_cursor = (
+        db.get_collection("telemetry")
+        .find({"flight_id": flight_id})
+        .sort("timestamp", pymongo.ASCENDING)
+    )
+
     series_data = {}
     for doc in telemetry_cursor:
         t = doc["timestamp"]
@@ -664,7 +809,7 @@ def _dump_flight(client: pymongo.MongoClient | None, plane_id: str, flight_id: s
                 series_data.setdefault("longitude", []).append([t, coords[0]])
                 series_data.setdefault("latitude", []).append([t, coords[1]])
                 has_pos = True
-                
+
         for k, v in doc.items():
             if k in ("_id", "flight_id", "icao", "timestamp", "position"):
                 continue
@@ -679,12 +824,12 @@ def _dump_flight(client: pymongo.MongoClient | None, plane_id: str, flight_id: s
             category = STORE_RECV_DATA
         else:
             category = STORE_CALC_DATA
-            
+
         result.setdefault(category, {})
         result[category][field] = {
             "category": category,
             "type": field,
-            "data": data_points
+            "data": data_points,
         }
 
     info_doc = {
@@ -696,6 +841,6 @@ def _dump_flight(client: pymongo.MongoClient | None, plane_id: str, flight_id: s
         info_doc.update(flight_doc["info"])
     if "internal" in flight_doc:
         info_doc.update(flight_doc["internal"])
-        
+
     result[STORE_INFO] = info_doc
     return result

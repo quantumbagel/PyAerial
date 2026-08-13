@@ -1,6 +1,7 @@
 """
 Mock receiver plugin: emits simulated ADS-B Mode S messages for testing.
 """
+
 from __future__ import annotations
 
 import math
@@ -21,7 +22,9 @@ def _cpr_nl(lat: float) -> int:
     return max(1, int(math.floor(num)))
 
 
-def encode_airborne_pos(icao: str, lat: float, lon: float, alt_meters: float, is_odd: bool = False) -> str:
+def encode_airborne_pos(
+    icao: str, lat: float, lon: float, alt_meters: float, is_odd: bool = False
+) -> str:
     tc = 11
     ss = 0
     nic_sb = 0
@@ -42,7 +45,16 @@ def encode_airborne_pos(icao: str, lat: float, lon: float, alt_meters: float, is
     time_bit = 0
     f_bit = 1 if is_odd else 0
 
-    me = (tc << 51) | (ss << 49) | (nic_sb << 48) | (alt_code << 36) | (time_bit << 35) | (f_bit << 34) | (yz << 17) | xz
+    me = (
+        (tc << 51)
+        | (ss << 49)
+        | (nic_sb << 48)
+        | (alt_code << 36)
+        | (time_bit << 35)
+        | (f_bit << 34)
+        | (yz << 17)
+        | xz
+    )
     return f"8D{icao.upper()}{me:014X}000000"
 
 
@@ -63,7 +75,9 @@ def encode_callsign(icao: str, callsign: str) -> str:
     return f"8D{icao.upper()}{me:014X}000000"
 
 
-def encode_velocity(icao: str, speed_kmh: float, heading_deg: float, vert_rate_fps: float = 0.0) -> str:
+def encode_velocity(
+    icao: str, speed_kmh: float, heading_deg: float, vert_rate_fps: float = 0.0
+) -> str:
     tc = 19
     st = 1  # subsonic ground speed
     ic = 0  # intent change flag
@@ -90,10 +104,18 @@ def encode_velocity(icao: str, speed_kmh: float, heading_deg: float, vert_rate_f
     #   13 ew-dir | 14-23 ew-mag | 24 ns-dir | 25-34 ns-mag |
     #   35 vr-source | 36 vr-sign | 37-45 vr-mag | 46-55 reserved/diff
     me = (
-        (tc << 51) | (st << 48) | (ic << 47) | (ifr << 46) | (nac << 43)
-        | (dir_ew << 42) | ((val_ew & 0x3FF) << 32)
-        | (dir_ns << 31) | ((val_ns & 0x3FF) << 21)
-        | (vr_source << 20) | (vr_dir << 19) | ((vr_val & 0x1FF) << 10)
+        (tc << 51)
+        | (st << 48)
+        | (ic << 47)
+        | (ifr << 46)
+        | (nac << 43)
+        | (dir_ew << 42)
+        | ((val_ew & 0x3FF) << 32)
+        | (dir_ns << 31)
+        | ((val_ns & 0x3FF) << 21)
+        | (vr_source << 20)
+        | (vr_dir << 19)
+        | ((vr_val & 0x1FF) << 10)
     )
     return f"8D{icao.upper()}{me:014X}000000"
 
@@ -180,13 +202,21 @@ class MockReceiver(Receiver):
                 p = plane["phase"]
                 lat = plane["center_lat"] + math.sin(p) * plane["radius"]
                 lon = plane["center_lon"] + math.cos(p) * plane["radius"]
-                heading = (math.degrees(math.atan2(math.cos(p), -math.sin(p))) + 360) % 360
+                heading = (
+                    math.degrees(math.atan2(math.cos(p), -math.sin(p))) + 360
+                ) % 360
 
                 if tick_count % 10 == 1:
                     c_msg = encode_callsign(plane["icao"], plane["callsign"])
                     self.emit(c_msg, now)
 
-                p_msg = encode_airborne_pos(plane["icao"], lat, lon, plane["altitude"], is_odd=(tick_count % 2 == 1))
+                p_msg = encode_airborne_pos(
+                    plane["icao"],
+                    lat,
+                    lon,
+                    plane["altitude"],
+                    is_odd=(tick_count % 2 == 1),
+                )
                 self.emit(p_msg, now)
 
                 v_msg = encode_velocity(plane["icao"], plane["speed"], heading)

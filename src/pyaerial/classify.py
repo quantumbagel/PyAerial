@@ -4,6 +4,7 @@ ADS-B / Mode S message classification.
 Turns a raw hex message into structured plane data (info + received_data) and a
 typecode category used for internal bookkeeping.
 """
+
 from __future__ import annotations
 
 import logging
@@ -136,7 +137,7 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
             STORE_RECV_DATA: {
                 STORE_LAT: lat,
                 STORE_LONG: lon,
-                STORE_ALT: alt * 0.3048 if alt is not None else None
+                STORE_ALT: alt * 0.3048 if alt is not None else None,
             },
         }
         category = CAT_AIRBORNE_BARO if typecode <= 18 else CAT_AIRBORNE_GNSS
@@ -154,7 +155,9 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
             STORE_RECV_DATA: {
                 STORE_HORIZ_SPEED: speed * 1.852 if speed is not None else None,
                 STORE_HEADING: angle,
-                STORE_VERT_SPEED: vert_rate * 0.00508 if vert_rate is not None else None,
+                STORE_VERT_SPEED: vert_rate * 0.00508
+                if vert_rate is not None
+                else None,
             },
         }
         category = CAT_VELOCITY

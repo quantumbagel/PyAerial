@@ -1,4 +1,5 @@
 """Live store factory for the CLI viewer."""
+
 from __future__ import annotations
 
 import logging
@@ -11,7 +12,9 @@ from pyaerial.store.redis_live import RedisLiveStore
 log = logging.getLogger("pyaerial.view")
 
 
-def get_live_store(config: Any, mock: bool = False, aircraft_db: AircraftDB | None = None) -> Any:
+def get_live_store(
+    config: Any, mock: bool = False, aircraft_db: AircraftDB | None = None
+) -> Any:
     if mock:
         return MockStore(aircraft_db=aircraft_db)
     live_store = RedisLiveStore(config.database.redis_uri)

@@ -1,4 +1,5 @@
 """Live terminal flight table display."""
+
 from __future__ import annotations
 
 import sys
@@ -11,7 +12,9 @@ from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 from pyaerial.view.store import get_live_store
 
 
-def format_dump1090_table(live_flights: list[dict[str, Any]], aircraft_db: AircraftDB | None = None) -> str:
+def format_dump1090_table(
+    live_flights: list[dict[str, Any]], aircraft_db: AircraftDB | None = None
+) -> str:
     """Format live flights into a live text table display."""
     now = time.time()
     header = f"{'ICAO':<8} {'Callsign':<10} {'Flight ID':<16} {'Alt (ft)':<10} {'Speed (kt)':<11} {'Track':<7} {'Lat':<10} {'Lon':<11} {'Alerts':<14} {'Status':<8} {'Last Seen':<10}"
@@ -62,9 +65,15 @@ def format_dump1090_table(live_flights: list[dict[str, Any]], aircraft_db: Aircr
                         formatted.append("ALERT")
             alert_str = ",".join(sorted(set(formatted))) if formatted else "ALERT"
 
-        status = (flight.get("status") or ("LIVE" if flight.get("is_live", True) else "END")).upper()
+        status = (
+            flight.get("status") or ("LIVE" if flight.get("is_live", True) else "END")
+        ).upper()
 
-        last_packet = flight.get("last_packet") or flight.get("timestamp") or flight.get("start_time")
+        last_packet = (
+            flight.get("last_packet")
+            or flight.get("timestamp")
+            or flight.get("start_time")
+        )
         if last_packet:
             age = max(0, int(now - last_packet))
             seen_str = f"{age}s ago"
@@ -77,7 +86,12 @@ def format_dump1090_table(live_flights: list[dict[str, Any]], aircraft_db: Aircr
     return "\n".join(lines)
 
 
-def run_live_loop(live_store: Any, aircraft_db: AircraftDB | None = None, interval: float = 1.0, once: bool = False) -> None:
+def run_live_loop(
+    live_store: Any,
+    aircraft_db: AircraftDB | None = None,
+    interval: float = 1.0,
+    once: bool = False,
+) -> None:
     """Run live flight display loop."""
     while True:
         live_flights = live_store.get_flights()
@@ -98,11 +112,14 @@ def run_live_loop(live_store: Any, aircraft_db: AircraftDB | None = None, interv
         time.sleep(interval)
 
 
-def run_live_cmd(config_path: str = "config.yaml", *,
-                 aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
-                 mock: bool = False,
-                 interval: float = 1.0,
-                 once: bool = False) -> None:
+def run_live_cmd(
+    config_path: str = "config.yaml",
+    *,
+    aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
+    mock: bool = False,
+    interval: float = 1.0,
+    once: bool = False,
+) -> None:
     """CLI handler for pyaerial live command."""
     config = load_config(config_path)
     aircraft_db = AircraftDB(aircraft_db_path)

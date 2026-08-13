@@ -4,6 +4,7 @@ Kinematic Extended Kalman Filter (EKF) and Dead Reckoning for PyAerial.
 Provides 2D state tracking (latitude, longitude, north velocity, east velocity)
 for smoothing noisy position reports and dead-reckoning during signal gaps.
 """
+
 from __future__ import annotations
 
 import math
@@ -23,9 +24,15 @@ class KinematicKalmanFilter:
     State vector: [lat (deg), lon (deg), vn (m/s), ve (m/s)]
     """
 
-    def __init__(self, init_lat: float, init_lon: float,
-                 init_vn: float = 0.0, init_ve: float = 0.0,
-                 process_noise: float = 1.0, measurement_noise: float = 25.0):
+    def __init__(
+        self,
+        init_lat: float,
+        init_lon: float,
+        init_vn: float = 0.0,
+        init_ve: float = 0.0,
+        process_noise: float = 1.0,
+        measurement_noise: float = 25.0,
+    ):
         # State vector
         self.lat = init_lat
         self.lon = init_lon
@@ -57,14 +64,16 @@ class KinematicKalmanFilter:
         self.lon += (self.ve * dt) / m_per_deg_lon
 
         # Covariance growth
-        self.p_lat += (dt ** 2 * self.q) / (m_per_deg_lat ** 2)
-        self.p_lon += (dt ** 2 * self.q) / (m_per_deg_lon ** 2)
+        self.p_lat += (dt**2 * self.q) / (m_per_deg_lat**2)
+        self.p_lon += (dt**2 * self.q) / (m_per_deg_lon**2)
         self.p_vn += dt * self.q
         self.p_ve += dt * self.q
 
         return self.lat, self.lon
 
-    def update(self, measured_lat: float, measured_lon: float, dt: float) -> tuple[float, float, float, float]:
+    def update(
+        self, measured_lat: float, measured_lon: float, dt: float
+    ) -> tuple[float, float, float, float]:
         """
         Incorporate position measurement and update state.
         Returns (filtered_lat, filtered_lon, speed_m_s, heading_deg).
@@ -81,8 +90,12 @@ class KinematicKalmanFilter:
         res_lon_m = (measured_lon - self.lon) * m_per_deg_lon
 
         # Kalman gain for position (simple decoupled scalar update for numerical efficiency)
-        k_lat = (self.p_lat * m_per_deg_lat ** 2) / (self.p_lat * m_per_deg_lat ** 2 + self.r_pos)
-        k_lon = (self.p_lon * m_per_deg_lon ** 2) / (self.p_lon * m_per_deg_lon ** 2 + self.r_pos)
+        k_lat = (self.p_lat * m_per_deg_lat**2) / (
+            self.p_lat * m_per_deg_lat**2 + self.r_pos
+        )
+        k_lon = (self.p_lon * m_per_deg_lon**2) / (
+            self.p_lon * m_per_deg_lon**2 + self.r_pos
+        )
 
         # Update position
         self.lat += (k_lat * res_lat_m) / m_per_deg_lat
@@ -94,8 +107,8 @@ class KinematicKalmanFilter:
             self.ve += 0.2 * (res_lon_m / dt)
 
         # Update covariances
-        self.p_lat *= (1.0 - k_lat)
-        self.p_lon *= (1.0 - k_lon)
+        self.p_lat *= 1.0 - k_lat
+        self.p_lon *= 1.0 - k_lon
 
         speed_m_s = math.hypot(self.vn, self.ve)
         heading_deg = (math.degrees(math.atan2(self.ve, self.vn)) + 360.0) % 360.0

@@ -1,6 +1,7 @@
 """
 Requirement / field-constraint evaluation shared by live alerting and persistence.
 """
+
 from __future__ import annotations
 
 from typing import Callable
@@ -49,8 +50,13 @@ _FIELD_ALIASES = {
 }
 
 
-def make_resolver(plane: dict, eta: float, polygon: Polygon,
-                  position: tuple[float, float], at_time: float | None = None) -> Resolver:
+def make_resolver(
+    plane: dict,
+    eta: float,
+    polygon: Polygon,
+    position: tuple[float, float],
+    at_time: float | None = None,
+) -> Resolver:
     """Build a resolver that reads a plane's data fields (optionally at a time)."""
 
     def resolve(field: str) -> float | None:
@@ -85,9 +91,14 @@ def when_passes(when: dict[str, FieldConstraint], resolver: Resolver) -> bool:
 
 
 def make_predicted_resolver(
-    plane: dict, polygon: Polygon, position: tuple[float, float],
-    heading: float, speed_kph: float, turn_rate: float,
-    predict_seconds: float, curved: bool = False,
+    plane: dict,
+    polygon: Polygon,
+    position: tuple[float, float],
+    heading: float,
+    speed_kph: float,
+    turn_rate: float,
+    predict_seconds: float,
+    curved: bool = False,
 ) -> Resolver:
     """
     Build a resolver that evaluates against *predicted* future state.
@@ -97,17 +108,30 @@ def make_predicted_resolver(
     speed, and recomputes ETA from the predicted position.
     """
     predicted_pos = geo.dead_reckon_curved(
-        position, heading, speed_kph, turn_rate, predict_seconds,
+        position,
+        heading,
+        speed_kph,
+        turn_rate,
+        predict_seconds,
     )
     predicted_heading = heading + turn_rate * predict_seconds
 
     if curved and abs(turn_rate) >= 0.1:
         predicted_eta = geo.time_to_enter_geofence_curved(
-            predicted_pos, predicted_heading, speed_kph, turn_rate, polygon, 10_000,
+            predicted_pos,
+            predicted_heading,
+            speed_kph,
+            turn_rate,
+            polygon,
+            10_000,
         )
     else:
         predicted_eta = geo.time_to_enter_geofence(
-            predicted_pos, predicted_heading, speed_kph, polygon, 10_000,
+            predicted_pos,
+            predicted_heading,
+            speed_kph,
+            polygon,
+            10_000,
         )
 
     def resolve(field: str) -> float | None:

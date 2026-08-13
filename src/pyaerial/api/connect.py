@@ -1,4 +1,5 @@
 """Database and Redis connection helpers for the web portal."""
+
 from __future__ import annotations
 
 import pymongo
@@ -8,7 +9,9 @@ from pyaerial.config.schema import Config
 from pyaerial.store.redis_live import RedisLiveStore
 
 
-def connect_stores(config_path: str) -> tuple[Config, pymongo.MongoClient, pymongo.database.Database, RedisLiveStore]:
+def connect_stores(
+    config_path: str,
+) -> tuple[Config, pymongo.MongoClient, pymongo.database.Database, RedisLiveStore]:
     config = load_config(config_path)
     client = pymongo.MongoClient(config.database.uri)
     if config.database.name:

@@ -1,6 +1,7 @@
 """
 Loading and validation of the PyAerial configuration file.
 """
+
 from __future__ import annotations
 
 import logging
@@ -41,8 +42,11 @@ def _apply_overrides(data: dict, overrides: dict[str, object] | None) -> dict:
     return data
 
 
-def load_config(path: str | os.PathLike = "config.yaml", *,
-                overrides: dict[str, object] | None = None) -> Config:
+def load_config(
+    path: str | os.PathLike = "config.yaml",
+    *,
+    overrides: dict[str, object] | None = None,
+) -> Config:
     """
     Load, override, and validate the configuration.
 
@@ -64,7 +68,9 @@ def load_config(path: str | os.PathLike = "config.yaml", *,
     if data is None:
         raise ConfigError(f"configuration file {config_path} is empty")
     if not isinstance(data, dict):
-        raise ConfigError(f"configuration file {config_path} must contain a mapping at the top level")
+        raise ConfigError(
+            f"configuration file {config_path} must contain a mapping at the top level"
+        )
 
     data = _apply_overrides(data, overrides)
 

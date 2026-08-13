@@ -5,6 +5,7 @@ PyAerial v2 uses a flat, portal-oriented layout::
 
     database, tracking, logging, home, receivers, zones
 """
+
 from __future__ import annotations
 
 import re
@@ -88,7 +89,10 @@ class FieldConstraint(_Strict):
         return self
 
     def as_pairs(self) -> dict[str, float]:
-        from pyaerial.constants import CONFIG_COMP_CTYPE_MAXIMUM, CONFIG_COMP_CTYPE_MINIMUM
+        from pyaerial.constants import (
+            CONFIG_COMP_CTYPE_MAXIMUM,
+            CONFIG_COMP_CTYPE_MINIMUM,
+        )
 
         pairs: dict[str, float] = {}
         if self.minimum is not None:

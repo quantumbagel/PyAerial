@@ -1,4 +1,5 @@
 """Live WebSocket broadcaster for the web portal."""
+
 from __future__ import annotations
 
 import asyncio
@@ -53,14 +54,23 @@ class LiveBroadcaster:
         self._clients.pop(websocket, None)
 
     async def _send_snapshot(self, websocket: WebSocket) -> None:
-        flights = get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
+        flights = (
+            get_live_flights(self.live_store, self.aircraft_db)
+            if self.live_store
+            else []
+        )
         alerts = (
             get_tracked_live_alerts(self.live_store, flights, limit=50)
-            if self.live_store else []
+            if self.live_store
+            else []
         )
         stats = get_stats(self.live_store, None, self.aircraft_db)
-        await websocket.send_json({"type": "flights", "flights": sanitize_for_json(flights)})
-        await websocket.send_json({"type": "alerts", "alerts": sanitize_for_json(alerts)})
+        await websocket.send_json(
+            {"type": "flights", "flights": sanitize_for_json(flights)}
+        )
+        await websocket.send_json(
+            {"type": "alerts", "alerts": sanitize_for_json(alerts)}
+        )
         await websocket.send_json({"type": "stats", "stats": sanitize_for_json(stats)})
 
     async def _run_loop(self) -> None:
@@ -101,14 +111,21 @@ class LiveBroadcaster:
     async def _broadcast_tick(self) -> None:
         now = time.time()
 
-        flights = get_live_flights(self.live_store, self.aircraft_db) if self.live_store else []
+        flights = (
+            get_live_flights(self.live_store, self.aircraft_db)
+            if self.live_store
+            else []
+        )
         alerts = (
             get_tracked_live_alerts(self.live_store, flights, limit=50)
-            if self.live_store else []
+            if self.live_store
+            else []
         )
         stats = get_stats(self.live_store, None, self.aircraft_db)
 
-        flights_sig = json.dumps(sanitize_for_json(flights), sort_keys=True, default=str)
+        flights_sig = json.dumps(
+            sanitize_for_json(flights), sort_keys=True, default=str
+        )
         if flights_sig != self._last_flights_sig:
             self._last_flights_sig = flights_sig
             msg = {"type": "flights", "flights": sanitize_for_json(flights)}
@@ -127,7 +144,9 @@ class LiveBroadcaster:
             await self._broadcast(msg)
 
         for websocket, since in list(self._clients.items()):
-            points = self.live_store.get_live_telemetry(since) if self.live_store else []
+            points = (
+                self.live_store.get_live_telemetry(since) if self.live_store else []
+            )
 
             if points:
                 payload = {

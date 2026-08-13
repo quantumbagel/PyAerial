@@ -1,6 +1,7 @@
 """
 Aircraft metadata lookup backed by SQLite.
 """
+
 from __future__ import annotations
 
 import json
@@ -9,12 +10,11 @@ import sqlite3
 import threading
 from pathlib import Path
 
+import requests
+
 log = logging.getLogger("pyaerial.aircraft_db")
 
 _MISSING = object()
-
-
-import requests
 
 
 def normalize_photo_url(value: object) -> str | None:
@@ -63,7 +63,7 @@ class AircraftDB:
         # Ensure parent directory exists
         if self.path.parent:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         self._lock = threading.Lock()
         # Open in read-write mode to allow dynamic caching, and allow shared thread access
         with self._lock:
@@ -126,7 +126,9 @@ class AircraftDB:
             if "photo_checked" in record:
                 return self._return_normalized_record(icao, record)
 
-            photo_info = self._fetch_photo_from_planespotters(icao, record.get("registration"))
+            photo_info = self._fetch_photo_from_planespotters(
+                icao, record.get("registration")
+            )
             record.update(photo_info)
             record["photo_checked"] = True
             self._update_cache(icao, record)
@@ -170,12 +172,16 @@ class AircraftDB:
         return normalized
 
     def _fetch_from_apis(self, icao: str) -> dict | None:
-        headers = {"User-Agent": "PyAerial/2.0 (https://github.com/quantumbagel/PyAerial)"}
-        
+        headers = {
+            "User-Agent": "PyAerial/2.0 (https://github.com/quantumbagel/PyAerial)"
+        }
+
         # 1. Fetch from HexDB
         hexdb_data = {}
         try:
-            resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{icao}", headers=headers, timeout=3.0)
+            resp = requests.get(
+                f"https://hexdb.io/api/v1/aircraft/{icao}", headers=headers, timeout=3.0
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 hexdb_data = {
@@ -204,17 +210,21 @@ class AircraftDB:
 
         return hexdb_data
 
-    def _fetch_photo_from_planespotters(self, icao: str, registration: str | None = None) -> dict:
-        headers = {"User-Agent": "PyAerial/2.0 (https://github.com/quantumbagel/PyAerial)"}
-        photo_info = {
-            "photo_url": None,
-            "photo_link": None,
-            "photo_photographer": None
+    def _fetch_photo_from_planespotters(
+        self, icao: str, registration: str | None = None
+    ) -> dict:
+        headers = {
+            "User-Agent": "PyAerial/2.0 (https://github.com/quantumbagel/PyAerial)"
         }
-        
+        photo_info = {"photo_url": None, "photo_link": None, "photo_photographer": None}
+
         # Try looking up by ICAO hex first
         try:
-            resp = requests.get(f"https://api.planespotters.net/pub/photos/hex/{icao}", headers=headers, timeout=3.0)
+            resp = requests.get(
+                f"https://api.planespotters.net/pub/photos/hex/{icao}",
+                headers=headers,
+                timeout=3.0,
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 photos = data.get("photos", [])
@@ -230,7 +240,11 @@ class AircraftDB:
         # Try looking up by Registration if we have it and hex lookup failed/had no photos
         if registration:
             try:
-                resp = requests.get(f"https://api.planespotters.net/pub/photos/reg/{registration}", headers=headers, timeout=3.0)
+                resp = requests.get(
+                    f"https://api.planespotters.net/pub/photos/reg/{registration}",
+                    headers=headers,
+                    timeout=3.0,
+                )
                 if resp.status_code == 200:
                     data = resp.json()
                     photos = data.get("photos", [])
@@ -240,7 +254,11 @@ class AircraftDB:
                         photo_info["photo_link"] = photo.get("link")
                         photo_info["photo_photographer"] = photo.get("photographer")
             except Exception as e:
-                log.debug("Planespotters.net registration lookup failed for %s: %s", registration, e)
+                log.debug(
+                    "Planespotters.net registration lookup failed for %s: %s",
+                    registration,
+                    e,
+                )
 
         return photo_info
 
@@ -251,7 +269,7 @@ class AircraftDB:
                 if self._conn is not None:
                     self._conn.execute(
                         "INSERT OR REPLACE INTO aircraft (icao, data) VALUES (?, ?)",
-                        (icao, val)
+                        (icao, val),
                     )
                     self._conn.commit()
         except sqlite3.Error as e:
@@ -262,5 +280,3 @@ class AircraftDB:
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
-
-

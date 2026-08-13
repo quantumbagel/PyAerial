@@ -1,4 +1,5 @@
 """Alerter that logs alerts (the default, dependency-free option)."""
+
 from __future__ import annotations
 
 from pyaerial.alerters import Alerter, register_alerter

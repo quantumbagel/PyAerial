@@ -2,6 +2,7 @@
 Mock data store for PyAerial web portal --mock mode.
 Provides simulated live and historical flight telemetry, alerts, and details.
 """
+
 from __future__ import annotations
 
 import math
@@ -12,8 +13,14 @@ from pyaerial.calc.motion import ResolvedMotion
 from pyaerial.calc.projection import _sample_track_path
 
 
-def _active_alert(alert_id: str, zone: str, rule: str, activated_at: float,
-                  eta: float | None = None, mock_lifetime: float = 120.0) -> dict[str, Any]:
+def _active_alert(
+    alert_id: str,
+    zone: str,
+    rule: str,
+    activated_at: float,
+    eta: float | None = None,
+    mock_lifetime: float = 120.0,
+) -> dict[str, Any]:
     return {
         "alert_id": alert_id,
         "zone": zone,
@@ -65,7 +72,9 @@ def _enrich_mock_photo(res: dict[str, Any], aircraft_db: Any) -> None:
         except Exception:
             pass
 
-    fallback = _MOCK_PHOTOS.get(icao) or _MOCK_PHOTOS.get((res.get("icao") or "").lower())
+    fallback = _MOCK_PHOTOS.get(icao) or _MOCK_PHOTOS.get(
+        (res.get("icao") or "").lower()
+    )
     if fallback:
         res["photo_url"] = fallback.get("photo_url")
         res["photo_photographer"] = fallback.get("photo_photographer")
@@ -79,8 +88,12 @@ def _enrich_mock_photo(res: dict[str, Any], aircraft_db: Any) -> None:
 class MockStore:
     """Simulates Redis and MongoDB stores with realistic generated flight data."""
 
-    def __init__(self, home_lat: float = 35.7275, home_lon: float = -78.6959,
-                 aircraft_db: Any = None):
+    def __init__(
+        self,
+        home_lat: float = 35.7275,
+        home_lon: float = -78.6959,
+        aircraft_db: Any = None,
+    ):
         self.home_lat = home_lat
         self.home_lon = home_lon
         self.aircraft_db = aircraft_db
@@ -99,7 +112,16 @@ class MockStore:
                 "altitude": 1200.0,
                 "speed": 180.0,
                 "heading": 45.0,
-                "active_alerts": [_active_alert("mock_live_1:aerpaw:warn", "aerpaw", "warn", self._start_time - 30, 45.0, 90.0)],
+                "active_alerts": [
+                    _active_alert(
+                        "mock_live_1:aerpaw:warn",
+                        "aerpaw",
+                        "warn",
+                        self._start_time - 30,
+                        45.0,
+                        90.0,
+                    )
+                ],
                 "is_live": True,
                 "status": "live",
                 "retained": True,
@@ -123,7 +145,16 @@ class MockStore:
                 "altitude": 120.0,
                 "speed": 45.0,
                 "heading": 210.0,
-                "active_alerts": [_active_alert("mock_live_2:aerpaw:alert", "aerpaw", "alert", self._start_time - 20, 15.0, 75.0)],
+                "active_alerts": [
+                    _active_alert(
+                        "mock_live_2:aerpaw:alert",
+                        "aerpaw",
+                        "alert",
+                        self._start_time - 20,
+                        15.0,
+                        75.0,
+                    )
+                ],
                 "is_live": True,
                 "status": "live",
                 "retained": True,
@@ -146,7 +177,16 @@ class MockStore:
                 "altitude": 450.0,
                 "speed": 210.0,
                 "heading": 315.0,
-                "active_alerts": [_active_alert("mock_live_3:cool:cool", "cool", "cool", self._start_time - 45, 60.0, 120.0)],
+                "active_alerts": [
+                    _active_alert(
+                        "mock_live_3:cool:cool",
+                        "cool",
+                        "cool",
+                        self._start_time - 45,
+                        60.0,
+                        120.0,
+                    )
+                ],
                 "is_live": True,
                 "status": "live",
                 "retained": True,
@@ -180,7 +220,11 @@ class MockStore:
                 "start_time": now - 7200,
                 "end_time": now - 3600,
                 "timestamp": now - 3600,
-                "alert_stats": {"episode_count": 1, "total_seconds": 1600, "active_count": 0},
+                "alert_stats": {
+                    "episode_count": 1,
+                    "total_seconds": 1600,
+                    "active_count": 0,
+                },
                 "latitude": home_lat + 0.003,
                 "longitude": home_lon - 0.004,
             },
@@ -225,7 +269,11 @@ class MockStore:
                 "start_time": now - 21600,
                 "end_time": now - 18000,
                 "timestamp": now - 18000,
-                "alert_stats": {"episode_count": 1, "total_seconds": 1000, "active_count": 0},
+                "alert_stats": {
+                    "episode_count": 1,
+                    "total_seconds": 1000,
+                    "active_count": 0,
+                },
                 "latitude": home_lat + 0.001,
                 "longitude": home_lon + 0.002,
             },
@@ -251,17 +299,19 @@ class MockStore:
                 t = start_t + i * step
                 lat = base_lat + (math.sin(i * 0.2) * 0.008)
                 lon = base_lon + (math.cos(i * 0.2) * 0.008)
-                points.append({
-                    "flight_id": fid,
-                    "icao": flight["icao"],
-                    "timestamp": t,
-                    "latitude": lat,
-                    "longitude": lon,
-                    "altitude": flight["altitude"] + (i * 5.0),
-                    "speed": flight["speed"],
-                    "heading": (flight["heading"] + i * 2) % 360,
-                    "active_alerts": flight.get("active_alerts", []),
-                })
+                points.append(
+                    {
+                        "flight_id": fid,
+                        "icao": flight["icao"],
+                        "timestamp": t,
+                        "latitude": lat,
+                        "longitude": lon,
+                        "altitude": flight["altitude"] + (i * 5.0),
+                        "speed": flight["speed"],
+                        "heading": (flight["heading"] + i * 2) % 360,
+                        "active_alerts": flight.get("active_alerts", []),
+                    }
+                )
             self.telemetry[fid] = points
 
         for flight in self.live_flights:
@@ -274,20 +324,32 @@ class MockStore:
             for i in range(steps + 1):
                 t = start_t + i * step
                 p = phase + i * flight["speed_rad"]
-                lat = self.home_lat + flight["lat_offset"] + math.sin(p) * flight["radius"]
-                lon = self.home_lon + flight["lon_offset"] + math.cos(p) * flight["radius"]
-                heading = (math.degrees(math.atan2(math.cos(p), -math.sin(p))) + 360) % 360
-                points.append({
-                    "flight_id": fid,
-                    "icao": flight["icao"],
-                    "timestamp": t,
-                    "latitude": lat,
-                    "longitude": lon,
-                    "altitude": flight["altitude"],
-                    "speed": flight["speed"],
-                    "heading": round(heading, 1),
-                    "active_alerts": flight.get("active_alerts", []),
-                })
+                lat = (
+                    self.home_lat
+                    + flight["lat_offset"]
+                    + math.sin(p) * flight["radius"]
+                )
+                lon = (
+                    self.home_lon
+                    + flight["lon_offset"]
+                    + math.cos(p) * flight["radius"]
+                )
+                heading = (
+                    math.degrees(math.atan2(math.cos(p), -math.sin(p))) + 360
+                ) % 360
+                points.append(
+                    {
+                        "flight_id": fid,
+                        "icao": flight["icao"],
+                        "timestamp": t,
+                        "latitude": lat,
+                        "longitude": lon,
+                        "altitude": flight["altitude"],
+                        "speed": flight["speed"],
+                        "heading": round(heading, 1),
+                        "active_alerts": flight.get("active_alerts", []),
+                    }
+                )
             self.telemetry[fid] = points
             if points:
                 flight["latitude"] = points[-1]["latitude"]
@@ -407,7 +469,8 @@ class MockStore:
             if flight.get("flight_id") != flight_id:
                 continue
             flight["active_alerts"] = [
-                item for item in (flight.get("active_alerts") or [])
+                item
+                for item in (flight.get("active_alerts") or [])
                 if item.get("alert_id") != alert_id
             ]
             break
@@ -438,9 +501,14 @@ class MockStore:
             position = (lat, lon)
             speed = float(flight["speed"])
             turn_rate = float(flight.get("mock_turn_rate_deg_s", 0.0))
-            motion = ResolvedMotion(heading_deg=heading, speed_kph=speed, turn_rate_deg_s=turn_rate)
+            motion = ResolvedMotion(
+                heading_deg=heading, speed_kph=speed, turn_rate_deg_s=turn_rate
+            )
             track_path = _sample_track_path(
-                position, motion, horizon_seconds=120, step_seconds=2,
+                position,
+                motion,
+                horizon_seconds=120,
+                step_seconds=2,
             )
             flight["portal_projection"] = {
                 "horizon_seconds": 120,
@@ -478,7 +546,12 @@ class MockStore:
             if active:
                 row["alert_stats"] = {
                     "episode_count": len(active),
-                    "total_seconds": int(sum(max(0.0, now - (a.get("activated_at") or now)) for a in active)),
+                    "total_seconds": int(
+                        sum(
+                            max(0.0, now - (a.get("activated_at") or now))
+                            for a in active
+                        )
+                    ),
                     "active_count": len(active),
                 }
             results.append(row)
@@ -495,7 +568,7 @@ class MockStore:
                 res["registration"] = res.get("registration") or "N/A"
                 _enrich_mock_photo(res, self.aircraft_db)
                 return res
-        for flight in (self.history_flights if view == "live" else self.live_flights):
+        for flight in self.history_flights if view == "live" else self.live_flights:
             if flight["flight_id"] == flight_id:
                 res = dict(flight)
                 res["registration"] = res.get("registration") or "N/A"
@@ -525,21 +598,27 @@ class MockStore:
         active_only: bool | None = None,
     ) -> list[dict[str, Any]]:
         if view == "live":
-            alerts = list(self.live_alerts) if not flight_id else [
-                a for a in self.live_alerts if a.get("flight_id") == flight_id
-            ]
+            alerts = (
+                list(self.live_alerts)
+                if not flight_id
+                else [a for a in self.live_alerts if a.get("flight_id") == flight_id]
+            )
             if active_only is not False and not flight_id:
                 alerts = [a for a in alerts if a.get("active", True)]
         else:
-            alerts = list(self.history_alerts) if not flight_id else [
-                a for a in self.history_alerts if a.get("flight_id") == flight_id
-            ]
+            alerts = (
+                list(self.history_alerts)
+                if not flight_id
+                else [a for a in self.history_alerts if a.get("flight_id") == flight_id]
+            )
         if since > 0:
             alerts = [a for a in alerts if (a.get("activated_at") or 0) > since]
         if flight_id:
             alerts = [a for a in alerts if a.get("flight_id") == flight_id]
         if rule:
-            alerts = [a for a in alerts if (a.get("rule") or "").lower() == rule.lower()]
+            alerts = [
+                a for a in alerts if (a.get("rule") or "").lower() == rule.lower()
+            ]
         alerts.sort(key=lambda a: a.get("activated_at") or 0, reverse=True)
         if skip:
             alerts = alerts[skip:]
@@ -558,4 +637,3 @@ class MockStore:
             "retained_flights": retained_flights,
             "historical_alerts": historical_alerts,
         }
-

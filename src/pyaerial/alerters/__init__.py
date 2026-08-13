@@ -5,6 +5,7 @@ Alerters replace the old hardcoded ``if method == 'print' / elif 'kafka'`` block
 New alerters register with :func:`register_alerter` and are selectable via a
 category's ``alert_method``.
 """
+
 from __future__ import annotations
 
 import abc
@@ -41,6 +42,7 @@ def register_alerter(name: str) -> Callable[[type[Alerter]], type[Alerter]]:
         cls.method = name
         _REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
@@ -63,4 +65,3 @@ try:  # kafka-python-ng may be unavailable if installed without [kafka] extra
     from pyaerial.alerters import kafka as _kafka  # noqa: E402,F401
 except Exception as _exc:  # pragma: no cover - optional dependency
     logging.getLogger("pyaerial.alerter").debug("kafka alerter unavailable: %s", _exc)
-

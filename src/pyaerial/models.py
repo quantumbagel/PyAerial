@@ -6,6 +6,7 @@ A "plane" is a nested dict with four buckets (``info``, ``received_data``,
 lists of :class:`Datum` (value/timestamp pairs) so history can be filtered and
 saved later.
 """
+
 from __future__ import annotations
 
 import math
@@ -16,6 +17,7 @@ from typing import Any, TypedDict
 @dataclass(slots=True)
 class Datum:
     """A single value observed (or calculated) at a point in time."""
+
     value: float
     time: float
 
@@ -39,8 +41,12 @@ class PlaneState(TypedDict, total=False):
     raw_messages: list[Any]
 
 
-def get_latest(information_type: str, information_datum: str, plane_data: PlaneState | dict,
-               after_time: float | None = None) -> Datum | None:
+def get_latest(
+    information_type: str,
+    information_datum: str,
+    plane_data: PlaneState | dict,
+    after_time: float | None = None,
+) -> Datum | None:
     """
     Return the most relevant :class:`Datum` for a field.
 
@@ -73,7 +79,9 @@ def get_latest(information_type: str, information_datum: str, plane_data: PlaneS
     return best
 
 
-def patch_append(plane: PlaneState | dict, bucket: str, field: str, datum: Datum) -> bool:
+def patch_append(
+    plane: PlaneState | dict, bucket: str, field: str, datum: Datum
+) -> bool:
     """
     Append ``datum`` to ``plane[bucket][field]`` unless it duplicates the latest
     value already stored there.

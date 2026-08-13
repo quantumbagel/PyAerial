@@ -1,4 +1,5 @@
 """WebSocket request dispatch for the web portal."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -43,14 +44,22 @@ def handle_ws_request(
 
     if action == "fetchFlight":
         return get_flight_detail(
-            _flight_id_param(params), view, live_store=live_store, db=db, aircraft_db=aircraft_db,
+            _flight_id_param(params),
+            view,
+            live_store=live_store,
+            db=db,
+            aircraft_db=aircraft_db,
         )
 
     if action == "fetchTelemetry":
         since_val = params.get("since")
         since = float(since_val) if since_val is not None else 0.0
         return get_telemetry(
-            _flight_id_param(params), view, since, live_store=live_store, db=db,
+            _flight_id_param(params),
+            view,
+            since,
+            live_store=live_store,
+            db=db,
         )
 
     if action == "fetchAlerts":

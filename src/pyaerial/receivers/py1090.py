@@ -4,6 +4,7 @@ Pure-Python RTL-SDR receiver (a much less capable stand-in for dump1090).
 Decodes Mode S / ADS-B directly from raw IQ samples. Requires ``pyrtlsdr`` and a
 working ``librtlsdr`` install. Adapted from "The 1090 Megahertz Riddle".
 """
+
 from __future__ import annotations
 
 import time
@@ -80,7 +81,7 @@ class Py1090Receiver(Receiver):
                 continue
 
             frame_length = (FRAME_BITS + 1) * 2
-            frame_pulses = buffer[frame_start:frame_start + frame_length]
+            frame_pulses = buffer[frame_start : frame_start + frame_length]
             if not frame_pulses:
                 break
             threshold = max(frame_pulses) * 0.2
@@ -88,7 +89,7 @@ class Py1090Receiver(Receiver):
             bits: list[int] = []
             frame_index = 0
             for frame_index in range(0, frame_length, 2):
-                pair = frame_pulses[frame_index:frame_index + 2]
+                pair = frame_pulses[frame_index : frame_index + 2]
                 if len(pair) < 2:
                     break
                 if pair[0] < threshold and pair[1] < threshold:

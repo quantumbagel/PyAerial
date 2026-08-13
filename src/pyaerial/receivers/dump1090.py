@@ -4,6 +4,7 @@ Receiver that streams raw messages from dump1090's TCP output.
 Run ``dump1090 --net --raw`` (or broadcast raw messages over TCP) and point this
 receiver at the host/port.
 """
+
 from __future__ import annotations
 
 import socket
