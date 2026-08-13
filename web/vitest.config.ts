@@ -7,5 +7,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // Pin the timezone so date/time formatting assertions are deterministic.
+    env: { TZ: 'UTC' },
   },
 });

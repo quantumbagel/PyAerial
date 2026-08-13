@@ -1,5 +1,10 @@
 import type { TelemetryPoint } from '../api/types';
-import { formatAltitudeCell, formatHeading, formatSpeedCell } from '../utils/format';
+import {
+  formatAltitudeCell,
+  formatDateTime,
+  formatHeading,
+  formatSpeedCell,
+} from '../utils/format';
 
 interface TelemetryTableProps {
   telemetry: TelemetryPoint[];
@@ -43,11 +48,7 @@ export function TelemetryTable({
             </tr>
           ) : (
             telemetry.map((point) => {
-              const timeStr = new Date(point.timestamp * 1000).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-              });
+              const timeStr = formatDateTime(point.timestamp, { withSeconds: true });
               const latVal = point.latitude != null ? point.latitude.toFixed(4) : 'N/A';
               const lonVal = point.longitude != null ? point.longitude.toFixed(4) : 'N/A';
               const isSelected = selectedTelemetryPoint?.timestamp === point.timestamp;

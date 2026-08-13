@@ -3,6 +3,7 @@ import type { Alert, AppConfig, FlightDetail, FlightSummary, TelemetryPoint, Zon
 import {
   formatActiveAlerts,
   formatAltitude,
+  formatDateTime,
   formatFlightAlertSummary,
   formatHeading,
   formatSpeed,
@@ -383,13 +384,7 @@ function renderTelemetrySummary(
   now: number,
 ) {
   const formatTs = (ts?: number | null) =>
-    ts
-      ? new Date(ts * 1000).toLocaleTimeString([], {
-          hour: 'numeric',
-          minute: '2-digit',
-          second: '2-digit',
-        })
-      : 'N/A';
+    ts ? formatDateTime(ts, { withSeconds: true }) : 'N/A';
   const live = flightDetail
     ? isFlightLive(flightDetail)
     : flightSummary

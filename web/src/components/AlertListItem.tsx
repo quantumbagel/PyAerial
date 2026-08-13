@@ -4,6 +4,7 @@ import {
   formatActiveSince,
   formatAlertAltitude,
   formatAlertEta,
+  formatDateTime,
   formatEpisodeDuration,
   formatZoneRule,
   isAlertActive,
@@ -39,7 +40,7 @@ export function AlertListItem({
   const statusTitle = isEpisodeActive
     ? `Active episode · ${durationStr}`
     : `Ended episode · ${durationStr}${deactivatedStr ? ` (ended ${deactivatedStr})` : ''}`;
-  const title = `${statusTitle}\nActivated: ${alert.activated_at ? new Date(alert.activated_at * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}${isEpisodeActive ? `\nETA: ${formatAlertEta(alert.eta)}` : ''}`;
+  const title = `${statusTitle}\nActivated: ${formatDateTime(alert.activated_at) || 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}${isEpisodeActive ? `\nETA: ${formatAlertEta(alert.eta)}` : ''}`;
 
   const rawCallsign = alert.callsign?.trim();
   const displayCallsign =

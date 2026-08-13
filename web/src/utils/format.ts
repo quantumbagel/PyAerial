@@ -99,12 +99,51 @@ export function formatActiveAlerts(
 }
 
 export function formatActiveSince(ts?: number): string {
-  if (!ts) return 'N/A';
-  return new Date(ts * 1000).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
+  return formatDateTime(ts, { withSeconds: true }) || 'N/A';
+}
+
+export function formatDate(ts?: number | null): string {
+  if (!ts || !Number.isFinite(ts)) return '';
+  return new Date(ts * 1000).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
   });
+}
+
+export function formatTime(ts?: number | null, opts?: { withSeconds?: boolean }): string {
+  if (!ts || !Number.isFinite(ts)) return '';
+  return new Date(ts * 1000).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    ...(opts?.withSeconds ? { second: '2-digit' as const } : {}),
+  });
+}
+
+export function formatDateTime(
+  ts?: number | null,
+  opts?: { withSeconds?: boolean },
+): string {
+  if (!ts || !Number.isFinite(ts)) return '';
+  return new Date(ts * 1000).toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    ...(opts?.withSeconds ? { second: '2-digit' as const } : {}),
+  });
+}
+
+export function isSameLocalDay(a?: number | null, b?: number | null): boolean {
+  if (!a || !b) return false;
+  const da = new Date(a * 1000);
+  const db = new Date(b * 1000);
+  return (
+    da.getFullYear() === db.getFullYear() &&
+    da.getMonth() === db.getMonth() &&
+    da.getDate() === db.getDate()
+  );
 }
 
 export function formatAlertEta(eta: unknown): string {

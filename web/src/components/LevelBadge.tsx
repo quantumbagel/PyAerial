@@ -1,11 +1,15 @@
 import type { FlightSummary, Zone } from '../api/types';
 import type { FlightSortField } from '../utils/flightData';
 import {
+  formatDate,
+  formatDateTime,
   formatDuration,
   formatFlightAlertSummary,
+  formatTime,
   formatZoneRule,
   isFiniteNumber,
   isFlightLive,
+  isSameLocalDay,
 } from '../utils/format';
 import { alertColorFor, getAccessibleBadgeTextColor } from '../utils/zoneColors';
 import { Badge, BadgeGroup } from './ui';
@@ -161,28 +165,24 @@ export function flightSortValueLabel(
 
 export function flightTimeLabel(flight: FlightSummary, sortField?: FlightSortField): string {
   const isLive = isFlightLive(flight);
-  const formatTime = (ts?: number) => {
-    if (!ts) return '';
-    return new Date(ts * 1000).toLocaleTimeString([], {
-      hour: 'numeric',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  };
+  const formatTs = (ts?: number) => (ts ? formatDateTime(ts) : '');
 
   if (sortField === 'first_seen') {
-    return formatTime(flight.start_time) || formatTime(flight.timestamp ?? flight.end_time);
+    return formatTs(flight.start_time) || formatTs(flight.timestamp ?? flight.end_time);
   }
 
   if (isLive) {
     const liveTime = flight.timestamp ?? flight.end_time ?? flight.start_time;
-    return formatTime(liveTime);
-  } else {
-    const startStr = formatTime(flight.start_time);
-    const endStr = formatTime(flight.end_time);
-    if (startStr && endStr) {
-      return `${startStr} : ${endStr}`;
-    }
-    return startStr || endStr || '';
+    return formatTs(liveTime);
   }
+
+  const start = flight.start_time;
+  const end = flight.end_time;
+  if (start && end) {
+    if (isSameLocalDay(start, end)) {
+      return `${formatDate(start)} · ${formatTime(start)} – ${formatTime(end)}`;
+    }
+    return `${formatDateTime(start)} : ${formatDateTime(end)}`;
+  }
+  return formatTs(start ?? end);
 }

@@ -4,6 +4,7 @@ import {
   formatActiveSince,
   formatAlertAltitude,
   formatAlertEta,
+  formatDateTime,
   formatEpisodeDuration,
   formatZoneRule,
   isAlertActive,
@@ -42,7 +43,7 @@ export function AlertTimeline({ alerts, activeAlertId, zones, alertColors, onSel
             : `${activatedStr} (${durationStr})`;
         const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
         const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-        const title = `${isEpisodeActive ? 'Active' : 'Ended'} episode · ${durationStr}\nActivated: ${alert.activated_at ? new Date(alert.activated_at * 1000).toLocaleString() : 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}${isEpisodeActive ? `\nETA: ${formatAlertEta(alert.eta)}` : ''}`;
+        const title = `${isEpisodeActive ? 'Active' : 'Ended'} episode · ${durationStr}\nActivated: ${formatDateTime(alert.activated_at) || 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}${isEpisodeActive ? `\nETA: ${formatAlertEta(alert.eta)}` : ''}`;
 
         return (
           <button

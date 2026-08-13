@@ -1,8 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
-import { isFlightLive } from '../utils/format';
-import { formatZoneRule } from '../utils/format';
+import { formatDateTime, formatZoneRule, isFlightLive } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight } from '../utils/planeIcon';
 import { zoneColorFor } from '../utils/zoneColors';
 import { COLOR_HEX } from '../utils/colors';
@@ -227,7 +226,7 @@ export function MapView({
         fillOpacity: 1.0,
       }).addTo(map);
       marker.bindTooltip(
-        `Time: ${new Date(selectedTelemetryPoint.timestamp * 1000).toLocaleTimeString()}<br/>Alt: ${selectedTelemetryPoint.altitude} m<br/>Speed: ${selectedTelemetryPoint.speed} km/h`,
+        `Time: ${formatDateTime(selectedTelemetryPoint.timestamp)}<br/>Alt: ${selectedTelemetryPoint.altitude} m<br/>Speed: ${selectedTelemetryPoint.speed} km/h`,
       );
       selectedTelemetryMarker.current = marker;
       map.panTo(pos);
