@@ -299,9 +299,6 @@ def flight_summary(
         "retained": doc.get("retained", False),
         "timestamp": timestamp,
     }
-    projection = doc.get("portal_projection")
-    if projection is not None:
-        summary["portal_projection"] = projection
     if alert_stats is not None:
         summary["alert_stats"] = alert_stats
     return summary
@@ -340,5 +337,4 @@ def app_config_payload(config: Config) -> dict[str, Any]:
             "longitude": config.home.longitude,
         },
         "remember_planes": config.tracking.remember_planes,
-        "projection_seconds": config.tracking.projection_seconds,
     }

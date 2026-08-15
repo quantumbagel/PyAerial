@@ -19,7 +19,6 @@ from shapely import Polygon
 
 from pyaerial.alerters import Alerter, create_alerter
 from pyaerial.calc import evaluate, geo
-from pyaerial.calc.projection import build_portal_projection
 from pyaerial.calc.motion import (
     ResolvedMotion,
     estimate_turn_rate_deg_s,
@@ -43,7 +42,6 @@ from pyaerial.constants import (
     STORE_INFO,
     STORE_LAT,
     STORE_LONG,
-    STORE_PORTAL_PROJECTION,
     STORE_RECV_DATA,
     STORE_VERT_SPEED,
 )
@@ -204,21 +202,12 @@ class PlaneCalculator:
         )
         self._smoothed_turn_rates[icao] = smoothed_turn
 
-        display_motion = resolve_motion(
-            self.config,
-            track_heading=final_heading,
-            track_speed_kph=final_speed,
-            turn_rate_deg_s=smoothed_turn,
-            kf=kf,
-            for_display=True,
-        )
         alert_motion = resolve_motion(
             self.config,
             track_heading=final_heading,
             track_speed_kph=final_speed,
             turn_rate_deg_s=smoothed_turn,
             kf=kf,
-            for_display=False,
         )
         plane["_alert_motion"] = alert_motion
 
@@ -231,11 +220,6 @@ class PlaneCalculator:
 
         callsign = self._resolve_callsign(plane)
         self._check_alerts(plane, current, alert_motion, callsign)
-        plane[STORE_PORTAL_PROJECTION] = build_portal_projection(
-            self.config,
-            current,
-            display_motion,
-        )
 
     def deactivate_plane(self, plane: dict) -> None:
         """Deactivate and clean up all active alerts for a plane being removed or expired."""

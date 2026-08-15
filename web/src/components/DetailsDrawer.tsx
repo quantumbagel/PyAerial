@@ -142,12 +142,11 @@ export function DetailsDrawer({
   const displayFlight = useMemo(() => {
     const base = flightDetail ?? flightSummary;
     if (!base) return null;
-    if (!flightSummary?.is_live || !flightSummary.portal_projection) {
+    if (!flightSummary?.is_live) {
       return base;
     }
     return {
       ...base,
-      portal_projection: flightSummary.portal_projection,
       latitude: flightSummary.latitude ?? base.latitude,
       longitude: flightSummary.longitude ?? base.longitude,
       heading: flightSummary.heading ?? base.heading,
@@ -295,15 +294,6 @@ export function DetailsDrawer({
                 <span className="ui-field-value" id="detail-heading">
                   {lastPoint ? formatHeading(lastPoint.heading) : 'N/A'}
                 </span>
-                {displayFlight?.portal_projection?.turn_rate_deg_s != null &&
-                  Math.abs(displayFlight.portal_projection.turn_rate_deg_s) >= 0.05 && (
-                  <>
-                    <span className="ui-field-label">Turn rate</span>
-                    <span className="ui-field-value" id="detail-turn-rate">
-                      {displayFlight.portal_projection.turn_rate_deg_s.toFixed(1)}°/s
-                    </span>
-                  </>
-                )}
                 <span className="ui-field-label">Latitude</span>
                 <span className="ui-field-value" id="detail-latitude">
                   {lastPoint?.latitude != null ? lastPoint.latitude.toFixed(5) : 'N/A'}

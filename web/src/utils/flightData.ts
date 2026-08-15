@@ -194,7 +194,6 @@ export function mergeLiveFlights(existing: FlightSummary[], incoming: FlightSumm
           country: newFlight.country || current.country,
           active_alerts: newFlight.active_alerts,
           alert_stats: newFlight.alert_stats,
-          portal_projection: newFlight.portal_projection ?? current.portal_projection,
           ...(useIncomingKinematics
             ? {
                 latitude: newFlight.latitude ?? current.latitude,

@@ -1,4 +1,4 @@
-"""Shared track motion estimates for map projection and geofence ETA."""
+"""Shared track motion estimates for geofence ETA."""
 
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ def estimate_turn_rate_deg_s(
     """
     Turn rate from heading change over ``elapsed_s``, smoothed over recent updates.
 
-    Small rates are snapped to zero so straight tracks stay straight on the map
-    and in curved ETA projection.
+    Small rates are snapped to zero so straight tracks stay straight
+    in curved ETA projection.
     """
     if elapsed_s <= 0:
         return 0.0 if prev_smoothed is None else prev_smoothed
@@ -46,7 +46,7 @@ def estimate_turn_rate_deg_s(
 
 @dataclass(frozen=True)
 class ResolvedMotion:
-    """Motion used for curved extrapolation (ETA + portal projection)."""
+    """Motion used for curved geofence ETA."""
 
     heading_deg: float
     speed_kph: float
@@ -60,19 +60,17 @@ def resolve_motion(
     track_speed_kph: float,
     turn_rate_deg_s: float,
     kf: KinematicKalmanFilter | None,
-    for_display: bool = False,
 ) -> ResolvedMotion:
     """
-    Build motion for curved dead reckoning / ETA.
+    Build motion for curved geofence ETA.
 
-    ``for_display=True`` uses track heading and speed only (stable map polyline).
-    Alerting uses Kalman velocity when ``tracking.use_kalman_eta`` is enabled.
+    Uses Kalman velocity when ``tracking.use_kalman_eta`` is enabled.
     Turn rate is always the shared smoothed track estimate.
     """
     heading = track_heading
     speed = max(0.0, track_speed_kph)
 
-    if not for_display and config.tracking.use_kalman_eta and kf is not None:
+    if config.tracking.use_kalman_eta and kf is not None:
         kalman_speed_mps = math.hypot(kf.vn, kf.ve)
         kalman_speed_kph = kalman_speed_mps * 3.6
         if kalman_speed_kph >= 5.0:

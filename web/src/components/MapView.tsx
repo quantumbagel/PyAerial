@@ -111,7 +111,6 @@ export function MapView({
   const markerState = useRef<Record<string, MarkerState>>({});
   const planePaths = useRef<Record<string, L.Polyline>>({});
   const planeAlertPaths = useRef<Record<string, L.Polyline[]>>({});
-  const planeProjectionTracks = useRef<Record<string, L.Polyline>>({});
   const zoneLayers = useRef<L.Layer[]>([]);
   const selectedTelemetryMarker = useRef<L.CircleMarker | null>(null);
   const onFollowDisabledRef = useRef(onFollowDisabled);
@@ -397,57 +396,6 @@ export function MapView({
       }
     });
   }, [pathCoords, pathTelemetry, pathAlerts, showAllPaths, filteredFlights, activeFlightId, flights]);
-
-  useEffect(() => {
-    const map = mapInstance.current;
-    if (!map) return;
-
-    const visibleProjectionIds = new Set<string>();
-    for (const flight of filteredFlights) {
-      if (!isFlightLive(flight) || !flight.portal_projection?.track_path?.length) continue;
-      if (flight.flight_id === activeFlightId || showAllPaths) {
-        visibleProjectionIds.add(flight.flight_id);
-      }
-    }
-
-    const removeLayer = (layers: Record<string, L.Polyline>, flightId: string) => {
-      const layer = layers[flightId];
-      if (layer) {
-        map.removeLayer(layer);
-        delete layers[flightId];
-      }
-    };
-
-    Object.keys(planeProjectionTracks.current).forEach((flightId) => {
-      if (!visibleProjectionIds.has(flightId)) {
-        removeLayer(planeProjectionTracks.current, flightId);
-      }
-    });
-
-    visibleProjectionIds.forEach((flightId) => {
-      const flight = flights.find((f) => f.flight_id === flightId);
-      const projection = flight?.portal_projection;
-      if (!projection?.track_path?.length) return;
-
-      const isSelected = flightId === activeFlightId;
-      const trackLatLngs = projection.track_path.map(([lat, lon]) => [lat, lon] as L.LatLngExpression);
-      const trackStyle: L.PolylineOptions = {
-        color: isSelected ? COLOR_HEX.accent : COLOR_HEX.default,
-        weight: isSelected ? 3 : 2,
-        opacity: isSelected ? 0.85 : 0.45,
-        dashArray: '10 8',
-        className: 'flight-projection-track',
-      };
-      if (planeProjectionTracks.current[flightId]) {
-        planeProjectionTracks.current[flightId].setLatLngs(trackLatLngs);
-        planeProjectionTracks.current[flightId].setStyle(trackStyle);
-      } else {
-        const line = L.polyline(trackLatLngs, trackStyle).addTo(map);
-        line.bindTooltip('Projected path (turn rate)');
-        planeProjectionTracks.current[flightId] = line;
-      }
-    });
-  }, [filteredFlights, flights, activeFlightId, showAllPaths]);
 
   return (
     <div id="map-container">

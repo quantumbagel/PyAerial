@@ -36,8 +36,6 @@ class TrackingConfig(_Strict):
     duplicate_packet_merging: float = Field(default=5, ge=0)
     use_kalman_eta: bool = False
     curved_projection: bool = False
-    projection_seconds: float = Field(default=120, gt=0)
-    projection_step_seconds: float = Field(default=2, gt=0)
 
 
 class LoggingConfig(_Strict):
