@@ -60,20 +60,8 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
         return None
 
     if typecode == -1:
-        try:
-            icao = pms_icao(msg)
-        except Exception:
-            return None
-        if not _valid_icao(icao):
-            return None
-        return ClassifiedMessage(
-            data={
-                STORE_INFO: {STORE_ICAO: icao},
-                STORE_RECV_DATA: {},
-                STORE_CALC_DATA: {},
-            },
-            typecode_category=CAT_UNKNOWN,
-        )
+        # Non-ADS-B / undecodable Mode S. Do not spawn a ghost plane.
+        return None
 
     try:
         icao = pms_icao(msg)

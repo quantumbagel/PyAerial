@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from typing import Any
 
 import pymongo
@@ -86,21 +87,31 @@ def build_telemetry_docs(
 class MongoStore:
     """MongoDB writer for retained completed flights only."""
 
-    def __init__(self, config: Config, polygons: dict[str, Polygon]):
+    def __init__(
+        self,
+        config: Config,
+        polygons: dict[str, Polygon],
+        *,
+        disabled: bool = False,
+    ):
         self.config = config
         self.polygons = polygons
         self.uri = config.database.uri
+        self.disabled = disabled
         self.client: pymongo.MongoClient | None = None
         self.db: pymongo.database.Database | None = None
-        self._connect()
+        self._last_connect_attempt = 0.0
+        self._reported_down = False
+        if not disabled:
+            self._connect()
 
     def _connect(self) -> None:
         try:
             self.client = pymongo.MongoClient(
                 self.uri,
-                serverSelectionTimeoutMS=500,
-                connectTimeoutMS=500,
-                socketTimeoutMS=500,
+                serverSelectionTimeoutMS=2000,
+                connectTimeoutMS=2000,
+                socketTimeoutMS=5000,
             )
             self.client.admin.command("ping")
             if self.config.database.name:
@@ -111,9 +122,21 @@ class MongoStore:
                 except Exception:
                     self.db = self.client.get_database("pyaerial")
             self._ensure_indexes()
-            log.info("Connected to MongoDB database '%s' at %s", self.db.name, self.uri)
+            if self._reported_down:
+                log.info(
+                    "Reconnected to MongoDB database '%s' at %s", self.db.name, self.uri
+                )
+            else:
+                log.info(
+                    "Connected to MongoDB database '%s' at %s", self.db.name, self.uri
+                )
+            self._reported_down = False
         except Exception:
-            log.info("MongoDB unavailable at %s; operating in offline mode.", self.uri)
+            if not self._reported_down:
+                log.info(
+                    "MongoDB unavailable at %s; operating in offline mode.", self.uri
+                )
+                self._reported_down = True
             self.client = None
             self.db = None
 
@@ -145,32 +168,51 @@ class MongoStore:
         )
 
     def _ensure_connected(self) -> bool:
+        if self.disabled:
+            return False
+        if self.client is None or self.db is None:
+            now = time.monotonic()
+            if now - self._last_connect_attempt >= _RECONNECT_DELAY:
+                self._last_connect_attempt = now
+                self._connect()
         if self.client is None or self.db is None:
             return False
         try:
             self.client.admin.command("ping")
             return True
         except (PyMongoError, AttributeError):
-            log.info("Lost MongoDB connection; operating in offline mode.")
+            if not self._reported_down:
+                log.info("Lost MongoDB connection; operating in offline mode.")
+                self._reported_down = True
             self.client = None
             self.db = None
             return False
 
     def finalize_plane(
         self, plane: dict, *, alerts: list[dict[str, Any]] | None = None
-    ) -> None:
-        """Persist a completed flight to Mongo if retention rules are met."""
-        if not self._ensure_connected():
-            return
-        assert self.db is not None
-        flight_id = flight_id_for_plane(plane)
+    ) -> bool:
+        """Persist a completed flight to Mongo if retention rules are met.
+
+        Returns True when it is safe to drop the live Redis copy: the flight
+        was written, was intentionally discarded, or persistence is disabled.
+        Returns False when the flight should have been written but Mongo was
+        unavailable — the caller must keep the live data and retry.
+        """
+        if self.disabled:
+            return True
         alert_docs = alerts or []
         retained = self._should_retain(plane, alert_docs)
-        if retained:
-            self._persist_completed_flight(plane, flight_id, alert_docs)
+        if not retained:
+            log.debug("Discarded uninteresting flight %s", flight_id_for_plane(plane))
+            return True
+        if not self._ensure_connected():
+            return False
+        assert self.db is not None
+        flight_id = flight_id_for_plane(plane)
+        if self._persist_completed_flight(plane, flight_id, alert_docs):
             log.debug("Retained completed flight %s", flight_id)
-        else:
-            log.debug("Discarded uninteresting flight %s", flight_id)
+            return True
+        return False
 
     def close(self) -> None:
         if self.client is not None:
@@ -179,8 +221,25 @@ class MongoStore:
             self.db = None
 
     def _should_retain(self, plane: dict, alerts: list[dict[str, Any]]) -> bool:
-        if alerts:
-            return True
+        rules_by_key: dict[tuple[str, str], Any] = {}
+        for zone_name, zone in self.config.zones.items():
+            for rule in zone.rules:
+                rules_by_key[(zone_name, rule.name)] = rule
+
+        for alert in alerts:
+            rule = rules_by_key.get((alert.get("zone", ""), alert.get("rule", "")))
+            if rule is None or not rule.retain:
+                continue
+            activated = alert.get("activated_at")
+            if activated is None:
+                continue
+            deactivated = alert.get("deactivated_at")
+            if deactivated is None:
+                deactivated = plane.get(STORE_INTERNAL, {}).get(
+                    STORE_MOST_RECENT_PACKET, activated
+                )
+            if (deactivated - activated) >= rule.dwell_seconds:
+                return True
 
         recv = plane.get(STORE_RECV_DATA, {})
         calc = plane.get(STORE_CALC_DATA, {})
@@ -194,7 +253,9 @@ class MongoStore:
         for zone_name, zone in self.config.zones.items():
             if not any(rule.retain for rule in zone.rules):
                 continue
-            polygon = self.polygons[zone_name]
+            polygon = self.polygons.get(zone_name)
+            if polygon is None:
+                continue
             for rule in zone.rules:
                 if not rule.retain:
                     continue
@@ -240,7 +301,7 @@ class MongoStore:
 
     def _persist_completed_flight(
         self, plane: dict, flight_id: str, alerts: list[dict[str, Any]]
-    ) -> None:
+    ) -> bool:
         assert self.db is not None
         info = plane.get(STORE_INFO, {})
         internal = plane[STORE_INTERNAL]
@@ -291,9 +352,9 @@ class MongoStore:
                 upsert=True,
             )
             if telemetry_docs:
-                self.db.get_collection("telemetry").insert_many(
-                    telemetry_docs, ordered=False
-                )
+                telemetry_col = self.db.get_collection("telemetry")
+                telemetry_col.delete_many({"flight_id": flight_id})
+                telemetry_col.insert_many(telemetry_docs, ordered=False)
             if alert_docs:
                 alerts_col = self.db.get_collection("alerts")
                 for adoc in alert_docs:
@@ -302,5 +363,7 @@ class MongoStore:
                         adoc,
                         upsert=True,
                     )
+            return True
         except PyMongoError as exc:
             log.error("Failed to persist completed flight %s: %s", flight_id, exc)
+            return False

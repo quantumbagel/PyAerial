@@ -28,7 +28,7 @@ services:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
     command: pyaerial web -c /opt/PyAerial/config.yaml
   mongodb:
-    image: mongo:latest
+    image: mongo:7
     container_name: pyaerial_database
     restart: always
     ports:

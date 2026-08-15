@@ -12,7 +12,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from pyaerial.constants import LOGGING_LEVELS
+from pyaerial.constants import LOGGING_LEVELS, WHEN_FIELDS
 
 _HEX_COLOR_RE = r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
 
@@ -126,6 +126,19 @@ class RuleConfig(_Strict):
     def _validate_color(cls, value: str | None) -> str | None:
         if value is not None and not re.match(_HEX_COLOR_RE, value):
             raise ValueError("color must be a hex value like #rrggbb")
+        return value
+
+    @field_validator("when")
+    @classmethod
+    def _validate_when_fields(
+        cls, value: dict[str, FieldConstraint]
+    ) -> dict[str, FieldConstraint]:
+        unknown = sorted(name for name in value if name not in WHEN_FIELDS)
+        if unknown:
+            raise ValueError(
+                f"unknown when field(s): {', '.join(unknown)}; "
+                f"valid: {', '.join(sorted(WHEN_FIELDS))}"
+            )
         return value
 
 

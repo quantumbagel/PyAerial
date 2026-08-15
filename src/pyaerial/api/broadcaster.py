@@ -23,9 +23,15 @@ _LIVE_POLL_INTERVAL = 1.0
 class LiveBroadcaster:
     """Poll the live store and push updates to connected WebSocket clients."""
 
-    def __init__(self, live_store: LiveStore | None, aircraft_db: AircraftDB | None):
+    def __init__(
+        self,
+        live_store: LiveStore | None,
+        aircraft_db: AircraftDB | None,
+        db: Any | None = None,
+    ):
         self.live_store = live_store
         self.aircraft_db = aircraft_db
+        self.db = db
         self._clients: dict[WebSocket, float] = {}
         self._task: asyncio.Task | None = None
         self._pending_lookups: set[str] = set()
@@ -64,7 +70,7 @@ class LiveBroadcaster:
             if self.live_store
             else []
         )
-        stats = get_stats(self.live_store, None, self.aircraft_db)
+        stats = get_stats(self.live_store, self.db, self.aircraft_db)
         await websocket.send_json(
             {"type": "flights", "flights": sanitize_for_json(flights)}
         )
@@ -121,7 +127,7 @@ class LiveBroadcaster:
             if self.live_store
             else []
         )
-        stats = get_stats(self.live_store, None, self.aircraft_db)
+        stats = get_stats(self.live_store, self.db, self.aircraft_db)
 
         flights_sig = json.dumps(
             sanitize_for_json(flights), sort_keys=True, default=str

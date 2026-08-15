@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("pyaerial.calc.plane")
 
 _ETA_HORIZON = 10_000
+_ADS_B_TRUST_SECONDS = 10.0
 _ALERT_HOOK_ACTIVATE = "activate"
 _ALERT_HOOK_DEACTIVATE = "deactivate"
 _ALERT_HOOK_WHILE_ACTIVE = "while_active"
@@ -94,20 +95,24 @@ class PlaneCalculator:
         self._alerters.clear()
         self._executor.shutdown(wait=False)
         self._alert_executor.shutdown(wait=False)
+        self._kalman_filters.clear()
+        self._smoothed_turn_rates.clear()
+        self._alert_state.clear()
 
     def calculate_all(
         self, planes: dict[str, dict], dirty_icaos: set[str] | None = None
     ) -> None:
-        if dirty_icaos is not None:
-            # Calculate for dirty planes + active alert planes (for periodic checks)
-            active_alert_icaos = {key[0] for key in self._alert_state}
-            target_icaos = dirty_icaos | active_alert_icaos
-            for icao, plane in planes.items():
-                if icao.lower() in target_icaos or icao.upper() in target_icaos:
-                    self.calculate_plane(plane)
-        else:
-            for plane in planes.values():
-                self.calculate_plane(plane)
+        # Always evaluate every plane with a position so ETA can coast during
+        # ADS-B gaps. dirty_icaos is kept for API compatibility.
+        _ = dirty_icaos
+        for plane in planes.values():
+            self.calculate_plane(plane)
+
+    def forget_motion(self, icao: str) -> None:
+        """Drop Kalman / turn-rate state so the next flight of this ICAO starts clean."""
+        key = icao.lower()
+        self._kalman_filters.pop(key, None)
+        self._smoothed_turn_rates.pop(key, None)
 
     def calculate_plane(self, plane: dict) -> None:
         recv = plane.get(STORE_RECV_DATA, {})
@@ -116,28 +121,34 @@ class PlaneCalculator:
 
         lat_series = recv[STORE_LAT]
         lon_series = recv[STORE_LONG]
-        if len(lat_series) < 2:
+        if not lat_series or not lon_series:
             return
 
-        if len(lat_series) < self.backdate:
-            previous_lat = lat_series[0]
-            previous_lon = lon_series[0]
+        current_lat = lat_series[-1]
+        current_lon = (
+            get_latest(STORE_RECV_DATA, STORE_LONG, plane, current_lat.time)
+            or lon_series[-1]
+        )
+        current = (current_lat.value, current_lon.value)
+        current_time = current_lat.time
+
+        if len(lat_series) < 2:
+            speed = 0.0
+            heading = 0.0
+            previous_time = current_time
         else:
-            previous_lat = lat_series[-self.backdate]
+            if len(lat_series) < self.backdate:
+                previous_lat = lat_series[0]
+            else:
+                previous_lat = lat_series[-self.backdate]
             previous_lon = (
                 get_latest(STORE_RECV_DATA, STORE_LONG, plane, previous_lat.time)
                 or lon_series[0]
             )
-
-        previous = (previous_lat.value, previous_lon.value)
-        previous_time = previous_lat.time
-        current_lat = lat_series[-1]
-        current_lon = lon_series[-1]
-        current = (current_lat.value, current_lon.value)
-        current_time = current_lat.time
-
-        speed = geo.calculate_speed(previous, current, previous_time, current_time)
-        heading = geo.calculate_heading(previous, current)
+            previous = (previous_lat.value, previous_lon.value)
+            previous_time = previous_lat.time
+            speed = geo.calculate_speed(previous, current, previous_time, current_time)
+            heading = geo.calculate_heading(previous, current)
 
         final_speed, speed_time = self._choose_speed(plane, speed, current_time)
         final_heading = self._choose_heading(plane, heading, current_time)
@@ -159,17 +170,16 @@ class PlaneCalculator:
             cos_val = alpha * math.cos(rad_current) + (1.0 - alpha) * math.cos(rad_prev)
             final_heading = (math.degrees(math.atan2(sin_val, cos_val)) + 360.0) % 360.0
 
-        # Run Kalman filter update (use consecutive fix interval, not backdate window)
+        # Run Kalman filter update only when a new fix arrives.
         icao = plane[STORE_INFO][STORE_ICAO].lower()
         kf = self._kalman_filters.get(icao)
-        prev_fix = lat_series[-2]
-        dt_kf = max(0.0, current_time - prev_fix.time)
-        dt_kf = min(dt_kf, 30.0)
         if kf is None:
             kf = KinematicKalmanFilter(current[0], current[1])
             self._kalman_filters[icao] = kf
             kf.last_update_time = current_time
-        else:
+        elif current_time > kf.last_update_time:
+            prev_fix = lat_series[-2] if len(lat_series) >= 2 else current_lat
+            dt_kf = min(max(0.0, current_time - prev_fix.time), 30.0)
             kf.update(current[0], current[1], dt_kf)
             kf.last_update_time = current_time
 
@@ -219,7 +229,21 @@ class PlaneCalculator:
         )
 
         callsign = self._resolve_callsign(plane)
-        self._check_alerts(plane, current, alert_motion, callsign)
+
+        # Coast the last fix forward to "now" so ETA stays current during gaps.
+        now = time.time()
+        age = min(max(0.0, now - current_time), self.config.tracking.remember_planes)
+        alert_position = current
+        if age > 0.5 and alert_motion.speed_kph > 0:
+            alert_position = geo.dead_reckon_curved(
+                current,
+                alert_motion.heading_deg,
+                alert_motion.speed_kph,
+                alert_motion.turn_rate_deg_s,
+                age,
+            )
+
+        self._check_alerts(plane, alert_position, alert_motion, callsign)
 
     def deactivate_plane(self, plane: dict) -> None:
         """Deactivate and clean up all active alerts for a plane being removed or expired."""
@@ -229,6 +253,8 @@ class PlaneCalculator:
         icao = info[STORE_ICAO].lower()
         stale_keys = [k for k in self._alert_state if k[0] == icao]
         if not stale_keys:
+            self.forget_motion(icao)
+            plane["active_alerts"] = []
             return
 
         now = time.time()
@@ -281,6 +307,7 @@ class PlaneCalculator:
                     active=False,
                 )
         plane["active_alerts"] = []
+        self.forget_motion(icao)
 
     def _choose_speed(
         self, plane: dict, computed: float, current_time: float
@@ -289,7 +316,9 @@ class PlaneCalculator:
         if STORE_HORIZ_SPEED not in recv:
             return computed, current_time
         reported = recv[STORE_HORIZ_SPEED][-1]
-        if current_time - reported.time < self.backdate:
+        # Prefer the last ADS-B velocity if it is fresher than a few seconds.
+        # ``backdate_packets`` is a sample count, not a time window.
+        if current_time - reported.time < _ADS_B_TRUST_SECONDS:
             return reported.value, reported.time
         return computed, current_time
 
@@ -300,7 +329,7 @@ class PlaneCalculator:
         if STORE_HEADING not in recv:
             return computed
         reported = recv[STORE_HEADING][-1]
-        if current_time - reported.time < self.backdate:
+        if current_time - reported.time < _ADS_B_TRUST_SECONDS:
             return reported.value
         return computed
 
@@ -336,6 +365,9 @@ class PlaneCalculator:
                     country = record.get("country") or ""
                     aircraft_type = record.get("typecode") or ""
 
+            live_cs = plane[STORE_INFO].get(STORE_CALLSIGN)
+            if live_cs:
+                callsign = live_cs
             plane[STORE_INFO][STORE_CALLSIGN] = callsign or ""
             plane[STORE_INFO]["model"] = model
             plane[STORE_INFO]["owner"] = owner
@@ -397,7 +429,8 @@ class PlaneCalculator:
 
             resolver = evaluate.make_resolver(plane, eta, polygon, position)
             for rule in zone.rules:
-                # --- Improvement 4: predictive evaluation ---
+                # Early warning: match if the rule is true now OR at the
+                # predicted future state (not predicted-only).
                 if rule.predict_seconds is not None and rule.predict_seconds > 0:
                     pred_resolver = evaluate.make_predicted_resolver(
                         plane,
@@ -409,7 +442,10 @@ class PlaneCalculator:
                         rule.predict_seconds,
                         curved=use_curved,
                     )
-                    if not evaluate.when_passes(rule.when, pred_resolver):
+                    if not (
+                        evaluate.when_passes(rule.when, resolver)
+                        or evaluate.when_passes(rule.when, pred_resolver)
+                    ):
                         continue
                 else:
                     if not evaluate.when_passes(rule.when, resolver):
@@ -427,7 +463,7 @@ class PlaneCalculator:
                 alert_id = f"{flight_id}:{zone_name}:{rule.name}:{int(now)}"
                 state = {
                     "activated_at": now,
-                    "last_periodic": 0.0,
+                    "last_periodic": now,
                     "alert_id": alert_id,
                 }
                 self._alert_state[key] = state
@@ -595,7 +631,16 @@ class PlaneCalculator:
     ) -> None:
         for action in actions:
             alerter = self._get_alerter(action.method, action.options)
-            self._alert_executor.submit(alerter.alert, meta, payload)
+            if alerter is None:
+                continue
+            self._alert_executor.submit(self._safe_alert, alerter, meta, payload)
+
+    @staticmethod
+    def _safe_alert(alerter: Alerter, meta: dict, payload: dict) -> None:
+        try:
+            alerter.alert(meta, payload)
+        except Exception:
+            log.exception("Alerter %s failed", getattr(alerter, "method", alerter))
 
     def _on_activate(
         self,
@@ -708,8 +753,12 @@ class PlaneCalculator:
         payload = self._build_payload(plane, position)
         self._run_actions(while_active.actions, meta, payload)
 
-    def _get_alerter(self, method: str, arguments: dict) -> Alerter:
+    def _get_alerter(self, method: str, arguments: dict) -> Alerter | None:
         key = (method, str(sorted(arguments.items())))
         if key not in self._alerters:
-            self._alerters[key] = create_alerter(method, arguments)
+            try:
+                self._alerters[key] = create_alerter(method, arguments)
+            except Exception:
+                log.exception("Could not create alerter %r; alert dropped", method)
+                return None
         return self._alerters[key]

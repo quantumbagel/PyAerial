@@ -171,6 +171,7 @@ export function DetailsDrawer({
           variant="ghost"
           className="drawer-close-btn"
           title="Close"
+          aria-label="Close aircraft details"
           onClick={onClose}
         >
           &times;
@@ -200,7 +201,15 @@ export function DetailsDrawer({
           <>
             {hasPhoto && photoUrl && (
               <div id="detail-photo-container">
-                <img id="detail-photo" src={photoUrl} alt="Aircraft photo" />
+                <img
+                  id="detail-photo"
+                  src={photoUrl}
+                  alt={rawCallsign ? `Photo of ${rawCallsign}` : 'Aircraft photo'}
+                  onError={(event) => {
+                    const wrap = event.currentTarget.closest('#detail-photo-container');
+                    if (wrap instanceof HTMLElement) wrap.style.display = 'none';
+                  }}
+                />
                 <div className="photo-gradient-bottom">
                   <span>
                     Photo by{' '}
@@ -284,23 +293,27 @@ export function DetailsDrawer({
                 )}
                 <span className="ui-field-label">Altitude</span>
                 <span className="ui-field-value" id="detail-altitude">
-                  {lastPoint ? formatAltitude(lastPoint.altitude) : 'N/A'}
+                  {formatAltitude(lastPoint?.altitude ?? displayFlight?.altitude)}
                 </span>
                 <span className="ui-field-label">Speed</span>
                 <span className="ui-field-value" id="detail-speed">
-                  {lastPoint ? formatSpeed(lastPoint.speed) : 'N/A'}
+                  {formatSpeed(lastPoint?.speed ?? displayFlight?.speed)}
                 </span>
                 <span className="ui-field-label">Heading</span>
                 <span className="ui-field-value" id="detail-heading">
-                  {lastPoint ? formatHeading(lastPoint.heading) : 'N/A'}
+                  {formatHeading(lastPoint?.heading ?? displayFlight?.heading)}
                 </span>
                 <span className="ui-field-label">Latitude</span>
                 <span className="ui-field-value" id="detail-latitude">
-                  {lastPoint?.latitude != null ? lastPoint.latitude.toFixed(5) : 'N/A'}
+                  {(lastPoint?.latitude ?? displayFlight?.latitude) != null
+                    ? (lastPoint?.latitude ?? displayFlight?.latitude)!.toFixed(5)
+                    : 'N/A'}
                 </span>
                 <span className="ui-field-label">Longitude</span>
                 <span className="ui-field-value" id="detail-longitude">
-                  {lastPoint?.longitude != null ? lastPoint.longitude.toFixed(5) : 'N/A'}
+                  {(lastPoint?.longitude ?? displayFlight?.longitude) != null
+                    ? (lastPoint?.longitude ?? displayFlight?.longitude)!.toFixed(5)
+                    : 'N/A'}
                 </span>
               </div>
             </div>

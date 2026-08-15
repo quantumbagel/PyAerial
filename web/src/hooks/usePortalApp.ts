@@ -145,6 +145,8 @@ export function usePortalApp() {
       const icao = (flight.icao || '').toLowerCase();
       const model = (flight.model || '').toLowerCase();
       const aircraftType = (flight.aircraft_type || '').toLowerCase();
+      const owner = (flight.owner || '').toLowerCase();
+      const flightId = (flight.flight_id || '').toLowerCase();
       const activeAlertText = (flight.active_alerts ?? [])
         .map((a) => `${a.zone} ${a.rule}`)
         .join(' ')
@@ -154,6 +156,8 @@ export function usePortalApp() {
         icao.includes(q) ||
         model.includes(q) ||
         aircraftType.includes(q) ||
+        owner.includes(q) ||
+        flightId.includes(q) ||
         activeAlertText.includes(q)
       );
     });

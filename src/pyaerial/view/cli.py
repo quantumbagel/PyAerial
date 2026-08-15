@@ -42,6 +42,9 @@ live      - start live flight display
 """.strip()
 
 
+_VIEW_DB_NAME: str | None = None
+
+
 def _get_mongo_db(
     client: pymongo.MongoClient | None,
 ) -> pymongo.database.Database | None:
@@ -50,12 +53,14 @@ def _get_mongo_db(
     try:
         if hasattr(client, "admin"):
             client.admin.command("ping")
-        return client.get_default_database()
-    except Exception:
+        if _VIEW_DB_NAME:
+            return client.get_database(_VIEW_DB_NAME)
         try:
-            return client.get_database("pyaerial")
+            return client.get_default_database()
         except Exception:
-            return None
+            return client.get_database("pyaerial")
+    except Exception:
+        return None
 
 
 def run_view(
@@ -65,7 +70,9 @@ def run_view(
     mock: bool = False,
 ) -> None:
     """Run interactive flight viewer command-line session."""
+    global _VIEW_DB_NAME
     config = load_config(config_path)
+    _VIEW_DB_NAME = config.database.name
     aircraft_db = AircraftDB(aircraft_db_path)
     live_store = get_live_store(config, mock=mock, aircraft_db=aircraft_db)
 
@@ -104,6 +111,11 @@ def run_view(
             "live",
         }:
             print(f"[err] Invalid verb: {verb}")
+            last_reset = False
+            continue
+
+        if verb in {"plane", "history"}:
+            print(f"[err] '{verb}' is not a command. Try 'list planes' or 'help'.")
             last_reset = False
             continue
 

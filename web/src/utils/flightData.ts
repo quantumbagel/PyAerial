@@ -250,13 +250,13 @@ export function applyTelemetryPoint(
     const idx = next.indexOf(flight);
     next[idx] = {
       ...flight,
-      latitude: point.latitude,
-      longitude: point.longitude,
-      altitude: point.altitude,
-      speed: point.speed,
-      heading: point.heading,
-      timestamp: point.timestamp,
-      end_time: point.timestamp,
+      latitude: point.latitude ?? flight.latitude,
+      longitude: point.longitude ?? flight.longitude,
+      altitude: point.altitude ?? flight.altitude,
+      speed: point.speed ?? flight.speed,
+      heading: point.heading ?? flight.heading,
+      timestamp: point.timestamp ?? flight.timestamp,
+      end_time: point.timestamp ?? flight.end_time,
       active_alerts: point.active_alerts ?? flight.active_alerts,
       is_live: true,
     };

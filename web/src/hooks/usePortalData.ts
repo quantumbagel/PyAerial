@@ -55,7 +55,7 @@ export function usePortalData({
   const [isLoadingAlerts, setIsLoadingAlerts] = useState(true);
   const [flightsError, setFlightsError] = useState<string | null>(null);
   const [alertsError, setAlertsError] = useState<string | null>(null);
-  const [wsConnected, setWsConnected] = useState(true);
+  const [wsConnected, setWsConnected] = useState(false);
 
   const hasMoreAlerts = useRef(true);
   const isFetchingAlerts = useRef(false);
@@ -125,7 +125,9 @@ export function usePortalData({
         return;
       }
       setFlightsData(sortFlights(flights));
-      if (!isFetchingAlerts.current) {
+      // Do not rewind infinite-scroll pagination. Only seed / refresh the
+      // first page when the user has not loaded further pages.
+      if (!isFetchingAlerts.current && alertsFetchedCount.current <= ALERTS_LIMIT) {
         setAlertsData(dedupeAlerts(alerts));
         alertsFetchedCount.current = alerts.length;
         hasMoreAlerts.current = alerts.length >= ALERTS_LIMIT;
@@ -371,7 +373,6 @@ export function usePortalData({
             const selectedPoints = validPoints.filter((p) => p.flight_id === flightId);
             if (selectedPoints.length > 0) {
               appendSelectedTelemetryRef.current(selectedPoints);
-              loadFlightAlertsRef.current(flightId, 'live', true);
             }
           }
 

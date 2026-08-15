@@ -79,8 +79,71 @@ def load_config(
     except ValidationError as exc:
         raise ConfigError(_format_validation_error(config_path, exc)) from exc
 
+    _validate_cross_references(config, config_path)
+
     log.debug("Loaded configuration from %s", config_path)
     return config
+
+
+def _validate_cross_references(config: Config, path: Path) -> None:
+    """Check receiver types, alerter methods, and webhook options."""
+    from pyaerial.alerters import available_alerters
+    from pyaerial.receivers import available_receivers
+
+    known_receivers = set(available_receivers())
+    unknown_receivers = [
+        f"{name} ({cfg.type})"
+        for name, cfg in config.receivers.items()
+        if cfg.type not in known_receivers
+    ]
+    if unknown_receivers:
+        raise ConfigError(
+            f"configuration file {path} is invalid:\n"
+            f"  - receivers: unknown type(s): {', '.join(unknown_receivers)}; "
+            f"available: {', '.join(sorted(known_receivers))}"
+        )
+
+    known_alerters = set(available_alerters())
+    problems: list[str] = []
+    for zone_name, zone in config.zones.items():
+        for rule in zone.rules:
+            actions = list(rule.on_activate) + list(rule.on_deactivate)
+            if rule.while_active is not None:
+                actions.extend(rule.while_active.actions)
+            for action in actions:
+                loc = f"zones.{zone_name}.rules.{rule.name}"
+                if action.method not in known_alerters:
+                    problems.append(
+                        f"{loc}: unknown alerter {action.method!r}; "
+                        f"available: {', '.join(sorted(known_alerters))}"
+                    )
+                    continue
+                if action.method == "webhook":
+                    url = action.options.get("url")
+                    if not url:
+                        problems.append(f"{loc}: webhook action requires options.url")
+                    elif not _webhook_url_allowed(str(url)):
+                        problems.append(
+                            f"{loc}: webhook url must be https "
+                            f"(http allowed only for localhost): {url}"
+                        )
+                if action.method == "kafka" and "server" not in action.options:
+                    problems.append(f"{loc}: kafka action requires options.server")
+    if problems:
+        lines = [f"configuration file {path} is invalid:"]
+        lines.extend(f"  - {item}" for item in problems)
+        raise ConfigError("\n".join(lines))
+
+
+def _webhook_url_allowed(url: str) -> bool:
+    lowered = url.strip().lower()
+    if lowered.startswith("https://"):
+        return True
+    if lowered.startswith("http://localhost") or lowered.startswith(
+        "http://127.0.0.1"
+    ):
+        return True
+    return False
 
 
 def _format_validation_error(path: Path, exc: ValidationError) -> str:

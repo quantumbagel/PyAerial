@@ -19,6 +19,8 @@ def get_live_store(
         return MockStore(aircraft_db=aircraft_db)
     live_store = RedisLiveStore(config.database.redis_uri)
     if live_store.client is None:
-        log.info("Redis unavailable, using mock store for live data display.")
-        return MockStore(aircraft_db=aircraft_db)
+        log.warning(
+            "Redis unavailable at %s; live display will be empty until it reconnects.",
+            config.database.redis_uri,
+        )
     return live_store

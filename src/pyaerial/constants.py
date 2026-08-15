@@ -7,6 +7,7 @@ schema (:mod:`pyaerial.config`) rather than here.
 """
 
 import operator
+import os
 from pathlib import Path
 
 # --- Top-level buckets stored per plane ---------------------------------------
@@ -54,7 +55,31 @@ CONFIG_COMP_FUNCTIONS = {
 LOGGING_LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
 
 # --- Defaults -----------------------------------------------------------------
-DEFAULT_CONFIG_FILE = "config.yaml"
+DEFAULT_CONFIG_FILE = os.environ.get("PYAERIAL_CONFIG", "config.yaml")
+# constants.py lives at src/pyaerial/constants.py → project root is two parents up.
 DEFAULT_AIRCRAFT_DB = str(
-    (Path(__file__).resolve().parent / ".." / ".." / ".." / "aircraft.db").resolve()
+    (Path(__file__).resolve().parent.parent.parent / "aircraft.db").resolve()
+)
+
+# Names accepted in a zone rule's ``when`` block (canonical + aliases).
+WHEN_FIELDS = frozenset(
+    {
+        STORE_HORIZ_SPEED,
+        "horizontal_speed",
+        STORE_HEADING,
+        "direction",
+        STORE_ALT,
+        "alt",
+        STORE_VERT_SPEED,
+        "vert_speed",
+        STORE_LAT,
+        "lat",
+        STORE_LONG,
+        "lon",
+        "long",
+        STORE_DISTANCE,
+        "dist",
+        "proximity",
+        ALERT_CAT_ETA,
+    }
 )

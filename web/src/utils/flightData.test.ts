@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FlightSummary } from '../api/types';
-import { sortFlightsBy } from './flightData';
+import { applyTelemetryPoint, sortFlightsBy } from './flightData';
 
 function flight(overrides: Partial<FlightSummary>): FlightSummary {
   return {
@@ -61,5 +61,29 @@ describe('sortFlightsBy alerts', () => {
 
     const sorted = sortFlightsBy([older, newer], 'alerts', 'desc');
     expect(sorted.map((f) => f.flight_id)).toEqual(['new', 'old']);
+  });
+});
+
+describe('applyTelemetryPoint', () => {
+  it('does not wipe last-known altitude/speed/heading when the point omits them', () => {
+    const existing = flight({
+      flight_id: 'live_1',
+      is_live: true,
+      latitude: 35.7,
+      longitude: -78.7,
+      altitude: 400,
+      speed: 180,
+      heading: 90,
+    });
+    const next = applyTelemetryPoint([existing], {
+      flight_id: 'live_1',
+      timestamp: 300,
+      latitude: 35.71,
+      longitude: -78.71,
+    });
+    expect(next[0].altitude).toBe(400);
+    expect(next[0].speed).toBe(180);
+    expect(next[0].heading).toBe(90);
+    expect(next[0].latitude).toBe(35.71);
   });
 });

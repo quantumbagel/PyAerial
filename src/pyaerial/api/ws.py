@@ -72,7 +72,12 @@ def handle_ws_request(
         skip_val = params.get("skip")
         skip = int(skip_val) if skip_val is not None else 0
         active_only_val = params.get("active_only")
-        active_only = bool(active_only_val) if active_only_val is not None else None
+        if active_only_val is None:
+            active_only = None
+        elif isinstance(active_only_val, str):
+            active_only = active_only_val.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            active_only = bool(active_only_val)
         return get_alerts(
             view,
             since=since,

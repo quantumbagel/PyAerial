@@ -162,6 +162,10 @@ class Tracker:
                 series = recv.setdefault(field, [])
                 if not series or series[-1].value != datum.value:
                     series.append(datum)
+                elif timestamp > series[-1].time:
+                    # Same value, newer time: keep the sample current so a
+                    # stopped aircraft ages to speed 0 instead of freezing.
+                    series[-1].time = timestamp
 
         internal = plane.setdefault(
             STORE_INTERNAL,

@@ -30,10 +30,13 @@ Resolver = Callable[[str], float | None]
 _RECV_FIELDS = {STORE_LAT, STORE_LONG, STORE_ALT, STORE_VERT_SPEED}
 _CALC_FIELDS = {STORE_HORIZ_SPEED, STORE_HEADING}
 _PROXIMITY_KEY = "_proximity"
+_HEADING_FIELDS = {STORE_HEADING, "heading", "direction"}
 
 _FIELD_ALIASES = {
     "speed": STORE_HORIZ_SPEED,
+    "horizontal_speed": STORE_HORIZ_SPEED,
     "heading": STORE_HEADING,
+    "direction": STORE_HEADING,
     "alt": STORE_ALT,
     "altitude": STORE_ALT,
     "vert_speed": STORE_VERT_SPEED,
@@ -48,6 +51,22 @@ _FIELD_ALIASES = {
     "proximity": _PROXIMITY_KEY,
     "eta": ALERT_CAT_ETA,
 }
+
+
+def _heading_in_range(value: float, minimum: float | None, maximum: float | None) -> bool:
+    """True if ``value`` (degrees) lies in the (possibly wrapping) heading window."""
+    heading = value % 360.0
+    if minimum is not None and maximum is not None:
+        lo = minimum % 360.0
+        hi = maximum % 360.0
+        if lo <= hi:
+            return lo <= heading <= hi
+        return heading >= lo or heading <= hi
+    if minimum is not None:
+        return heading >= (minimum % 360.0)
+    if maximum is not None:
+        return heading <= (maximum % 360.0)
+    return True
 
 
 def make_resolver(
@@ -84,6 +103,10 @@ def when_passes(when: dict[str, FieldConstraint], resolver: Resolver) -> bool:
         value = resolver(field)
         if value is None:
             return False
+        if field in _HEADING_FIELDS or _FIELD_ALIASES.get(field) == STORE_HEADING:
+            if not _heading_in_range(value, spec.minimum, spec.maximum):
+                return False
+            continue
         for ctype, threshold in spec.as_pairs().items():
             if not CONFIG_COMP_FUNCTIONS[ctype](value, threshold):
                 return False

@@ -39,14 +39,24 @@ class _ReceiverHandle:
 class Engine:
     """Orchestrates receivers, tracking, calculations, alerting, and persistence."""
 
-    def __init__(self, config: Config, *, aircraft_db_path: str = DEFAULT_AIRCRAFT_DB):
+    def __init__(
+        self,
+        config: Config,
+        *,
+        aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
+        isolated: bool = False,
+    ):
         self.config = config
+        self.isolated = isolated
         self.tracker = Tracker(config)
         self.polygons: dict[str, Polygon] = build_polygons(config.zones)
         self.aircraft_db = AircraftDB(aircraft_db_path)
-        self.live_store = RedisLiveStore(config.database.redis_uri)
-        self.live_store.clear_all()
-        self.mongo_store = MongoStore(config, self.polygons)
+        self.live_store = RedisLiveStore(
+            config.database.redis_uri, memory_only=isolated
+        )
+        if not isolated:
+            self.live_store.clear_all()
+        self.mongo_store = MongoStore(config, self.polygons, disabled=isolated)
         self.calculator = PlaneCalculator(
             config, self.polygons, self.aircraft_db, self.live_store
         )
@@ -55,6 +65,7 @@ class Engine:
         self._running = False
         self._shutdown = threading.Event()
         self._shutdown_done = False
+        self._pending_finalize: list[dict] = []
 
     def start_receivers(self) -> None:
         for name, receiver_cfg in self.config.receivers.items():
@@ -163,6 +174,7 @@ class Engine:
                     for plane in removed:
                         self._finalize_plane(plane)
                     log.debug("Expired %d plane(s): %s", len(expired), expired)
+                self._retry_pending_finalizes()
 
                 summary = self.tracker.top_planes_summary()
                 status = f"processed {processed} msg(s). " if processed else ""
@@ -207,6 +219,7 @@ class Engine:
         for plane in list(self.tracker.planes.values()):
             self._finalize_plane(plane)
         self.tracker.planes.clear()
+        self._retry_pending_finalizes()
 
         self.calculator.close()
         self.live_store.close()
@@ -215,10 +228,35 @@ class Engine:
         log.info("Shutdown complete")
 
     def _finalize_plane(self, plane: dict) -> None:
+        """Deactivate alerts, persist to Mongo, then drop the live Redis copy.
+
+        Redis is only popped after Mongo accepts the write (or the flight is
+        intentionally not retained) so a Mongo outage cannot lose history.
+        """
         self.calculator.deactivate_plane(plane)
         flight_id = flight_id_for_plane(plane)
-        redis_data = self.live_store.pop_flight(flight_id)
-        self.mongo_store.finalize_plane(plane, alerts=redis_data.get("alerts", []))
+        alerts = self.live_store.get_alerts(flight_id=flight_id, active_only=False)
+        if self.mongo_store.finalize_plane(plane, alerts=alerts):
+            self.live_store.pop_flight(flight_id)
+        else:
+            log.warning(
+                "Deferred persist for %s; keeping live data until Mongo is back",
+                flight_id,
+            )
+            self._pending_finalize.append(plane)
+
+    def _retry_pending_finalizes(self) -> None:
+        if not self._pending_finalize:
+            return
+        still: list[dict] = []
+        for plane in self._pending_finalize:
+            flight_id = flight_id_for_plane(plane)
+            alerts = self.live_store.get_alerts(flight_id=flight_id, active_only=False)
+            if self.mongo_store.finalize_plane(plane, alerts=alerts):
+                self.live_store.pop_flight(flight_id)
+            else:
+                still.append(plane)
+        self._pending_finalize = still
 
     def _install_signal_handlers(self) -> None:
         def _handler(signum, _frame):

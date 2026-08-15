@@ -94,6 +94,17 @@ class WebhookAlerter(Alerter):
         self.url = arguments.get("url")
         if not self.url:
             raise ValueError("webhook URL must be provided in alerter options")
+        url = str(self.url).strip()
+        lowered = url.lower()
+        if not (
+            lowered.startswith("https://")
+            or lowered.startswith("http://localhost")
+            or lowered.startswith("http://127.0.0.1")
+        ):
+            raise ValueError(
+                "webhook URL must be https (http allowed only for localhost)"
+            )
+        self.url = url
         self.headers = arguments.get("headers", {})
         self.http_method = arguments.get("method", "POST")
         self.payload_format = arguments.get("format", "json")  # json, discord, slack

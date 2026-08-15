@@ -56,7 +56,7 @@ def create_app(
     live_store: RedisLiveStore | None = None,
     aircraft_db: AircraftDB | None = None,
 ) -> FastAPI:
-    broadcaster = LiveBroadcaster(live_store, aircraft_db)
+    broadcaster = LiveBroadcaster(live_store, aircraft_db, db=db)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -65,6 +65,8 @@ def create_app(
         await broadcaster.stop()
 
     app = FastAPI(title="PyAerial Web Portal", lifespan=lifespan)
+    app.state.db = db
+    app.state.live_store = live_store
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[],
@@ -206,7 +208,9 @@ def run_webapp(
         import threading
 
         config.receivers = {"mock": ReceiverConfig(type="mock")}
-        engine = Engine(config, aircraft_db_path=aircraft_db_path)
+        # Isolated: in-memory live store only. Never touch the configured
+        # Redis/Mongo URIs (those may be a real production stack).
+        engine = Engine(config, aircraft_db_path=aircraft_db_path, isolated=True)
         engine_thread = threading.Thread(
             target=engine.run, daemon=True, name="mock-engine"
         )

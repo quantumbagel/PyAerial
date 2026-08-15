@@ -24,6 +24,7 @@ interface SidebarProps {
   flights: FlightSummary[];
   alerts: Alert[];
   allAlerts: Alert[];
+  unreadAlertsCount?: number;
   serverStats?: ServerStats | null;
   activeFlightId: string | null;
   activeAlertId: string | null;
@@ -59,6 +60,7 @@ export function Sidebar({
   flights,
   alerts,
   allAlerts,
+  unreadAlertsCount = 0,
   serverStats,
   activeFlightId,
   activeAlertId,
@@ -217,6 +219,11 @@ export function Sidebar({
           onClick={() => onSwitchSidebarTab('alerts')}
         >
           Alerts
+          {unreadAlertsCount > 0 && sidebarTab !== 'alerts' ? (
+            <span className="ui-count" aria-label={`${unreadAlertsCount} unread alerts`}>
+              {unreadAlertsCount}
+            </span>
+          ) : null}
         </Tab>
       </TabList>
       <div

@@ -54,10 +54,12 @@ export function useFlightSelection({
   useEffect(() => () => stopDetailPoll(), [stopDetailPoll]);
 
   const loadFlightAlerts = useCallback(async (flightId: string, view: PortalView, merge = false) => {
+    const token = selectionTokenRef.current;
     const alerts = await api.fetchAlerts(view, {
       flightId,
       activeOnly: false,
     });
+    if (token !== selectionTokenRef.current) return alerts;
     if (merge) {
       setFlightAlerts((prev) => mergeAlertsByEpisode(prev, alerts));
     } else {
@@ -125,18 +127,27 @@ export function useFlightSelection({
   }, []);
 
   const selectFlight = useCallback(
-    async (flightId: string, initialTab?: DrawerTab) => {
+    async (
+      flightId: string,
+      initialTab?: DrawerTab,
+      opts?: { follow?: boolean; panToLatest?: boolean; keepAlert?: boolean },
+    ) => {
       const token = ++selectionTokenRef.current;
+      const follow = opts?.follow ?? true;
+      const panToLatest = opts?.panToLatest ?? true;
       stopDetailPoll();
       setSelectionError(null);
       setIsLoading(true);
       setActiveFlightId(flightId);
       setSelectedTelemetryPoint(null);
-      setFollowSelectedPlane(true);
+      setFollowSelectedPlane(follow);
       setDrawerOpen(true);
       setFlightDetail(null);
       setFlightAlerts([]);
       setFlightTelemetry([]);
+      if (!opts?.keepAlert) {
+        setActiveAlertId(null);
+      }
       if (initialTab) {
         setDrawerTab(initialTab);
       }
@@ -148,12 +159,22 @@ export function useFlightSelection({
           fetchAndSetPathRef.current(flightId, portalViewRef.current),
         ]);
         if (token !== selectionTokenRef.current) return;
+        if (!detail) {
+          setIsLoading(false);
+          setSelectionError('Flight not found.');
+          return;
+        }
         setFlightDetail(detail);
         setIsLoading(false);
         if (!initialTab) {
           setDrawerTab(alerts && alerts.length > 0 ? 'alerts' : 'telemetry');
         }
-        if (detail.latitude != null && detail.longitude != null && mapRef.current?.map) {
+        if (
+          panToLatest &&
+          detail.latitude != null &&
+          detail.longitude != null &&
+          mapRef.current?.map
+        ) {
           mapRef.current.map.setView(
             [detail.latitude, detail.longitude],
             Math.max(mapRef.current.map.getZoom(), 11),
@@ -194,7 +215,11 @@ export function useFlightSelection({
         mapRef.current?.panToAlert(alert.latitude, alert.longitude);
       }
       if (alert.flight_id) {
-        await selectFlight(alert.flight_id, 'alerts');
+        await selectFlight(alert.flight_id, 'alerts', {
+          follow: false,
+          panToLatest: false,
+          keepAlert: true,
+        });
       }
     },
     [selectFlight, mapRef, onSelectAlertTab],
@@ -205,6 +230,7 @@ export function useFlightSelection({
     stopDetailPoll();
     setDrawerOpen(false);
     setActiveFlightId(null);
+    setActiveAlertId(null);
     setSelectedTelemetryPoint(null);
     setFollowSelectedPlane(false);
     setFlightDetail(null);

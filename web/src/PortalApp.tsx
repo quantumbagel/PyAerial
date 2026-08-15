@@ -41,6 +41,7 @@ export function PortalApp() {
         flights={filteredFlights}
         alerts={filteredAlerts}
         allAlerts={portal.alertsData}
+        unreadAlertsCount={portal.unreadAlertsCount}
         serverStats={portal.serverStats}
         activeFlightId={selection.activeFlightId}
         activeAlertId={selection.activeAlertId}
@@ -128,7 +129,10 @@ export function PortalApp() {
                 selection.selectFlight(selection.activeFlightId, selection.drawerTab);
               }
             }}
-            onSelectTelemetryPoint={selection.setSelectedTelemetryPoint}
+            onSelectTelemetryPoint={(point) => {
+              disableFollow();
+              selection.setSelectedTelemetryPoint(point);
+            }}
             onClose={selection.closeDrawer}
             onSwitchTab={selection.setDrawerTab}
             onSelectAlert={selection.selectAlert}

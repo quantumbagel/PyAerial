@@ -65,13 +65,13 @@ graph TD
 
 - Decodes position, altitude, horizontal/vertical velocity, direction, callsign, and ICAO plane categories in real time via [`pyModeS`](https://github.com/junzis/pymodes).
 - Concurrently stream from TCP raw inputs (e.g. `dump1090`), direct hardware SDRs (`py1090` via `pyrtlsdr`), or synthetic test feeds (`mock`).
-- Define custom polygon zones with rule constraints (`altitude`, `speed`, `distance`, `direction`, `eta`) and lifecycle event hooks (`on_activate`, `on_deactivate`, `while_active`).
+- Define custom polygon zones with rule constraints (`altitude`, `speed` / `horizontal_speed`, `heading` / `direction`, `distance`, `proximity`, `eta`) and lifecycle event hooks (`on_activate`, `on_deactivate`, `while_active`).
 - Out-of-the-box support for console output (`print`), HTTP POST (`webhook`), and Apache Kafka message topics (`kafka`).
 - Two storage methods:
-  - Redis: live flight telemetry, active states, and real-time alert events.
+  - Redis: live flight telemetry, active states, and real-time alert events (`live:flight:{id}`, `live:telemetry:{id}`, `live:alerts:{id}`, `live:active_alerts`, `live:alert_episodes`).
   - MongoDB: Persistent historical storage for important completed flights, track points, and alert episodes.
 - Offline resolution of ICAO 24-bit addresses to aircraft model, manufacturer, operator, and registration details via `aircraft.db`.
-- Webapp with real-time radar, flight tracking, alert feeds, and historical flight playback.
+- Webapp with real-time radar, flight tracking, alert feeds, and historical flight browse (track + telemetry table).
 - Terminal interfaces including an interactive flight viewer (`pyaerial view`) and a live dump1090-style ASCII table display (`pyaerial live`).
 
 ---
@@ -202,7 +202,7 @@ Environment variables override values in your `config.yaml`:
 
 | Environment Variable | Overrides Config Key | Description                                         |
 |----------------------|----------------------|-----------------------------------------------------|
-| `PYAERIAL_CONFIG`    | Config path          | Default configuration file location                 |
+| `PYAERIAL_CONFIG`    | Config path          | Default configuration file (`-c` still wins)        |
 | `PYAERIAL_MONGODB`   | `database.uri`       | MongoDB connection URI                              |
 | `PYAERIAL_REDIS`     | `database.redis_uri` | Redis connection URI                                |
 | `PYAERIAL_LOG_LEVEL` | `logging.level`      | Logging level (`debug`, `info`, `warning`, `error`) |
@@ -242,6 +242,8 @@ tracking:
   duplicate_packet_merging: 5     # Seconds window to dedup duplicate hex frames
   status_message_top_planes: 5    # Top planes to show in console status lines
   advanced_status: true
+  use_kalman_eta: false           # Use Kalman-smoothed velocity for ETA
+  curved_projection: false        # Turn-rate-aware curved-path ETA projection
 
 logging:
   level: info
@@ -280,8 +282,8 @@ zones:
         when:
           altitude: { max: 1000 }      # Altitude constraint (meters)
           eta: { max: 120 }             # Estimated arrival time constraint (seconds)
-        dwell_seconds: 60              # Required seconds in zone for MongoDB retention
-        retain: true                   # Retain flight in MongoDB on completion
+        dwell_seconds: 60              # Episode must last this long to retain in Mongo
+        retain: true                   # If false, matching this rule never archives the flight
         on_activate:
           - method: print
           - method: webhook
@@ -299,14 +301,15 @@ zones:
 
 The `when` section supports numeric constraints (`min` / `max`) on telemetry and calculated metrics:
 
-| Metric Field       | Unit               | Description                                    |
-|--------------------|--------------------|------------------------------------------------|
-| `altitude`         | Meters (`m`)       | Altitude (converted from feet)                 |
-| `horizontal_speed` | Meters/sec (`m/s`) | Speed over ground                              |
-| `vertical_speed`   | Meters/sec (`m/s`) | Rate of climb/descent                          |
-| `distance`         | Meters (`m`)       | Distance from ground home location             |
-| `direction`        | Degrees (`°`)      | Heading / course                               |
-| `eta`              | Seconds (`s`)      | Estimated time to enter or reach home location |
+| Metric Field                         | Unit                    | Description                                              |
+|--------------------------------------|-------------------------|----------------------------------------------------------|
+| `altitude` / `alt`                   | Metres (`m`)            | Altitude (converted from feet)                           |
+| `speed` / `horizontal_speed`         | km/h                    | Ground speed (ADS-B knots × 1.852, or geodesic)          |
+| `vertical_speed` / `vert_speed`      | m/s                     | Rate of climb/descent (from ft/min)                      |
+| `distance` / `dist`                  | km                      | Geodesic distance to the **zone polygon** edge           |
+| `proximity`                          | m                       | Same as `distance`, in metres                            |
+| `heading` / `direction`              | Degrees (`°`)           | Course; wrapping windows like `{min: 350, max: 10}` work |
+| `eta`                                | Seconds (`s`)           | Estimated time to enter the zone                         |
 
 ---
 
@@ -315,9 +318,11 @@ The `when` section supports numeric constraints (`min` / `max`) on telemetry and
 ### Redis (Live Telemetry & Active State)
 
 Redis serves as an in-memory buffer while flights are active.
-- `flight:{flight_id}`: Current aircraft state JSON document.
-- `telemetry:{flight_id}`: Stream of recent track points.
-- `alerts`: Active alert episodes and log entries.
+- `live:flights`: set of active flight ids
+- `live:flight:{flight_id}`: current aircraft state JSON document
+- `live:telemetry:{flight_id}`: sorted set of recent track points
+- `live:alerts:{flight_id}`: alert episodes for that flight
+- `live:active_alerts` / `live:alert_episodes`: global active set and episode index
 
 Data is automatically cleared or transitioned when a flight expires from memory.
 

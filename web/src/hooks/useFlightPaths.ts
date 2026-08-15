@@ -16,6 +16,8 @@ export function useFlightPaths(
   const showAllPathsRef = useRef(showAllPaths);
   const pathCoordsRef = useRef(pathCoords);
   const filteredFlightsRef = useRef(filteredFlights);
+  const portalViewRef = useRef(portalView);
+  const activeFlightIdRef = useRef(activeFlightId);
 
   useEffect(() => {
     showAllPathsRef.current = showAllPaths;
@@ -26,6 +28,12 @@ export function useFlightPaths(
   useEffect(() => {
     filteredFlightsRef.current = filteredFlights;
   }, [filteredFlights]);
+  useEffect(() => {
+    portalViewRef.current = portalView;
+  }, [portalView]);
+  useEffect(() => {
+    activeFlightIdRef.current = activeFlightId;
+  }, [activeFlightId]);
 
   const fetchAndSetPath = useCallback(async (flightId: string, view: PortalView) => {
     if (pendingPathFetches.current.has(flightId)) return;
@@ -35,6 +43,8 @@ export function useFlightPaths(
         api.fetchTelemetry(flightId, view),
         api.fetchAlerts(view, { flightId, activeOnly: false }),
       ]);
+      if (portalViewRef.current !== view) return;
+      if (!showAllPathsRef.current && activeFlightIdRef.current !== flightId) return;
       const validTelemetry = telemetry.filter((p) => p.latitude != null && p.longitude != null);
       const latlngs = validTelemetry.map((p) => [p.latitude!, p.longitude!] as [number, number]);
       if (latlngs.length === 0) {

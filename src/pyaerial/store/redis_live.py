@@ -47,8 +47,9 @@ _RECONNECT_DELAY = 2.0
 class RedisLiveStore:
     """Shared in-memory live store for engine writes and web portal reads."""
 
-    def __init__(self, redis_uri: str):
+    def __init__(self, redis_uri: str, *, memory_only: bool = False):
         self.uri = redis_uri
+        self.memory_only = memory_only
         self.client: redis.Redis | None = None
         self._last_telemetry_ts: dict[str, float] = {}
         self._mem_flights: dict[str, dict] = {}
@@ -58,7 +59,11 @@ class RedisLiveStore:
         self._mem_alert_episodes: list[dict] = []
         self._last_connect_attempt = 0.0
         self._reported_down = False
-        self._connect()
+        if memory_only:
+            self._reported_down = True
+            log.info("Live store running in memory-only mode (no Redis).")
+        else:
+            self._connect()
 
     def _connect(self) -> None:
         """Create the Redis client and verify connectivity.
@@ -76,10 +81,7 @@ class RedisLiveStore:
             self.client.ping()
             if self._reported_down:
                 log.info("Reconnected to Redis at %s", self.uri)
-                # Points buffered in memory while Redis was down were never
-                # written; reset the cursor so they are backfilled on the next
-                # write_live_planes call.
-                self._last_telemetry_ts.clear()
+                self._backfill_redis_from_mem()
             else:
                 log.info("Connected to Redis at %s", self.uri)
             self._reported_down = False
@@ -95,6 +97,8 @@ class RedisLiveStore:
             self.client = None
 
     def _ensure_connected(self) -> bool:
+        if self.memory_only:
+            return False
         if self.client is None:
             # Reconnect automatically (throttled) so a Redis that comes up after
             # startup -- or that recovers from an outage -- is picked up without
@@ -543,6 +547,8 @@ class RedisLiveStore:
         """Return buffered flight data and delete Redis keys for the flight."""
         mem_flight = self._mem_flights.pop(flight_id, None)
         mem_alerts = self._mem_alerts.pop(flight_id, [])
+        self._mem_telemetry.pop(flight_id, None)
+        self._last_telemetry_ts.pop(flight_id, None)
         self._mem_alert_episodes = [
             a for a in self._mem_alert_episodes if a.get("flight_id") != flight_id
         ]
@@ -728,9 +734,48 @@ class RedisLiveStore:
 
         if not wrote:
             return
+        # Advance the cursor after the in-memory write so a failed Redis
+        # execute does not duplicate mem points. Redis holes are repaired
+        # by ``_backfill_redis_from_mem`` on reconnect.
         self._last_telemetry_ts[flight_id] = last_written
         if pipe:
             try:
                 pipe.execute()
             except RedisError as exc:
                 log.error("Failed to write live telemetry for %s: %s", flight_id, exc)
+
+    def _backfill_redis_from_mem(self) -> None:
+        """Replay in-memory flights/telemetry/alerts after a Redis reconnect."""
+        if self.client is None:
+            return
+        try:
+            pipe = self.client.pipeline()
+            for flight_id, doc in self._mem_flights.items():
+                pipe.sadd(_KEY_FLIGHTS, flight_id)
+                pipe.set(
+                    _KEY_FLIGHT.format(flight_id=flight_id),
+                    json.dumps(doc, separators=(",", ":")),
+                )
+                key = _KEY_TELEMETRY.format(flight_id=flight_id)
+                for point in self._mem_telemetry.get(flight_id, []):
+                    ts = point.get("timestamp")
+                    if ts is None:
+                        continue
+                    pipe.zadd(key, {json.dumps(point, separators=(",", ":")): ts})
+            for alert_id, doc in self._mem_active_alerts.items():
+                encoded = json.dumps(doc, separators=(",", ":"))
+                pipe.hset(_KEY_ACTIVE_ALERTS, alert_id, encoded)
+            for doc in self._mem_alert_episodes:
+                alert_id = doc.get("alert_id")
+                flight_id = doc.get("flight_id")
+                if not alert_id:
+                    continue
+                encoded = json.dumps(doc, separators=(",", ":"))
+                pipe.hset(_KEY_ALERT_EPISODES, alert_id, encoded)
+                if flight_id:
+                    pipe.hset(
+                        _KEY_ALERTS.format(flight_id=flight_id), alert_id, encoded
+                    )
+            pipe.execute()
+        except RedisError as exc:
+            log.error("Failed to backfill Redis from memory: %s", exc)

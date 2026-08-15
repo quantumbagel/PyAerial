@@ -136,9 +136,14 @@ class AircraftDB:
 
         # Cache miss: Fetch from HexDB and Planespotters APIs
         log.info("Aircraft DB miss for %s. Querying online APIs...", icao)
-        record = self._fetch_from_apis(icao)
+        try:
+            record = self._fetch_from_apis(icao)
+        except Exception as exc:
+            # Transport / 5xx — do not persist a negative cache entry.
+            log.warning("Aircraft API lookup failed for %s: %s", icao, exc)
+            return None
 
-        # Cache results (even if None/empty, to prevent spamming APIs for invalid ICAOs)
+        # Cache results (including 404/empty) so we do not spam APIs for invalid ICAOs.
         self._update_cache(icao, record)
         return normalize_record_photos(record) if record is not None else None
 
@@ -198,9 +203,10 @@ class AircraftDB:
             elif resp.status_code == 404:
                 log.debug("ICAO %s not found in HexDB", icao)
                 return None
+            resp.raise_for_status()
         except Exception as e:
             log.warning("HexDB API lookup failed for %s: %s", icao, e)
-            return None
+            raise
 
         # 2. Fetch from Planespotters
         registration = hexdb_data.get("registration")

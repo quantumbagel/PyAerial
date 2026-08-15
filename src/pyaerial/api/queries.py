@@ -23,8 +23,10 @@ _FLIGHT_STATUS_LIVE = "live"
 
 
 def get_live_flights(
-    live_store: LiveStore, aircraft_db: AircraftDB | None
+    live_store: LiveStore | None, aircraft_db: AircraftDB | None
 ) -> list[dict[str, Any]]:
+    if live_store is None:
+        return []
     return [
         enrich_flight_summary(summary, aircraft_db)
         for summary in live_store.get_flights()
@@ -32,8 +34,10 @@ def get_live_flights(
 
 
 def get_history_flights(
-    db: pymongo.database.Database, aircraft_db: AircraftDB | None
+    db: pymongo.database.Database | None, aircraft_db: AircraftDB | None
 ) -> list[dict[str, Any]]:
+    if db is None:
+        return []
     flights_col = db.get_collection("flights")
     telemetry_col = db.get_collection("telemetry")
     alerts_col = db.get_collection("alerts")
@@ -107,7 +111,7 @@ def get_history_flights(
 
 
 def get_live_alerts(
-    live_store: LiveStore,
+    live_store: LiveStore | None,
     *,
     since: float = 0.0,
     flight_id: str | None = None,
@@ -116,6 +120,8 @@ def get_live_alerts(
     skip: int = 0,
     active_only: bool = True,
 ) -> list[dict[str, Any]]:
+    if live_store is None:
+        return []
     alerts = live_store.get_alerts(
         since=since,
         flight_id=flight_id,
@@ -152,11 +158,13 @@ def get_flight_detail(
     flight_id: str,
     view: str,
     *,
-    live_store: LiveStore,
-    db: pymongo.database.Database,
+    live_store: LiveStore | None,
+    db: pymongo.database.Database | None,
     aircraft_db: AircraftDB | None,
 ) -> dict[str, Any] | None:
     if view == "live":
+        if live_store is None:
+            return None
         flight_data = live_store.get_flight(flight_id)
         if not flight_data:
             return None
@@ -177,6 +185,8 @@ def get_flight_detail(
             flight_data, flight_data.get("icao", ""), aircraft_db
         )
 
+    if db is None:
+        return None
     doc = db.get_collection("flights").find_one({"_id": flight_id})
     if not doc:
         return None
@@ -224,11 +234,15 @@ def get_telemetry(
     view: str,
     since: float,
     *,
-    live_store: LiveStore,
-    db: pymongo.database.Database,
+    live_store: LiveStore | None,
+    db: pymongo.database.Database | None,
 ) -> list[dict[str, Any]]:
     if view == "live":
+        if live_store is None:
+            return []
         return live_store.get_telemetry(flight_id, since=since)
+    if db is None:
+        return []
     filt: dict[str, Any] = {"flight_id": flight_id}
     if since > 0:
         filt["timestamp"] = {"$gt": since}
@@ -244,11 +258,13 @@ def get_alerts(
     rule: str | None = None,
     limit: int = 0,
     skip: int = 0,
-    live_store: LiveStore,
-    db: pymongo.database.Database,
+    live_store: LiveStore | None,
+    db: pymongo.database.Database | None,
     active_only: bool | None = None,
 ) -> list[dict[str, Any]]:
     if view == "live":
+        if live_store is None:
+            return []
         resolved_active_only = active_only if active_only is not None else not flight_id
         return get_live_alerts(
             live_store,
@@ -259,6 +275,8 @@ def get_alerts(
             skip=skip,
             active_only=resolved_active_only,
         )
+    if db is None:
+        return []
     filt: dict[str, Any] = {}
     if since:
         filt["activated_at"] = {"$gt": since}
