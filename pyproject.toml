@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyaerial"
-version = "2.0.0"
+version = "0.10.0"
 description = "Scanning software for ADS-B / Mode S with geofence-based early warning, alerting, and persistence."
 readme = "README.md"
 requires-python = ">=3.11"
