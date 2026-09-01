@@ -208,3 +208,19 @@ def test_pending_finalize_retries_then_clears(tmp_path, monkeypatch):
         assert popped == ["abc123-1"]
     finally:
         engine.shutdown()
+
+
+def test_start_isolated_engine_uses_memory_store(tmp_path):
+    from pyaerial.engine import start_isolated_engine
+
+    engine = start_isolated_engine(
+        make_config(),
+        aircraft_db_path=str(tmp_path / "aircraft.db"),
+    )
+    try:
+        assert engine.live_store.memory_only is True
+        assert engine.live_store.ping() is True
+        assert "mock" in engine.config.receivers
+        assert engine.config.receivers["mock"].type == "mock"
+    finally:
+        engine.shutdown()

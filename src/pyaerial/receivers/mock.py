@@ -8,6 +8,7 @@ import math
 import time
 
 from pyaerial.receivers import Receiver, register_receiver
+from pyaerial.units import KMH_TO_KT, M_TO_FT
 
 
 def _cpr_nl(lat: float) -> int:
@@ -29,7 +30,7 @@ def encode_airborne_pos(
     ss = 0
     nic_sb = 0
 
-    alt_ft = int(round(alt_meters * 3.28084))
+    alt_ft = int(round(alt_meters * M_TO_FT))
     n = int(round((alt_ft + 1000) / 25.0))
     n_high = (n >> 4) & 0x7F
     n_low = n & 0x0F
@@ -84,7 +85,7 @@ def encode_velocity(
     ifr = 0
     nac = 1
 
-    speed_kts = speed_kmh * 0.539957
+    speed_kts = speed_kmh * KMH_TO_KT
     rad = math.radians(heading_deg)
     v_ew = speed_kts * math.sin(rad)
     v_ns = speed_kts * math.cos(rad)

@@ -7,6 +7,7 @@ from pyaerial.api.queries import (
     get_live_flights,
     get_telemetry,
 )
+from pyaerial.store.redis_live import RedisLiveStore
 from pyaerial.webapp import create_app
 from helpers import make_config
 
@@ -32,7 +33,6 @@ def test_create_app_without_frontend_serves_503():
 
 def test_health_and_api(monkeypatch):
     from fastapi.testclient import TestClient
-    from pyaerial.config.schema import WebConfig
 
     config = make_config()
     app = create_app(config=config, db=None, live_store=None, aircraft_db=None)
@@ -40,12 +40,21 @@ def test_health_and_api(monkeypatch):
         health = client.get("/health")
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
-        flights = client.get("/api/flights")
-        assert flights.status_code == 200
-        assert flights.json() == []
+        assert client.get("/api/flights").status_code == 404
+        assert client.get("/api/stats").status_code == 404
 
-    config.web = WebConfig(token="s3cret")
-    locked = create_app(config=config, db=None, live_store=None, aircraft_db=None)
-    with TestClient(locked) as client:
-        assert client.get("/api/stats").status_code == 401
-        assert client.get("/api/stats", params={"token": "s3cret"}).status_code == 200
+
+def test_ready_uses_live_store_ping():
+    from fastapi.testclient import TestClient
+
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    assert store.ping() is True
+    app = create_app(
+        config=make_config(), db=None, live_store=store, aircraft_db=None
+    )
+    with TestClient(app) as client:
+        ready = client.get("/ready")
+        assert ready.status_code == 200
+        body = ready.json()
+        assert body["redis"] is True
+        assert body["status"] == "ok"

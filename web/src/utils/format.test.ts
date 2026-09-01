@@ -1,7 +1,7 @@
 // Timezone is pinned to UTC via vitest.config.ts so date/time assertions are deterministic.
 import { describe, expect, it } from 'vitest';
 import type { FlightSummary } from '../api/types';
-import { flightTimeLabel } from '../components/LevelBadge';
+import { flightTimeLabel } from './flightData';
 import {
   formatActiveSince,
   formatDate,

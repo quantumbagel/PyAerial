@@ -6,14 +6,9 @@ import requests
 
 from pyaerial.alerters import Alerter, register_alerter
 from pyaerial.config.loader import webhook_url_allowed
+from pyaerial.units import KMH_TO_KT, M_TO_FT, MPS_TO_FT_PER_MIN
 
 log = logging.getLogger("pyaerial.alerter.webhook")
-
-# Alert payload telemetry arrives in SI units (altitude m, speed km/h,
-# vertical speed m/s). Convert to ft / kt / ft-per-min for display.
-_ALT_M_TO_FT = 3.28084
-_SPEED_KMH_TO_KT = 0.539957
-_VS_MPS_TO_FT_PER_MIN = 196.8504
 _WEBHOOK_ATTEMPTS = 3
 _WEBHOOK_RETRY_BACKOFF = 0.5
 _WEBHOOK_TIMEOUT = 5
@@ -221,7 +216,7 @@ class WebhookAlerter(Alerter):
         fields.append(
             {
                 "name": "Altitude",
-                "value": f"{int(alt * _ALT_M_TO_FT)} ft" if alt is not None else "N/A",
+                "value": f"{int(alt * M_TO_FT)} ft" if alt is not None else "N/A",
                 "inline": True,
             }
         )
@@ -234,10 +229,10 @@ class WebhookAlerter(Alerter):
         )
 
         # Telemetry Summary
-        speed_str = f"{speed * _SPEED_KMH_TO_KT:.1f} kt" if speed is not None else "N/A"
+        speed_str = f"{speed * KMH_TO_KT:.1f} kt" if speed is not None else "N/A"
         heading_str = f"{heading:.0f}°" if heading is not None else "N/A"
         vspeed_str = (
-            f"{vert_speed * _VS_MPS_TO_FT_PER_MIN:+.0f} ft/min"
+            f"{vert_speed * MPS_TO_FT_PER_MIN:+.0f} ft/min"
             if vert_speed is not None
             else "N/A"
         )
@@ -329,12 +324,12 @@ class WebhookAlerter(Alerter):
             if lat is not None and lon is not None
             else "N/A"
         )
-        alt_str = f"{int(alt * _ALT_M_TO_FT)} ft" if alt is not None else "N/A"
+        alt_str = f"{int(alt * M_TO_FT)} ft" if alt is not None else "N/A"
         eta_str = f"{int(eta)}s" if eta is not None else "N/A"
-        speed_str = f"{speed * _SPEED_KMH_TO_KT:.1f} kt" if speed is not None else "N/A"
+        speed_str = f"{speed * KMH_TO_KT:.1f} kt" if speed is not None else "N/A"
         heading_str = f"{heading:.0f}°" if heading is not None else "N/A"
         vspeed_str = (
-            f"{vert_speed * _VS_MPS_TO_FT_PER_MIN:+.0f} ft/min"
+            f"{vert_speed * MPS_TO_FT_PER_MIN:+.0f} ft/min"
             if vert_speed is not None
             else "N/A"
         )

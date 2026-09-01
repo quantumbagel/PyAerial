@@ -9,7 +9,7 @@ from typing import Any
 
 import pymongo
 
-from pyaerial.calc.aircraft_db import AircraftDB, normalize_photo_url
+from pyaerial.enrich.aircraft_db import AircraftDB, normalize_photo_url
 from pyaerial.config.schema import Config
 
 FLIGHT_STATUS_LIVE = "live"

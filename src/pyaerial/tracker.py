@@ -24,7 +24,7 @@ from pyaerial.constants import (
     STORE_RECV_DATA,
     STORE_TOTAL_PACKETS,
 )
-from pyaerial.models import Datum, PlaneState
+from pyaerial.models import Datum, Plane
 
 log = logging.getLogger("pyaerial.tracker")
 
@@ -34,7 +34,7 @@ class Tracker:
 
     def __init__(self, config: Config):
         self.config = config
-        self.planes: dict[str, PlaneState] = {}
+        self.planes: dict[str, Plane] = {}
         # full frame hex -> most recent timestamp we have seen for that exact frame
         self._recent: dict[str, float] = {}
 
@@ -150,12 +150,13 @@ class Tracker:
         icao = message_data[STORE_INFO][STORE_ICAO]
 
         if icao not in self.planes:
-            plane = message_data
-            for field, value in plane[STORE_RECV_DATA].items():
-                plane[STORE_RECV_DATA][field] = [Datum(value, timestamp)]
+            plane = Plane.from_mapping(message_data)
+            for field, value in list(plane.received_data.items()):
+                plane.received_data[field] = [Datum(value, timestamp)]
             self.planes[icao] = plane
         else:
-            plane = self.planes[icao]
+            plane = Plane.from_mapping(self.planes[icao])
+            self.planes[icao] = plane
             for key, value in message_data[STORE_INFO].items():
                 plane[STORE_INFO][key] = value
 
@@ -170,15 +171,11 @@ class Tracker:
                     # stopped aircraft ages to speed 0 instead of freezing.
                     series[-1].time = timestamp
 
-        internal = plane.setdefault(
-            STORE_INTERNAL,
-            {
-                STORE_MOST_RECENT_PACKET: timestamp,
-                STORE_FIRST_PACKET: timestamp,
-                STORE_TOTAL_PACKETS: 0,
-                STORE_PACKET_TYPE: defaultdict(int),
-            },
-        )
+        internal = plane.internal
+        if STORE_FIRST_PACKET not in internal:
+            internal[STORE_FIRST_PACKET] = timestamp
+            internal[STORE_TOTAL_PACKETS] = 0
+            internal[STORE_PACKET_TYPE] = defaultdict(int)
         internal[STORE_MOST_RECENT_PACKET] = timestamp
         internal[STORE_TOTAL_PACKETS] += 1
         pkt_types = internal[STORE_PACKET_TYPE]
@@ -195,7 +192,7 @@ class Tracker:
 
         self._trim_series(plane, timestamp)
 
-    def _trim_series(self, plane: dict, now: float) -> None:
+    def _trim_series(self, plane: Plane, now: float) -> None:
         keep = self.config.tracking.telemetry_keep_seconds
         if keep <= 0:
             return

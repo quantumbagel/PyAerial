@@ -14,14 +14,15 @@ from dataclasses import dataclass
 from shapely import Polygon
 
 from pyaerial.alerters import available_alerters
-from pyaerial.calc.aircraft_db import AircraftDB
+from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.calc.geo import build_polygons
 from pyaerial.calc.plane import PlaneCalculator
 from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 from pyaerial.logging_setup import setup_logging
+from pyaerial.models import flight_id_for_plane
 from pyaerial.receivers import Receiver, available_receivers, create_receiver
-from pyaerial.store import MongoStore, RedisLiveStore, flight_id_for_plane
+from pyaerial.store import MongoStore, RedisLiveStore
 from pyaerial.tracker import Tracker
 
 log = logging.getLogger("pyaerial.engine")
@@ -296,7 +297,8 @@ class Engine:
         for handle in self._receivers.values():
             handle.receiver.stop()
         for handle in self._receivers.values():
-            handle.thread.join(timeout=2.0)
+            if handle.thread.ident is not None:
+                handle.thread.join(timeout=2.0)
 
         for plane in list(self.tracker.planes.values()):
             self._finalize_plane(plane)
@@ -373,3 +375,41 @@ def run_engine(config: Config, *, aircraft_db_path: str = DEFAULT_AIRCRAFT_DB) -
     """Configure logging and run the engine until shutdown."""
     setup_logging(config.logging.level, log_file=config.logging.file)
     Engine(config, aircraft_db_path=aircraft_db_path).run()
+
+
+def isolated_config(config_path: str) -> Config:
+    """Load config for mock/isolated mode, falling back to built-in defaults."""
+    from pyaerial.config import load_config
+    from pyaerial.config.schema import HomeConfig, TrackingConfig
+
+    try:
+        return load_config(config_path)
+    except Exception:
+        log.warning(
+            "Could not load configuration %s; falling back to defaults",
+            config_path,
+            exc_info=True,
+        )
+        return Config(
+            home=HomeConfig(latitude=35.7275, longitude=-78.6959),
+            tracking=TrackingConfig(),
+            receivers={},
+        )
+
+
+def start_isolated_engine(
+    config: Config,
+    *,
+    aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
+) -> Engine:
+    """Run the tracking engine in-process with a mock receiver and memory stores.
+
+    Used by ``pyaerial web --mock``, ``live --mock``, and ``view --mock``.
+    Never connects to the configured Redis/Mongo URIs.
+    """
+    from pyaerial.config.schema import ReceiverConfig
+
+    config.receivers = {"mock": ReceiverConfig(type="mock")}
+    engine = Engine(config, aircraft_db_path=aircraft_db_path, isolated=True)
+    threading.Thread(target=engine.run, daemon=True, name="mock-engine").start()
+    return engine

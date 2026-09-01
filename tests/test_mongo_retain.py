@@ -13,6 +13,7 @@ from pyaerial.constants import (
     STORE_MOST_RECENT_PACKET,
     STORE_RECV_DATA,
 )
+from pyaerial.alerts.retain import should_retain
 from pyaerial.models import Datum
 from pyaerial.store.mongo import MongoStore
 from helpers import make_config, make_rule
@@ -60,7 +61,7 @@ def test_retain_false_is_honored_even_with_alerts():
             "deactivated_at": 100.0,
         }
     ]
-    assert store._should_retain(_plane(), alerts) is False
+    assert should_retain(_plane(), alerts, config, store.polygons) is False
 
 
 def test_retain_true_requires_dwell():
@@ -94,8 +95,8 @@ def test_retain_true_requires_dwell():
             "deactivated_at": 80.0,
         }
     ]
-    assert store._should_retain(_plane(), short) is False
-    assert store._should_retain(_plane(), long) is True
+    assert should_retain(_plane(), short, config, store.polygons) is False
+    assert should_retain(_plane(), long, config, store.polygons) is True
 
 
 def test_disabled_store_finalize_succeeds_without_mongo():

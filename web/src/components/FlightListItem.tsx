@@ -1,7 +1,11 @@
 import type { FlightSummary, Zone } from '../api/types';
-import type { FlightSortField } from '../utils/flightData';
+import {
+  flightSortValueLabel,
+  flightTimeLabel,
+  type FlightSortField,
+} from '../utils/flightData';
 import { Chip } from './ui';
-import { flightSortValueLabel, flightTimeLabel, LevelBadge } from './LevelBadge';
+import { LevelBadge } from './LevelBadge';
 
 interface FlightListItemProps {
   flight: FlightSummary;

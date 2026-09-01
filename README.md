@@ -105,6 +105,8 @@ Alternatively, view simulated flight traffic directly in your terminal:
 pyaerial live --mock
 ```
 
+`live --mock` and `view --mock` run the same isolated tracking engine as `web --mock` (mock ADS-B receiver, in-memory store). Planes appear after a short warm-up while the tracker ingests the simulated feed.
+
 ---
 
 ### Dockerized Setup

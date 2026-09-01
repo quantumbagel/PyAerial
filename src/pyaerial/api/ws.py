@@ -16,7 +16,7 @@ from pyaerial.api.queries import (
     get_stats,
     get_telemetry,
 )
-from pyaerial.calc.aircraft_db import AircraftDB
+from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.config.schema import Config
 
 _MAX_LIMIT = 500

@@ -18,7 +18,7 @@ from pyaerial.api.payloads import (
     telemetry_point,
 )
 from pyaerial.api.protocol import LiveStore
-from pyaerial.calc.aircraft_db import AircraftDB
+from pyaerial.enrich.aircraft_db import AircraftDB
 
 
 def get_live_flights(

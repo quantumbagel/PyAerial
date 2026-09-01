@@ -73,14 +73,18 @@ def create_receiver(method: str, name: str, emit: Emit, arguments: dict) -> Rece
     return _REGISTRY[method](name, emit, arguments)
 
 
-# Import built-in receivers so they register themselves.
-from pyaerial.receivers import dump1090 as _dump1090  # noqa: E402,F401
-from pyaerial.receivers import mock as _mock  # noqa: E402,F401
-from pyaerial.receivers import replay as _replay  # noqa: E402,F401
+def register_builtins() -> None:
+    """Import built-in receivers so they register themselves."""
+    from pyaerial.receivers import dump1090 as _dump1090  # noqa: F401
+    from pyaerial.receivers import mock as _mock  # noqa: F401
+    from pyaerial.receivers import replay as _replay  # noqa: F401
 
-try:  # pyrtlsdr / librtlsdr may be unavailable on some systems.
-    from pyaerial.receivers import py1090 as _py1090  # noqa: E402,F401
-except Exception as _exc:  # pragma: no cover - optional dependency
-    logging.getLogger("pyaerial.receiver").debug(
-        "py1090 receiver unavailable: %s", _exc
-    )
+    try:  # pyrtlsdr / librtlsdr may be unavailable on some systems.
+        from pyaerial.receivers import py1090 as _py1090  # noqa: F401
+    except Exception as exc:  # pragma: no cover - optional dependency
+        logging.getLogger("pyaerial.receiver").debug(
+            "py1090 receiver unavailable: %s", exc
+        )
+
+
+register_builtins()

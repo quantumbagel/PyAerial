@@ -12,7 +12,7 @@ from fastapi import WebSocket
 from pyaerial.api.payloads import sanitize_for_json
 from pyaerial.api.protocol import LiveStore
 from pyaerial.api.queries import get_live_flights, get_stats, get_tracked_live_alerts
-from pyaerial.calc.aircraft_db import AircraftDB
+from pyaerial.enrich.aircraft_db import AircraftDB
 
 log = logging.getLogger("pyaerial.webapp")
 

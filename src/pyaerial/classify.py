@@ -27,6 +27,7 @@ from pyaerial.constants import (
     STORE_RECV_DATA,
     STORE_VERT_SPEED,
 )
+from pyaerial.units import FT_PER_MIN_TO_MPS, FT_TO_M, KT_TO_KMH
 
 log = logging.getLogger("pyaerial.classify")
 
@@ -103,7 +104,7 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
             STORE_RECV_DATA: {
                 STORE_LAT: lat,
                 STORE_LONG: lon,
-                STORE_HORIZ_SPEED: speed * 1.852 if speed is not None else None,
+                STORE_HORIZ_SPEED: speed * KT_TO_KMH if speed is not None else None,
                 STORE_HEADING: angle,
             },
         }
@@ -122,7 +123,7 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
             STORE_RECV_DATA: {
                 STORE_LAT: lat,
                 STORE_LONG: lon,
-                STORE_ALT: alt * 0.3048 if alt is not None else None,
+                STORE_ALT: alt * FT_TO_M if alt is not None else None,
             },
         }
         category = CAT_AIRBORNE_BARO if typecode <= 18 else CAT_AIRBORNE_GNSS
@@ -138,9 +139,9 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
         data = {
             STORE_INFO: {STORE_ICAO: icao},
             STORE_RECV_DATA: {
-                STORE_HORIZ_SPEED: speed * 1.852 if speed is not None else None,
+                STORE_HORIZ_SPEED: speed * KT_TO_KMH if speed is not None else None,
                 STORE_HEADING: angle,
-                STORE_VERT_SPEED: vert_rate * 0.00508
+                STORE_VERT_SPEED: vert_rate * FT_PER_MIN_TO_MPS
                 if vert_rate is not None
                 else None,
             },

@@ -7,7 +7,8 @@ import time
 from typing import Any
 
 from pyaerial.config import load_config
-from pyaerial.view.store import get_live_store
+from pyaerial.units import KMH_TO_KT, M_TO_FT
+from pyaerial.view.store import open_live_session
 
 
 def format_dump1090_table(live_flights: list[dict[str, Any]]) -> str:
@@ -28,11 +29,11 @@ def format_dump1090_table(live_flights: list[dict[str, Any]]) -> str:
 
         alt = flight.get("altitude")
         # altitude is stored in meters; display as feet to match the header.
-        alt_str = f"{int(alt * 3.28084):,}" if alt is not None else "N/A"
+        alt_str = f"{int(alt * M_TO_FT):,}" if alt is not None else "N/A"
 
         spd = flight.get("speed")
         # speed is stored in km/h; display as knots to match the header.
-        spd_str = f"{int(spd * 0.539957)}" if spd is not None else "N/A"
+        spd_str = f"{int(spd * KMH_TO_KT)}" if spd is not None else "N/A"
 
         hdg = flight.get("heading")
         hdg_str = f"{int(hdg):03d}°" if hdg is not None else "N/A"
@@ -90,9 +91,6 @@ def run_live_loop(
     """Run live flight display loop."""
     while True:
         live_flights = live_store.get_flights()
-        if hasattr(live_store, "update_live"):
-            live_store.update_live()
-
         table = format_dump1090_table(live_flights)
 
         if not once:
@@ -116,9 +114,14 @@ def run_live_cmd(
 ) -> None:
     """CLI handler for pyaerial live command."""
     config = load_config(config_path)
-    live_store = get_live_store(config, mock=mock)
+    live_store, engine = open_live_session(config, mock=mock)
 
     try:
         run_live_loop(live_store, interval=interval, once=once)
     except KeyboardInterrupt:
         print("\n[live] Stopped.")
+    finally:
+        if engine is not None:
+            engine.shutdown()
+        else:
+            live_store.close()
