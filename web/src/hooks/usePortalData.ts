@@ -249,11 +249,8 @@ export function usePortalData({
       const timer = setInterval(fetchHistoryData, 10000);
       return () => clearInterval(timer);
     }
-    if (portalView === 'live') {
-      fetchLiveData();
-    }
     return undefined;
-  }, [portalView, fetchHistoryData, fetchLiveData]);
+  }, [portalView, fetchHistoryData]);
 
   useEffect(() => {
     return connectLiveSocket({
@@ -307,7 +304,9 @@ export function usePortalData({
                 next = { ...next };
                 updated = true;
               }
-              next[f.flight_id] = [...(next[f.flight_id] || existing), newCoord];
+              next[f.flight_id] = [...(next[f.flight_id] || existing), newCoord].slice(
+                -400,
+              );
             });
 
             return next;

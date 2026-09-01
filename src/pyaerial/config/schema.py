@@ -36,6 +36,8 @@ class TrackingConfig(_Strict):
     duplicate_packet_merging: float = Field(default=5, ge=0)
     use_kalman_eta: bool = False
     curved_projection: bool = False
+    telemetry_keep_seconds: float = Field(default=600, ge=0)
+    status_interval: float = Field(default=10, gt=0)
 
 
 class LoggingConfig(_Strict):
@@ -116,6 +118,7 @@ class RuleConfig(_Strict):
     when: dict[str, FieldConstraint] = Field(min_length=1)
     dwell_seconds: int = Field(gt=0)
     retain: bool = True
+    hysteresis_seconds: float = Field(default=0, ge=0)
     predict_seconds: float | None = Field(default=None, ge=0)
     on_activate: list[AlertActionConfig] = Field(default_factory=list)
     on_deactivate: list[AlertActionConfig] = Field(default_factory=list)
@@ -163,6 +166,10 @@ class ZoneConfig(_Strict):
         return value
 
 
+class WebConfig(_Strict):
+    token: str | None = None
+
+
 class Config(_Strict):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     tracking: TrackingConfig = Field(default_factory=TrackingConfig)
@@ -171,6 +178,7 @@ class Config(_Strict):
     receivers: dict[str, ReceiverConfig]
     zones: dict[str, ZoneConfig] = Field(default_factory=dict)
     alert_colors: dict[str, str] = Field(default_factory=dict)
+    web: WebConfig = Field(default_factory=WebConfig)
 
     @field_validator("alert_colors")
     @classmethod

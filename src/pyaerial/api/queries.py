@@ -34,47 +34,49 @@ def get_live_flights(
 
 
 def get_history_flights(
-    db: pymongo.database.Database | None, aircraft_db: AircraftDB | None
+    db: pymongo.database.Database | None,
+    aircraft_db: AircraftDB | None,
+    *,
+    skip: int = 0,
+    limit: int = 50,
+    q: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
 ) -> list[dict[str, Any]]:
     if db is None:
         return []
+    skip = max(0, skip)
+    limit = min(max(limit, 1), 200)
     flights_col = db.get_collection("flights")
     telemetry_col = db.get_collection("telemetry")
-    alerts_col = db.get_collection("alerts")
 
-    completed_cursor = (
-        flights_col.find(
-            {
-                "status": {"$ne": _FLIGHT_STATUS_LIVE},
-                "$or": [{"retained": True}, {"retained": {"$exists": False}}],
-            }
-        )
-        .sort("end_time", -1)
-        .limit(100)
-    )
-
-    completed_docs = list(completed_cursor)
-    if not completed_docs:
-        return []
-
-    flight_ids = [doc["_id"] for doc in completed_docs]
-    alert_flight_ids = {
-        doc["_id"]
-        for doc in alerts_col.aggregate(
-            [
-                {"$match": {"flight_id": {"$in": flight_ids}}},
-                {"$group": {"_id": "$flight_id"}},
-            ]
-        )
+    filt: dict[str, Any] = {
+        "status": {"$ne": _FLIGHT_STATUS_LIVE},
+        "$or": [{"retained": True}, {"retained": {"$exists": False}}],
     }
+    end_filt: dict[str, Any] = {}
+    if since:
+        end_filt["$gte"] = since
+    if until:
+        end_filt["$lte"] = until
+    if end_filt:
+        filt["end_time"] = end_filt
+    if q:
+        pattern = {"$regex": q, "$options": "i"}
+        filt["$and"] = [
+            {"$or": filt.pop("$or")},
+            {
+                "$or": [
+                    {"icao": pattern},
+                    {"callsign": pattern},
+                    {"_id": pattern},
+                ]
+            },
+        ]
 
-    selected_docs = []
-    for doc in completed_docs:
-        if doc.get("retained") or doc["_id"] in alert_flight_ids:
-            selected_docs.append(doc)
-        if len(selected_docs) >= 50:
-            break
-
+    selected_docs = list(
+        flights_col.find(filt).sort("end_time", -1).skip(skip).limit(limit)
+    )
     if not selected_docs:
         return []
 

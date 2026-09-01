@@ -16,6 +16,7 @@ def make_rule(
     *,
     retain: bool = True,
     dwell_seconds: int = 60,
+    hysteresis_seconds: float = 0,
     **when_fields: dict,
 ) -> RuleConfig:
     when = {
@@ -28,6 +29,7 @@ def make_rule(
         when=when,
         dwell_seconds=dwell_seconds,
         retain=retain,
+        hysteresis_seconds=hysteresis_seconds,
     )
 
 

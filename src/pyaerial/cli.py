@@ -100,7 +100,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"SQLite aircraft index (default: {DEFAULT_AIRCRAFT_DB})",
     )
     web_p.add_argument(
-        "--host", default="0.0.0.0", help="host to bind (default: 0.0.0.0)"
+        "--host",
+        default="127.0.0.1",
+        help="host to bind (default: 127.0.0.1; use 0.0.0.0 for LAN)",
     )
     web_p.add_argument(
         "-p", "--port", type=int, default=10090, help="port to bind (default: 10090)"

@@ -28,3 +28,24 @@ def test_live_queries_tolerate_missing_store():
 def test_create_app_without_frontend_serves_503():
     app = create_app(config=make_config(), db=None, live_store=None, aircraft_db=None)
     assert app.title == "PyAerial Web Portal"
+
+
+def test_health_and_api(monkeypatch):
+    from fastapi.testclient import TestClient
+    from pyaerial.config.schema import WebConfig
+
+    config = make_config()
+    app = create_app(config=config, db=None, live_store=None, aircraft_db=None)
+    with TestClient(app) as client:
+        health = client.get("/health")
+        assert health.status_code == 200
+        assert health.json()["status"] == "ok"
+        flights = client.get("/api/flights")
+        assert flights.status_code == 200
+        assert flights.json() == []
+
+    config.web = WebConfig(token="s3cret")
+    locked = create_app(config=config, db=None, live_store=None, aircraft_db=None)
+    with TestClient(locked) as client:
+        assert client.get("/api/stats").status_code == 401
+        assert client.get("/api/stats", params={"token": "s3cret"}).status_code == 200

@@ -80,3 +80,33 @@ def test_value_change_appends():
     series = plane[STORE_RECV_DATA][STORE_LAT]
     assert len(series) == 2
     assert series[-1].value == 35.71
+
+
+def test_telemetry_series_are_capped():
+    from pyaerial.config.schema import TrackingConfig
+    from pyaerial.classify import ClassifiedMessage
+
+    tracker = Tracker(make_config(tracking=TrackingConfig(telemetry_keep_seconds=5)))
+    plane = {
+        STORE_INFO: {STORE_ICAO: "abc123"},
+        STORE_RECV_DATA: {
+            STORE_LAT: [Datum(35.7, 100.0), Datum(35.71, 101.0), Datum(35.72, 110.0)]
+        },
+        STORE_INTERNAL: {
+            STORE_FIRST_PACKET: 100.0,
+            STORE_MOST_RECENT_PACKET: 110.0,
+            STORE_TOTAL_PACKETS: 3,
+            STORE_PACKET_TYPE: {},
+        },
+    }
+    tracker.planes["abc123"] = plane
+    classified = ClassifiedMessage(
+        data={
+            STORE_INFO: {STORE_ICAO: "abc123"},
+            STORE_RECV_DATA: {STORE_LAT: 35.73},
+        },
+        typecode_category=3,
+    )
+    tracker._merge(classified, 112.0, "deadbeef")
+    series = plane[STORE_RECV_DATA][STORE_LAT]
+    assert all(item.time >= 107.0 for item in series)

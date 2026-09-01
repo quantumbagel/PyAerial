@@ -26,6 +26,13 @@ from pyaerial.tracker import Tracker
 
 log = logging.getLogger("pyaerial.engine")
 
+_RECEIVER_BACKOFF_INITIAL = 1.0
+_RECEIVER_BACKOFF_MAX = 30.0
+_RECEIVER_BACKOFF_RESET_AFTER = 10.0
+_MESSAGE_QUEUE_MAXSIZE = 10_000
+_PENDING_FINALIZE_MAX = 256
+_DROP_LOG_INTERVAL = 10.0
+
 
 @dataclass
 class _ReceiverHandle:
@@ -34,6 +41,9 @@ class _ReceiverHandle:
     receiver: Receiver
     thread: threading.Thread
     last_error: str = ""
+    backoff: float = _RECEIVER_BACKOFF_INITIAL
+    next_restart_at: float = 0.0
+    started_at: float = 0.0
 
 
 class Engine:
@@ -52,20 +62,27 @@ class Engine:
         self.polygons: dict[str, Polygon] = build_polygons(config.zones)
         self.aircraft_db = AircraftDB(aircraft_db_path)
         self.live_store = RedisLiveStore(
-            config.database.redis_uri, memory_only=isolated
+            config.database.redis_uri,
+            memory_only=isolated,
+            telemetry_keep_seconds=config.tracking.telemetry_keep_seconds,
         )
+        self._last_status_log = 0.0
         if not isolated:
             self.live_store.clear_all()
         self.mongo_store = MongoStore(config, self.polygons, disabled=isolated)
         self.calculator = PlaneCalculator(
             config, self.polygons, self.aircraft_db, self.live_store
         )
-        self._message_queue: queue.Queue[tuple[str, float, str]] = queue.Queue()
+        self._message_queue: queue.Queue[tuple[str, float, str]] = queue.Queue(
+            maxsize=_MESSAGE_QUEUE_MAXSIZE
+        )
         self._receivers: dict[str, _ReceiverHandle] = {}
         self._running = False
         self._shutdown = threading.Event()
         self._shutdown_done = False
-        self._pending_finalize: list[dict] = []
+        self._pending_finalize: dict[str, dict] = {}
+        self._dropped_messages = 0
+        self._last_drop_log = 0.0
 
     def start_receivers(self) -> None:
         for name, receiver_cfg in self.config.receivers.items():
@@ -76,9 +93,16 @@ class Engine:
         if not self._receivers:
             raise RuntimeError("no receivers could be started")
 
-    def _start_receiver(self, name: str, method: str, arguments: dict) -> None:
+    def _start_receiver(
+        self,
+        name: str,
+        method: str,
+        arguments: dict,
+        *,
+        backoff: float = _RECEIVER_BACKOFF_INITIAL,
+    ) -> None:
         def emit(msg_hex: str, timestamp: float, receiver_name: str = name) -> None:
-            self._message_queue.put((msg_hex, timestamp, receiver_name))
+            self._enqueue_message(msg_hex, timestamp, receiver_name)
 
         try:
             receiver = create_receiver(method, name, emit, arguments)
@@ -92,9 +116,52 @@ class Engine:
             name=f"receiver-{name}",
             daemon=True,
         )
-        self._receivers[name] = _ReceiverHandle(name, method, receiver, thread)
+        self._receivers[name] = _ReceiverHandle(
+            name,
+            method,
+            receiver,
+            thread,
+            backoff=backoff,
+            started_at=time.monotonic(),
+        )
         thread.start()
         log.info("Started receiver %r (%s)", name, method)
+
+    def _enqueue_message(
+        self, msg_hex: str, timestamp: float, receiver_name: str
+    ) -> None:
+        """Push a raw frame onto the bounded queue, dropping the oldest if full."""
+        item = (msg_hex, timestamp, receiver_name)
+        try:
+            self._message_queue.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+        dropped = 0
+        try:
+            self._message_queue.get_nowait()
+            dropped += 1
+        except queue.Empty:
+            pass
+        try:
+            self._message_queue.put_nowait(item)
+        except queue.Full:
+            dropped += 1
+        if dropped:
+            self._note_dropped(dropped)
+
+    def _note_dropped(self, count: int) -> None:
+        self._dropped_messages += count
+        now = time.monotonic()
+        if now - self._last_drop_log < _DROP_LOG_INTERVAL:
+            return
+        log.warning(
+            "Message queue full (max %d); dropped %d frame(s) since last report",
+            _MESSAGE_QUEUE_MAXSIZE,
+            self._dropped_messages,
+        )
+        self._dropped_messages = 0
+        self._last_drop_log = now
 
     def _run_receiver(self, name: str, receiver: Receiver) -> None:
         try:
@@ -110,30 +177,44 @@ class Engine:
             handle.last_error = reason or ""
 
     def _restart_dead_receivers(self) -> None:
+        now = time.monotonic()
         for name, handle in list(self._receivers.items()):
             if handle.thread.is_alive():
                 continue
             if self._shutdown.is_set():
                 return
-            log.warning(
-                "Restarting receiver %r (%s)%s",
-                name,
-                handle.method,
-                f": {handle.last_error}" if handle.last_error else "",
-            )
+            if handle.next_restart_at <= 0.0:
+                if now - handle.started_at >= _RECEIVER_BACKOFF_RESET_AFTER:
+                    handle.backoff = _RECEIVER_BACKOFF_INITIAL
+                handle.next_restart_at = now + handle.backoff
+                log.warning(
+                    "Receiver %r (%s) stopped%s; retry in %.1fs",
+                    name,
+                    handle.method,
+                    f": {handle.last_error}" if handle.last_error else "",
+                    handle.backoff,
+                )
+                handle.backoff = min(handle.backoff * 2.0, _RECEIVER_BACKOFF_MAX)
+                continue
+            if now < handle.next_restart_at:
+                continue
+            log.warning("Restarting receiver %r (%s)", name, handle.method)
             handle.receiver.stop()
             cfg = self.config.receivers[name]
+            next_backoff = handle.backoff
             self._receivers.pop(name, None)
-            self._start_receiver(name, cfg.type, cfg.receiver_arguments())
+            self._start_receiver(
+                name, cfg.type, cfg.receiver_arguments(), backoff=next_backoff
+            )
 
-    def _drain_messages(self) -> list[tuple[str, float]]:
-        batch: list[tuple[str, float]] = []
+    def _drain_messages(self) -> list[tuple[str, float, str]]:
+        batch: list[tuple[str, float, str]] = []
         while True:
             try:
-                msg_hex, timestamp, _receiver = self._message_queue.get_nowait()
+                msg_hex, timestamp, receiver = self._message_queue.get_nowait()
             except queue.Empty:
                 break
-            batch.append((msg_hex, timestamp))
+            batch.append((msg_hex, timestamp, receiver))
         return batch
 
     def run(self) -> None:
@@ -158,8 +239,10 @@ class Engine:
                 self._restart_dead_receivers()
 
                 raw = self._drain_messages()
-                new_messages = self.tracker.collect_new_messages(raw)
-                processed = self.tracker.ingest(new_messages)
+                pairs = [(hex_msg, ts) for hex_msg, ts, _recv in raw]
+                receivers = {hex_msg: recv for hex_msg, _ts, recv in raw if recv}
+                new_messages = self.tracker.collect_new_messages(pairs)
+                processed = self.tracker.ingest(new_messages, receivers=receivers)
                 dirty_icaos = self.tracker.get_and_clear_dirty_icaos()
 
                 self.calculator.calculate_all(
@@ -178,12 +261,15 @@ class Engine:
 
                 summary = self.tracker.top_planes_summary()
                 status = f"processed {processed} msg(s). " if processed else ""
-                log.info(
-                    "%sTracking %d plane(s). %s",
-                    status,
-                    len(self.tracker.planes),
-                    summary,
+                status_line = (
+                    f"{status}Tracking {len(self.tracker.planes)} plane(s). {summary}"
                 )
+                now_mono = time.monotonic()
+                if now_mono - self._last_status_log >= self.config.tracking.status_interval:
+                    log.info("%s", status_line)
+                    self._last_status_log = now_mono
+                else:
+                    log.debug("%s", status_line)
 
                 elapsed = time.time() - start
                 sleep_for = tick_budget - elapsed
@@ -237,25 +323,41 @@ class Engine:
         flight_id = flight_id_for_plane(plane)
         alerts = self.live_store.get_alerts(flight_id=flight_id, active_only=False)
         if self.mongo_store.finalize_plane(plane, alerts=alerts):
+            self._pending_finalize.pop(flight_id, None)
             self.live_store.pop_flight(flight_id)
         else:
             log.warning(
                 "Deferred persist for %s; keeping live data until Mongo is back",
                 flight_id,
             )
-            self._pending_finalize.append(plane)
+            self._enqueue_pending_finalize(flight_id, plane)
+
+    def _enqueue_pending_finalize(self, flight_id: str, plane: dict) -> None:
+        if flight_id in self._pending_finalize:
+            self._pending_finalize[flight_id] = plane
+            return
+        while len(self._pending_finalize) >= _PENDING_FINALIZE_MAX:
+            dropped_id, _dropped = next(iter(self._pending_finalize.items()))
+            del self._pending_finalize[dropped_id]
+            self.live_store.pop_flight(dropped_id)
+            log.error(
+                "Pending finalize cap (%d) reached; dropped retry for %s "
+                "(Mongo still down; live copy removed)",
+                _PENDING_FINALIZE_MAX,
+                dropped_id,
+            )
+        self._pending_finalize[flight_id] = plane
 
     def _retry_pending_finalizes(self) -> None:
         if not self._pending_finalize:
             return
-        still: list[dict] = []
-        for plane in self._pending_finalize:
-            flight_id = flight_id_for_plane(plane)
+        still: dict[str, dict] = {}
+        for flight_id, plane in self._pending_finalize.items():
             alerts = self.live_store.get_alerts(flight_id=flight_id, active_only=False)
             if self.mongo_store.finalize_plane(plane, alerts=alerts):
                 self.live_store.pop_flight(flight_id)
             else:
-                still.append(plane)
+                still[flight_id] = plane
         self._pending_finalize = still
 
     def _install_signal_handlers(self) -> None:

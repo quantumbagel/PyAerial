@@ -86,7 +86,9 @@ function connect() {
   isClosed = false;
   if (ws) return;
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${protocol}//${window.location.host}/ws/live`);
+  const token = new URLSearchParams(window.location.search).get('token');
+  const qs = token ? `?token=${encodeURIComponent(token)}` : '';
+  ws = new WebSocket(`${protocol}//${window.location.host}/ws/live${qs}`);
 
   ws.onopen = () => {
     backoff = 1000;
@@ -108,6 +110,8 @@ function connect() {
             req.reject(new Error(data.error || 'Request failed'));
           }
         }
+      } else if (data && data.type === 'ping') {
+        return;
       } else {
         handlersSet.forEach((h) => h.onMessage(data as LiveMessage));
       }

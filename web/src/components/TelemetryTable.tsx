@@ -47,7 +47,7 @@ export function TelemetryTable({
               </td>
             </tr>
           ) : (
-            telemetry.map((point) => {
+            telemetry.slice(-250).map((point) => {
               const timeStr = formatDateTime(point.timestamp, { withSeconds: true });
               const latVal = point.latitude != null ? point.latitude.toFixed(4) : 'N/A';
               const lonVal = point.longitude != null ? point.longitude.toFixed(4) : 'N/A';

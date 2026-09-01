@@ -1,51 +1,80 @@
 services:
+  dump1090:
+    image: pyaerial:latest
+    container_name: pyaerial_dump1090
+    restart: always
+    build:
+      context: .
+    profiles: ["sdr"]
+    privileged: true
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+    expose:
+      - "30002"
+    command: ["/opt/dump1090/dump1090", "--net", "--raw", "--quiet"]
   pyaerial:
     image: pyaerial:latest
     container_name: pyaerial
     restart: always
     build:
       context: .
-      network: host
-    privileged: true
-    volumes:
-      - /dev/bus/usb:/dev/bus/usb
     depends_on:
-      - mongodb
-      - redis
-    network_mode: host
+      mongodb:
+        condition: service_started
+      redis:
+        condition: service_started
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
+      PYAERIAL_START_DUMP1090: "0"
+      PYAERIAL_MONGODB: mongodb://pyaerial:${MONGO_PASSWORD:-pyaerial}@mongodb:27017/?authSource=admin
+      PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:-pyaerial}@redis:6379/0
+      DUMP1090_HOST: dump1090
+    command: ["pyaerial", "run", "-c", "/opt/PyAerial/config.yaml"]
   web:
     image: pyaerial:latest
     container_name: pyaerial_web
     restart: always
-    network_mode: host
     depends_on:
       - mongodb
       - redis
       - pyaerial
+    ports:
+      - "10090:10090"
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
-    command: pyaerial web -c /opt/PyAerial/config.yaml
+      PYAERIAL_START_DUMP1090: "0"
+      PYAERIAL_MONGODB: mongodb://pyaerial:${MONGO_PASSWORD:-pyaerial}@mongodb:27017/?authSource=admin
+      PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:-pyaerial}@redis:6379/0
+    command:
+      [
+        "pyaerial",
+        "web",
+        "-c",
+        "/opt/PyAerial/config.yaml",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "10090",
+      ]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:10090/health')"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
   mongodb:
     image: mongo:7
     container_name: pyaerial_database
     restart: always
-    ports:
-      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: pyaerial
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-pyaerial}
     volumes:
       - pyaerial_mongo:/data/db
-    network_mode: host
   redis:
     image: redis:7-alpine
     container_name: pyaerial_redis
     restart: always
-    # Pure in-memory live cache (Mongo is the durable store). Disabling RDB/AOF
-    # persistence avoids MISCONF write-refusals when a bgsave fails (e.g. full disk).
-    command: redis-server --save "" --appendonly no
-    ports:
-      - "6379:6379"
-    network_mode: host
+    command: redis-server --save "" --appendonly no --requirepass ${REDIS_PASSWORD:-pyaerial}
 
 volumes:
   pyaerial_mongo:

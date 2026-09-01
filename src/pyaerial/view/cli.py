@@ -592,6 +592,15 @@ def _cmd_reset(
         db.get_collection("flights").delete_many({"icao": target})
         db.get_collection("telemetry").delete_many({"icao": target})
         db.get_collection("alerts").delete_many({"icao": target})
+    if live_store is not None:
+        flight_ids = []
+        if hasattr(live_store, "get_flights"):
+            for flight in live_store.get_flights() or []:
+                if str(flight.get("icao", "")).lower() == target:
+                    flight_ids.append(flight.get("flight_id"))
+        for flight_id in flight_ids:
+            if flight_id and hasattr(live_store, "pop_flight"):
+                live_store.pop_flight(flight_id)
     print(f"[success] Dropped plane {target}.")
     return False, ""
 

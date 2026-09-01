@@ -180,22 +180,7 @@ export function useFlightSelection({
             Math.max(mapRef.current.map.getZoom(), 11),
           );
         }
-        if (portalViewRef.current === 'live' && detail.is_live) {
-          flightDetailsPollTimer.current = setInterval(async () => {
-            if (token !== selectionTokenRef.current) return;
-            try {
-              const [updated, alerts] = await Promise.all([
-                api.fetchFlight(flightId, 'live'),
-                api.fetchAlerts('live', { flightId, activeOnly: false }),
-              ]);
-              if (token !== selectionTokenRef.current) return;
-              setFlightDetail(updated);
-              setFlightAlerts((prev) => mergeAlertsByEpisode(prev, alerts));
-            } catch (err) {
-              console.error('Failed to fetch active flight details', err);
-            }
-          }, 10000);
-        }
+        // Live detail/alerts continue via the WebSocket snapshot and alert stream.
       } catch (err) {
         if (token !== selectionTokenRef.current) return;
         setIsLoading(false);

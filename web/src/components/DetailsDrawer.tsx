@@ -161,7 +161,9 @@ export function DetailsDrawer({
       ref={drawerRef}
       className={open ? 'open' : ''}
       role="dialog"
-      aria-modal="true"
+      aria-modal={open ? true : undefined}
+      aria-hidden={!open}
+      inert={!open ? true : undefined}
       aria-label="Selected aircraft details"
       tabIndex={-1}
     >

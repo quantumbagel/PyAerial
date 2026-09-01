@@ -13,7 +13,12 @@ def connect_stores(
     config_path: str,
 ) -> tuple[Config, pymongo.MongoClient, pymongo.database.Database, RedisLiveStore]:
     config = load_config(config_path)
-    client = pymongo.MongoClient(config.database.uri)
+    client = pymongo.MongoClient(
+        config.database.uri,
+        serverSelectionTimeoutMS=2000,
+        connectTimeoutMS=2000,
+        socketTimeoutMS=5000,
+    )
     if config.database.name:
         db = client.get_database(config.database.name)
     else:

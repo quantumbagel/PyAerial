@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import Any
@@ -18,6 +17,33 @@ from pyaerial.calc.aircraft_db import AircraftDB
 log = logging.getLogger("pyaerial.webapp")
 
 _LIVE_POLL_INTERVAL = 1.0
+_PING_INTERVAL = 15.0
+_STATS_CACHE_TTL = 5.0
+
+
+def _flights_sig(flights: list[dict[str, Any]]) -> tuple:
+    return tuple(
+        (
+            flight.get("flight_id"),
+            flight.get("timestamp"),
+            flight.get("latitude"),
+            flight.get("longitude"),
+            len(flight.get("active_alerts") or []),
+        )
+        for flight in flights
+    )
+
+
+def _alerts_sig(alerts: list[dict[str, Any]]) -> tuple:
+    return tuple(
+        (
+            alert.get("alert_id"),
+            alert.get("active"),
+            alert.get("eta"),
+            alert.get("deactivated_at"),
+        )
+        for alert in alerts
+    )
 
 
 class LiveBroadcaster:
@@ -33,11 +59,13 @@ class LiveBroadcaster:
         self.aircraft_db = aircraft_db
         self.db = db
         self._clients: dict[WebSocket, float] = {}
+        self._last_ping: dict[WebSocket, float] = {}
         self._task: asyncio.Task | None = None
         self._pending_lookups: set[str] = set()
-        self._last_flights_sig: str | None = None
-        self._last_alerts_sig: str | None = None
-        self._last_stats_sig: str | None = None
+        self._last_flights_sig: tuple | None = None
+        self._last_alerts_sig: tuple | None = None
+        self._last_stats: dict[str, int] | None = None
+        self._last_stats_at = 0.0
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run_loop())
@@ -53,11 +81,23 @@ class LiveBroadcaster:
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
-        self._clients[websocket] = 0.0
+        now = time.time()
+        self._clients[websocket] = now
+        self._last_ping[websocket] = now
         await self._send_snapshot(websocket)
 
     def disconnect(self, websocket: WebSocket) -> None:
         self._clients.pop(websocket, None)
+        self._last_ping.pop(websocket, None)
+
+    def _cached_stats(self) -> dict[str, int]:
+        now = time.monotonic()
+        if self._last_stats is not None and now - self._last_stats_at < _STATS_CACHE_TTL:
+            return self._last_stats
+        stats = get_stats(self.live_store, self.db, self.aircraft_db)
+        self._last_stats = stats
+        self._last_stats_at = now
+        return stats
 
     async def _send_snapshot(self, websocket: WebSocket) -> None:
         flights = (
@@ -70,7 +110,7 @@ class LiveBroadcaster:
             if self.live_store
             else []
         )
-        stats = get_stats(self.live_store, self.db, self.aircraft_db)
+        stats = self._cached_stats()
         await websocket.send_json(
             {"type": "flights", "flights": sanitize_for_json(flights)}
         )
@@ -127,33 +167,30 @@ class LiveBroadcaster:
             if self.live_store
             else []
         )
-        stats = get_stats(self.live_store, self.db, self.aircraft_db)
+        stats = self._cached_stats()
 
-        flights_sig = json.dumps(
-            sanitize_for_json(flights), sort_keys=True, default=str
-        )
+        flights_sig = _flights_sig(flights)
         if flights_sig != self._last_flights_sig:
             self._last_flights_sig = flights_sig
-            msg = {"type": "flights", "flights": sanitize_for_json(flights)}
-            await self._broadcast(msg)
-
-        alerts_sig = json.dumps(sanitize_for_json(alerts), sort_keys=True, default=str)
-        if alerts_sig != self._last_alerts_sig:
-            self._last_alerts_sig = alerts_sig
-            msg = {"type": "alerts", "alerts": sanitize_for_json(alerts)}
-            await self._broadcast(msg)
-
-        stats_sig = json.dumps(sanitize_for_json(stats), sort_keys=True, default=str)
-        if stats_sig != self._last_stats_sig:
-            self._last_stats_sig = stats_sig
-            msg = {"type": "stats", "stats": sanitize_for_json(stats)}
-            await self._broadcast(msg)
-
-        for websocket, since in list(self._clients.items()):
-            points = (
-                self.live_store.get_live_telemetry(since) if self.live_store else []
+            await self._broadcast(
+                {"type": "flights", "flights": sanitize_for_json(flights)}
             )
 
+        alerts_sig = _alerts_sig(alerts)
+        if alerts_sig != self._last_alerts_sig:
+            self._last_alerts_sig = alerts_sig
+            await self._broadcast(
+                {"type": "alerts", "alerts": sanitize_for_json(alerts)}
+            )
+
+        await self._broadcast({"type": "stats", "stats": sanitize_for_json(stats)})
+
+        min_since = min(self._clients.values()) if self._clients else now
+        all_points = (
+            self.live_store.get_live_telemetry(min_since) if self.live_store else []
+        )
+        for websocket, since in list(self._clients.items()):
+            points = [point for point in all_points if point.get("timestamp", 0) > since]
             if points:
                 payload = {
                     "type": "telemetry",
@@ -163,6 +200,14 @@ class LiveBroadcaster:
                 try:
                     await websocket.send_json(payload)
                     self._clients[websocket] = now
+                except Exception:
+                    self.disconnect(websocket)
+                    continue
+            last_ping = self._last_ping.get(websocket, 0.0)
+            if now - last_ping >= _PING_INTERVAL:
+                try:
+                    await websocket.send_json({"type": "ping", "timestamp": now})
+                    self._last_ping[websocket] = now
                 except Exception:
                     self.disconnect(websocket)
 

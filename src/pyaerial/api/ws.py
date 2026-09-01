@@ -19,6 +19,19 @@ from pyaerial.api.queries import (
 from pyaerial.calc.aircraft_db import AircraftDB
 from pyaerial.config.schema import Config
 
+_MAX_LIMIT = 500
+_MAX_SKIP = 100_000
+
+
+def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:
+    if value is None:
+        return default
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, number))
+
 
 def _flight_id_param(params: dict[str, Any]) -> str:
     flight_id = params.get("flightId")
@@ -36,11 +49,21 @@ def handle_ws_request(
     live_store: LiveStore | None,
     aircraft_db: AircraftDB | None,
 ) -> Any:
+    if not isinstance(params, dict):
+        raise ValueError("params must be an object")
     view = view_param(params.get("view", "live"))
     if action == "fetchFlights":
         if view == "live":
             return get_live_flights(live_store, aircraft_db)
-        return get_history_flights(db, aircraft_db)
+        return get_history_flights(
+            db,
+            aircraft_db,
+            skip=_clamp_int(params.get("skip"), 0, 0, _MAX_SKIP),
+            limit=_clamp_int(params.get("limit"), 50, 1, _MAX_LIMIT),
+            q=str(params["q"]) if params.get("q") else None,
+            since=float(params["since"]) if params.get("since") is not None else None,
+            until=float(params["until"]) if params.get("until") is not None else None,
+        )
 
     if action == "fetchFlight":
         return get_flight_detail(
@@ -67,10 +90,8 @@ def handle_ws_request(
         since = float(since_val) if since_val is not None else 0.0
         flight_id = params.get("flightId")
         rule = params.get("rule")
-        limit_val = params.get("limit")
-        limit = int(limit_val) if limit_val is not None else 0
-        skip_val = params.get("skip")
-        skip = int(skip_val) if skip_val is not None else 0
+        limit = _clamp_int(params.get("limit"), 0, 0, _MAX_LIMIT)
+        skip = _clamp_int(params.get("skip"), 0, 0, _MAX_SKIP)
         active_only_val = params.get("active_only")
         if active_only_val is None:
             active_only = None

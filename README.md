@@ -70,7 +70,7 @@ graph TD
 - Two storage methods:
   - Redis: live flight telemetry, active states, and real-time alert events (`live:flight:{id}`, `live:telemetry:{id}`, `live:alerts:{id}`, `live:active_alerts`, `live:alert_episodes`).
   - MongoDB: Persistent historical storage for important completed flights, track points, and alert episodes.
-- Offline resolution of ICAO 24-bit addresses to aircraft model, manufacturer, operator, and registration details via `aircraft.db`.
+- ICAO metadata (model, operator, registration, photos) is cached in `aircraft.db` after lookups to HexDB / Planespotters; the file is a local cache, not a fully offline index.
 - Webapp with real-time radar, flight tracking, alert feeds, and historical flight browse (track + telemetry table).
 - Terminal interfaces including an interactive flight viewer (`pyaerial view`) and a live dump1090-style ASCII table display (`pyaerial live`).
 
@@ -90,7 +90,10 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 
-# Launch Web Portal in mock mode (simulates live traffic poorly)
+# Build the React portal (required; static files are not committed)
+scripts/build_web.sh
+
+# Launch Web Portal in mock mode (simulated approaches into the configured zone)
 pyaerial web --mock
 ```
 
@@ -112,6 +115,14 @@ Run PyAerial with MongoDB, Redis, and live SDR/dump1090 support:
 # Start full production stack
 docker compose up --build
 ```
+
+Compose uses a bridge network and publishes only the web portal on port 10090. MongoDB and Redis are not exposed on the host and require the `MONGO_PASSWORD` / `REDIS_PASSWORD` env vars (default `pyaerial`). SDR/USB dump1090 is an optional profile:
+
+```bash
+docker compose --profile sdr up --build
+```
+
+A standalone `docker run` of the image still supervises dump1090 via `scripts/run-engine.sh`. Bind the portal on all interfaces with `pyaerial web --host 0.0.0.0` (the CLI default is `127.0.0.1`).
 
 Or run the isolated mock container stack:
 
@@ -174,6 +185,8 @@ PyAerial provides a unified command line interface via the `pyaerial` executable
 | `pyaerial view`     | Interactive terminal flight viewer for live & historical data |
 | `pyaerial live`     | Real-time ASCII terminal flight display                       |
 
+The web portal also exposes `GET /health`, `GET /ready`, and `/api/flights|alerts|telemetry|stats|zones|config`. Pass `?token=` when `web.token` / `PYAERIAL_WEB_TOKEN` is set.
+
 ### Usage Options
 
 ```bash
@@ -208,6 +221,17 @@ Environment variables override values in your `config.yaml`:
 | `PYAERIAL_LOG_LEVEL` | `logging.level`      | Logging level (`debug`, `info`, `warning`, `error`) |
 | `PYAERIAL_LOG_FILE`  | `logging.file`       | Output log file path                                |
 | `PYAERIAL_HZ`        | `tracking.hz`        | Engine loop tick rate (Hz)                          |
+| `PYAERIAL_WEB_TOKEN` | `web.token`          | Optional shared secret for `/ws/live` and `/api/*`  |
+
+String values in `config.yaml` also expand `${VAR}` and `${VAR:-default}`. A referenced variable with no default must be set, or `pyaerial validate` / load fails. Use this for webhook secrets:
+
+```yaml
+on_activate:
+  - method: webhook
+    options:
+      url: "${PYAERIAL_WEBHOOK_URL}"
+      format: discord
+```
 
 ---
 

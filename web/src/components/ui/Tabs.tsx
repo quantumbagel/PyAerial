@@ -30,6 +30,7 @@ export function Tab({ active = false, className, children, ...props }: TabProps)
       role="tab"
       className={cn('ui-tab', active && 'is-active', className)}
       aria-selected={active}
+      tabIndex={active ? 0 : -1}
       {...props}
     >
       {children}

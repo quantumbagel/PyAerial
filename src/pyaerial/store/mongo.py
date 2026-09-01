@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import time
 from typing import Any
 
@@ -33,7 +32,7 @@ from pyaerial.models import get_latest
 log = logging.getLogger("pyaerial.store")
 
 _RECONNECT_DELAY = 2.0
-_ETA_HORIZON = 100_000
+_ETA_HORIZON = 10_000
 _FLIGHT_STATUS_COMPLETED = "completed"
 
 
@@ -148,6 +147,13 @@ class MongoStore:
         flights.create_index([("status", pymongo.ASCENDING)])
         flights.create_index([("end_time", pymongo.DESCENDING)])
         flights.create_index([("retained", pymongo.ASCENDING)])
+        flights.create_index(
+            [
+                ("status", pymongo.ASCENDING),
+                ("retained", pymongo.ASCENDING),
+                ("end_time", pymongo.DESCENDING),
+            ]
+        )
 
         telemetry = self.db.get_collection("telemetry")
         telemetry.create_index(
@@ -166,6 +172,7 @@ class MongoStore:
         alerts.create_index(
             [("icao", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)]
         )
+        alerts.create_index([("activated_at", pymongo.DESCENDING)])
 
     def _ensure_connected(self) -> bool:
         if self.disabled:
@@ -280,21 +287,31 @@ class MongoStore:
         first_time: float,
         last_time: float,
     ) -> int:
+        lat_series = plane.get(STORE_RECV_DATA, {}).get(STORE_LAT, [])
+        if not lat_series:
+            return 0
+        samples = [
+            datum
+            for datum in lat_series
+            if first_time <= datum.time <= last_time
+        ]
+        if len(samples) > 3600:
+            step = max(1, len(samples) // 1800)
+            samples = samples[::step]
         valid = 0
-        for tick in range(int(first_time) + 1, int(last_time) + 1):
-            lat = get_latest(STORE_RECV_DATA, STORE_LAT, plane, tick)
-            lon = get_latest(STORE_RECV_DATA, STORE_LONG, plane, tick)
-            heading = get_latest(STORE_CALC_DATA, STORE_HEADING, plane, tick)
-            speed = get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, tick)
-            if None in (lat, lon, heading, speed):
+        for lat in samples:
+            lon = get_latest(STORE_RECV_DATA, STORE_LONG, plane, lat.time)
+            heading = get_latest(STORE_CALC_DATA, STORE_HEADING, plane, lat.time)
+            speed = get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat.time)
+            if None in (lon, heading, speed):
                 continue
             position = (lat.value, lon.value)
             eta = geo.time_to_enter_geofence(
                 position, heading.value, speed.value, polygon, _ETA_HORIZON
             )
-            if eta is math.inf:
-                eta = math.inf
-            resolver = evaluate.make_resolver(plane, eta, polygon, position, tick)
+            resolver = evaluate.make_resolver(
+                plane, eta, polygon, position, lat.time
+            )
             if evaluate.when_passes(when, resolver):
                 valid += 1
         return valid
@@ -346,11 +363,8 @@ class MongoStore:
         ]
 
         try:
-            self.db.get_collection("flights").replace_one(
-                {"_id": flight_id},
-                flight_doc,
-                upsert=True,
-            )
+            # Telemetry and alerts first so a crash cannot leave a flight
+            # document without its track.
             if telemetry_docs:
                 telemetry_col = self.db.get_collection("telemetry")
                 telemetry_col.delete_many({"flight_id": flight_id})
@@ -363,6 +377,11 @@ class MongoStore:
                         adoc,
                         upsert=True,
                     )
+            self.db.get_collection("flights").replace_one(
+                {"_id": flight_id},
+                flight_doc,
+                upsert=True,
+            )
             return True
         except PyMongoError as exc:
             log.error("Failed to persist completed flight %s: %s", flight_id, exc)

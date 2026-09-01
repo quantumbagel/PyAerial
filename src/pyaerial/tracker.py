@@ -14,6 +14,7 @@ from collections import defaultdict
 from pyaerial.classify import ClassifiedMessage, classify
 from pyaerial.config.schema import Config
 from pyaerial.constants import (
+    STORE_CALC_DATA,
     STORE_FIRST_PACKET,
     STORE_ICAO,
     STORE_INFO,
@@ -44,7 +45,12 @@ class Tracker:
         self._dirty_icaos.clear()
         return dirty
 
-    def ingest(self, messages: list[tuple[str, float]]) -> int:
+    def ingest(
+        self,
+        messages: list[tuple[str, float]],
+        *,
+        receivers: dict[str, str] | None = None,
+    ) -> int:
         """Classify and merge ``messages`` into the plane store. Returns count processed."""
         processed = 0
         for msg_hex, timestamp in messages:
@@ -55,7 +61,8 @@ class Tracker:
                 continue
             if classified is None:
                 continue
-            self._merge(classified, timestamp, msg_hex)
+            receiver = (receivers or {}).get(msg_hex)
+            self._merge(classified, timestamp, msg_hex, receiver=receiver)
             processed += 1
         return processed
 
@@ -139,7 +146,12 @@ class Tracker:
         return f"{label}: {', '.join(parts)}"
 
     def _merge(
-        self, classified: ClassifiedMessage, timestamp: float, msg_hex: str
+        self,
+        classified: ClassifiedMessage,
+        timestamp: float,
+        msg_hex: str,
+        *,
+        receiver: str | None = None,
     ) -> None:
         message_data = classified.data
         typecode_cat = classified.typecode_category
@@ -183,3 +195,28 @@ class Tracker:
             pkt_types = defaultdict(int, pkt_types)
             internal[STORE_PACKET_TYPE] = pkt_types
         pkt_types[typecode_cat] += 1
+
+        if receiver:
+            plane[STORE_INFO]["receiver"] = receiver
+            seen = plane[STORE_INFO].setdefault("receivers", [])
+            if receiver not in seen:
+                seen.append(receiver)
+
+        self._trim_series(plane, timestamp)
+
+    def _trim_series(self, plane: dict, now: float) -> None:
+        keep = self.config.tracking.telemetry_keep_seconds
+        if keep <= 0:
+            return
+        cutoff = now - keep
+        for bucket in (STORE_RECV_DATA, STORE_CALC_DATA):
+            fields = plane.get(bucket)
+            if not isinstance(fields, dict):
+                continue
+            for field, series in list(fields.items()):
+                if not series:
+                    continue
+                trimmed = [datum for datum in series if datum.time >= cutoff]
+                if not trimmed:
+                    trimmed = series[-1:]
+                fields[field] = trimmed

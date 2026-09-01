@@ -134,24 +134,26 @@ class MockReceiver(Receiver):
             {
                 "icao": "A1B2C3",
                 "callsign": "N123AB",
-                "center_lat": 35.7275,
-                "center_lon": -78.6959,
-                "radius": 0.005,
-                "altitude": 1200.0,
-                "speed": 180.0,
-                "speed_rad": 0.04,
-                "phase": 0.0,
+                "mode": "approach",
+                "start_lat": 35.7050,
+                "start_lon": -78.7100,
+                "end_lat": 35.7285,
+                "end_lon": -78.6965,
+                "altitude": 400.0,
+                "speed": 220.0,
+                "duration": 80.0,
             },
             {
                 "icao": "B4C5D6",
                 "callsign": "DRONE01",
-                "center_lat": 35.7285,
-                "center_lon": -78.6965,
-                "radius": 0.003,
-                "altitude": 120.0,
-                "speed": 45.0,
-                "speed_rad": 0.08,
-                "phase": 2.0,
+                "mode": "approach",
+                "start_lat": 35.7400,
+                "start_lon": -78.6800,
+                "end_lat": 35.7275,
+                "end_lon": -78.6959,
+                "altitude": 180.0,
+                "speed": 60.0,
+                "duration": 70.0,
             },
             {
                 "icao": "C7D8E9",
@@ -163,17 +165,6 @@ class MockReceiver(Receiver):
                 "speed": 210.0,
                 "speed_rad": 0.02,
                 "phase": 4.0,
-            },
-            {
-                "icao": "D1E2F3",
-                "callsign": "COOLFLY1",
-                "center_lat": 35.8500,
-                "center_lon": -78.8000,
-                "radius": 0.120,
-                "altitude": 2200.0,
-                "speed": 260.0,
-                "speed_rad": 0.015,
-                "phase": 1.0,
             },
             {
                 "icao": "D9E0F1",
@@ -198,13 +189,32 @@ class MockReceiver(Receiver):
             tick_count += 1
 
             for plane in planes:
-                plane["phase"] += plane["speed_rad"]
-                p = plane["phase"]
-                lat = plane["center_lat"] + math.sin(p) * plane["radius"]
-                lon = plane["center_lon"] + math.cos(p) * plane["radius"]
-                heading = (
-                    math.degrees(math.atan2(math.cos(p), -math.sin(p))) + 360
-                ) % 360
+                if plane.get("mode") == "approach":
+                    elapsed = (tick_count * self.interval) % plane["duration"]
+                    frac = min(elapsed / plane["duration"], 0.9)
+                    lat = plane["start_lat"] + (
+                        plane["end_lat"] - plane["start_lat"]
+                    ) * frac
+                    lon = plane["start_lon"] + (
+                        plane["end_lon"] - plane["start_lon"]
+                    ) * frac
+                    heading = (
+                        math.degrees(
+                            math.atan2(
+                                plane["end_lon"] - plane["start_lon"],
+                                plane["end_lat"] - plane["start_lat"],
+                            )
+                        )
+                        + 360.0
+                    ) % 360.0
+                else:
+                    plane["phase"] += plane["speed_rad"]
+                    p = plane["phase"]
+                    lat = plane["center_lat"] + math.sin(p) * plane["radius"]
+                    lon = plane["center_lon"] + math.cos(p) * plane["radius"]
+                    heading = (
+                        math.degrees(math.atan2(math.cos(p), -math.sin(p))) + 360
+                    ) % 360
 
                 if tick_count % 10 == 1:
                     c_msg = encode_callsign(plane["icao"], plane["callsign"])

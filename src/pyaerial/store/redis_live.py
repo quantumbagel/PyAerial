@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from collections import defaultdict
 from typing import Any
@@ -47,9 +48,16 @@ _RECONNECT_DELAY = 2.0
 class RedisLiveStore:
     """Shared in-memory live store for engine writes and web portal reads."""
 
-    def __init__(self, redis_uri: str, *, memory_only: bool = False):
+    def __init__(
+        self,
+        redis_uri: str,
+        *,
+        memory_only: bool = False,
+        telemetry_keep_seconds: float = 600.0,
+    ):
         self.uri = redis_uri
         self.memory_only = memory_only
+        self.telemetry_keep_seconds = telemetry_keep_seconds
         self.client: redis.Redis | None = None
         self._last_telemetry_ts: dict[str, float] = {}
         self._mem_flights: dict[str, dict] = {}
@@ -58,6 +66,8 @@ class RedisLiveStore:
         self._mem_active_alerts: dict[str, dict] = {}
         self._mem_alert_episodes: list[dict] = []
         self._last_connect_attempt = 0.0
+        self._last_ping_ok = 0.0
+        self._mem_lock = threading.Lock()
         self._reported_down = False
         if memory_only:
             self._reported_down = True
@@ -113,8 +123,12 @@ class RedisLiveStore:
                     self.client = None
         if self.client is None:
             return False
+        now = time.monotonic()
+        if now - self._last_ping_ok < _RECONNECT_DELAY:
+            return True
         try:
             self.client.ping()
+            self._last_ping_ok = now
             return True
         except RedisError:
             log.warning("Lost Redis connection; operating with in-memory live buffer.")
@@ -375,7 +389,6 @@ class RedisLiveStore:
                 "owner": doc.get("owner") or info.get("owner"),
                 "country": doc.get("country") or info.get("country"),
                 "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type"),
-                "raw_messages": doc.get("raw_messages", []),
                 "is_live": True,
                 "status": "live",
             }
@@ -397,7 +410,6 @@ class RedisLiveStore:
                 "owner": doc.get("owner") or info.get("owner"),
                 "country": doc.get("country") or info.get("country"),
                 "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type"),
-                "raw_messages": doc.get("raw_messages", []),
                 "is_live": True,
                 "status": "live",
             }
@@ -666,8 +678,7 @@ class RedisLiveStore:
             "owner": info.get("owner") or "",
             "country": info.get("country") or "",
             "aircraft_type": info.get("aircraft_type") or "",
-            "info": {str(k): v for k, v in info.items()},
-            "raw_messages": plane.get("raw_messages", []),
+            "info": {str(k): v for k, v in dict(info).items()},
         }
         self._mem_flights[flight_id] = flight_doc
         self._write_telemetry_points(plane, flight_id, icao)
@@ -738,6 +749,14 @@ class RedisLiveStore:
         # execute does not duplicate mem points. Redis holes are repaired
         # by ``_backfill_redis_from_mem`` on reconnect.
         self._last_telemetry_ts[flight_id] = last_written
+        keep = self.telemetry_keep_seconds
+        if keep > 0:
+            cutoff = time.time() - keep
+            points = self._mem_telemetry[flight_id]
+            trimmed = [point for point in points if point["timestamp"] >= cutoff]
+            self._mem_telemetry[flight_id] = trimmed or points[-1:]
+            if pipe and key:
+                pipe.zremrangebyscore(key, "-inf", cutoff)
         if pipe:
             try:
                 pipe.execute()

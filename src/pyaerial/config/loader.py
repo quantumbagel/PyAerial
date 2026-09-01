@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 import ruamel.yaml
 from pydantic import ValidationError
@@ -14,6 +16,11 @@ from pydantic import ValidationError
 from pyaerial.config.schema import Config
 
 log = logging.getLogger("pyaerial.config")
+
+_ENV_INTERPOLATION = re.compile(
+    r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}"
+)
+_LOCAL_HTTP_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 class ConfigError(Exception):
@@ -26,6 +33,7 @@ _ENV_OVERRIDES = {
     "PYAERIAL_LOG_LEVEL": ("logging", "level"),
     "PYAERIAL_LOG_FILE": ("logging", "file"),
     "PYAERIAL_HZ": ("tracking", "hz"),
+    "PYAERIAL_WEB_TOKEN": ("web", "token"),
 }
 
 
@@ -72,6 +80,7 @@ def load_config(
             f"configuration file {config_path} must contain a mapping at the top level"
         )
 
+    data = _expand_env_vars(data, config_path)
     data = _apply_overrides(data, overrides)
 
     try:
@@ -135,15 +144,58 @@ def _validate_cross_references(config: Config, path: Path) -> None:
         raise ConfigError("\n".join(lines))
 
 
-def _webhook_url_allowed(url: str) -> bool:
-    lowered = url.strip().lower()
-    if lowered.startswith("https://"):
+def _expand_env_vars(value: object, path: Path) -> object:
+    """Replace ``${VAR}`` and ``${VAR:-default}`` in string values.
+
+    Unset variables without a default raise :class:`ConfigError`.
+    """
+    if isinstance(value, str):
+        return _expand_env_string(value, path)
+    if isinstance(value, list):
+        return [_expand_env_vars(item, path) for item in value]
+    if isinstance(value, dict):
+        return {key: _expand_env_vars(item, path) for key, item in value.items()}
+    return value
+
+
+def _expand_env_string(value: str, path: Path) -> str:
+    missing: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        default = match.group(2)
+        if name in os.environ:
+            return os.environ[name]
+        if default is not None:
+            return default
+        missing.append(name)
+        return match.group(0)
+
+    expanded = _ENV_INTERPOLATION.sub(replace, value)
+    if missing:
+        names = ", ".join(sorted(set(missing)))
+        raise ConfigError(
+            f"configuration file {path} is invalid:\n"
+            f"  - unset environment variable(s): {names}"
+        )
+    return expanded
+
+
+def webhook_url_allowed(url: str) -> bool:
+    """HTTPS anywhere, HTTP only for localhost / 127.0.0.1 / ::1."""
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if parsed.scheme == "https":
         return True
-    if lowered.startswith("http://localhost") or lowered.startswith(
-        "http://127.0.0.1"
-    ):
-        return True
+    if parsed.scheme == "http":
+        return host in _LOCAL_HTTP_HOSTS
     return False
+
+
+def _webhook_url_allowed(url: str) -> bool:
+    return webhook_url_allowed(url)
 
 
 def _format_validation_error(path: Path, exc: ValidationError) -> str:

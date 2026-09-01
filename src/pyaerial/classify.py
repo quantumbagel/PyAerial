@@ -154,7 +154,7 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
         return None
 
     if data is None:
-        log.warning("Unsupported typecode %s (msg=%s)", typecode, msg)
+        log.debug("Unsupported typecode %s (msg=%s)", typecode, msg)
         return None
 
     data[STORE_CALC_DATA] = {}
@@ -163,8 +163,8 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
     return ClassifiedMessage(data=data, typecode_category=category)
 
 
-def _valid_icao(icao: str) -> bool:
-    return len(icao) == 6 and icao != "000000"
+def _valid_icao(icao: object) -> bool:
+    return isinstance(icao, str) and len(icao) == 6 and icao != "000000"
 
 
 def _strip_nulls(data: dict) -> dict:

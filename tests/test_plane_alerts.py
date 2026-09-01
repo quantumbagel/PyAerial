@@ -67,6 +67,40 @@ def test_forget_motion_drops_kalman():
         calc.close()
 
 
+def test_hysteresis_delays_activation():
+    from pyaerial.config.schema import ZoneConfig
+    from helpers import make_rule
+
+    config = make_config(
+        zones={
+            "pad": ZoneConfig(
+                coordinates=[
+                    [35.72, -78.70],
+                    [35.73, -78.70],
+                    [35.73, -78.69],
+                    [35.72, -78.69],
+                    [35.72, -78.70],
+                ],
+                rules=[
+                    make_rule(
+                        altitude={"max": 2000},
+                        eta={"max": 120},
+                        hysteresis_seconds=30,
+                    )
+                ],
+            )
+        }
+    )
+    calc = PlaneCalculator(config, build_polygons(config.zones))
+    try:
+        plane = _plane()
+        calc.calculate_plane(plane)
+        assert calc._alert_state == {}
+        assert any(key[0] == "abc123" for key in calc._pending_match)
+    finally:
+        calc.close()
+
+
 def test_deactivate_clears_motion_and_alerts():
     config = make_config()
     calc = PlaneCalculator(config, build_polygons(config.zones))

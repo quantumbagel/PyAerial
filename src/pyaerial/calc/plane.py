@@ -88,16 +88,20 @@ class PlaneCalculator:
         self._smoothed_turn_rates: dict[str, float] = {}
         # (icao, zone, rule) -> {activated_at, last_periodic, alert_id}
         self._alert_state: dict[tuple[str, str, str], dict] = {}
+        self._pending_match: dict[tuple[str, str, str], float] = {}
+        self._pending_unmatch: dict[tuple[str, str, str], float] = {}
 
     def close(self) -> None:
         for alerter in self._alerters.values():
             alerter.close()
         self._alerters.clear()
-        self._executor.shutdown(wait=False)
-        self._alert_executor.shutdown(wait=False)
+        self._executor.shutdown(wait=True, cancel_futures=True)
+        self._alert_executor.shutdown(wait=True, cancel_futures=True)
         self._kalman_filters.clear()
         self._smoothed_turn_rates.clear()
         self._alert_state.clear()
+        self._pending_match.clear()
+        self._pending_unmatch.clear()
 
     def calculate_all(
         self, planes: dict[str, dict], dirty_icaos: set[str] | None = None
@@ -251,6 +255,12 @@ class PlaneCalculator:
         if STORE_ICAO not in info:
             return
         icao = info[STORE_ICAO].lower()
+        self._pending_match = {
+            key: ts for key, ts in self._pending_match.items() if key[0] != icao
+        }
+        self._pending_unmatch = {
+            key: ts for key, ts in self._pending_unmatch.items() if key[0] != icao
+        }
         stale_keys = [k for k in self._alert_state if k[0] == icao]
         if not stale_keys:
             self.forget_motion(icao)
@@ -365,23 +375,25 @@ class PlaneCalculator:
                     country = record.get("country") or ""
                     aircraft_type = record.get("typecode") or ""
 
-            live_cs = plane[STORE_INFO].get(STORE_CALLSIGN)
-            if live_cs:
-                callsign = live_cs
-            plane[STORE_INFO][STORE_CALLSIGN] = callsign or ""
-            plane[STORE_INFO]["model"] = model
-            plane[STORE_INFO]["owner"] = owner
-            plane[STORE_INFO]["country"] = country
-            plane[STORE_INFO]["aircraft_type"] = aircraft_type
-            plane[STORE_INFO]["metadata_resolved"] = True
+            with self._lock:
+                live_cs = plane[STORE_INFO].get(STORE_CALLSIGN)
+                if live_cs:
+                    callsign = live_cs
+                plane[STORE_INFO][STORE_CALLSIGN] = callsign or ""
+                plane[STORE_INFO]["model"] = model
+                plane[STORE_INFO]["owner"] = owner
+                plane[STORE_INFO]["country"] = country
+                plane[STORE_INFO]["aircraft_type"] = aircraft_type
+                plane[STORE_INFO]["metadata_resolved"] = True
         except Exception as exc:
             log.debug("Background metadata lookup failed for %s: %s", icao, exc)
-            plane[STORE_INFO].setdefault(STORE_CALLSIGN, "")
-            plane[STORE_INFO].setdefault("model", "")
-            plane[STORE_INFO].setdefault("owner", "")
-            plane[STORE_INFO].setdefault("country", "")
-            plane[STORE_INFO].setdefault("aircraft_type", "")
-            plane[STORE_INFO]["metadata_resolved"] = True
+            with self._lock:
+                plane[STORE_INFO].setdefault(STORE_CALLSIGN, "")
+                plane[STORE_INFO].setdefault("model", "")
+                plane[STORE_INFO].setdefault("owner", "")
+                plane[STORE_INFO].setdefault("country", "")
+                plane[STORE_INFO].setdefault("aircraft_type", "")
+                plane[STORE_INFO]["metadata_resolved"] = True
         finally:
             with self._lock:
                 self._pending_lookups.discard(icao)
@@ -455,8 +467,13 @@ class PlaneCalculator:
 
         active_alerts: list[dict] = []
         for key, (zone_name, rule, eta) in matching.items():
+            self._pending_unmatch.pop(key, None)
             state = self._alert_state.get(key)
             if state is None:
+                first_match = self._pending_match.setdefault(key, now)
+                if now - first_match < (rule.hysteresis_seconds or 0):
+                    continue
+                self._pending_match.pop(key, None)
                 # Include the activation time in the alert id so a re-entry into the
                 # same zone/rule starts a new episode instead of overwriting the
                 # previous one in the live store and in Mongo.
@@ -517,17 +534,37 @@ class PlaneCalculator:
             )
 
         stale_keys = [
-            key for key in self._alert_state if key[0] == icao and key not in matching
+            key
+            for key in list(self._alert_state) + list(self._pending_match)
+            if key[0] == icao and key not in matching
         ]
         for key in stale_keys:
+            self._pending_match.pop(key, None)
+            state = self._alert_state.get(key)
+            if state is None:
+                continue
             zone_name, rule_name = key[1], key[2]
-            state = self._alert_state.pop(key)
             zone = self.config.zones.get(zone_name)
             rule = (
                 next((r for r in zone.rules if r.name == rule_name), None)
                 if zone
                 else None
             )
+            hyst = rule.hysteresis_seconds if rule is not None else 0
+            first_unmatch = self._pending_unmatch.setdefault(key, now)
+            if now - first_unmatch < (hyst or 0):
+                active_alerts.append(
+                    {
+                        "alert_id": state["alert_id"],
+                        "zone": zone_name,
+                        "rule": rule_name,
+                        "activated_at": state["activated_at"],
+                        "eta": geofence_etas.get(zone_name, math.inf),
+                    }
+                )
+                continue
+            self._pending_unmatch.pop(key, None)
+            self._alert_state.pop(key, None)
             eta = geofence_etas.get(zone_name, math.inf)
             if rule is not None:
                 self._on_deactivate(

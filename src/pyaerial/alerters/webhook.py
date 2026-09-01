@@ -1,7 +1,11 @@
 import logging
 import math
+import time
+
 import requests
+
 from pyaerial.alerters import Alerter, register_alerter
+from pyaerial.config.loader import webhook_url_allowed
 
 log = logging.getLogger("pyaerial.alerter.webhook")
 
@@ -10,6 +14,9 @@ log = logging.getLogger("pyaerial.alerter.webhook")
 _ALT_M_TO_FT = 3.28084
 _SPEED_KMH_TO_KT = 0.539957
 _VS_MPS_TO_FT_PER_MIN = 196.8504
+_WEBHOOK_ATTEMPTS = 3
+_WEBHOOK_RETRY_BACKOFF = 0.5
+_WEBHOOK_TIMEOUT = 5
 
 
 def build_tracker_links(
@@ -95,12 +102,7 @@ class WebhookAlerter(Alerter):
         if not self.url:
             raise ValueError("webhook URL must be provided in alerter options")
         url = str(self.url).strip()
-        lowered = url.lower()
-        if not (
-            lowered.startswith("https://")
-            or lowered.startswith("http://localhost")
-            or lowered.startswith("http://127.0.0.1")
-        ):
+        if not webhook_url_allowed(url):
             raise ValueError(
                 "webhook URL must be https (http allowed only for localhost)"
             )
@@ -137,13 +139,35 @@ class WebhookAlerter(Alerter):
         else:
             body = alert_data
 
-        try:
-            resp = requests.request(
-                self.http_method, self.url, json=body, headers=self.headers, timeout=5
-            )
-            resp.raise_for_status()
-        except Exception as exc:
-            log.error("Failed to deliver webhook alert: %s", exc)
+        last_error: BaseException | None = None
+        for attempt in range(1, _WEBHOOK_ATTEMPTS + 1):
+            try:
+                resp = requests.request(
+                    self.http_method,
+                    self.url,
+                    json=body,
+                    headers=self.headers,
+                    timeout=_WEBHOOK_TIMEOUT,
+                )
+                resp.raise_for_status()
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt < _WEBHOOK_ATTEMPTS:
+                    delay = _WEBHOOK_RETRY_BACKOFF * (2 ** (attempt - 1))
+                    log.warning(
+                        "Webhook delivery failed (attempt %d/%d); retrying in %.1fs: %s",
+                        attempt,
+                        _WEBHOOK_ATTEMPTS,
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
+        log.error(
+            "Failed to deliver webhook alert after %d attempts: %s",
+            _WEBHOOK_ATTEMPTS,
+            last_error,
+        )
 
     def _format_discord(
         self,

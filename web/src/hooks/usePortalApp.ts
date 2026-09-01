@@ -207,7 +207,41 @@ export function usePortalApp() {
     return portal.flightsData.length;
   }, [portal.flightsData, portalView]);
 
-  const { activeFlightId, closeDrawer, setFollowSelectedPlane, syncFlightAlerts } = selection;
+  const { activeFlightId, closeDrawer, setFollowSelectedPlane, syncFlightAlerts, selectFlight } =
+    selection;
+
+  const urlFlightApplied = useRef(false);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const view = params.get('view');
+    if (view === 'live' || view === 'history') {
+      setPortalView(view);
+    }
+  }, [setPortalView]);
+
+  useEffect(() => {
+    if (urlFlightApplied.current) return;
+    const flight = new URLSearchParams(window.location.search).get('flight');
+    if (!flight) {
+      urlFlightApplied.current = true;
+      return;
+    }
+    if (portal.flightsData.some((item) => item.flight_id === flight)) {
+      selectFlight(flight);
+      urlFlightApplied.current = true;
+    }
+  }, [portal.flightsData, selectFlight]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (portalView === 'history') params.set('view', 'history');
+    else params.delete('view');
+    if (activeFlightId) params.set('flight', activeFlightId);
+    else params.delete('flight');
+    const qs = params.toString();
+    const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    window.history.replaceState(null, '', next);
+  }, [portalView, activeFlightId]);
 
   useEffect(() => {
     if (portalView === 'live' && activeFlightId) {

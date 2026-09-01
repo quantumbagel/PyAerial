@@ -27,7 +27,7 @@ alert_colors:
 receivers:
   main:
     type: dump1090
-    host: localhost
+    host: "${DUMP1090_HOST:-localhost}"
     port: 30002
 
 zones:
@@ -69,8 +69,8 @@ zones:
         dwell_seconds: 60
         on_activate:
           - method: print
-          # Webhook URLs are secrets — set via options.url in an untracked
-          # overlay, or keep print-only in the committed config.
+          # Webhook URLs are secrets. Uncomment and export PYAERIAL_WEBHOOK_URL;
+          # ${VAR} is expanded at load time (fails if the variable is unset).
           # - method: webhook
           #   options:
           #     url: "${PYAERIAL_WEBHOOK_URL}"
