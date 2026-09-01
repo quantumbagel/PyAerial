@@ -12,7 +12,7 @@ import pymongo
 from pyaerial.calc.aircraft_db import AircraftDB, normalize_photo_url
 from pyaerial.config.schema import Config
 
-_FLIGHT_STATUS_LIVE = "live"
+FLIGHT_STATUS_LIVE = "live"
 
 
 def zones_payload(config: Config) -> dict[str, Any]:
@@ -267,7 +267,7 @@ def flight_summary(
         speed = tel.get("speed")
         heading = tel.get("heading")
         timestamp = tel.get("timestamp")
-    is_live = doc.get("status") == _FLIGHT_STATUS_LIVE
+    is_live = doc.get("status") == FLIGHT_STATUS_LIVE
     active_alerts = format_active_alerts(doc)
     alert_stats = (
         live_alert_stats(active_alerts)

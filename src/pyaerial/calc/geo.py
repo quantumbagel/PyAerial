@@ -56,6 +56,19 @@ def distance_to_polygon(polygon: Polygon, position: tuple[float, float]) -> floa
     return geodesic((nearest.x, nearest.y), position).km
 
 
+def _bbox_min_distance_km(polygon: Polygon, position: tuple[float, float]) -> float:
+    """Lower-bound km from ``position`` to ``polygon`` using the bounding box."""
+    min_lat, min_lon, max_lat, max_lon = polygon.bounds
+    lat_diff = max(0.0, min_lat - position[0], position[0] - max_lat)
+    max_abs_lat = max(abs(position[0]), abs(min_lat), abs(max_lat))
+    if max_abs_lat < 89.0:
+        lon_diff = max(0.0, min_lon - position[1], position[1] - max_lon)
+        return max(
+            lat_diff * 110.5, lon_diff * 111.3 * math.cos(math.radians(max_abs_lat))
+        )
+    return lat_diff * 110.5
+
+
 def time_to_enter_geofence(
     position: tuple[float, float],
     heading: float,
@@ -74,20 +87,8 @@ def time_to_enter_geofence(
     if speed <= 0:
         return math.inf
 
-    # 1. Bounding box lower bound distance check (extremely fast early-return)
-    min_lat, min_lon, max_lat, max_lon = polygon.bounds
-    lat_diff = max(0.0, min_lat - position[0], position[0] - max_lat)
-    max_abs_lat = max(abs(position[0]), abs(min_lat), abs(max_lat))
-    if max_abs_lat < 89.0:
-        lon_diff = max(0.0, min_lon - position[1], position[1] - max_lon)
-        min_dist_lb = max(
-            lat_diff * 110.5, lon_diff * 111.3 * math.cos(math.radians(max_abs_lat))
-        )
-    else:
-        min_dist_lb = lat_diff * 110.5
-
     distance_approx = max_time * speed / 3600  # km
-    if min_dist_lb > distance_approx:
+    if _bbox_min_distance_km(polygon, position) > distance_approx:
         return math.inf
 
     # 2. Continuous ray calculation without discretized steps
@@ -140,18 +141,7 @@ def time_to_enter_geofence_curved(
     # Bounding-box lower-bound check: within max_time the aircraft can cover at
     # most max_time * speed, so if even the straight-line distance to the box
     # exceeds that, the geofence is unreachable.
-    min_lat, min_lon, max_lat, max_lon = polygon.bounds
-    lat_diff = max(0.0, min_lat - position[0], position[0] - max_lat)
-    max_abs_lat = max(abs(position[0]), abs(min_lat), abs(max_lat))
-    if max_abs_lat < 89.0:
-        lon_diff = max(0.0, min_lon - position[1], position[1] - max_lon)
-        min_dist_lb = max(
-            lat_diff * 110.5, lon_diff * 111.3 * math.cos(math.radians(max_abs_lat))
-        )
-    else:
-        min_dist_lb = lat_diff * 110.5
-
-    if min_dist_lb > max_time * speed / 3600:
+    if _bbox_min_distance_km(polygon, position) > max_time * speed / 3600:
         return math.inf
 
     # The straight-line ETA acts as a floor: a small turn rate (heading noise or

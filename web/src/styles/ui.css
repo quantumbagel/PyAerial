@@ -148,26 +148,6 @@
     white-space: nowrap;
 }
 
-.ui-badge--live {
-    background: var(--status-live-bg);
-    color: var(--status-live-text);
-}
-
-.ui-badge--warn {
-    background: var(--warn-dark);
-    color: var(--text);
-}
-
-.ui-badge--alert {
-    background: var(--alert-dark);
-    color: #fca5a5;
-}
-
-.ui-badge--info {
-    background: var(--info-bg);
-    color: var(--info);
-}
-
 .ui-badge--neutral {
     background: var(--neutral-dark);
     color: var(--text-secondary);
@@ -229,10 +209,6 @@
 
 .ui-stat__value--warn {
     color: var(--warn);
-}
-
-.ui-stat__value--alert {
-    color: var(--alert);
 }
 
 /* ── Tabs ────────────────────────────────────────────────── */
@@ -301,10 +277,6 @@
 
 .ui-input:focus {
     border-color: var(--accent);
-}
-
-.ui-input--search {
-    /* alias for semantic use */
 }
 
 /* ── Menus ───────────────────────────────────────────────── */

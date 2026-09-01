@@ -197,7 +197,6 @@ export function Sidebar({
       <div id="search-container">
         <Input
           type="search"
-          search
           id="search-input"
           placeholder="Search by callsign, ICAO, model, or alert..."
           value={searchQuery}

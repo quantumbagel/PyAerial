@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator
 from typing import Any
 
 import pymongo
@@ -42,15 +43,11 @@ def flight_id_for_plane(plane: dict) -> str:
     return f"{icao}-{int(first_packet)}"
 
 
-def build_telemetry_docs(
-    plane: dict, flight_id: str, icao: str
-) -> list[dict[str, Any]]:
-    """Build telemetry documents from a plane's in-memory time series."""
+def iter_telemetry_samples(
+    plane: dict,
+) -> Iterator[tuple[float, float, float, float | None, float | None, float | None]]:
+    """Yield ``(timestamp, lat, lon, alt, speed, heading)`` for each position sample."""
     lat_series = plane.get(STORE_RECV_DATA, {}).get(STORE_LAT, [])
-    if not lat_series:
-        return []
-
-    docs: list[dict[str, Any]] = []
     for lat_datum in lat_series:
         lon_datum = get_latest(STORE_RECV_DATA, STORE_LONG, plane, lat_datum.time)
         if lon_datum is None:
@@ -62,23 +59,39 @@ def build_telemetry_docs(
         heading_datum = get_latest(
             STORE_CALC_DATA, STORE_HEADING, plane, lat_datum.time
         ) or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, lat_datum.time)
+        yield (
+            lat_datum.time,
+            lat_datum.value,
+            lon_datum.value,
+            alt_datum.value if alt_datum is not None else None,
+            speed_datum.value if speed_datum is not None else None,
+            heading_datum.value if heading_datum is not None else None,
+        )
+
+
+def build_telemetry_docs(
+    plane: dict, flight_id: str, icao: str
+) -> list[dict[str, Any]]:
+    """Build telemetry documents from a plane's in-memory time series."""
+    docs: list[dict[str, Any]] = []
+    for timestamp, lat, lon, alt, speed, heading in iter_telemetry_samples(plane):
         doc: dict[str, Any] = {
             "flight_id": flight_id,
             "icao": icao,
-            "timestamp": lat_datum.time,
-            "latitude": lat_datum.value,
-            "longitude": lon_datum.value,
+            "timestamp": timestamp,
+            "latitude": lat,
+            "longitude": lon,
             "position": {
                 "type": "Point",
-                "coordinates": [lon_datum.value, lat_datum.value],
+                "coordinates": [lon, lat],
             },
         }
-        if alt_datum is not None:
-            doc["altitude"] = alt_datum.value
-        if speed_datum is not None:
-            doc["speed"] = speed_datum.value
-        if heading_datum is not None:
-            doc["heading"] = heading_datum.value
+        if alt is not None:
+            doc["altitude"] = alt
+        if speed is not None:
+            doc["speed"] = speed
+        if heading is not None:
+            doc["heading"] = heading
         docs.append(doc)
     return docs
 

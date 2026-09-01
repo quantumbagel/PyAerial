@@ -7,6 +7,7 @@ from typing import Any
 import pymongo
 
 from pyaerial.api.payloads import (
+    FLIGHT_STATUS_LIVE,
     alert_stats_by_flight,
     enrich_flight_detail,
     enrich_flight_summary,
@@ -18,8 +19,6 @@ from pyaerial.api.payloads import (
 )
 from pyaerial.api.protocol import LiveStore
 from pyaerial.calc.aircraft_db import AircraftDB
-
-_FLIGHT_STATUS_LIVE = "live"
 
 
 def get_live_flights(
@@ -51,7 +50,7 @@ def get_history_flights(
     telemetry_col = db.get_collection("telemetry")
 
     filt: dict[str, Any] = {
-        "status": {"$ne": _FLIGHT_STATUS_LIVE},
+        "status": {"$ne": FLIGHT_STATUS_LIVE},
         "$or": [{"retained": True}, {"retained": {"$exists": False}}],
     }
     end_filt: dict[str, Any] = {}
@@ -297,18 +296,17 @@ def get_alerts(
 def get_stats(
     live_store: LiveStore | None,
     db: pymongo.database.Database | None,
-    aircraft_db: AircraftDB | None,
 ) -> dict[str, int]:
-    live_flights = len(get_live_flights(live_store, aircraft_db)) if live_store else 0
+    live_flights = len(live_store.get_flights()) if live_store else 0
     active_alerts = (
-        len(get_live_alerts(live_store, active_only=True)) if live_store else 0
+        len(live_store.get_alerts(active_only=True)) if live_store else 0
     )
     retained_flights = 0
     historical_alerts = 0
     if db is not None:
         retained_flights = db.get_collection("flights").count_documents(
             {
-                "status": {"$ne": _FLIGHT_STATUS_LIVE},
+                "status": {"$ne": FLIGHT_STATUS_LIVE},
                 "$or": [{"retained": True}, {"retained": {"$exists": False}}],
             }
         )

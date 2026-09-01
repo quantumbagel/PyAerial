@@ -7,7 +7,6 @@ export const COLOR_HEX = {
   live: '#34d399',
   liveDark: '#047857',
   accent: '#3b82f6',
-  accentDark: '#1e3a5f',
   default: '#64748b',
   defaultDark: '#334155',
 } as const;

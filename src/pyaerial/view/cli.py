@@ -358,7 +358,7 @@ def _display_plane_details(
     plane_id: str,
     aircraft_db: AircraftDB,
 ) -> None:
-    """Format and print detailed plane statistics according to statviewer_formatting specification."""
+    """Format and print detailed plane statistics."""
     db = _get_mongo_db(client)
 
     # 1. Lookup aircraft metadata

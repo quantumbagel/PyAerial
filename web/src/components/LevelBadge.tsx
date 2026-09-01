@@ -19,27 +19,22 @@ export function ZoneBadge({
   rule,
   zones,
   alertColors,
-  className,
   label,
-  colors: colorsOverride,
 }: {
   zone: string;
   rule?: string;
   zones?: Zone[];
   alertColors?: Record<string, string>;
-  className?: string;
   label?: string;
-  colors?: { fill: string };
 }) {
   const zoneName = (zone || 'zone').trim() || 'zone';
   const ruleName = (rule || '').trim() || 'rule';
   const displayLabel = label ?? formatZoneRule(zoneName, ruleName);
-  const colors = colorsOverride ?? alertColorFor(zoneName, ruleName, zones, alertColors);
+  const colors = alertColorFor(zoneName, ruleName, zones, alertColors);
   const textColor = getAccessibleBadgeTextColor(colors.fill);
   return (
     <Badge
       variant="zone"
-      className={className}
       style={{
         backgroundColor: `${colors.fill}26`,
         color: textColor,

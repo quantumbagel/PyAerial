@@ -8,7 +8,7 @@ interface StatProps {
 }
 
 interface StatValueProps {
-  tone?: 'live' | 'warn' | 'alert';
+  tone?: 'live' | 'warn';
   className?: string;
   id?: string;
   children: ReactNode;

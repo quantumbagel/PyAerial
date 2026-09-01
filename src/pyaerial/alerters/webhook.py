@@ -71,6 +71,18 @@ def build_map_links(latitude: float | None, longitude: float | None) -> dict[str
         return {}
 
 
+def _alert_telemetry(meta: dict, payload: dict) -> tuple:
+    return (
+        _safe_num(payload.get("latitude")),
+        _safe_num(payload.get("longitude")),
+        _safe_num(payload.get("altitude")),
+        _safe_num(payload.get("speed")),
+        _safe_num(payload.get("heading")),
+        _safe_num(payload.get("vertical_speed")),
+        _safe_num(meta.get("eta")),
+    )
+
+
 def _safe_num(val: object) -> float | int | None:
     if val is None:
         return None
@@ -183,13 +195,9 @@ class WebhookAlerter(Alerter):
         hook = reason.get("hook") if isinstance(reason, dict) else None
         hook_str = f" ({hook.capitalize()})" if hook else ""
 
-        lat = _safe_num(payload.get("latitude"))
-        lon = _safe_num(payload.get("longitude"))
-        alt = _safe_num(payload.get("altitude"))
-        speed = _safe_num(payload.get("speed"))
-        heading = _safe_num(payload.get("heading"))
-        vert_speed = _safe_num(payload.get("vertical_speed"))
-        eta = _safe_num(meta.get("eta"))
+        lat, lon, alt, speed, heading, vert_speed, eta = _alert_telemetry(
+            meta, payload
+        )
 
         fields = []
 
@@ -312,13 +320,9 @@ class WebhookAlerter(Alerter):
         hook = reason.get("hook") if isinstance(reason, dict) else None
         hook_str = f" ({hook.capitalize()})" if hook else ""
 
-        lat = _safe_num(payload.get("latitude"))
-        lon = _safe_num(payload.get("longitude"))
-        alt = _safe_num(payload.get("altitude"))
-        speed = _safe_num(payload.get("speed"))
-        heading = _safe_num(payload.get("heading"))
-        vert_speed = _safe_num(payload.get("vertical_speed"))
-        eta = _safe_num(meta.get("eta"))
+        lat, lon, alt, speed, heading, vert_speed, eta = _alert_telemetry(
+            meta, payload
+        )
 
         pos_str = (
             f"<{map_links.get('google_maps', f'https://www.google.com/maps?q={lat},{lon}')}|{lat:.5f}, {lon:.5f}>"

@@ -17,21 +17,16 @@ from pyaerial.constants import (
     ALERT_CAT_TYPE,
     ALERT_CAT_ZONE,
     STORE_ALT,
-    STORE_CALC_DATA,
     STORE_CALLSIGN,
     STORE_FIRST_PACKET,
-    STORE_HEADING,
-    STORE_HORIZ_SPEED,
     STORE_ICAO,
     STORE_INFO,
     STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import get_latest
-from pyaerial.store.mongo import flight_id_for_plane
+from pyaerial.store.mongo import flight_id_for_plane, iter_telemetry_samples
 
 log = logging.getLogger("pyaerial.store.redis")
 
@@ -373,44 +368,13 @@ class RedisLiveStore:
     def get_flight(self, flight_id: str) -> dict[str, Any] | None:
         if not self._ensure_connected():
             doc = self._mem_flights.get(flight_id)
-            if not doc:
-                return None
-            info = doc.get("info", {})
-            return {
-                "flight_id": flight_id,
-                "icao": doc.get("icao", ""),
-                "active_alerts": doc.get("active_alerts", []),
-                "start_time": doc.get("start_time"),
-                "end_time": doc.get("end_time"),
-                "callsign": doc.get("callsign") or info.get("callsign"),
-                "model": doc.get("model") or info.get("model"),
-                "owner": doc.get("owner") or info.get("owner"),
-                "country": doc.get("country") or info.get("country"),
-                "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type"),
-                "is_live": True,
-                "status": "live",
-            }
+            return self._flight_detail(doc, flight_id) if doc else None
         assert self.client is not None
         try:
             raw = self.client.get(_KEY_FLIGHT.format(flight_id=flight_id))
             if not raw:
                 return None
-            doc = json.loads(raw)
-            info = doc.get("info", {})
-            return {
-                "flight_id": flight_id,
-                "icao": doc.get("icao", ""),
-                "active_alerts": doc.get("active_alerts", []),
-                "start_time": doc.get("start_time"),
-                "end_time": doc.get("end_time"),
-                "callsign": doc.get("callsign") or info.get("callsign"),
-                "model": doc.get("model") or info.get("model"),
-                "owner": doc.get("owner") or info.get("owner"),
-                "country": doc.get("country") or info.get("country"),
-                "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type"),
-                "is_live": True,
-                "status": "live",
-            }
+            return self._flight_detail(json.loads(raw), flight_id)
         except RedisError as exc:
             log.error("Failed to read live flight %s: %s", flight_id, exc)
             return None
@@ -611,6 +575,24 @@ class RedisLiveStore:
             self.client.close()
             self.client = None
 
+    @staticmethod
+    def _flight_detail(doc: dict[str, Any], flight_id: str) -> dict[str, Any]:
+        info = doc.get("info", {})
+        return {
+            "flight_id": flight_id,
+            "icao": doc.get("icao", ""),
+            "active_alerts": doc.get("active_alerts", []),
+            "start_time": doc.get("start_time"),
+            "end_time": doc.get("end_time"),
+            "callsign": doc.get("callsign") or info.get("callsign"),
+            "model": doc.get("model") or info.get("model"),
+            "owner": doc.get("owner") or info.get("owner"),
+            "country": doc.get("country") or info.get("country"),
+            "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type"),
+            "is_live": True,
+            "status": "live",
+        }
+
     def _get_last_telemetry_point(self, flight_id: str) -> dict[str, Any] | None:
         if self.client is None:
             points = self._mem_telemetry.get(flight_id, [])
@@ -695,11 +677,14 @@ class RedisLiveStore:
 
     def _write_telemetry_points(self, plane: dict, flight_id: str, icao: str) -> None:
         last_written = self._last_telemetry_ts.get(flight_id, 0.0)
-        lat_series = plane.get(STORE_RECV_DATA, {}).get(STORE_LAT, [])
-        if not lat_series:
+        samples = [
+            sample
+            for sample in iter_telemetry_samples(plane)
+            if sample[0] > last_written
+        ]
+        if not samples:
             return
 
-        wrote = False
         pipe = (
             self.client.pipeline()
             if self._ensure_connected() and self.client is not None
@@ -707,42 +692,27 @@ class RedisLiveStore:
         )
         key = _KEY_TELEMETRY.format(flight_id=flight_id) if pipe else None
 
-        for lat_datum in lat_series:
-            if lat_datum.time <= last_written:
-                continue
-            lon_datum = get_latest(STORE_RECV_DATA, STORE_LONG, plane, lat_datum.time)
-            if lon_datum is None:
-                continue
-            alt_datum = get_latest(STORE_RECV_DATA, STORE_ALT, plane, lat_datum.time)
-            speed_datum = get_latest(
-                STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time
-            ) or get_latest(STORE_RECV_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
-            heading_datum = get_latest(
-                STORE_CALC_DATA, STORE_HEADING, plane, lat_datum.time
-            ) or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, lat_datum.time)
+        for timestamp, lat, lon, alt, speed, heading in samples:
             point: dict[str, Any] = {
                 "icao": icao,
-                "timestamp": lat_datum.time,
-                "latitude": lat_datum.value,
-                "longitude": lon_datum.value,
+                "timestamp": timestamp,
+                "latitude": lat,
+                "longitude": lon,
             }
-            if alt_datum is not None:
-                point["altitude"] = alt_datum.value
-            if speed_datum is not None:
-                point["speed"] = speed_datum.value
-            if heading_datum is not None:
-                point["heading"] = heading_datum.value
+            if alt is not None:
+                point["altitude"] = alt
+            if speed is not None:
+                point["speed"] = speed
+            if heading is not None:
+                point["heading"] = heading
 
             self._mem_telemetry[flight_id].append(point)
             if pipe and key:
                 pipe.zadd(
-                    key, {json.dumps(point, separators=(",", ":")): lat_datum.time}
+                    key, {json.dumps(point, separators=(",", ":")): timestamp}
                 )
-            last_written = max(last_written, lat_datum.time)
-            wrote = True
+            last_written = max(last_written, timestamp)
 
-        if not wrote:
-            return
         # Advance the cursor after the in-memory write so a failed Redis
         # execute does not duplicate mem points. Redis holes are repaired
         # by ``_backfill_redis_from_mem`` on reconnect.

@@ -228,7 +228,7 @@ def create_app(
     @app.get("/api/stats")
     def api_stats(token: str | None = Query(default=None)):
         _check_http_token(token)
-        return sanitize_for_json(get_stats(live_store, db, aircraft_db))
+        return sanitize_for_json(get_stats(live_store, db))
 
     @app.get("/api/zones")
     def api_zones(token: str | None = Query(default=None)):

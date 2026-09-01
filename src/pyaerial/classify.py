@@ -31,7 +31,6 @@ from pyaerial.constants import (
 log = logging.getLogger("pyaerial.classify")
 
 # Internal packet-type buckets used for status reporting.
-CAT_UNKNOWN = 0
 CAT_IDENT = 1
 CAT_SURFACE = 2
 CAT_AIRBORNE_BARO = 3
@@ -69,7 +68,7 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
         return None
 
     data: dict | None = None
-    category = CAT_UNKNOWN
+    category: int | None = None
 
     if 1 <= typecode <= 4:
         try:
@@ -151,7 +150,7 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
     elif typecode in (28, 29, 31):
         return None
 
-    if data is None:
+    if data is None or category is None:
         log.debug("Unsupported typecode %s (msg=%s)", typecode, msg)
         return None
 

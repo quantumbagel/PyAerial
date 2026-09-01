@@ -94,7 +94,7 @@ class LiveBroadcaster:
         now = time.monotonic()
         if self._last_stats is not None and now - self._last_stats_at < _STATS_CACHE_TTL:
             return self._last_stats
-        stats = get_stats(self.live_store, self.db, self.aircraft_db)
+        stats = get_stats(self.live_store, self.db)
         self._last_stats = stats
         self._last_stats_at = now
         return stats

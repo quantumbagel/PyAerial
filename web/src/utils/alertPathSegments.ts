@@ -3,14 +3,14 @@ import type { NormalizedAlertLevel } from './format';
 import { normalizeAlertRule } from './format';
 import { alertEpisodeIdentity } from './alertData';
 
-export interface AlertPathSegment {
+interface AlertPathSegment {
   latlngs: [number, number][];
   severity: NormalizedAlertLevel;
   rule?: string;
   zone?: string;
 }
 
-export interface NormalizedAlertEpisode {
+interface NormalizedAlertEpisode {
   alert_id: string;
   zone?: string;
   rule?: string;
@@ -19,7 +19,7 @@ export interface NormalizedAlertEpisode {
   active?: boolean;
 }
 
-export function normalizeAlertEpisodes(alerts: Alert[]): NormalizedAlertEpisode[] {
+function normalizeAlertEpisodes(alerts: Alert[]): NormalizedAlertEpisode[] {
   const byId = new Map<string, NormalizedAlertEpisode>();
   for (const alert of alerts) {
     const key = alertEpisodeIdentity(alert);

@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { cn } from './cn';
 
-type BadgeVariant = 'live' | 'warn' | 'alert' | 'info' | 'neutral' | 'zone';
+type BadgeVariant = 'neutral' | 'zone';
 
 interface BadgeProps {
   variant?: BadgeVariant;

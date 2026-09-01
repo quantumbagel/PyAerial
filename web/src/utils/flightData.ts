@@ -35,11 +35,11 @@ export function defaultSortDirection(field: FlightSortField): SortDirection {
   return 'desc';
 }
 
-export function getFlightLastSeen(flight: FlightSummary): number {
+function getFlightLastSeen(flight: FlightSummary): number {
   return flight.timestamp ?? flight.end_time ?? flight.start_time ?? 0;
 }
 
-export function getFlightDuration(flight: FlightSummary): number {
+function getFlightDuration(flight: FlightSummary): number {
   const start = flight.start_time ?? 0;
   const end = flight.end_time ?? flight.timestamp ?? start;
   return Math.max(0, end - start);
@@ -62,7 +62,7 @@ function activeAlertCount(flight: FlightSummary): number {
   return flight.alert_stats?.episode_count ?? 0;
 }
 
-export function isFlightSortValueMissing(flight: FlightSummary, field: FlightSortField): boolean {
+function isFlightSortValueMissing(flight: FlightSummary, field: FlightSortField): boolean {
   switch (field) {
     case 'altitude':
       return !isFiniteSortNumber(flight.altitude);

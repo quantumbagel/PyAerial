@@ -112,7 +112,7 @@ def handle_ws_request(
         )
 
     if action == "fetchStats":
-        return get_stats(live_store, db, aircraft_db)
+        return get_stats(live_store, db)
 
     if action == "fetchZones":
         return zones_payload(config)
