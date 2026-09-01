@@ -9,6 +9,9 @@ tracking:
   duplicate_packet_merging: 5
   status_message_top_planes: 5
   advanced_status: true
+  telemetry_keep_seconds: 600
+  # use_kalman_eta: true
+  # curved_projection: true
 
 logging:
   level: info
@@ -17,14 +20,25 @@ home:
   latitude: 36.6810752
   longitude: -78.8758528
 
+# web:
+#   token: "shared-secret"   # optional; require ?token= on /ws/live
+
 receivers:
   main:
     type: dump1090
     host: localhost
     port: 30002
+  # recorded:
+  #   type: replay
+  #   options:
+  #     path: captures/adsb.raw
+  #     speed: 1.0
+  #     loop: true
 
 zones:
   main:
+    # Inline [latitude, longitude] rings, or:
+    # file: zone.geojson   # .kml / .kmz / .geojson relative to this config
     coordinates:
       - [35.753821, -78.909304]
       - [35.755597, -78.904969]
@@ -43,6 +57,8 @@ zones:
           altitude: { max: 1000 }
           eta: { max: 120 }
         dwell_seconds: 60
+        # hysteresis_seconds: 15
+        # predict_seconds: 20
         on_activate:
           - method: print
         retain: true

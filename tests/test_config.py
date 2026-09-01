@@ -8,9 +8,16 @@ from pyaerial.config.loader import (
     load_config,
     webhook_url_allowed,
 )
+from pydantic import ValidationError
+
 from pyaerial.config.schema import AlertActionConfig, ReceiverConfig
 from helpers import make_config, make_rule
 from pyaerial.config.schema import ZoneConfig
+
+
+def test_zone_requires_coordinates_or_file():
+    with pytest.raises(ValidationError, match="coordinates or file"):
+        ZoneConfig(rules=[make_rule()])
 
 
 def test_unknown_receiver_rejected():

@@ -23,12 +23,16 @@ services:
         condition: service_started
       redis:
         condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
       PYAERIAL_START_DUMP1090: "0"
       PYAERIAL_MONGODB: mongodb://pyaerial:${MONGO_PASSWORD:-pyaerial}@mongodb:27017/?authSource=admin
       PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:-pyaerial}@redis:6379/0
-      DUMP1090_HOST: dump1090
+      # With --profile sdr this is the dump1090 service. Without SDR, set
+      # DUMP1090_HOST to an existing receiver (e.g. host.docker.internal).
+      DUMP1090_HOST: ${DUMP1090_HOST:-dump1090}
     command: ["pyaerial", "run", "-c", "/opt/PyAerial/config.yaml"]
   web:
     image: pyaerial:latest

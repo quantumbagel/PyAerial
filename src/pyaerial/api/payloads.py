@@ -38,7 +38,7 @@ def zones_payload(config: Config) -> dict[str, Any]:
             rules.append(rule_payload)
         zone_payload: dict[str, Any] = {
             "name": name,
-            "coordinates": zone.coordinates,
+            "coordinates": zone.coordinates or [],
             "rules": rules,
         }
         if zone.color is not None:

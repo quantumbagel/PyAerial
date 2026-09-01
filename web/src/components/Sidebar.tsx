@@ -46,9 +46,14 @@ interface SidebarProps {
   onAlertSortDirectionToggle: () => void;
   onSwitchSidebarTab: (tab: SidebarTab) => void;
   onSearchChange: (query: string) => void;
+  historySinceDate?: string;
+  historyUntilDate?: string;
+  onHistorySinceChange?: (value: string) => void;
+  onHistoryUntilChange?: (value: string) => void;
   onSelectFlight: (flightId: string) => void;
   onSelectAlert: (alert: Alert, episodeKey: string) => void;
   onAlertsScroll: (el: HTMLElement) => void;
+  onFlightsScroll?: (el: HTMLElement) => void;
   zones?: Zone[];
   alertColors?: Record<string, string>;
 }
@@ -82,9 +87,14 @@ export function Sidebar({
   onAlertSortDirectionToggle,
   onSwitchSidebarTab,
   onSearchChange,
+  historySinceDate = '',
+  historyUntilDate = '',
+  onHistorySinceChange,
+  onHistoryUntilChange,
   onSelectFlight,
   onSelectAlert,
   onAlertsScroll,
+  onFlightsScroll,
   zones,
   alertColors,
 }: SidebarProps) {
@@ -198,11 +208,39 @@ export function Sidebar({
         <Input
           type="search"
           id="search-input"
-          placeholder="Search by callsign, ICAO, model, or alert..."
+          placeholder={
+            portalView === 'history'
+              ? 'Search callsign, ICAO, or flight id…'
+              : 'Search by callsign, ICAO, model, or alert…'
+          }
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
           aria-label="Search flights and alerts"
         />
+        {portalView === 'history' ? (
+          <div id="history-filters">
+            <label className="history-filter">
+              <span>From</span>
+              <Input
+                type="date"
+                value={historySinceDate}
+                max={historyUntilDate || undefined}
+                onChange={(e) => onHistorySinceChange?.(e.target.value)}
+                aria-label="History from date"
+              />
+            </label>
+            <label className="history-filter">
+              <span>To</span>
+              <Input
+                type="date"
+                value={historyUntilDate}
+                min={historySinceDate || undefined}
+                onChange={(e) => onHistoryUntilChange?.(e.target.value)}
+                aria-label="History to date"
+              />
+            </label>
+          </div>
+        ) : null}
       </div>
       <TabList compact id="sidebar-tabs" aria-label="Sidebar panels">
         <Tab
@@ -236,7 +274,10 @@ export function Sidebar({
           onFlightSortChange={onFlightSortChange}
           onFlightSortDirectionToggle={onFlightSortDirectionToggle}
         />
-        <ul id="flight-list">
+        <ul
+          id="flight-list"
+          onScroll={(e) => onFlightsScroll?.(e.currentTarget)}
+        >
           {isLoadingFlights ? (
             <StatusMessage variant="loading">Loading flights…</StatusMessage>
           ) : flightsError ? (
@@ -245,7 +286,9 @@ export function Sidebar({
             </StatusMessage>
           ) : flights.length === 0 ? (
             <StatusMessage>
-              {searchQuery ? 'No flights match your search.' : 'No flights available.'}
+              {searchQuery || historySinceDate || historyUntilDate
+                ? 'No flights match your filters.'
+                : 'No flights available.'}
             </StatusMessage>
           ) : (
             flights.map((flight) => (
@@ -287,7 +330,9 @@ export function Sidebar({
             </StatusMessage>
           ) : sortedAlerts.length === 0 ? (
             <StatusMessage>
-              {searchQuery ? 'No alerts match your search.' : 'No alerts yet.'}
+              {searchQuery || historySinceDate || historyUntilDate
+                ? 'No alerts match your filters.'
+                : 'No alerts yet.'}
             </StatusMessage>
           ) : (
             sortedAlerts.map((alert, index) => {

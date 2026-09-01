@@ -216,16 +216,17 @@ def cmd_dump(
 ) -> None:
     if len(parts) < 2:
         print(
-            "[err] dump requires a subcommand or plane id (plane, flight, live, all, opensky)"
+            "[err] dump requires a subcommand or plane id "
+            "(plane, flight, live, all, aircraft <icao>)"
         )
         return
 
     db = get_mongo_db(client)
     arg = parts[1].lower()
 
-    if arg == "opensky":
+    if arg in {"aircraft", "opensky"}:
         if len(parts) < 3:
-            print("[err] dump opensky requires a plane id")
+            print("[err] dump aircraft requires an ICAO id")
             return
         plane = parts[2]
         record = aircraft_db.lookup_cached(plane) if aircraft_db else None
@@ -267,7 +268,8 @@ def cmd_dump(
         return
 
     if arg == "plane" or (
-        len(parts) == 2 and arg not in {"flight", "all", "opensky", "live"}
+        len(parts) == 2
+        and arg not in {"flight", "all", "aircraft", "opensky", "live"}
     ):
         plane_id = parts[2] if arg == "plane" else parts[1]
         if not _verify_plane(client, plane_id, live_store=live_store):

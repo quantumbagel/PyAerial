@@ -9,6 +9,10 @@ export function PortalApp() {
     portalView,
     searchQuery,
     setSearchQuery,
+    historySinceDate,
+    historyUntilDate,
+    setHistorySinceDate,
+    setHistoryUntilDate,
     zonesVisible,
     setZonesVisible,
     mapRef,
@@ -63,9 +67,14 @@ export function PortalApp() {
         onAlertSortDirectionToggle={toggleAlertSortDirection}
         onSwitchSidebarTab={portal.handleSwitchSidebarTab}
         onSearchChange={setSearchQuery}
+        historySinceDate={historySinceDate}
+        historyUntilDate={historyUntilDate}
+        onHistorySinceChange={setHistorySinceDate}
+        onHistoryUntilChange={setHistoryUntilDate}
         onSelectFlight={selection.selectFlight}
         onSelectAlert={selection.selectAlert}
         onAlertsScroll={portal.handleAlertsScroll}
+        onFlightsScroll={portal.handleFlightsScroll}
         zones={portal.zonesData?.zones}
         alertColors={portal.zonesData?.alert_colors}
       />

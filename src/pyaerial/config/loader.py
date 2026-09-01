@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import ruamel.yaml
 from pydantic import ValidationError
 
+from pyaerial.config.geofence_file import GeofenceFileError, load_geofence_coordinates
 from pyaerial.config.schema import Config
 
 log = logging.getLogger("pyaerial.config")
@@ -72,6 +73,7 @@ def load_config(
 
     data = _expand_env_vars(data, config_path)
     data = _apply_env_overrides(data)
+    data = _resolve_zone_files(data, config_path)
 
     try:
         config = Config.model_validate(data)
@@ -82,6 +84,42 @@ def load_config(
 
     log.debug("Loaded configuration from %s", config_path)
     return config
+
+
+def _resolve_zone_files(data: dict, config_path: Path) -> dict:
+    """Expand ``zones.*.file`` into ``coordinates`` before schema validation."""
+    zones = data.get("zones")
+    if not isinstance(zones, dict):
+        return data
+    for name, zone in zones.items():
+        if not isinstance(zone, dict):
+            continue
+        file_ref = zone.get("file")
+        if not file_ref:
+            continue
+        if zone.get("coordinates"):
+            raise ConfigError(
+                f"configuration file {config_path} is invalid:\n"
+                f"  - zones.{name}: provide coordinates or file, not both"
+            )
+        path = Path(str(file_ref))
+        if not path.is_absolute():
+            path = (config_path.parent / path).resolve()
+        else:
+            path = path.resolve()
+        if not path.is_file():
+            raise ConfigError(
+                f"configuration file {config_path} is invalid:\n"
+                f"  - zones.{name}.file: not found: {path}"
+            )
+        try:
+            zone["coordinates"] = load_geofence_coordinates(path)
+        except GeofenceFileError as exc:
+            raise ConfigError(
+                f"configuration file {config_path} is invalid:\n"
+                f"  - zones.{name}.file: {exc}"
+            ) from exc
+    return data
 
 
 def _validate_cross_references(config: Config, path: Path) -> None:

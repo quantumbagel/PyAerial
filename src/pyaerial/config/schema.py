@@ -147,7 +147,8 @@ class RuleConfig(_Strict):
 
 class ZoneConfig(_Strict):
     color: str | None = None
-    coordinates: list[list[float]] = Field(min_length=3)
+    coordinates: list[list[float]] | None = None
+    file: str | None = None
     rules: list[RuleConfig] = Field(min_length=1)
 
     @field_validator("color")
@@ -159,11 +160,23 @@ class ZoneConfig(_Strict):
 
     @field_validator("coordinates")
     @classmethod
-    def _validate_coordinates(cls, value: list[list[float]]) -> list[list[float]]:
+    def _validate_coordinates(
+        cls, value: list[list[float]] | None
+    ) -> list[list[float]] | None:
+        if value is None:
+            return value
+        if len(value) < 3:
+            raise ValueError("coordinates must include at least 3 points")
         for point in value:
             if len(point) != 2:
                 raise ValueError("each coordinate must be a [latitude, longitude] pair")
         return value
+
+    @model_validator(mode="after")
+    def _coordinates_or_file(self) -> "ZoneConfig":
+        if self.coordinates is None and not self.file:
+            raise ValueError("zone must define coordinates or file")
+        return self
 
 
 class WebConfig(_Strict):

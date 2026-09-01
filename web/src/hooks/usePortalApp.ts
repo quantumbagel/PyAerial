@@ -17,6 +17,7 @@ import {
   type FlightSortField,
   type SortDirection,
 } from '../utils/flightData';
+import { localDayEndSeconds, localDayStartSeconds } from '../utils/historyFilters';
 import { useFlightPaths } from './useFlightPaths';
 import { useFlightSelection } from './useFlightSelection';
 import { usePortalData } from './usePortalData';
@@ -27,6 +28,9 @@ export function usePortalApp() {
     return saved === 'live' || saved === 'history' ? saved : 'live';
   });
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [historySinceDate, setHistorySinceDate] = useState('');
+  const [historyUntilDate, setHistoryUntilDate] = useState('');
   const [zonesVisible, setZonesVisible] = useState(true);
   const [flightSortField, setFlightSortField] = useState<FlightSortField>(
     () => loadFlightSort(portalView).field,
@@ -40,6 +44,15 @@ export function usePortalApp() {
   const [alertSortDirection, setAlertSortDirection] = useState<AlertSortDirection>(
     () => loadAlertSort(portalView).direction,
   );
+  useEffect(() => {
+    if (portalView !== 'history') {
+      setDebouncedSearch(searchQuery);
+      return;
+    }
+    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery, portalView]);
+
   const skipNextFlightSortSave = useRef(false);
   const skipNextAlertSortSave = useRef(false);
 
@@ -129,35 +142,41 @@ export function usePortalApp() {
     appendSelectedTelemetry: selection.appendSelectedTelemetry,
     resetSelection: selection.resetSelection,
     resetPaths: () => resetPathsRef.current(),
+    historyQ: portalView === 'history' ? debouncedSearch.trim() : '',
+    historySince: portalView === 'history' ? localDayStartSeconds(historySinceDate) : null,
+    historyUntil: portalView === 'history' ? localDayEndSeconds(historyUntilDate) : null,
   });
 
   onSelectAlertTabRef.current = () => portal.setSidebarTab('alerts');
 
   const filteredFlights = useMemo(() => {
-    const q = searchQuery.toLowerCase();
-    const filtered = portal.flightsData.filter((flight) => {
-      const callsign = (flight.callsign || '').toLowerCase();
-      const icao = (flight.icao || '').toLowerCase();
-      const model = (flight.model || '').toLowerCase();
-      const aircraftType = (flight.aircraft_type || '').toLowerCase();
-      const owner = (flight.owner || '').toLowerCase();
-      const flightId = (flight.flight_id || '').toLowerCase();
-      const activeAlertText = (flight.active_alerts ?? [])
-        .map((a) => `${a.zone} ${a.rule}`)
-        .join(' ')
-        .toLowerCase();
-      return (
-        callsign.includes(q) ||
-        icao.includes(q) ||
-        model.includes(q) ||
-        aircraftType.includes(q) ||
-        owner.includes(q) ||
-        flightId.includes(q) ||
-        activeAlertText.includes(q)
-      );
-    });
-    return sortFlightsBy(filtered, flightSortField, flightSortDirection);
-  }, [portal.flightsData, searchQuery, flightSortField, flightSortDirection]);
+    const source =
+      portalView === 'history' || !searchQuery
+        ? portal.flightsData
+        : portal.flightsData.filter((flight) => {
+            const q = searchQuery.toLowerCase();
+            const callsign = (flight.callsign || '').toLowerCase();
+            const icao = (flight.icao || '').toLowerCase();
+            const model = (flight.model || '').toLowerCase();
+            const aircraftType = (flight.aircraft_type || '').toLowerCase();
+            const owner = (flight.owner || '').toLowerCase();
+            const flightId = (flight.flight_id || '').toLowerCase();
+            const activeAlertText = (flight.active_alerts ?? [])
+              .map((a) => `${a.zone} ${a.rule}`)
+              .join(' ')
+              .toLowerCase();
+            return (
+              callsign.includes(q) ||
+              icao.includes(q) ||
+              model.includes(q) ||
+              aircraftType.includes(q) ||
+              owner.includes(q) ||
+              flightId.includes(q) ||
+              activeAlertText.includes(q)
+            );
+          });
+    return sortFlightsBy(source, flightSortField, flightSortDirection);
+  }, [portal.flightsData, portalView, searchQuery, flightSortField, flightSortDirection]);
 
   const paths = useFlightPaths(portalView, selection.activeFlightId, filteredFlights);
 
@@ -180,7 +199,10 @@ export function usePortalApp() {
             (alert) => alert.flight_id && trackedFlightIds.has(alert.flight_id),
           )
         : portal.alertsData;
-    const filtered = scopedAlerts.filter((alert) => {
+    if (portalView === 'history' || !q) {
+      return scopedAlerts;
+    }
+    return scopedAlerts.filter((alert) => {
       const callsign = (alert.callsign || '').toLowerCase();
       const icao = (alert.icao || '').toLowerCase();
       const zone = (alert.zone || '').toLowerCase();
@@ -192,7 +214,6 @@ export function usePortalApp() {
         rule.includes(q)
       );
     });
-    return filtered;
   }, [portal.alertsData, portal.flightsData, portalView, searchQuery]);
 
   const flightCount = useMemo(() => {
@@ -296,6 +317,10 @@ export function usePortalApp() {
     portalView,
     searchQuery,
     setSearchQuery,
+    historySinceDate,
+    historyUntilDate,
+    setHistorySinceDate,
+    setHistoryUntilDate,
     zonesVisible,
     setZonesVisible,
     mapRef,

@@ -22,7 +22,6 @@ home:
 alert_colors:
   warn: "#f59e0b"
   alert: "#ef4444"
-  cool: "#22d3ee"
 
 receivers:
   main:

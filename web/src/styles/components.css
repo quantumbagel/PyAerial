@@ -72,6 +72,28 @@
     padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border);
     background-color: var(--panel-raised);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+#history-filters {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.history-filter {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+    font-size: var(--font-xs);
+    color: var(--text-secondary);
+}
+
+.history-filter .ui-input {
+    color-scheme: dark;
 }
 
 #stats-panel {

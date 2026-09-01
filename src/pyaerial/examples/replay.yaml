@@ -1,0 +1,23 @@
+# Replay a recorded dump1090 raw stream (no SDR required).
+# Capture with: nc localhost 30002 > captures/adsb.raw
+#
+# Lines may be bare hex (`8DABCDEF...`) or `timestamp hex`.
+# Then: pyaerial run -c src/pyaerial/examples/replay.yaml
+
+database:
+  uri: mongodb://localhost:27017
+  redis_uri: redis://localhost:6379/0
+
+home:
+  latitude: 35.727488
+  longitude: -78.695942
+
+receivers:
+  recorded:
+    type: replay
+    options:
+      path: captures/adsb.raw
+      speed: 4.0
+      loop: true
+
+zones: {}

@@ -16,7 +16,13 @@ from shapely.ops import nearest_points
 
 def build_polygons(zones: dict) -> dict[str, Polygon]:
     """Build a ``{zone_name: Polygon}`` map from the configured zones."""
-    return {name: Polygon(zone.coordinates) for name, zone in zones.items()}
+    polygons: dict[str, Polygon] = {}
+    for name, zone in zones.items():
+        coordinates = zone.coordinates
+        if not coordinates:
+            raise ValueError(f"zone {name!r} has no coordinates")
+        polygons[name] = Polygon(coordinates)
+    return polygons
 
 
 def calculate_heading(

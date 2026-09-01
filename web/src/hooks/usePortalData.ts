@@ -6,7 +6,7 @@ import type { SidebarTab } from '../components/Sidebar';
 import { alertEpisodeIdentity, dedupeAlerts, mergeAlertsByEpisode } from '../utils/alertData';
 import { applyTelemetryPoint, mergeLiveFlights, sortFlights } from '../utils/flightData';
 
-const ALERTS_LIMIT = 50;
+const PAGE_LIMIT = 50;
 
 function isValidCoordinate(lat?: number | null, lon?: number | null): boolean {
   return (
@@ -27,6 +27,9 @@ interface UsePortalDataOptions {
   appendSelectedTelemetry: (points: TelemetryPoint[]) => void;
   resetSelection: () => void;
   resetPaths: () => void;
+  historyQ?: string;
+  historySince?: number | null;
+  historyUntil?: number | null;
 }
 
 export function usePortalData({
@@ -39,6 +42,9 @@ export function usePortalData({
   appendSelectedTelemetry,
   resetSelection,
   resetPaths,
+  historyQ = '',
+  historySince = null,
+  historyUntil = null,
 }: UsePortalDataOptions) {
   const [flightsData, setFlightsData] = useState<FlightSummary[]>([]);
   const [alertsData, setAlertsData] = useState<Alert[]>([]);
@@ -57,7 +63,12 @@ export function usePortalData({
   const isFetchingAlerts = useRef(false);
   const isInitialAlertsLoad = useRef(true);
   const alertsFetchedCount = useRef(0);
+  const hasMoreFlights = useRef(true);
+  const isFetchingFlights = useRef(false);
+  const flightsFetchedCount = useRef(0);
   const historyRefreshVersion = useRef(0);
+  const historyFilterKey = `${historyQ}|${historySince ?? ''}|${historyUntil ?? ''}`;
+  const prevHistoryFilterKey = useRef(historyFilterKey);
   const portalViewRef = useRef<PortalView>(portalView);
   const sidebarTabRef = useRef(sidebarTab);
   const appendSelectedTelemetryRef = useRef(appendSelectedTelemetry);
@@ -105,24 +116,37 @@ export function usePortalData({
     }
   }, []);
 
+  const historyListOpts = useCallback((): api.HistoryListOpts => {
+    const opts: api.HistoryListOpts = { limit: PAGE_LIMIT };
+    if (historyQ) opts.q = historyQ;
+    if (historySince != null) opts.since = historySince;
+    if (historyUntil != null) opts.until = historyUntil;
+    return opts;
+  }, [historyQ, historySince, historyUntil]);
+
   const fetchHistoryData = useCallback(async () => {
     const version = ++historyRefreshVersion.current;
+    const filter = historyListOpts();
     try {
       const [flights, alerts, stats] = await Promise.all([
-        api.fetchFlights('history'),
-        api.fetchAlerts('history', { limit: ALERTS_LIMIT }),
+        api.fetchFlights('history', filter),
+        api.fetchAlerts('history', filter),
         api.fetchStats(),
       ]);
       if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
         return;
       }
-      setFlightsData(sortFlights(flights));
       // Do not rewind infinite-scroll pagination. Only seed / refresh the
       // first page when the user has not loaded further pages.
-      if (!isFetchingAlerts.current && alertsFetchedCount.current <= ALERTS_LIMIT) {
+      if (!isFetchingFlights.current && flightsFetchedCount.current <= PAGE_LIMIT) {
+        setFlightsData(sortFlights(flights));
+        flightsFetchedCount.current = flights.length;
+        hasMoreFlights.current = flights.length >= PAGE_LIMIT;
+      }
+      if (!isFetchingAlerts.current && alertsFetchedCount.current <= PAGE_LIMIT) {
         setAlertsData(dedupeAlerts(alerts));
         alertsFetchedCount.current = alerts.length;
-        hasMoreAlerts.current = alerts.length >= ALERTS_LIMIT;
+        hasMoreAlerts.current = alerts.length >= PAGE_LIMIT;
       }
       if (stats) setServerStats(stats);
       setFlightsError(null);
@@ -139,29 +163,30 @@ export function usePortalData({
         setIsLoadingAlerts(false);
       }
     }
-  }, []);
+  }, [historyListOpts]);
 
   const fetchHistoryAlerts = useCallback(async (append = false) => {
     if (isFetchingAlerts.current) return;
     isFetchingAlerts.current = true;
     const version = historyRefreshVersion.current;
+    const filter = historyListOpts();
     try {
       // Paginate against the number of alerts actually fetched from the server,
       // not the deduped client-side list (whose length can differ after merging).
       const skip = append ? alertsFetchedCount.current : 0;
-      const limit = append ? ALERTS_LIMIT : Math.max(ALERTS_LIMIT, alertsFetchedCount.current);
-      const data = await api.fetchAlerts('history', { limit, skip });
+      const limit = append ? PAGE_LIMIT : Math.max(PAGE_LIMIT, alertsFetchedCount.current);
+      const data = await api.fetchAlerts('history', { ...filter, limit, skip });
       if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
         return;
       }
       if (append) {
-        if (data.length < ALERTS_LIMIT) hasMoreAlerts.current = false;
+        if (data.length < PAGE_LIMIT) hasMoreAlerts.current = false;
         alertsFetchedCount.current += data.length;
         setAlertsData((prev) => dedupeAlerts([...prev, ...data]));
       } else {
         setAlertsData(dedupeAlerts(data));
         alertsFetchedCount.current = data.length;
-        hasMoreAlerts.current = data.length >= ALERTS_LIMIT;
+        hasMoreAlerts.current = data.length >= PAGE_LIMIT;
       }
       setAlertsError(null);
     } catch (err) {
@@ -171,7 +196,42 @@ export function usePortalData({
     } finally {
       isFetchingAlerts.current = false;
     }
-  }, []);
+  }, [historyListOpts]);
+
+  const fetchHistoryFlights = useCallback(async (append = false) => {
+    if (isFetchingFlights.current) return;
+    isFetchingFlights.current = true;
+    const version = historyRefreshVersion.current;
+    const filter = historyListOpts();
+    try {
+      const skip = append ? flightsFetchedCount.current : 0;
+      const limit = append ? PAGE_LIMIT : Math.max(PAGE_LIMIT, flightsFetchedCount.current);
+      const data = await api.fetchFlights('history', { ...filter, limit, skip });
+      if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
+        return;
+      }
+      if (append) {
+        if (data.length < PAGE_LIMIT) hasMoreFlights.current = false;
+        flightsFetchedCount.current += data.length;
+        setFlightsData((prev) => {
+          const seen = new Set(prev.map((flight) => flight.flight_id));
+          const extra = data.filter((flight) => !seen.has(flight.flight_id));
+          return extra.length ? sortFlights([...prev, ...extra]) : prev;
+        });
+      } else {
+        setFlightsData(sortFlights(data));
+        flightsFetchedCount.current = data.length;
+        hasMoreFlights.current = data.length >= PAGE_LIMIT;
+      }
+      setFlightsError(null);
+    } catch (err) {
+      const message = 'Failed to load flights.';
+      console.error(message, err);
+      setFlightsError(message);
+    } finally {
+      isFetchingFlights.current = false;
+    }
+  }, [historyListOpts]);
 
   const switchPortalView = useCallback(
     (view: PortalView) => {
@@ -179,6 +239,9 @@ export function usePortalData({
       historyRefreshVersion.current += 1;
       isInitialAlertsLoad.current = true;
       alertsFetchedCount.current = 0;
+      flightsFetchedCount.current = 0;
+      hasMoreAlerts.current = true;
+      hasMoreFlights.current = true;
       setUnreadAlertsCount(0);
       setPortalView(view);
       resetSelection();
@@ -203,6 +266,18 @@ export function usePortalData({
       }
     },
     [portalView, fetchHistoryAlerts],
+  );
+
+  const handleFlightsScroll = useCallback(
+    (el: HTMLElement) => {
+      if (portalView !== 'history') return;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 50) {
+        if (hasMoreFlights.current && !isFetchingFlights.current) {
+          fetchHistoryFlights(true);
+        }
+      }
+    },
+    [portalView, fetchHistoryFlights],
   );
 
   const fetchLiveData = useCallback(async () => {
@@ -235,13 +310,22 @@ export function usePortalData({
   }, [loadConfig, loadZones]);
 
   useEffect(() => {
-    if (portalView === 'history') {
-      fetchHistoryData();
-      const timer = setInterval(fetchHistoryData, 10000);
-      return () => clearInterval(timer);
+    if (portalView !== 'history') return undefined;
+    if (prevHistoryFilterKey.current !== historyFilterKey) {
+      prevHistoryFilterKey.current = historyFilterKey;
+      flightsFetchedCount.current = 0;
+      alertsFetchedCount.current = 0;
+      hasMoreFlights.current = true;
+      hasMoreAlerts.current = true;
+      setFlightsData([]);
+      setAlertsData([]);
+      setIsLoadingFlights(true);
+      setIsLoadingAlerts(true);
     }
-    return undefined;
-  }, [portalView, fetchHistoryData]);
+    fetchHistoryData();
+    const timer = setInterval(fetchHistoryData, 10000);
+    return () => clearInterval(timer);
+  }, [portalView, historyFilterKey, fetchHistoryData]);
 
   useEffect(() => {
     return connectLiveSocket({
@@ -464,6 +548,7 @@ export function usePortalData({
     handleSwitchSidebarTab,
     switchPortalView,
     handleAlertsScroll,
+    handleFlightsScroll,
     setSidebarTab,
     retryFlights,
     retryAlerts,

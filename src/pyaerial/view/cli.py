@@ -26,7 +26,7 @@ about     - info about PyAerial
 exit      - close this terminal
 reset     - reset database or individual planes (requires confirmation)
 list      - show summarized information (planes, flights, plane <id>)
-dump      - show raw information (plane <id>, flight <id>, live, all, opensky <id>)
+dump      - show raw information (plane <id>, flight <id>, live, all, aircraft <icao>)
 status    - database and live stream summary
 live      - start live flight display
 """.strip()

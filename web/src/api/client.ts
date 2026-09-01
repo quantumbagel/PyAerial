@@ -1,8 +1,32 @@
 import { sendWsRequest } from './liveSocket';
 import type { Alert, AppConfig, FlightDetail, FlightSummary, PortalView, ServerStats, TelemetryPoint, ZonesData } from './types';
 
-export function fetchFlights(view: PortalView): Promise<FlightSummary[]> {
-  return sendWsRequest<FlightSummary[]>('fetchFlights', { view });
+export type HistoryListOpts = {
+  skip?: number;
+  limit?: number;
+  q?: string;
+  since?: number;
+  until?: number;
+};
+
+function historyParams(
+  view: PortalView,
+  opts: HistoryListOpts = {},
+): Record<string, unknown> {
+  const params: Record<string, unknown> = { view };
+  if (opts.skip) params.skip = opts.skip;
+  if (opts.limit) params.limit = opts.limit;
+  if (opts.q) params.q = opts.q;
+  if (opts.since != null) params.since = opts.since;
+  if (opts.until != null) params.until = opts.until;
+  return params;
+}
+
+export function fetchFlights(
+  view: PortalView,
+  opts: HistoryListOpts = {},
+): Promise<FlightSummary[]> {
+  return sendWsRequest<FlightSummary[]>('fetchFlights', historyParams(view, opts));
 }
 
 export function fetchFlight(flightId: string, view: PortalView): Promise<FlightDetail> {
@@ -21,8 +45,10 @@ export function fetchAlerts(
   view: PortalView,
   opts: {
     since?: number;
+    until?: number;
     flightId?: string;
     rule?: string;
+    q?: string;
     limit?: number;
     skip?: number;
     activeOnly?: boolean;

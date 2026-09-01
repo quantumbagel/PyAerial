@@ -88,8 +88,11 @@ def handle_ws_request(
     if action == "fetchAlerts":
         since_val = params.get("since")
         since = float(since_val) if since_val is not None else 0.0
+        until_val = params.get("until")
+        until = float(until_val) if until_val is not None else None
         flight_id = params.get("flightId")
         rule = params.get("rule")
+        q = str(params["q"]) if params.get("q") else None
         limit = _clamp_int(params.get("limit"), 0, 0, _MAX_LIMIT)
         skip = _clamp_int(params.get("skip"), 0, 0, _MAX_SKIP)
         active_only_val = params.get("active_only")
@@ -102,8 +105,10 @@ def handle_ws_request(
         return get_alerts(
             view,
             since=since,
+            until=until,
             flight_id=flight_id,
             rule=rule,
+            q=q,
             limit=limit,
             skip=skip,
             live_store=live_store,

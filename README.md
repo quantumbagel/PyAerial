@@ -18,6 +18,7 @@ graph TD
         DUMP1090["dump1090 (TCP Raw Stream)"]
         PY1090["py1090 (RTL-SDR Hardware)"]
         MOCK_REC["Mock Receiver (Simulated Feed)"]
+        REPLAY["Replay Receiver (Recorded Hex File)"]
     end
 
     subgraph Core ["PyAerial Engine & Processing"]
@@ -44,6 +45,7 @@ graph TD
     DUMP1090 --> ENGINE
     PY1090 --> ENGINE
     MOCK_REC --> ENGINE
+    REPLAY --> ENGINE
 
     ENGINE <--> AIRCRAFT_DB
     ENGINE --> GEOFENCE
@@ -64,8 +66,8 @@ graph TD
 ## Features
 
 - Decodes position, altitude, horizontal/vertical velocity, direction, callsign, and ICAO plane categories in real time via [`pyModeS`](https://github.com/junzis/pymodes).
-- Concurrently stream from TCP raw inputs (e.g. `dump1090`), direct hardware SDRs (`py1090` via `pyrtlsdr`), or synthetic test feeds (`mock`).
-- Define custom polygon zones with rule constraints (`altitude`, `speed` / `horizontal_speed`, `heading` / `direction`, `distance`, `proximity`, `eta`) and lifecycle event hooks (`on_activate`, `on_deactivate`, `while_active`).
+- Concurrently stream from TCP raw inputs (e.g. `dump1090`), direct hardware SDRs (`py1090` via `pyrtlsdr`), synthetic test feeds (`mock`), or a recorded dump1090 hex file (`replay`).
+- Define custom polygon zones (inline coordinates, or a KML / KMZ / GeoJSON `file`) with rule constraints (`altitude`, `speed` / `horizontal_speed`, `heading` / `direction`, `distance`, `proximity`, `eta`) and lifecycle event hooks (`on_activate`, `on_deactivate`, `while_active`).
 - Out-of-the-box support for console output (`print`), HTTP POST (`webhook`), and Apache Kafka message topics (`kafka`).
 - Two storage methods:
   - Redis: live flight telemetry, active states, and real-time alert events (`live:flight:{id}`, `live:telemetry:{id}`, `live:alerts:{id}`, `live:active_alerts`, `live:alert_episodes`).
@@ -111,17 +113,23 @@ pyaerial live --mock
 
 ### Dockerized Setup
 
-Run PyAerial with MongoDB, Redis, and live SDR/dump1090 support:
+Run PyAerial with MongoDB, Redis, and the tracking engine + web portal:
 
 ```bash
-# Start full production stack
+# Start MongoDB, Redis, engine, and portal (no in-cluster dump1090)
 docker compose up --build
 ```
 
-Compose uses a bridge network and publishes only the web portal on port 10090. MongoDB and Redis are not exposed on the host and require the `MONGO_PASSWORD` / `REDIS_PASSWORD` env vars (default `pyaerial`). SDR/USB dump1090 is an optional profile:
+Compose uses a bridge network and publishes only the web portal on port 10090. MongoDB and Redis are not exposed on the host and require the `MONGO_PASSWORD` / `REDIS_PASSWORD` env vars (default `pyaerial`).
+
+The engine connects to dump1090 at `DUMP1090_HOST` (default `dump1090`, the optional compose service name). Without the SDR profile that host is not running, so either start dump1090 in-cluster or point at an existing receiver:
 
 ```bash
+# USB SDR: also start dump1090 in the compose project
 docker compose --profile sdr up --build
+
+# No SDR: use dump1090 already listening on the host (port 30002)
+DUMP1090_HOST=host.docker.internal docker compose up --build
 ```
 
 A standalone `docker run` of the image still supervises dump1090 via `scripts/run-engine.sh`. Bind the portal on all interfaces with `pyaerial web --host 0.0.0.0` (the CLI default is `127.0.0.1`).
@@ -184,10 +192,10 @@ PyAerial provides a unified command line interface via the `pyaerial` executable
 | `pyaerial run`      | Start the flight tracking engine                              |
 | `pyaerial web`      | Start the web portal (FastAPI + WebSocket + React SPA)        |
 | `pyaerial validate` | Check configuration file syntax, schema, and cross-references |
-| `pyaerial view`     | Interactive terminal flight viewer for live & historical data |
+| `pyaerial view`     | Interactive terminal flight viewer (`list`, `dump aircraft`, `status`, `live`) |
 | `pyaerial live`     | Real-time ASCII terminal flight display                       |
 
-The web portal also exposes `GET /health`, `GET /ready`, and `/api/flights|alerts|telemetry|stats|zones|config`. Pass `?token=` when `web.token` / `PYAERIAL_WEB_TOKEN` is set.
+The web portal exposes `GET /health`, `GET /ready`, and a WebSocket at `/ws/live`. All flight, alert, telemetry, zone, and config data is requested over that socket. Pass `?token=` when `web.token` / `PYAERIAL_WEB_TOKEN` is set.
 
 ### Usage Options
 
@@ -209,6 +217,9 @@ pyaerial live --once [--mock]
 
 # Interactive flight search & detail view
 pyaerial view [-c config.yaml] [--mock]
+
+# Replay a recorded dump1090 capture (see examples/replay.yaml)
+pyaerial run -c src/pyaerial/examples/replay.yaml
 ```
 
 ### Environment Variable Overrides
@@ -223,7 +234,7 @@ Environment variables override values in your `config.yaml`:
 | `PYAERIAL_LOG_LEVEL` | `logging.level`      | Logging level (`debug`, `info`, `warning`, `error`) |
 | `PYAERIAL_LOG_FILE`  | `logging.file`       | Output log file path                                |
 | `PYAERIAL_HZ`        | `tracking.hz`        | Engine loop tick rate (Hz)                          |
-| `PYAERIAL_WEB_TOKEN` | `web.token`          | Optional shared secret for `/ws/live` and `/api/*`  |
+| `PYAERIAL_WEB_TOKEN` | `web.token`          | Optional shared secret for `/ws/live`               |
 
 String values in `config.yaml` also expand `${VAR}` and `${VAR:-default}`. A referenced variable with no default must be set, or `pyaerial validate` / load fails. Use this for webhook secrets:
 
@@ -235,6 +246,34 @@ on_activate:
       format: discord
 ```
 
+### WebSocket protocol
+
+Connect to `ws://<host>:<port>/ws/live`. If `web.token` is set, pass it as `?token=` or the `x-pyaerial-token` header.
+
+Client request:
+
+```json
+{ "type": "request", "id": "1", "action": "fetchFlights", "params": { "view": "live" } }
+```
+
+Server reply:
+
+```json
+{ "type": "response", "id": "1", "success": true, "data": [] }
+```
+
+| Action | Params | Notes |
+|--------|--------|--------|
+| `fetchFlights` | `view` (`live` \| `history`); history: `skip`, `limit`, `q`, `since`, `until` | History `q` matches ICAO, callsign, or flight id. `since` / `until` are unix seconds on `end_time`. |
+| `fetchFlight` | `flightId`, `view` | Single flight detail |
+| `fetchTelemetry` | `flightId`, `view`, `since` | Track points after `since` |
+| `fetchAlerts` | `view`; history: `skip`, `limit`, `q`, `since`, `until`, `flightId`, `rule` | History `q` matches ICAO, callsign, zone, rule, or flight id |
+| `fetchStats` | — | Live / retained counts |
+| `fetchZones` | — | Home, polygons, `alert_colors` |
+| `fetchConfig` | — | Portal display config |
+
+The server also pushes `flights`, `alerts`, `telemetry`, and `stats` messages on the live view.
+
 ---
 
 ## Configuration
@@ -243,15 +282,16 @@ Configuration is stored in YAML format. See [`config.yaml`](config.yaml) and [`s
 
 ### Section Breakdown
 
-| Section        | Description                                                             |
-|----------------|-------------------------------------------------------------------------|
-| `database`     | MongoDB URI, optional database name, and Redis URI                      |
-| `tracking`     | Tick rate, plane retention, deduplication, status reporting             |
-| `logging`      | Log level and optional file logging                                     |
-| `home`         | Receiver station latitude & longitude for position decoding             |
-| `receivers`    | Configured named receiver instances                                     |
-| `zones`        | Geofence coordinates, alert rules, retain policies, and lifecycle hooks |
-| `alert_colors` | Custom hex color palette mapping for alert levels                       |
+| Section        | Description                                                                                  |
+|----------------|----------------------------------------------------------------------------------------------|
+| `database`     | MongoDB URI, optional database name, and Redis URI                                           |
+| `tracking`     | Tick rate, plane retention, live telemetry window, ETA options, status reporting             |
+| `logging`      | Log level and optional file logging                                                          |
+| `home`         | Receiver station latitude & longitude for position decoding                                  |
+| `receivers`    | Named receiver instances (`dump1090`, `py1090`, `mock`, `replay`)                            |
+| `zones`        | Geofence polygons (`coordinates` or `file`), alert rules, retain policies, lifecycle hooks   |
+| `alert_colors` | Custom hex color palette mapping for alert levels                                            |
+| `web`          | Optional `token` shared secret required on `/ws/live`                                        |
 
 ### Configuration Example
 
@@ -270,6 +310,7 @@ tracking:
   advanced_status: true
   use_kalman_eta: false           # Use Kalman-smoothed velocity for ETA
   curved_projection: false        # Turn-rate-aware curved-path ETA projection
+  telemetry_keep_seconds: 600     # How long live track points are kept in Redis
 
 logging:
   level: info
@@ -282,7 +323,9 @@ home:
 alert_colors:
   warn: "#f59e0b"
   alert: "#ef4444"
-  cool: "#22d3ee"
+
+# web:
+#   token: "shared-secret"
 
 receivers:
   main:
@@ -293,6 +336,12 @@ receivers:
     type: py1090
     options:
       rtl_index: "0"
+  # recorded:
+  #   type: replay
+  #   options:
+  #     path: captures/adsb.raw   # lines of hex, or `timestamp hex`
+  #     speed: 1.0
+  #     loop: true
 
 zones:
   airport_approach:
@@ -302,6 +351,7 @@ zones:
       - [35.7303, -78.6965]
       - [35.7304, -78.6992]
       - [35.7288, -78.6954]
+    # file: zones/approach.geojson   # instead of coordinates; .kml / .kmz / .geojson
     rules:
       - name: low_altitude_warning
         color: "#ef4444"
@@ -310,6 +360,8 @@ zones:
           eta: { max: 120 }             # Estimated arrival time constraint (seconds)
         dwell_seconds: 60              # Episode must last this long to retain in Mongo
         retain: true                   # If false, matching this rule never archives the flight
+        hysteresis_seconds: 0          # Seconds the `when` must hold before activation
+        # predict_seconds: 20          # Also match against dead-reckoned future state
         on_activate:
           - method: print
           - method: webhook
@@ -337,6 +389,19 @@ The `when` section supports numeric constraints (`min` / `max`) on telemetry and
 | `heading` / `direction`              | Degrees (`°`)           | Course; wrapping windows like `{min: 350, max: 10}` work |
 | `eta`                                | Seconds (`s`)           | Estimated time to enter the zone                         |
 
+Each rule also accepts:
+
+| Field                 | Default | Description |
+|-----------------------|---------|-------------|
+| `dwell_seconds`       | required | Minimum episode length (seconds) before the flight is eligible to retain |
+| `retain`              | `true`  | If `false`, matching this rule never archives the flight |
+| `hysteresis_seconds`  | `0`     | `when` must hold this long before the rule activates |
+| `predict_seconds`     | unset   | Also evaluate `when` against a dead-reckoned position this many seconds ahead |
+
+Zone polygons are `[latitude, longitude]` rings, or a `file` path relative to the config (`.kml`, `.kmz`, `.geojson` / `.json`). Provide `coordinates` or `file`, not both. GeoJSON/KML use lon,lat internally; PyAerial converts to lat,lon.
+
+Replay receiver `options`: `path` (required), `speed` (default `1.0`), `loop` (default `true`), `interval` (seconds between untimestamped lines, default `0.1`). See [`src/pyaerial/examples/replay.yaml`](src/pyaerial/examples/replay.yaml).
+
 ---
 
 ## Data Model & Storage
@@ -354,7 +419,12 @@ Data is automatically cleared or transitioned when a flight expires from memory.
 
 ### MongoDB (Historical Retention)
 
-Completed flights matching geofence rules or having `retain: true` are stored permanently in MongoDB upon completion.
+When a flight expires from the live store it is written to MongoDB only if **retain** says so:
+
+1. A recorded alert episode whose rule has `retain: true` lasted at least `dwell_seconds`, or
+2. Reconstructing the track against a `retain: true` rule shows at least `dwell_seconds` of matching samples.
+
+A rule with `retain: false` never archives a flight on its own. Live Redis keys are still written for every active episode.
 
 | Collection  | Purpose                                                                                                      |
 |-------------|--------------------------------------------------------------------------------------------------------------|
@@ -363,6 +433,10 @@ Completed flights matching geofence rules or having `retain: true` are stored pe
 | `alerts`    | Recorded alert episodes detailing zone name, rule name, activation/deactivation times, and spatial telemetry |
 
 Flight IDs follow the format: `{icao}-{first_packet_timestamp}` (e.g. `a1b2c3-1721832000`).
+
+The historical portal view pages flights and alerts (50 at a time), searches ICAO / callsign / flight id on the server, and can filter by end date.
+
+In `pyaerial view`, `dump aircraft <icao>` prints the HexDB / Planespotters cache record (`dump opensky` remains an alias).
 
 ## License
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pymongo
@@ -19,6 +20,86 @@ from pyaerial.api.payloads import (
 )
 from pyaerial.api.protocol import LiveStore
 from pyaerial.enrich.aircraft_db import AircraftDB
+
+_MAX_Q = 80
+
+
+def _normalize_q(q: str | None) -> str | None:
+    if not q:
+        return None
+    text = str(q).strip()[:_MAX_Q]
+    return text or None
+
+
+def _text_query(q: str) -> dict[str, str]:
+    return {"$regex": re.escape(q), "$options": "i"}
+
+
+def history_flight_filter(
+    *,
+    q: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
+) -> dict[str, Any]:
+    filt: dict[str, Any] = {
+        "status": {"$ne": FLIGHT_STATUS_LIVE},
+        "$or": [{"retained": True}, {"retained": {"$exists": False}}],
+    }
+    end_filt: dict[str, Any] = {}
+    if since is not None:
+        end_filt["$gte"] = since
+    if until is not None:
+        end_filt["$lte"] = until
+    if end_filt:
+        filt["end_time"] = end_filt
+    query = _normalize_q(q)
+    if query:
+        pattern = _text_query(query)
+        retain_or = filt.pop("$or")
+        filt["$and"] = [
+            {"$or": retain_or},
+            {
+                "$or": [
+                    {"icao": pattern},
+                    {"callsign": pattern},
+                    {"_id": pattern},
+                ]
+            },
+        ]
+    return filt
+
+
+def history_alert_filter(
+    *,
+    since: float = 0.0,
+    until: float | None = None,
+    flight_id: str | None = None,
+    rule: str | None = None,
+    q: str | None = None,
+) -> dict[str, Any]:
+    filt: dict[str, Any] = {}
+    activated: dict[str, Any] = {}
+    if since:
+        activated["$gte"] = since
+    if until is not None:
+        activated["$lte"] = until
+    if activated:
+        filt["activated_at"] = activated
+    if flight_id:
+        filt["flight_id"] = flight_id
+    if rule:
+        filt["rule"] = rule
+    query = _normalize_q(q)
+    if query:
+        pattern = _text_query(query)
+        filt["$or"] = [
+            {"icao": pattern},
+            {"callsign": pattern},
+            {"zone": pattern},
+            {"rule": pattern},
+            {"flight_id": pattern},
+        ]
+    return filt
 
 
 def get_live_flights(
@@ -48,30 +129,7 @@ def get_history_flights(
     limit = min(max(limit, 1), 200)
     flights_col = db.get_collection("flights")
     telemetry_col = db.get_collection("telemetry")
-
-    filt: dict[str, Any] = {
-        "status": {"$ne": FLIGHT_STATUS_LIVE},
-        "$or": [{"retained": True}, {"retained": {"$exists": False}}],
-    }
-    end_filt: dict[str, Any] = {}
-    if since:
-        end_filt["$gte"] = since
-    if until:
-        end_filt["$lte"] = until
-    if end_filt:
-        filt["end_time"] = end_filt
-    if q:
-        pattern = {"$regex": q, "$options": "i"}
-        filt["$and"] = [
-            {"$or": filt.pop("$or")},
-            {
-                "$or": [
-                    {"icao": pattern},
-                    {"callsign": pattern},
-                    {"_id": pattern},
-                ]
-            },
-        ]
+    filt = history_flight_filter(q=q, since=since, until=until)
 
     selected_docs = list(
         flights_col.find(filt).sort("end_time", -1).skip(skip).limit(limit)
@@ -255,8 +313,10 @@ def get_alerts(
     view: str,
     *,
     since: float = 0.0,
+    until: float | None = None,
     flight_id: str | None = None,
     rule: str | None = None,
+    q: str | None = None,
     limit: int = 0,
     skip: int = 0,
     live_store: LiveStore | None,
@@ -278,13 +338,13 @@ def get_alerts(
         )
     if db is None:
         return []
-    filt: dict[str, Any] = {}
-    if since:
-        filt["activated_at"] = {"$gt": since}
-    if flight_id:
-        filt["flight_id"] = flight_id
-    if rule:
-        filt["rule"] = rule
+    filt = history_alert_filter(
+        since=since,
+        until=until,
+        flight_id=flight_id,
+        rule=rule,
+        q=q,
+    )
     cursor = db.get_collection("alerts").find(filt).sort("activated_at", -1)
     if skip:
         cursor = cursor.skip(skip)
