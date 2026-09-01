@@ -93,15 +93,6 @@
     font-weight: 600;
 }
 
-.ui-btn--icon.ui-btn--icon-lg {
-    width: auto;
-    height: auto;
-    min-height: auto;
-    font-size: var(--font-icon-lg);
-    border: none;
-    background: none;
-}
-
 .ui-btn--subtle {
     width: 100%;
     justify-content: space-between;

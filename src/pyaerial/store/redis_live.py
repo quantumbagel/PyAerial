@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import time
 from collections import defaultdict
 from typing import Any
@@ -67,7 +66,6 @@ class RedisLiveStore:
         self._mem_alert_episodes: list[dict] = []
         self._last_connect_attempt = 0.0
         self._last_ping_ok = 0.0
-        self._mem_lock = threading.Lock()
         self._reported_down = False
         if memory_only:
             self._reported_down = True

@@ -47,7 +47,7 @@ def test_unchanged_value_refreshes_timestamp():
         },
         typecode_category=3,
     )
-    tracker._merge(classified, 150.0, "deadbeef")
+    tracker._merge(classified, 150.0)
     series = plane[STORE_RECV_DATA][STORE_LAT]
     assert len(series) == 1
     assert series[0].time == 150.0
@@ -76,7 +76,7 @@ def test_value_change_appends():
         },
         typecode_category=3,
     )
-    tracker._merge(classified, 150.0, "deadbeef")
+    tracker._merge(classified, 150.0)
     series = plane[STORE_RECV_DATA][STORE_LAT]
     assert len(series) == 2
     assert series[-1].value == 35.71
@@ -107,6 +107,6 @@ def test_telemetry_series_are_capped():
         },
         typecode_category=3,
     )
-    tracker._merge(classified, 112.0, "deadbeef")
+    tracker._merge(classified, 112.0)
     series = plane[STORE_RECV_DATA][STORE_LAT]
     assert all(item.time >= 107.0 for item in series)

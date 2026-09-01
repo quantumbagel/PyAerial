@@ -37,13 +37,6 @@ class Tracker:
         self.planes: dict[str, PlaneState] = {}
         # full frame hex -> most recent timestamp we have seen for that exact frame
         self._recent: dict[str, float] = {}
-        self._dirty_icaos: set[str] = set()
-
-    def get_and_clear_dirty_icaos(self) -> set[str]:
-        """Return and clear the set of ICAOs updated since last tick."""
-        dirty = set(self._dirty_icaos)
-        self._dirty_icaos.clear()
-        return dirty
 
     def ingest(
         self,
@@ -62,7 +55,7 @@ class Tracker:
             if classified is None:
                 continue
             receiver = (receivers or {}).get(msg_hex)
-            self._merge(classified, timestamp, msg_hex, receiver=receiver)
+            self._merge(classified, timestamp, receiver=receiver)
             processed += 1
         return processed
 
@@ -149,14 +142,12 @@ class Tracker:
         self,
         classified: ClassifiedMessage,
         timestamp: float,
-        msg_hex: str,
         *,
         receiver: str | None = None,
     ) -> None:
         message_data = classified.data
         typecode_cat = classified.typecode_category
         icao = message_data[STORE_INFO][STORE_ICAO]
-        self._dirty_icaos.add(icao)
 
         if icao not in self.planes:
             plane = message_data

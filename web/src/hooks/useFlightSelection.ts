@@ -32,7 +32,6 @@ export function useFlightSelection({
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const flightDetailsPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeFlightIdRef = useRef<string | null>(null);
   const selectionTokenRef = useRef(0);
   const portalViewRef = useRef(portalView);
@@ -44,27 +43,14 @@ export function useFlightSelection({
     portalViewRef.current = portalView;
   }, [portalView]);
 
-  const stopDetailPoll = useCallback(() => {
-    if (flightDetailsPollTimer.current) {
-      clearInterval(flightDetailsPollTimer.current);
-      flightDetailsPollTimer.current = null;
-    }
-  }, []);
-
-  useEffect(() => () => stopDetailPoll(), [stopDetailPoll]);
-
-  const loadFlightAlerts = useCallback(async (flightId: string, view: PortalView, merge = false) => {
+  const loadFlightAlerts = useCallback(async (flightId: string, view: PortalView) => {
     const token = selectionTokenRef.current;
     const alerts = await api.fetchAlerts(view, {
       flightId,
       activeOnly: false,
     });
     if (token !== selectionTokenRef.current) return alerts;
-    if (merge) {
-      setFlightAlerts((prev) => mergeAlertsByEpisode(prev, alerts));
-    } else {
-      setFlightAlerts(alerts);
-    }
+    setFlightAlerts(alerts);
     return alerts;
   }, []);
 
@@ -77,26 +63,13 @@ export function useFlightSelection({
   }, []);
 
   const loadFlightTelemetry = useCallback(
-    async (flightId: string, view: PortalView, append = false, token = selectionTokenRef.current) => {
-      let since = 0;
-      if (append && flightTelemetry.length > 0) {
-        since = Math.max(...flightTelemetry.map((t) => t.timestamp || 0));
-      }
-      const points = await api.fetchTelemetry(flightId, view, append ? since : 0);
+    async (flightId: string, view: PortalView, token = selectionTokenRef.current) => {
+      const points = await api.fetchTelemetry(flightId, view);
       if (token !== selectionTokenRef.current) return points;
-      if (append) {
-        setFlightTelemetry((prev) => {
-          const ts = new Set(prev.map((t) => t.timestamp));
-          return [...prev, ...points.filter((p) => !ts.has(p.timestamp))].sort(
-            (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
-          );
-        });
-      } else {
-        setFlightTelemetry(points.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)));
-      }
+      setFlightTelemetry(points.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)));
       return points;
     },
-    [flightTelemetry],
+    [],
   );
 
   const appendSelectedTelemetry = useCallback((points: TelemetryPoint[]) => {
@@ -135,7 +108,6 @@ export function useFlightSelection({
       const token = ++selectionTokenRef.current;
       const follow = opts?.follow ?? true;
       const panToLatest = opts?.panToLatest ?? true;
-      stopDetailPoll();
       setSelectionError(null);
       setIsLoading(true);
       setActiveFlightId(flightId);
@@ -154,7 +126,7 @@ export function useFlightSelection({
       try {
         const [detail, , alerts] = await Promise.all([
           api.fetchFlight(flightId, portalViewRef.current),
-          loadFlightTelemetry(flightId, portalViewRef.current, false, token),
+          loadFlightTelemetry(flightId, portalViewRef.current, token),
           loadFlightAlerts(flightId, portalViewRef.current),
           fetchAndSetPathRef.current(flightId, portalViewRef.current),
         ]);
@@ -189,7 +161,7 @@ export function useFlightSelection({
         setSelectionError(message);
       }
     },
-    [loadFlightTelemetry, loadFlightAlerts, fetchAndSetPathRef, mapRef, stopDetailPoll],
+    [loadFlightTelemetry, loadFlightAlerts, fetchAndSetPathRef, mapRef],
   );
 
   const selectAlert = useCallback(
@@ -212,7 +184,6 @@ export function useFlightSelection({
 
   const closeDrawer = useCallback(() => {
     selectionTokenRef.current += 1;
-    stopDetailPoll();
     setDrawerOpen(false);
     setActiveFlightId(null);
     setActiveAlertId(null);
@@ -224,11 +195,10 @@ export function useFlightSelection({
     setSelectionError(null);
     setIsLoading(false);
     clearPathsIfNeeded();
-  }, [stopDetailPoll, clearPathsIfNeeded]);
+  }, [clearPathsIfNeeded]);
 
   const resetSelection = useCallback(() => {
     selectionTokenRef.current += 1;
-    stopDetailPoll();
     setActiveFlightId(null);
     setActiveAlertId(null);
     setFollowSelectedPlane(false);
@@ -239,7 +209,7 @@ export function useFlightSelection({
     setSelectedTelemetryPoint(null);
     setSelectionError(null);
     setIsLoading(false);
-  }, [stopDetailPoll]);
+  }, []);
 
   return {
     activeFlightId,
@@ -261,9 +231,7 @@ export function useFlightSelection({
     selectAlert,
     closeDrawer,
     resetSelection,
-    loadFlightAlerts,
     syncFlightAlerts,
     appendSelectedTelemetry,
-    stopDetailPoll,
   };
 }

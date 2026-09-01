@@ -38,7 +38,6 @@ class PlaneState(TypedDict, total=False):
     calculated_data: dict[str, list[Datum]]
     internal: dict[str, Any]
     active_alerts: list[dict[str, Any]]
-    raw_messages: list[Any]
 
 
 def get_latest(

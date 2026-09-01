@@ -25,10 +25,8 @@ interface UsePortalDataOptions {
   setPathCoords: React.Dispatch<React.SetStateAction<Record<string, [number, number][]>>>;
   setPathTelemetry?: React.Dispatch<React.SetStateAction<Record<string, TelemetryPoint[]>>>;
   appendSelectedTelemetry: (points: TelemetryPoint[]) => void;
-  loadFlightAlerts: (flightId: string, view: PortalView, merge?: boolean) => Promise<Alert[]>;
   resetSelection: () => void;
   resetPaths: () => void;
-  stopDetailPoll: () => void;
 }
 
 export function usePortalData({
@@ -39,10 +37,8 @@ export function usePortalData({
   setPathCoords,
   setPathTelemetry,
   appendSelectedTelemetry,
-  loadFlightAlerts,
   resetSelection,
   resetPaths,
-  stopDetailPoll,
 }: UsePortalDataOptions) {
   const [flightsData, setFlightsData] = useState<FlightSummary[]>([]);
   const [alertsData, setAlertsData] = useState<Alert[]>([]);
@@ -65,7 +61,6 @@ export function usePortalData({
   const portalViewRef = useRef<PortalView>(portalView);
   const sidebarTabRef = useRef(sidebarTab);
   const appendSelectedTelemetryRef = useRef(appendSelectedTelemetry);
-  const loadFlightAlertsRef = useRef(loadFlightAlerts);
   const setPathCoordsRef = useRef(setPathCoords);
   const setPathTelemetryRef = useRef(setPathTelemetry);
 
@@ -78,9 +73,6 @@ export function usePortalData({
   useEffect(() => {
     appendSelectedTelemetryRef.current = appendSelectedTelemetry;
   }, [appendSelectedTelemetry]);
-  useEffect(() => {
-    loadFlightAlertsRef.current = loadFlightAlerts;
-  }, [loadFlightAlerts]);
   useEffect(() => {
     setPathCoordsRef.current = setPathCoords;
   }, [setPathCoords]);
@@ -119,7 +111,7 @@ export function usePortalData({
       const [flights, alerts, stats] = await Promise.all([
         api.fetchFlights('history'),
         api.fetchAlerts('history', { limit: ALERTS_LIMIT }),
-        api.fetchStats('history'),
+        api.fetchStats(),
       ]);
       if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
         return;
@@ -184,7 +176,6 @@ export function usePortalData({
   const switchPortalView = useCallback(
     (view: PortalView) => {
       if (view === portalView) return;
-      stopDetailPoll();
       historyRefreshVersion.current += 1;
       isInitialAlertsLoad.current = true;
       alertsFetchedCount.current = 0;
@@ -199,7 +190,7 @@ export function usePortalData({
       setIsLoadingFlights(true);
       setIsLoadingAlerts(true);
     },
-    [portalView, setPortalView, stopDetailPoll, resetSelection, resetPaths],
+    [portalView, setPortalView, resetSelection, resetPaths],
   );
 
   const handleAlertsScroll = useCallback(
@@ -219,7 +210,7 @@ export function usePortalData({
       const [flights, alerts, stats] = await Promise.all([
         api.fetchFlights('live'),
         api.fetchAlerts('live', { activeOnly: false }),
-        api.fetchStats('live'),
+        api.fetchStats(),
       ]);
       if (portalViewRef.current !== 'live') return;
       setFlightsData(sortFlights(flights));

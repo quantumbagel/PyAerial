@@ -37,8 +37,8 @@ export function fetchAlerts(
   });
 }
 
-export function fetchStats(view?: PortalView): Promise<ServerStats> {
-  return sendWsRequest<ServerStats>('fetchStats', { view });
+export function fetchStats(): Promise<ServerStats> {
+  return sendWsRequest<ServerStats>('fetchStats');
 }
 
 export function fetchZones(): Promise<ZonesData> {

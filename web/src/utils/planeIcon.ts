@@ -2,9 +2,6 @@ import * as L from 'leaflet';
 import type { ActiveAlert } from '../api/types';
 import { COLOR_HEX } from './colors';
 import { flightAlertSeverity } from './format';
-import { ZONE_COLORS } from './zoneColors';
-
-export { ZONE_COLORS };
 
 export function createPlaneIcon(
   heading: number | null | undefined,

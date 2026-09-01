@@ -14,41 +14,6 @@ import {
 import { alertColorFor, getAccessibleBadgeTextColor } from '../utils/zoneColors';
 import { Badge, BadgeGroup } from './ui';
 
-export function LiveBadge() {
-  return <Badge variant="live">Live</Badge>;
-}
-
-export function AlertColoredLabel({
-  zone,
-  rule,
-  zones,
-  alertColors,
-  className,
-  active = false,
-}: {
-  zone: string;
-  rule?: string;
-  zones?: Zone[];
-  alertColors?: Record<string, string>;
-  className?: string;
-  active?: boolean;
-}) {
-  const zoneName = (zone || 'zone').trim() || 'zone';
-  const ruleName = (rule || '').trim() || 'rule';
-  const colors = alertColorFor(zoneName, ruleName, zones, alertColors);
-  return (
-    <ZoneBadge
-      zone={zoneName}
-      rule={ruleName}
-      zones={zones}
-      alertColors={alertColors}
-      className={className}
-      label={formatZoneRule(zoneName, ruleName, { live: active })}
-      colors={colors}
-    />
-  );
-}
-
 export function ZoneBadge({
   zone,
   rule,

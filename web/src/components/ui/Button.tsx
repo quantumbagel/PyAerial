@@ -9,7 +9,6 @@ type SharedProps = {
   size?: ButtonSize;
   active?: boolean;
   flex?: boolean;
-  iconLg?: boolean;
   zoom?: boolean;
   className?: string;
   children: ReactNode;
@@ -30,21 +29,19 @@ export function Button({
   size = 'sm',
   active = false,
   flex = false,
-  iconLg = false,
   zoom = false,
   className,
   children,
   as,
   ...props
 }: ButtonProps | LinkButtonProps) {
-  const skipSize = variant === 'ghost' || variant === 'link' || variant === 'icon' || iconLg;
+  const skipSize = variant === 'ghost' || variant === 'link' || variant === 'icon';
   const classes = cn(
     'ui-btn',
     `ui-btn--${variant}`,
     !skipSize && `ui-btn--${size}`,
     active && 'is-active',
     flex && 'ui-btn--flex',
-    iconLg && 'ui-btn--icon-lg',
     zoom && 'ui-btn--zoom',
     className,
   );

@@ -13,7 +13,6 @@ import logging
 import math
 import threading
 import time
-from typing import TYPE_CHECKING
 
 from shapely import Polygon
 
@@ -47,9 +46,6 @@ from pyaerial.constants import (
 )
 from pyaerial.models import Datum, get_latest, patch_append
 from pyaerial.store.mongo import flight_id_for_plane
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("pyaerial.calc.plane")
 
@@ -103,12 +99,9 @@ class PlaneCalculator:
         self._pending_match.clear()
         self._pending_unmatch.clear()
 
-    def calculate_all(
-        self, planes: dict[str, dict], dirty_icaos: set[str] | None = None
-    ) -> None:
+    def calculate_all(self, planes: dict[str, dict]) -> None:
         # Always evaluate every plane with a position so ETA can coast during
-        # ADS-B gaps. dirty_icaos is kept for API compatibility.
-        _ = dirty_icaos
+        # ADS-B gaps.
         for plane in planes.values():
             self.calculate_plane(plane)
 
@@ -223,7 +216,6 @@ class PlaneCalculator:
             turn_rate_deg_s=smoothed_turn,
             kf=kf,
         )
-        plane["_alert_motion"] = alert_motion
 
         patch_append(
             plane, STORE_CALC_DATA, STORE_HORIZ_SPEED, Datum(final_speed, speed_time)
@@ -519,8 +511,6 @@ class PlaneCalculator:
                             geofence_etas,
                             position,
                             callsign,
-                            now,
-                            state["alert_id"],
                         )
 
             active_alerts.append(
@@ -772,8 +762,6 @@ class PlaneCalculator:
         geofence_etas: dict[str, float],
         position: tuple[float, float],
         callsign: str,
-        now: float,
-        alert_id: str,
     ) -> None:
         while_active = rule.while_active
         if while_active is None or not while_active.actions:

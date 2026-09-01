@@ -136,17 +136,6 @@ function connect() {
   };
 }
 
-export function resetLiveSocketForTests(): void {
-  isClosed = true;
-  ws?.close();
-  ws = null;
-  handlersSet.clear();
-  rejectAllPending('test reset');
-  requestQueue.length = 0;
-  backoff = 1000;
-  isClosed = false;
-}
-
 export function connectLiveSocket(handlers: LiveSocketHandlers): () => void {
   handlersSet.add(handlers);
   if (!ws) {

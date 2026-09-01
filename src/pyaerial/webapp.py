@@ -60,7 +60,7 @@ def _origin_allowed(origin: str | None, host_header: str | None) -> bool:
 
 
 def _token_ok(config: Config, token: str | None) -> bool:
-    expected = config.web.token if config.web else None
+    expected = config.web.token
     if not expected:
         return True
     return token == expected

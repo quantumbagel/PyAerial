@@ -321,7 +321,7 @@ class WebhookAlerter(Alerter):
         eta = _safe_num(meta.get("eta"))
 
         pos_str = (
-            f"<https://www.google.com/maps?q={lat},{lon}|{lat:.5f}, {lon:.5f}>"
+            f"<{map_links.get('google_maps', f'https://www.google.com/maps?q={lat},{lon}')}|{lat:.5f}, {lon:.5f}>"
             if lat is not None and lon is not None
             else "N/A"
         )

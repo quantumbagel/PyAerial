@@ -186,24 +186,6 @@ export function isAlertActive(alert: { active?: boolean; deactivated_at?: number
   return alert.active === true || alert.deactivated_at == null;
 }
 
-export function formatEpisodeTime(
-  activatedAt?: number,
-  deactivatedAt?: number | null,
-  active?: boolean,
-): string {
-  if (!activatedAt) return 'N/A';
-  const isActive = active !== undefined ? active : deactivatedAt == null;
-  const startStr = formatActiveSince(activatedAt);
-  if (isActive) {
-    return `Started ${startStr}`;
-  }
-  if (deactivatedAt) {
-    const endStr = formatActiveSince(deactivatedAt);
-    return `${startStr} – ${endStr}`;
-  }
-  return `Activated ${startStr}`;
-}
-
 export function isFlightLive(flight: { is_live?: boolean }): boolean {
   return !!flight.is_live;
 }

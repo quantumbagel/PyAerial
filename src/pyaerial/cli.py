@@ -13,7 +13,6 @@ Subcommands::
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 
 from pyaerial import __version__
@@ -22,8 +21,6 @@ from pyaerial.constants import DEFAULT_AIRCRAFT_DB, DEFAULT_CONFIG_FILE
 from pyaerial.engine import run_engine
 from pyaerial.logging_setup import setup_logging
 from pyaerial.view import run_live_cmd, run_view
-
-log = logging.getLogger("pyaerial.cli")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -74,7 +71,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     live_p = sub.add_parser("live", help="live flight display")
     live_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
-    live_p.add_argument("--aircraft-db", default=DEFAULT_AIRCRAFT_DB)
     live_p.add_argument("--mock", action="store_true", help="use mock live data store")
     live_p.add_argument(
         "--interval",
@@ -149,7 +145,6 @@ def _cmd_live(args: argparse.Namespace) -> None:
     setup_logging("warning")
     run_live_cmd(
         args.config,
-        aircraft_db_path=args.aircraft_db,
         mock=args.mock,
         interval=args.interval,
         once=args.once,

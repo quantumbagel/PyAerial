@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Alert, PortalView, TelemetryPoint } from '../api/types';
 import { mergeAlertsByEpisode } from '../utils/alertData';
-import type { DrawerTab } from '../components/DetailsDrawer';
 import type { MapViewHandle } from '../components/MapView';
-import type { SidebarTab } from '../components/Sidebar';
 import {
   defaultAlertSortDirection,
   loadAlertSort,
@@ -96,7 +94,6 @@ export function usePortalApp() {
 
   const mapRef = useRef<MapViewHandle>({
     map: null,
-    fitPathBounds: () => {},
     panToAlert: () => {},
   });
   const fetchAndSetPathRef = useRef<(flightId: string, view: PortalView) => Promise<void>>(
@@ -130,10 +127,8 @@ export function usePortalApp() {
     setPathCoords: (update) => setPathCoordsRef.current(update),
     setPathTelemetry: (update) => setPathTelemetryRef.current(update),
     appendSelectedTelemetry: selection.appendSelectedTelemetry,
-    loadFlightAlerts: selection.loadFlightAlerts,
     resetSelection: selection.resetSelection,
     resetPaths: () => resetPathsRef.current(),
-    stopDetailPoll: selection.stopDetailPoll,
   });
 
   onSelectAlertTabRef.current = () => portal.setSidebarTab('alerts');
@@ -321,5 +316,3 @@ export function usePortalApp() {
     disableFollow,
   };
 }
-
-export type { DrawerTab, SidebarTab };

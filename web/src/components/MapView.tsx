@@ -11,7 +11,6 @@ import '@luomus/leaflet-smooth-wheel-zoom';
 
 export interface MapViewHandle {
   map: L.Map | null;
-  fitPathBounds: (flightId: string) => void;
   panToAlert: (lat: number, lon: number) => void;
 }
 
@@ -156,21 +155,6 @@ export function MapView({
     mapInstance.current = map;
     mapRef.current = {
       map,
-      fitPathBounds: (flightId: string) => {
-        const layers: L.Layer[] = [];
-        const path = planePaths.current[flightId];
-        if (path) layers.push(path);
-        for (const segment of planeAlertPaths.current[flightId] || []) {
-          layers.push(segment);
-        }
-        if (!layers.length) return;
-        const bounds = layers[0] instanceof L.Polyline ? layers[0].getBounds() : null;
-        if (!bounds) return;
-        for (const layer of layers.slice(1)) {
-          if (layer instanceof L.Polyline) bounds.extend(layer.getBounds());
-        }
-        map.fitBounds(bounds, { padding: [50, 50] });
-      },
       panToAlert: (lat: number, lon: number) => {
         map.setView([lat, lon], Math.max(map.getZoom(), 14));
       },
@@ -187,7 +171,7 @@ export function MapView({
       planeAlertPaths.current = {};
       zoneLayers.current = [];
       selectedTelemetryMarker.current = null;
-      mapRef.current = { map: null, fitPathBounds: () => {}, panToAlert: () => {} };
+      mapRef.current = { map: null, panToAlert: () => {} };
     };
   }, [mapRef]);
 

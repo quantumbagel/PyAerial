@@ -57,7 +57,6 @@ class Engine:
         isolated: bool = False,
     ):
         self.config = config
-        self.isolated = isolated
         self.tracker = Tracker(config)
         self.polygons: dict[str, Polygon] = build_polygons(config.zones)
         self.aircraft_db = AircraftDB(aircraft_db_path)
@@ -243,11 +242,8 @@ class Engine:
                 receivers = {hex_msg: recv for hex_msg, _ts, recv in raw if recv}
                 new_messages = self.tracker.collect_new_messages(pairs)
                 processed = self.tracker.ingest(new_messages, receivers=receivers)
-                dirty_icaos = self.tracker.get_and_clear_dirty_icaos()
 
-                self.calculator.calculate_all(
-                    self.tracker.planes, dirty_icaos=dirty_icaos
-                )
+                self.calculator.calculate_all(self.tracker.planes)
                 self.live_store.write_live_planes(self.tracker.planes)
 
                 now = time.time()

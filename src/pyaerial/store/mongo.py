@@ -268,7 +268,6 @@ class MongoStore:
                     continue
                 valid = self._count_valid_ticks(
                     plane,
-                    zone_name,
                     polygon,
                     rule.when,
                     first_time,
@@ -281,7 +280,6 @@ class MongoStore:
     def _count_valid_ticks(
         self,
         plane: dict,
-        zone_name: str,
         polygon: Polygon,
         when: dict,
         first_time: float,

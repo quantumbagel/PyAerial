@@ -111,7 +111,6 @@ def time_to_enter_geofence_curved(
     turn_rate: float,
     polygon: Polygon,
     max_time: int,
-    steps: int = 30,
 ) -> float:
     """
     Estimate seconds until a plane enters the geofence along a curved trajectory
@@ -126,8 +125,6 @@ def time_to_enter_geofence_curved(
     geofence (small turn rates imply huge circles), the straight-line estimate is
     reported instead so transient heading noise or the start of a maneuver never
     erases alert forewarning.
-
-    ``steps`` is accepted for backward compatibility but is no longer used.
     """
     point = Point(position)
     if polygon.intersects(point) or polygon.covers(point):

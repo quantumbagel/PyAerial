@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import logging
 import time
 from typing import Any
 
@@ -25,8 +24,6 @@ from pyaerial.constants import (
 )
 from pyaerial.view.live_display import run_live_loop
 from pyaerial.view.store import get_live_store
-
-log = logging.getLogger("pyaerial.view")
 
 HELP_TEXT = """
 PyAerial Flight Viewer
@@ -74,7 +71,7 @@ def run_view(
     config = load_config(config_path)
     _VIEW_DB_NAME = config.database.name
     aircraft_db = AircraftDB(aircraft_db_path)
-    live_store = get_live_store(config, mock=mock, aircraft_db=aircraft_db)
+    live_store = get_live_store(config, mock=mock)
 
     client: pymongo.MongoClient | None = None
     try:
@@ -141,7 +138,7 @@ def run_view(
             _cmd_dump(client, parts, aircraft_db, live_store=live_store)
         elif verb == "live":
             try:
-                run_live_loop(live_store, aircraft_db=aircraft_db)
+                run_live_loop(live_store)
             except KeyboardInterrupt:
                 print("\n[live] Stopped.")
 
@@ -369,7 +366,6 @@ def _display_plane_details(
     if not meta:
         meta = {}
     callsign = meta.get("callsign") or "n/a"
-    meta.get("model") or "n/a"
     category = meta.get("category") or meta.get("aircraft_type") or "n/a"
 
     # 2. Gather flights & telemetry
@@ -695,7 +691,7 @@ def _cmd_dump(
                 {
                     plane_id: {
                         flight_id: _dump_flight(
-                            client, plane_id, flight_id, live_store=live_store
+                            client, flight_id, live_store=live_store
                         )
                     }
                 },
@@ -723,7 +719,7 @@ def _dump_plane(
                 if lf.get("icao", "").lower() == plane_id_lower:
                     fid = lf.get("flight_id", f"{plane_id_lower}-live")
                     results[fid] = _dump_flight(
-                        client, plane_id_lower, fid, live_store=live_store
+                        client, fid, live_store=live_store
                     )
         except Exception:
             pass
@@ -738,7 +734,7 @@ def _dump_plane(
                 fid = doc["_id"]
                 if fid not in results:
                     results[fid] = _dump_flight(
-                        client, plane_id_lower, fid, live_store=live_store
+                        client, fid, live_store=live_store
                     )
         except Exception:
             pass
@@ -748,7 +744,6 @@ def _dump_plane(
 
 def _dump_flight(
     client: pymongo.MongoClient | None,
-    plane_id: str,
     flight_id: str,
     live_store: Any = None,
 ) -> dict:

@@ -135,7 +135,6 @@ export function useFlightPaths(
     setPathTelemetry,
     pathAlerts,
     setPathAlerts,
-    showAllPathsRef,
     fetchAndSetPath,
     clearPathsIfNeeded,
     resetPaths,

@@ -120,8 +120,7 @@ class Py1090Receiver(Receiver):
                 self.signal_buffer.extend(np.absolute(data).tolist())
                 if len(self.signal_buffer) >= BUFFER_SIZE:
                     for msg, timestamp in self._process_buffer():
-                        if df(msg) in (17, 18):  # true ADS-B
-                            self.emit(msg, timestamp)
+                        self.emit(msg, timestamp)
         finally:
             try:
                 sdr.close()
@@ -137,12 +136,12 @@ def _check_preamble(pulses) -> bool:
 
 
 def _check_msg(msg: str) -> bool:
+    """Accept ADS-B extended squitters (DF 17/18) that the engine can classify."""
+    if len(msg) != 28:
+        return False
     msg_df = df(msg)
-    length = len(msg)
-    if msg_df == 17 and length == 28:
+    if msg_df == 17:
         return crc(msg) == 0
-    if msg_df in (20, 21) and length == 28:
-        return True
-    if msg_df in (4, 5, 11) and length == 14:
+    if msg_df == 18:
         return True
     return False

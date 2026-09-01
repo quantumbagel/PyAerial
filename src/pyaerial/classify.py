@@ -16,7 +16,6 @@ from pyModeS.util import typecode as pms_typecode, icao as pms_icao
 from pyaerial.config.schema import HomeConfig
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALC_DATA,
     STORE_CALLSIGN,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
@@ -38,7 +37,6 @@ CAT_SURFACE = 2
 CAT_AIRBORNE_BARO = 3
 CAT_AIRBORNE_GNSS = 4
 CAT_VELOCITY = 5
-CAT_TARGET_STATE = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +155,6 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
         log.debug("Unsupported typecode %s (msg=%s)", typecode, msg)
         return None
 
-    data[STORE_CALC_DATA] = {}
     data = _strip_nulls(data)
     log.debug("Classified typecode %s: %s", typecode, data)
     return ClassifiedMessage(data=data, typecode_category=category)

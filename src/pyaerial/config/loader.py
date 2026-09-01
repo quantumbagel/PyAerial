@@ -37,30 +37,20 @@ _ENV_OVERRIDES = {
 }
 
 
-def _apply_overrides(data: dict, overrides: dict[str, object] | None) -> dict:
+def _apply_env_overrides(data: dict) -> dict:
     for env_var, (section, key) in _ENV_OVERRIDES.items():
         if env_var in os.environ:
             data.setdefault(section, {})[key] = os.environ[env_var]
-    for dotted, value in (overrides or {}).items():
-        section, _, key = dotted.partition(".")
-        if not key:
-            data[section] = value
-        else:
-            data.setdefault(section, {})[key] = value
     return data
 
 
 def load_config(
     path: str | os.PathLike = "config.yaml",
-    *,
-    overrides: dict[str, object] | None = None,
 ) -> Config:
     """
     Load, override, and validate the configuration.
 
     :param path: path to the YAML configuration file
-    :param overrides: optional mapping of ``"section.key"`` -> value applied on
-        top of the file (and after env-var overrides)
     :raises ConfigError: if the file is missing, malformed, or invalid
     """
     config_path = Path(path)
@@ -81,7 +71,7 @@ def load_config(
         )
 
     data = _expand_env_vars(data, config_path)
-    data = _apply_overrides(data, overrides)
+    data = _apply_env_overrides(data)
 
     try:
         config = Config.model_validate(data)
@@ -131,7 +121,7 @@ def _validate_cross_references(config: Config, path: Path) -> None:
                     url = action.options.get("url")
                     if not url:
                         problems.append(f"{loc}: webhook action requires options.url")
-                    elif not _webhook_url_allowed(str(url)):
+                    elif not webhook_url_allowed(str(url)):
                         problems.append(
                             f"{loc}: webhook url must be https "
                             f"(http allowed only for localhost): {url}"
@@ -192,10 +182,6 @@ def webhook_url_allowed(url: str) -> bool:
     if parsed.scheme == "http":
         return host in _LOCAL_HTTP_HOSTS
     return False
-
-
-def _webhook_url_allowed(url: str) -> bool:
-    return webhook_url_allowed(url)
 
 
 def _format_validation_error(path: Path, exc: ValidationError) -> str:
