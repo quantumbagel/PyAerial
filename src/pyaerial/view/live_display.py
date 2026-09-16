@@ -7,19 +7,45 @@ import time
 from typing import Any
 
 from pyaerial.config import load_config
+from pyaerial.constants import LIVE_ENGINE_TTL_SECONDS
 from pyaerial.units import KMH_TO_KT, M_TO_FT
 from pyaerial.view.store import open_live_session
 
 
-def format_dump1090_table(live_flights: list[dict[str, Any]]) -> str:
+def live_empty_message(
+    *,
+    redis_ok: bool = True,
+    engine_seen_at: float | None = None,
+    now: float | None = None,
+) -> str:
+    """Why the live table is empty — engine down vs Redis down vs no traffic."""
+    if not redis_ok:
+        return "Redis is unreachable. Start Redis or check database.redis_uri."
+    seen = engine_seen_at
+    if seen is None or (now if now is not None else time.time()) - seen >= LIVE_ENGINE_TTL_SECONDS:
+        return "Tracking engine is not running. Start `pyaerial run`."
+    return "No aircraft on the live feed."
+
+
+def format_dump1090_table(
+    live_flights: list[dict[str, Any]],
+    *,
+    redis_ok: bool = True,
+    engine_seen_at: float | None = None,
+    now: float | None = None,
+) -> str:
     """Format live flights into a live text table display."""
-    now = time.time()
+    now = time.time() if now is None else now
     header = f"{'ICAO':<8} {'Callsign':<10} {'Flight ID':<16} {'Alt (ft)':<10} {'Speed (kt)':<11} {'Track':<7} {'Lat':<10} {'Lon':<11} {'Alerts':<14} {'Status':<8} {'Last Seen':<10}"
     divider = "-" * len(header)
     lines = [header, divider]
 
     if not live_flights:
-        lines.append("No active live flights currently tracked.")
+        lines.append(
+            live_empty_message(
+                redis_ok=redis_ok, engine_seen_at=engine_seen_at, now=now
+            )
+        )
         return "\n".join(lines)
 
     for flight in live_flights:
@@ -91,7 +117,12 @@ def run_live_loop(
     """Run live flight display loop."""
     while True:
         live_flights = live_store.get_flights()
-        table = format_dump1090_table(live_flights)
+        redis_ok = bool(live_store.ping()) if hasattr(live_store, "ping") else True
+        getter = getattr(live_store, "engine_seen_at", None)
+        engine_seen_at = getter() if callable(getter) else None
+        table = format_dump1090_table(
+            live_flights, redis_ok=redis_ok, engine_seen_at=engine_seen_at
+        )
 
         if not once:
             sys.stdout.write("\033[H\033[J")

@@ -148,7 +148,7 @@ export function PortalApp() {
           />
         }
       />
-      <DisconnectedBanner visible={!portal.wsConnected} />
+      <DisconnectedBanner status={portal.wsStatus} />
     </>
   );
 }

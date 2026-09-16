@@ -90,6 +90,9 @@ def test_websocket_hello_snapshot_and_subscribe():
                     break
             assert stats["success"] is True
             assert "live_flights" in stats["data"]
+            assert stats["data"]["redis"] is True
+            assert stats["data"]["mongo"] is False
+            assert stats["data"]["engine_seen_at"] is None
 
         with client.websocket_connect("/ws") as ws:
             assert ws.receive_json()["type"] == "hello"

@@ -15,6 +15,7 @@ from pyaerial.constants import (
     ALERT_CAT_REASON,
     ALERT_CAT_TYPE,
     ALERT_CAT_ZONE,
+    LIVE_ENGINE_TTL_SECONDS,
     STORE_ALT,
     STORE_CALLSIGN,
     STORE_FIRST_PACKET,
@@ -37,6 +38,7 @@ _KEY_TELEMETRY = "live:telemetry:{flight_id}"
 _KEY_ALERTS = "live:alerts:{flight_id}"
 _KEY_ACTIVE_ALERTS = "live:active_alerts"
 _KEY_ALERT_EPISODES = "live:alert_episodes"
+_KEY_ENGINE = "live:engine"
 _RECONNECT_DELAY = 2.0
 
 
@@ -136,6 +138,49 @@ class RedisLiveStore:
             return True
         return self._ensure_connected()
 
+    def touch_engine(self) -> None:
+        """Record that the tracking engine is alive.
+
+        Written every engine tick, including when no aircraft are tracked, so
+        the portal can tell "engine down" from "no traffic."
+        """
+        now = time.time()
+        self._mem.engine_seen_at = now
+        if not self._ensure_connected():
+            return
+        assert self.client is not None
+        payload = json.dumps({"seen_at": now}, separators=(",", ":"))
+        try:
+            self.client.set(_KEY_ENGINE, payload, ex=LIVE_ENGINE_TTL_SECONDS)
+        except RedisError as exc:
+            log.error("Failed to write engine heartbeat: %s", exc)
+
+    def engine_seen_at(self) -> float | None:
+        """Unix timestamp of the last engine heartbeat, or None if missing."""
+        if self._ensure_connected():
+            assert self.client is not None
+            try:
+                raw = self.client.get(_KEY_ENGINE)
+                if raw:
+                    doc = json.loads(raw)
+                    seen = doc.get("seen_at") if isinstance(doc, dict) else None
+                    if isinstance(seen, (int, float)):
+                        return float(seen)
+            except (RedisError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                log.debug("Could not read engine heartbeat: %s", exc)
+        return self._mem.engine_seen_at
+
+    def clear_engine(self) -> None:
+        """Drop the engine heartbeat so readers immediately see it as stopped."""
+        self._mem.engine_seen_at = None
+        if not self._ensure_connected():
+            return
+        assert self.client is not None
+        try:
+            self.client.delete(_KEY_ENGINE)
+        except RedisError as exc:
+            log.debug("Could not clear engine heartbeat: %s", exc)
+
     def clear_all(self) -> None:
         """Remove stale live keys from a previous engine session."""
         self._mem.clear()
@@ -153,7 +198,9 @@ class RedisLiveStore:
                     _KEY_TELEMETRY.format(flight_id=flight_id),
                     _KEY_ALERTS.format(flight_id=flight_id),
                 )
-            pipe.delete(_KEY_FLIGHTS, _KEY_ACTIVE_ALERTS, _KEY_ALERT_EPISODES)
+            pipe.delete(
+                _KEY_FLIGHTS, _KEY_ACTIVE_ALERTS, _KEY_ALERT_EPISODES, _KEY_ENGINE
+            )
             pipe.execute()
             log.info("Cleared %d stale live flight(s) from Redis.", len(flight_ids))
         except RedisError as exc:
@@ -713,6 +760,14 @@ class RedisLiveStore:
                     pipe.hset(
                         _KEY_ALERTS.format(flight_id=flight_id), alert_id, encoded
                     )
+            if self._mem.engine_seen_at is not None:
+                pipe.set(
+                    _KEY_ENGINE,
+                    json.dumps(
+                        {"seen_at": self._mem.engine_seen_at}, separators=(",", ":")
+                    ),
+                    ex=LIVE_ENGINE_TTL_SECONDS,
+                )
             pipe.execute()
         except RedisError as exc:
             log.error("Failed to backfill Redis from memory: %s", exc)

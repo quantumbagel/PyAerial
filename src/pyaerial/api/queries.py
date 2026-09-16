@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import re
+import time
 from typing import Any
 
 import pymongo
+from pymongo.errors import PyMongoError
 
 from pyaerial.api.payloads import (
     FLIGHT_STATUS_LIVE,
@@ -21,7 +24,27 @@ from pyaerial.api.payloads import (
 from pyaerial.api.protocol import LiveStore
 from pyaerial.enrich.aircraft_db import AircraftDB
 
+log = logging.getLogger("pyaerial.webapp")
+
 _MAX_Q = 80
+_MONGO_FAIL_TTL = 10.0
+_mongo_fail_until = 0.0
+
+
+def _mongo_available(db: pymongo.database.Database | None) -> bool:
+    """Ping Mongo, but don't retry a failure on every WebSocket request."""
+    global _mongo_fail_until
+    if db is None:
+        return False
+    now = time.time()
+    if now < _mongo_fail_until:
+        return False
+    try:
+        db.client.admin.command("ping")
+        return True
+    except Exception:
+        _mongo_fail_until = now + _MONGO_FAIL_TTL
+        return False
 
 
 def _normalize_q(q: str | None) -> str | None:
@@ -123,7 +146,7 @@ def get_history_flights(
     since: float | None = None,
     until: float | None = None,
 ) -> list[dict[str, Any]]:
-    if db is None:
+    if db is None or not _mongo_available(db):
         return []
     skip = max(0, skip)
     limit = min(max(limit, 1), 200)
@@ -131,9 +154,13 @@ def get_history_flights(
     telemetry_col = db.get_collection("telemetry")
     filt = history_flight_filter(q=q, since=since, until=until)
 
-    selected_docs = list(
-        flights_col.find(filt).sort("end_time", -1).skip(skip).limit(limit)
-    )
+    try:
+        selected_docs = list(
+            flights_col.find(filt).sort("end_time", -1).skip(skip).limit(limit)
+        )
+    except PyMongoError as exc:
+        log.warning("MongoDB unavailable for historical flights: %s", exc)
+        return []
     if not selected_docs:
         return []
 
@@ -336,7 +363,7 @@ def get_alerts(
             skip=skip,
             active_only=resolved_active_only,
         )
-    if db is None:
+    if db is None or not _mongo_available(db):
         return []
     filt = history_alert_filter(
         since=since,
@@ -345,35 +372,54 @@ def get_alerts(
         rule=rule,
         q=q,
     )
-    cursor = db.get_collection("alerts").find(filt).sort("activated_at", -1)
-    if skip:
-        cursor = cursor.skip(skip)
-    if limit:
-        cursor = cursor.limit(limit)
-    return [format_alert(doc) for doc in cursor]
+    try:
+        cursor = db.get_collection("alerts").find(filt).sort("activated_at", -1)
+        if skip:
+            cursor = cursor.skip(skip)
+        if limit:
+            cursor = cursor.limit(limit)
+        return [format_alert(doc) for doc in cursor]
+    except PyMongoError as exc:
+        log.warning("MongoDB unavailable for historical alerts: %s", exc)
+        return []
 
 
 def get_stats(
     live_store: LiveStore | None,
     db: pymongo.database.Database | None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     live_flights = len(live_store.get_flights()) if live_store else 0
     active_alerts = (
         len(live_store.get_alerts(active_only=True)) if live_store else 0
     )
+    redis_ok = bool(live_store.ping()) if live_store is not None else False
+    engine_seen_at = None
+    getter = getattr(live_store, "engine_seen_at", None) if live_store else None
+    if callable(getter):
+        try:
+            engine_seen_at = getter()
+        except Exception:
+            engine_seen_at = None
     retained_flights = 0
     historical_alerts = 0
-    if db is not None:
-        retained_flights = db.get_collection("flights").count_documents(
-            {
-                "status": {"$ne": FLIGHT_STATUS_LIVE},
-                "$or": [{"retained": True}, {"retained": {"$exists": False}}],
-            }
-        )
-        historical_alerts = db.get_collection("alerts").count_documents({})
+    mongo_ok = _mongo_available(db)
+    if mongo_ok and db is not None:
+        try:
+            retained_flights = db.get_collection("flights").count_documents(
+                {
+                    "status": {"$ne": FLIGHT_STATUS_LIVE},
+                    "$or": [{"retained": True}, {"retained": {"$exists": False}}],
+                }
+            )
+            historical_alerts = db.get_collection("alerts").count_documents({})
+        except Exception:
+            mongo_ok = False
     return {
         "live_flights": live_flights,
         "active_alerts": active_alerts,
         "retained_flights": retained_flights,
         "historical_alerts": historical_alerts,
+        "redis": redis_ok,
+        "mongo": mongo_ok,
+        "engine_seen_at": engine_seen_at,
     }

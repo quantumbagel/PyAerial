@@ -97,7 +97,12 @@ export interface ServerStats {
   active_alerts: number;
   retained_flights: number;
   historical_alerts: number;
+  redis?: boolean;
+  mongo?: boolean;
+  engine_seen_at?: number | null;
 }
+
+export type WsStatus = 'connecting' | 'connected' | 'reconnecting';
 
 export type LiveMessage =
   | { type: 'flights'; flights: FlightSummary[] }

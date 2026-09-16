@@ -80,9 +80,9 @@ graph TD
 
 ## Quick Start
 
-### Mock Mode
+### Terminal mock feed
 
-Test PyAerial immediately without an SDR dongle, Redis, or MongoDB:
+Try the tracker without an SDR dongle, Redis, or MongoDB:
 
 ```bash
 # Clone and install dependencies
@@ -92,22 +92,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 
-# Build the React portal (required; static files are not committed)
-scripts/build_web.sh
-
-# Launch Web Portal in mock mode (simulated approaches into the configured zone)
-pyaerial web --mock
-```
-
-Open your browser at **[http://localhost:10090](http://localhost:10090)** to view the live radar web application!
-
-Alternatively, view simulated flight traffic directly in your terminal:
-
-```bash
+# Simulated ADS-B approaches in the terminal
 pyaerial live --mock
 ```
 
-`live --mock` and `view --mock` run the same isolated tracking engine as `web --mock` (mock ADS-B receiver, in-memory store). Planes appear after a short warm-up while the tracker ingests the simulated feed.
+`view --mock` is the same isolated engine in an interactive REPL. Planes appear after a short warm-up while the tracker ingests the simulated feed. The web portal is **not** a mock mode — it reads Redis and MongoDB written by `pyaerial run`.
 
 ---
 
@@ -134,12 +123,6 @@ DUMP1090_HOST=host.docker.internal docker compose up --build
 
 A standalone `docker run` of the image still supervises dump1090 via `scripts/run-engine.sh`. Bind the portal on all interfaces with `pyaerial web --host 0.0.0.0` (the CLI default is `127.0.0.1`).
 
-Or run the isolated mock container stack:
-
-```bash
-docker compose -f docker-compose.mock.yml up --build
-```
-
 ---
 
 ### No Docker Setup
@@ -151,10 +134,11 @@ docker compose -f docker-compose.mock.yml up --build
    ```bash
    pyaerial run -c config.yaml
    ```
-5. In another terminal, start the web portal:
+5. In another terminal, start the web portal (reads Redis / MongoDB; does not start tracking):
    ```bash
    pyaerial web -c config.yaml
    ```
+   Build the React portal first if `src/pyaerial/static/` is missing: `scripts/build_web.sh`. Open **[http://localhost:10090](http://localhost:10090)**. If the map is empty, the portal will say whether the engine is down, Redis is unreachable, or there is simply no traffic.
 
 ---
 
@@ -189,8 +173,8 @@ PyAerial provides a unified command line interface via the `pyaerial` executable
 
 | Subcommand          | Description                                                   |
 |---------------------|---------------------------------------------------------------|
-| `pyaerial run`      | Start the flight tracking engine                              |
-| `pyaerial web`      | Start the web portal (FastAPI + WebSocket + React SPA)        |
+| `pyaerial run`      | Start the flight tracking engine (writes Redis / MongoDB)     |
+| `pyaerial web`      | Start the web portal (reads Redis / MongoDB; does not track)  |
 | `pyaerial validate` | Check configuration file syntax, schema, and cross-references |
 | `pyaerial view`     | Interactive terminal flight viewer (`list`, `dump aircraft`, `status`, `live`) |
 | `pyaerial live`     | Real-time ASCII terminal flight display                       |
@@ -206,8 +190,8 @@ pyaerial run -c /path/to/config.yaml --aircraft-db /path/to/aircraft.db
 # Validate configuration
 pyaerial validate -c config.yaml
 
-# Launch web portal on custom host and port
-pyaerial web -c config.yaml --host 0.0.0.0 --port 10090 [--mock]
+# Launch web portal on custom host and port (requires `pyaerial run` + Redis)
+pyaerial web -c config.yaml --host 0.0.0.0 --port 10090
 
 # Live flight viewer with 2-second refresh rate
 pyaerial live --interval 2.0 [--mock]
@@ -300,7 +284,7 @@ Server reply:
 | `fetchFlight` | `flightId`, `view` | Single flight detail |
 | `fetchTelemetry` | `flightId`, `view`, `since` | Track points after `since` |
 | `fetchAlerts` | `view`; history: `skip`, `limit`, `q`, `since`, `until`, `flightId`, `rule` | History `q` matches ICAO, callsign, zone, rule, or flight id |
-| `fetchStats` | — | Live / retained counts |
+| `fetchStats` | — | Live / retained counts, `redis` / `mongo` booleans, `engine_seen_at` |
 | `fetchZones` | — | Home, polygons, `alert_colors` |
 | `fetchConfig` | — | Portal display config |
 
@@ -319,10 +303,10 @@ Configuration is stored in YAML format. See [`config.yaml`](config.yaml) and [`s
 | `database`     | MongoDB URI, optional database name, and Redis URI                                           |
 | `tracking`     | Tick rate, plane retention, live telemetry window, ETA options, status reporting             |
 | `logging`      | Log level and optional file logging                                                          |
-| `home`         | Receiver station latitude & longitude for position decoding                                  |
+| `home`         | Receiver station latitude & longitude for ADS-B CPR decode (not the geofence)                |
 | `receivers`    | Named receiver instances (`dump1090`, `py1090`, `mock`, `replay`)                            |
-| `zones`        | Geofence polygons (`coordinates` or `file`), alert rules, retain policies, lifecycle hooks   |
-| `alert_colors` | Custom hex color palette mapping for alert levels                                            |
+| `zones`        | Named polygons plus independent constraint rules (not an implicit inside-test)               |
+| `alert_colors` | Hex colors keyed by **rule name**                                                            |
 | `web`          | Optional `token` for `/ws/live`, and `origins` (default `*`) for cross-origin clients        |
 
 ### Configuration Example
@@ -409,6 +393,8 @@ zones:
 
 ### Rule Field Constraints
 
+A zone is a named polygon plus independent rules. A rule fires when every `when` constraint holds — there is no implicit "inside the polygon" test. Include `eta`, `distance`, or `proximity` to tie a rule to the zone.
+
 The `when` section supports numeric constraints (`min` / `max`) on telemetry and calculated metrics:
 
 | Metric Field                         | Unit                    | Description                                              |
@@ -419,7 +405,7 @@ The `when` section supports numeric constraints (`min` / `max`) on telemetry and
 | `distance` / `dist`                  | km                      | Geodesic distance to the **zone polygon** edge           |
 | `proximity`                          | m                       | Same as `distance`, in metres                            |
 | `heading` / `direction`              | Degrees (`°`)           | Course; wrapping windows like `{min: 350, max: 10}` work |
-| `eta`                                | Seconds (`s`)           | Estimated time to enter the zone                         |
+| `eta`                                | Seconds (`s`)           | Time along the projected track to the zone boundary (`0` if already inside) |
 
 Each rule also accepts:
 
@@ -446,6 +432,7 @@ Redis serves as an in-memory buffer while flights are active.
 - `live:telemetry:{flight_id}`: sorted set of recent track points
 - `live:alerts:{flight_id}`: alert episodes for that flight
 - `live:active_alerts` / `live:alert_episodes`: global active set and episode index
+- `live:engine`: tracking-engine heartbeat (`seen_at`); expires if `pyaerial run` stops
 
 Data is automatically cleared or transitioned when a flight expires from memory.
 

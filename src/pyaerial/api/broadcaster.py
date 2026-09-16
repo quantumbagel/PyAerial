@@ -73,7 +73,7 @@ class LiveBroadcaster:
         self._pending_lookups: set[str] = set()
         self._last_flights_sig: tuple | None = None
         self._last_alerts_sig: tuple | None = None
-        self._last_stats: dict[str, int] | None = None
+        self._last_stats: dict[str, Any] | None = None
         self._last_stats_at = 0.0
 
     async def start(self) -> None:
@@ -111,7 +111,7 @@ class LiveBroadcaster:
             client.streams = chosen or set(WS_STREAMS)
         return sorted(client.streams)
 
-    def _cached_stats(self) -> dict[str, int]:
+    def _cached_stats(self) -> dict[str, Any]:
         now = time.monotonic()
         if self._last_stats is not None and now - self._last_stats_at < _STATS_CACHE_TTL:
             return self._last_stats

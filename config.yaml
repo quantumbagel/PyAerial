@@ -18,10 +18,12 @@ logging:
 web:
   origins: ["*"]
 
+# CPR decode reference for ADS-B positions — not the geofence and not the ETA target.
 home:
   latitude: 35.72748800696312
   longitude: -78.69594225530933
 
+# Hex colors keyed by rule name (warn / alert below), not a built-in severity enum.
 alert_colors:
   warn: "#f59e0b"
   alert: "#ef4444"
@@ -32,6 +34,12 @@ receivers:
     host: "${DUMP1090_HOST:-localhost}"
     port: 30002
 
+# Zones are named polygons plus independent rules. A rule fires when EVERY
+# `when` constraint holds — there is no implicit "inside the polygon" test.
+# Tie a rule to this zone with eta, distance, or proximity.
+# Units: altitude metres (not feet), speed km/h, eta seconds to the polygon
+# boundary along the current track (0 if already inside), distance km,
+# proximity metres. See UNITS.md.
 zones:
   aerpaw:
     color: "#f59e0b"
@@ -66,9 +74,9 @@ zones:
     rules:
       - name: warn
         when:
-          altitude: { max: 2000 }
-          eta: { max: 120 }
-        dwell_seconds: 60
+          altitude: { max: 2000 }  # metres
+          eta: { max: 120 }        # seconds to boundary (0 if already inside)
+        dwell_seconds: 60          # on-delay; also Mongo retain threshold
         on_activate:
           - method: print
           # Webhook URLs are secrets. Uncomment and export PYAERIAL_WEBHOOK_URL;
@@ -79,14 +87,14 @@ zones:
           #     format: discord
         on_deactivate:
           - method: print
-        retain: true
+        retain: true               # archive the flight after it expires, if dwell is met
       - name: alert
         when:
-          altitude: { max: 1500 }
-          eta: { max: 60 }
-        dwell_seconds: 60
+          altitude: { max: 1500 }  # metres
+          eta: { max: 60 }         # seconds to boundary (0 if already inside)
+        dwell_seconds: 60          # on-delay; also Mongo retain threshold
         on_activate:
           - method: print
         on_deactivate:
           - method: print
-        retain: true
+        retain: true               # archive the flight after it expires, if dwell is met

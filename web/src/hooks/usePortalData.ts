@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
 import { connectLiveSocket } from '../api/liveSocket';
-import type { Alert, AppConfig, FlightSummary, PortalView, ServerStats, TelemetryPoint, ZonesData } from '../api/types';
+import type { Alert, AppConfig, FlightSummary, PortalView, ServerStats, TelemetryPoint, WsStatus, ZonesData } from '../api/types';
 import type { SidebarTab } from '../components/Sidebar';
 import { alertEpisodeIdentity, dedupeAlerts, mergeAlertsByEpisode } from '../utils/alertData';
 import { applyTelemetryPoint, mergeLiveFlights, sortFlights } from '../utils/flightData';
@@ -57,7 +57,7 @@ export function usePortalData({
   const [isLoadingAlerts, setIsLoadingAlerts] = useState(true);
   const [flightsError, setFlightsError] = useState<string | null>(null);
   const [alertsError, setAlertsError] = useState<string | null>(null);
-  const [wsConnected, setWsConnected] = useState(false);
+  const [wsStatus, setWsStatus] = useState<WsStatus>('connecting');
 
   const hasMoreAlerts = useRef(true);
   const isFetchingAlerts = useRef(false);
@@ -310,6 +310,12 @@ export function usePortalData({
   }, [loadConfig, loadZones]);
 
   useEffect(() => {
+    if (portalView !== 'live') return undefined;
+    fetchLiveData();
+    return undefined;
+  }, [portalView, fetchLiveData]);
+
+  useEffect(() => {
     if (portalView !== 'history') return undefined;
     if (prevHistoryFilterKey.current !== historyFilterKey) {
       prevHistoryFilterKey.current = historyFilterKey;
@@ -329,8 +335,9 @@ export function usePortalData({
 
   useEffect(() => {
     return connectLiveSocket({
-      onOpen: () => setWsConnected(true),
-      onClose: () => setWsConnected(false),
+      onOpen: () => setWsStatus('connected'),
+      onClose: () =>
+        setWsStatus((prev) => (prev === 'connecting' ? 'connecting' : 'reconnecting')),
       onMessage: (message) => {
         if (portalViewRef.current !== 'live') return;
         if (message.type === 'stats') {
@@ -544,7 +551,7 @@ export function usePortalData({
     isLoadingAlerts,
     flightsError,
     alertsError,
-    wsConnected,
+    wsStatus,
     handleSwitchSidebarTab,
     switchPortalView,
     handleAlertsScroll,

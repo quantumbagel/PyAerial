@@ -10,8 +10,10 @@ Every calculated or received metric and its corresponding unit.
 | Heading / direction | degrees clockwise from true north (`°`) | ADS-B track, or great-circle bearing |
 | Distance (rule field `distance`) | kilometres (`km`) | geodesic to the **zone polygon** edge |
 | Proximity (rule field `proximity`) | metres (`m`) | same as `distance`, × 1000 |
-| ETA | seconds (`s`) | time to enter the zone along the projected path |
+| ETA | seconds (`s`) | time to the zone boundary along the projected path (`0` if already inside) |
 | Latitude / longitude | degrees (WGS84) | ADS-B CPR |
+
+A zone is a named polygon plus independent rules. A rule fires when every `when` constraint holds — there is no implicit "inside the polygon" test. Include `eta`, `distance`, or `proximity` to tie a rule to the zone.
 
 Zone coordinates in config are `[latitude, longitude]`.
 MongoDB GeoJSON positions are `[longitude, latitude]`.

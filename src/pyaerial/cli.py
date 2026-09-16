@@ -103,11 +103,6 @@ def _build_parser() -> argparse.ArgumentParser:
     web_p.add_argument(
         "-p", "--port", type=int, default=10090, help="port to bind (default: 10090)"
     )
-    web_p.add_argument(
-        "--mock",
-        action="store_true",
-        help="run in mock mode with simulated dummy data (no Redis/MongoDB required)",
-    )
     web_p.set_defaults(func=_cmd_web)
 
     return parser
@@ -160,7 +155,6 @@ def _cmd_web(args: argparse.Namespace) -> None:
         aircraft_db_path=args.aircraft_db,
         host=args.host,
         port=args.port,
-        mock=args.mock,
     )
 
 

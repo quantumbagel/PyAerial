@@ -56,6 +56,9 @@ LOGGING_LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
 
 # --- Defaults -----------------------------------------------------------------
 DEFAULT_CONFIG_FILE = os.environ.get("PYAERIAL_CONFIG", "config.yaml")
+# Redis `live:engine` heartbeat TTL. Portal treats a missing/expired key as
+# "tracking engine is not running." Keep in sync with web empty-state stale age.
+LIVE_ENGINE_TTL_SECONDS = 10
 # constants.py lives at src/pyaerial/constants.py → project root is two parents up.
 DEFAULT_AIRCRAFT_DB = str(
     (Path(__file__).resolve().parent.parent.parent / "aircraft.db").resolve()

@@ -16,6 +16,7 @@ tracking:
 logging:
   level: info
 
+# CPR decode reference for ADS-B positions — not the geofence and not the ETA target.
 home:
   latitude: 36.6810752
   longitude: -78.8758528
@@ -36,6 +37,12 @@ receivers:
   #     speed: 1.0
   #     loop: true
 
+# Zones are named polygons plus independent rules. A rule fires when EVERY
+# `when` constraint holds — there is no implicit "inside the polygon" test.
+# Tie a rule to this zone with eta, distance, or proximity.
+# Units: altitude metres (not feet), speed km/h, eta seconds to the polygon
+# boundary along the current track (0 if already inside), distance km,
+# proximity metres. See UNITS.md.
 zones:
   main:
     # Inline [latitude, longitude] rings, or:
@@ -55,19 +62,19 @@ zones:
     rules:
       - name: warn
         when:
-          altitude: { max: 1000 }
-          eta: { max: 120 }
-        dwell_seconds: 60
+          altitude: { max: 1000 }  # metres
+          eta: { max: 120 }        # seconds to boundary (0 if already inside)
+        dwell_seconds: 60          # on-delay; also Mongo retain threshold
         # hysteresis_seconds: 15
         # predict_seconds: 20
         on_activate:
           - method: print
-        retain: true
+        retain: true               # archive the flight after it expires, if dwell is met
       - name: alert
         when:
-          altitude: { max: 500 }
-          eta: { max: 60 }
-        dwell_seconds: 60
+          altitude: { max: 500 }   # metres
+          eta: { max: 60 }         # seconds to boundary (0 if already inside)
+        dwell_seconds: 60          # on-delay; also Mongo retain threshold
         on_activate:
           - method: print
-        retain: true
+        retain: true               # archive the flight after it expires, if dwell is met

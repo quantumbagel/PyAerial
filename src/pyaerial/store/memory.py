@@ -15,6 +15,7 @@ class MemoryLiveBuffer:
         self.alerts: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self.active_alerts: dict[str, dict[str, Any]] = {}
         self.alert_episodes: list[dict[str, Any]] = []
+        self.engine_seen_at: float | None = None
 
     def clear(self) -> None:
         self.flights.clear()
@@ -22,3 +23,4 @@ class MemoryLiveBuffer:
         self.alerts.clear()
         self.active_alerts.clear()
         self.alert_episodes.clear()
+        self.engine_seen_at = None

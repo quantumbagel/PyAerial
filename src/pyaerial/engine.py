@@ -58,6 +58,7 @@ class Engine:
         isolated: bool = False,
     ):
         self.config = config
+        self._isolated = isolated
         self.tracker = Tracker(config)
         self.polygons: dict[str, Polygon] = build_polygons(config.zones)
         self.aircraft_db = AircraftDB(aircraft_db_path)
@@ -225,11 +226,14 @@ class Engine:
 
         hz = self.config.tracking.hz
         tick_budget = 1.0 / hz
+        store = "memory" if self._isolated else "redis+mongodb"
         log.info(
-            "PyAerial running at up to %.1f Hz with %d receiver(s), store=redis+mongodb",
+            "PyAerial running at up to %.1f Hz with %d receiver(s), store=%s",
             hz,
             len(self._receivers),
+            store,
         )
+        self.live_store.touch_engine()
         log.info("Receivers available: %s", available_receivers())
         log.info("Alerters available: %s", available_alerters())
 
@@ -246,6 +250,7 @@ class Engine:
 
                 self.calculator.calculate_all(self.tracker.planes)
                 self.live_store.write_live_planes(self.tracker.planes)
+                self.live_store.touch_engine()
 
                 now = time.time()
                 expired = self.tracker.expired_planes(now)
@@ -306,6 +311,7 @@ class Engine:
         self._retry_pending_finalizes()
 
         self.calculator.close()
+        self.live_store.clear_engine()
         self.live_store.close()
         self.mongo_store.close()
         self.aircraft_db.close()
@@ -377,26 +383,6 @@ def run_engine(config: Config, *, aircraft_db_path: str = DEFAULT_AIRCRAFT_DB) -
     Engine(config, aircraft_db_path=aircraft_db_path).run()
 
 
-def isolated_config(config_path: str) -> Config:
-    """Load config for mock/isolated mode, falling back to built-in defaults."""
-    from pyaerial.config import load_config
-    from pyaerial.config.schema import HomeConfig, TrackingConfig
-
-    try:
-        return load_config(config_path)
-    except Exception:
-        log.warning(
-            "Could not load configuration %s; falling back to defaults",
-            config_path,
-            exc_info=True,
-        )
-        return Config(
-            home=HomeConfig(latitude=35.7275, longitude=-78.6959),
-            tracking=TrackingConfig(),
-            receivers={},
-        )
-
-
 def start_isolated_engine(
     config: Config,
     *,
@@ -404,7 +390,7 @@ def start_isolated_engine(
 ) -> Engine:
     """Run the tracking engine in-process with a mock receiver and memory stores.
 
-    Used by ``pyaerial web --mock``, ``live --mock``, and ``view --mock``.
+    Used by ``pyaerial live --mock`` and ``view --mock``.
     Never connects to the configured Redis/Mongo URIs.
     """
     from pyaerial.config.schema import ReceiverConfig
