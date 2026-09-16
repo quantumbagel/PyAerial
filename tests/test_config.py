@@ -15,6 +15,13 @@ from helpers import make_config, make_rule
 from pyaerial.config.schema import ZoneConfig
 
 
+def test_activation_hold_uses_dwell_when_hysteresis_is_zero():
+    rule = make_rule(dwell_seconds=60, hysteresis_seconds=0)
+    assert rule.activation_hold_seconds() == 60
+    rule = make_rule(dwell_seconds=60, hysteresis_seconds=15)
+    assert rule.activation_hold_seconds() == 15
+
+
 def test_zone_requires_coordinates_or_file():
     with pytest.raises(ValidationError, match="coordinates or file"):
         ZoneConfig(rules=[make_rule()])

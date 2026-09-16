@@ -114,6 +114,7 @@ class PlaneCalculator:
             owner = ""
             country = ""
             aircraft_type = ""
+            resolved = True
 
             if self.aircraft_db and self.aircraft_db.available:
                 record = self.aircraft_db.lookup_cached(icao)
@@ -124,26 +125,23 @@ class PlaneCalculator:
                     owner = record.get("owner") or ""
                     country = record.get("country") or ""
                     aircraft_type = record.get("typecode") or ""
+                elif not self.aircraft_db.is_cached(icao):
+                    # Transport/API failure — retry on a later tick.
+                    resolved = False
 
             with self._lock:
                 live_cs = plane[STORE_INFO].get(STORE_CALLSIGN)
                 if live_cs:
                     callsign = live_cs
                 plane[STORE_INFO][STORE_CALLSIGN] = callsign or ""
-                plane[STORE_INFO]["model"] = model
-                plane[STORE_INFO]["owner"] = owner
-                plane[STORE_INFO]["country"] = country
-                plane[STORE_INFO]["aircraft_type"] = aircraft_type
-                plane[STORE_INFO]["metadata_resolved"] = True
+                if resolved:
+                    plane[STORE_INFO]["model"] = model
+                    plane[STORE_INFO]["owner"] = owner
+                    plane[STORE_INFO]["country"] = country
+                    plane[STORE_INFO]["aircraft_type"] = aircraft_type
+                    plane[STORE_INFO]["metadata_resolved"] = True
         except Exception as exc:
             log.debug("Background metadata lookup failed for %s: %s", icao, exc)
-            with self._lock:
-                plane[STORE_INFO].setdefault(STORE_CALLSIGN, "")
-                plane[STORE_INFO].setdefault("model", "")
-                plane[STORE_INFO].setdefault("owner", "")
-                plane[STORE_INFO].setdefault("country", "")
-                plane[STORE_INFO].setdefault("aircraft_type", "")
-                plane[STORE_INFO]["metadata_resolved"] = True
         finally:
             with self._lock:
                 self._pending_lookups.discard(icao)

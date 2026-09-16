@@ -41,7 +41,7 @@ def mount_spa(app: FastAPI) -> None:
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
-        if full_path.startswith("ws/") or full_path.startswith("api/"):
+        if full_path in {"api", "ws"} or full_path.startswith(("ws/", "api/")):
             raise HTTPException(404)
         if ".." in Path(full_path).parts:
             raise HTTPException(404)

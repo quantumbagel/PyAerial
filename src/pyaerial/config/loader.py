@@ -35,13 +35,18 @@ _ENV_OVERRIDES = {
     "PYAERIAL_LOG_FILE": ("logging", "file"),
     "PYAERIAL_HZ": ("tracking", "hz"),
     "PYAERIAL_WEB_TOKEN": ("web", "token"),
+    "PYAERIAL_WEB_ORIGINS": ("web", "origins"),
 }
 
 
 def _apply_env_overrides(data: dict) -> dict:
     for env_var, (section, key) in _ENV_OVERRIDES.items():
-        if env_var in os.environ:
-            data.setdefault(section, {})[key] = os.environ[env_var]
+        if env_var not in os.environ:
+            continue
+        value: object = os.environ[env_var]
+        if env_var == "PYAERIAL_WEB_ORIGINS":
+            value = [part.strip() for part in str(value).split(",") if part.strip()]
+        data.setdefault(section, {})[key] = value
     return data
 
 

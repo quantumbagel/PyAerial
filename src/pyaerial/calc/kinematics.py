@@ -204,7 +204,11 @@ class Kinematics:
             return computed, current_time
         reported = recv[STORE_HORIZ_SPEED][-1]
         if current_time - reported.time < _ADS_B_TRUST_SECONDS:
-            return reported.value, reported.time
+            # Stamp at the position time, not the velocity-packet time. ADS-B
+            # speed/heading messages are sparse; reusing their timestamp made
+            # patch_append drop every subsequent sample and froze historical
+            # tracks to a single speed/heading.
+            return reported.value, current_time
         return computed, current_time
 
     def _choose_heading(

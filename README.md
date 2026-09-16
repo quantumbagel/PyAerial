@@ -195,7 +195,7 @@ PyAerial provides a unified command line interface via the `pyaerial` executable
 | `pyaerial view`     | Interactive terminal flight viewer (`list`, `dump aircraft`, `status`, `live`) |
 | `pyaerial live`     | Real-time ASCII terminal flight display                       |
 
-The web portal exposes `GET /health`, `GET /ready`, and a WebSocket at `/ws/live`. All flight, alert, telemetry, zone, and config data is requested over that socket. Pass `?token=` when `web.token` / `PYAERIAL_WEB_TOKEN` is set.
+The web portal exposes `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `/ws/live` (alias `/ws`). Other apps can consume the same live stream and request history over that socket. Pass `?token=` when `web.token` / `PYAERIAL_WEB_TOKEN` is set.
 
 ### Usage Options
 
@@ -235,6 +235,7 @@ Environment variables override values in your `config.yaml`:
 | `PYAERIAL_LOG_FILE`  | `logging.file`       | Output log file path                                |
 | `PYAERIAL_HZ`        | `tracking.hz`        | Engine loop tick rate (Hz)                          |
 | `PYAERIAL_WEB_TOKEN` | `web.token`          | Optional shared secret for `/ws/live`               |
+| `PYAERIAL_WEB_ORIGINS` | `web.origins`      | Comma-separated allowed WebSocket origins (`*` = any) |
 
 String values in `config.yaml` also expand `${VAR}` and `${VAR:-default}`. A referenced variable with no default must be set, or `pyaerial validate` / load fails. Use this for webhook secrets:
 
@@ -248,7 +249,37 @@ on_activate:
 
 ### WebSocket protocol
 
-Connect to `ws://<host>:<port>/ws/live`. If `web.token` is set, pass it as `?token=` or the `x-pyaerial-token` header.
+Connect to `ws://<host>:<port>/ws/live` (or `/ws`). Native clients (no `Origin` header) are accepted. Browser apps on another host need `web.origins: ["*"]` or an explicit origin list (the default is `*`). If `web.token` is set, pass it as `?token=` or the `x-pyaerial-token` header.
+
+`GET /api` returns the same protocol document the socket sends on connect.
+
+On connect the server sends `hello`, then a snapshot (`flights`, `alerts`, `stats`). After that it pushes those streams plus `telemetry` and `ping`.
+
+Python example:
+
+```python
+import asyncio, json, websockets
+
+async def main():
+    async with websockets.connect("ws://127.0.0.1:10090/ws/live") as ws:
+        hello = json.loads(await ws.recv())
+        assert hello["type"] == "hello"
+        await ws.send(json.dumps({
+            "type": "request", "id": "1",
+            "action": "subscribe",
+            "params": {"streams": ["flights", "alerts"]},
+        }))
+        await ws.send(json.dumps({
+            "type": "request", "id": "2",
+            "action": "fetchFlights",
+            "params": {"view": "live"},
+        }))
+        while True:
+            msg = json.loads(await ws.recv())
+            print(msg["type"], msg.get("id") or msg.get("stats") or "")
+
+asyncio.run(main())
+```
 
 Client request:
 
@@ -264,6 +295,7 @@ Server reply:
 
 | Action | Params | Notes |
 |--------|--------|--------|
+| `subscribe` | `streams` (`flights`, `alerts`, `telemetry`, `stats`) | Limit pushed streams for this connection. Omit / `[]` = all. |
 | `fetchFlights` | `view` (`live` \| `history`); history: `skip`, `limit`, `q`, `since`, `until` | History `q` matches ICAO, callsign, or flight id. `since` / `until` are unix seconds on `end_time`. |
 | `fetchFlight` | `flightId`, `view` | Single flight detail |
 | `fetchTelemetry` | `flightId`, `view`, `since` | Track points after `since` |
@@ -272,7 +304,7 @@ Server reply:
 | `fetchZones` | — | Home, polygons, `alert_colors` |
 | `fetchConfig` | — | Portal display config |
 
-The server also pushes `flights`, `alerts`, `telemetry`, and `stats` messages on the live view.
+Pushed messages: `hello`, `flights`, `alerts`, `telemetry`, `stats`, `ping`.
 
 ---
 
@@ -291,7 +323,7 @@ Configuration is stored in YAML format. See [`config.yaml`](config.yaml) and [`s
 | `receivers`    | Named receiver instances (`dump1090`, `py1090`, `mock`, `replay`)                            |
 | `zones`        | Geofence polygons (`coordinates` or `file`), alert rules, retain policies, lifecycle hooks   |
 | `alert_colors` | Custom hex color palette mapping for alert levels                                            |
-| `web`          | Optional `token` shared secret required on `/ws/live`                                        |
+| `web`          | Optional `token` for `/ws/live`, and `origins` (default `*`) for cross-origin clients        |
 
 ### Configuration Example
 
@@ -358,9 +390,9 @@ zones:
         when:
           altitude: { max: 1000 }      # Altitude constraint (meters)
           eta: { max: 120 }             # Estimated arrival time constraint (seconds)
-        dwell_seconds: 60              # Episode must last this long to retain in Mongo
+        dwell_seconds: 60              # Hold before activate (if hysteresis is 0) and before retain
         retain: true                   # If false, matching this rule never archives the flight
-        hysteresis_seconds: 0          # Seconds the `when` must hold before activation
+        hysteresis_seconds: 0          # If >0, overrides dwell as the activation hold; also the off-delay
         # predict_seconds: 20          # Also match against dead-reckoned future state
         on_activate:
           - method: print
@@ -393,9 +425,9 @@ Each rule also accepts:
 
 | Field                 | Default | Description |
 |-----------------------|---------|-------------|
-| `dwell_seconds`       | required | Minimum episode length (seconds) before the flight is eligible to retain |
+| `dwell_seconds`       | required | Minimum seconds `when` must hold to activate (when hysteresis is 0) and to retain |
 | `retain`              | `true`  | If `false`, matching this rule never archives the flight |
-| `hysteresis_seconds`  | `0`     | `when` must hold this long before the rule activates |
+| `hysteresis_seconds`  | `0`     | If >0, activation hold (overrides dwell). Also the deactivation off-delay |
 | `predict_seconds`     | unset   | Also evaluate `when` against a dead-reckoned position this many seconds ahead |
 
 Zone polygons are `[latitude, longitude]` rings, or a `file` path relative to the config (`.kml`, `.kmz`, `.geojson` / `.json`). Provide `coordinates` or `file`, not both. GeoJSON/KML use lon,lat internally; PyAerial converts to lat,lon.

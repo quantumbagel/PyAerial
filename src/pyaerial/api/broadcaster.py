@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import WebSocket
@@ -12,6 +13,7 @@ from fastapi import WebSocket
 from pyaerial.api.payloads import sanitize_for_json
 from pyaerial.api.protocol import LiveStore
 from pyaerial.api.queries import get_live_flights, get_stats, get_tracked_live_alerts
+from pyaerial.api.spec import WS_STREAMS, websocket_hello
 from pyaerial.enrich.aircraft_db import AircraftDB
 
 log = logging.getLogger("pyaerial.webapp")
@@ -19,6 +21,14 @@ log = logging.getLogger("pyaerial.webapp")
 _LIVE_POLL_INTERVAL = 1.0
 _PING_INTERVAL = 15.0
 _STATS_CACHE_TTL = 5.0
+_ALL_STREAMS = frozenset(WS_STREAMS)
+
+
+@dataclass
+class _Client:
+    telemetry_since: float
+    last_ping: float
+    streams: set[str] = field(default_factory=lambda: set(WS_STREAMS))
 
 
 def _flights_sig(flights: list[dict[str, Any]]) -> tuple:
@@ -58,8 +68,7 @@ class LiveBroadcaster:
         self.live_store = live_store
         self.aircraft_db = aircraft_db
         self.db = db
-        self._clients: dict[WebSocket, float] = {}
-        self._last_ping: dict[WebSocket, float] = {}
+        self._clients: dict[WebSocket, _Client] = {}
         self._task: asyncio.Task | None = None
         self._pending_lookups: set[str] = set()
         self._last_flights_sig: tuple | None = None
@@ -82,13 +91,25 @@ class LiveBroadcaster:
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
         now = time.time()
-        self._clients[websocket] = now
-        self._last_ping[websocket] = now
+        self._clients[websocket] = _Client(telemetry_since=now, last_ping=now)
+        await websocket.send_json(websocket_hello())
         await self._send_snapshot(websocket)
 
     def disconnect(self, websocket: WebSocket) -> None:
         self._clients.pop(websocket, None)
-        self._last_ping.pop(websocket, None)
+
+    def set_streams(self, websocket: WebSocket, streams: Any) -> list[str]:
+        client = self._clients.get(websocket)
+        if client is None:
+            return []
+        if not streams:
+            client.streams = set(WS_STREAMS)
+        else:
+            if isinstance(streams, str):
+                streams = [streams]
+            chosen = {str(name) for name in streams if str(name) in _ALL_STREAMS}
+            client.streams = chosen or set(WS_STREAMS)
+        return sorted(client.streams)
 
     def _cached_stats(self) -> dict[str, int]:
         now = time.monotonic()
@@ -111,13 +132,20 @@ class LiveBroadcaster:
             else []
         )
         stats = self._cached_stats()
-        await websocket.send_json(
-            {"type": "flights", "flights": sanitize_for_json(flights)}
-        )
-        await websocket.send_json(
-            {"type": "alerts", "alerts": sanitize_for_json(alerts)}
-        )
-        await websocket.send_json({"type": "stats", "stats": sanitize_for_json(stats)})
+        client = self._clients.get(websocket)
+        streams = client.streams if client else _ALL_STREAMS
+        if "flights" in streams:
+            await websocket.send_json(
+                {"type": "flights", "flights": sanitize_for_json(flights)}
+            )
+        if "alerts" in streams:
+            await websocket.send_json(
+                {"type": "alerts", "alerts": sanitize_for_json(alerts)}
+            )
+        if "stats" in streams:
+            await websocket.send_json(
+                {"type": "stats", "stats": sanitize_for_json(stats)}
+            )
 
     async def _run_loop(self) -> None:
         while True:
@@ -185,34 +213,45 @@ class LiveBroadcaster:
 
         await self._broadcast({"type": "stats", "stats": sanitize_for_json(stats)})
 
-        min_since = min(self._clients.values()) if self._clients else now
+        min_since = (
+            min(client.telemetry_since for client in self._clients.values())
+            if self._clients
+            else now
+        )
         all_points = (
             self.live_store.get_live_telemetry(min_since) if self.live_store else []
         )
-        for websocket, since in list(self._clients.items()):
-            points = [point for point in all_points if point.get("timestamp", 0) > since]
-            if points:
-                payload = {
-                    "type": "telemetry",
-                    "telemetry": sanitize_for_json(points),
-                    "timestamp": now,
-                }
-                try:
-                    await websocket.send_json(payload)
-                    self._clients[websocket] = now
-                except Exception:
-                    self.disconnect(websocket)
-                    continue
-            last_ping = self._last_ping.get(websocket, 0.0)
-            if now - last_ping >= _PING_INTERVAL:
+        for websocket, client in list(self._clients.items()):
+            if "telemetry" in client.streams:
+                points = [
+                    point
+                    for point in all_points
+                    if point.get("timestamp", 0) > client.telemetry_since
+                ]
+                if points:
+                    payload = {
+                        "type": "telemetry",
+                        "telemetry": sanitize_for_json(points),
+                        "timestamp": now,
+                    }
+                    try:
+                        await websocket.send_json(payload)
+                        client.telemetry_since = now
+                    except Exception:
+                        self.disconnect(websocket)
+                        continue
+            if now - client.last_ping >= _PING_INTERVAL:
                 try:
                     await websocket.send_json({"type": "ping", "timestamp": now})
-                    self._last_ping[websocket] = now
+                    client.last_ping = now
                 except Exception:
                     self.disconnect(websocket)
 
     async def _broadcast(self, message: dict[str, Any]) -> None:
-        for websocket in list(self._clients):
+        stream = message.get("type")
+        for websocket, client in list(self._clients.items()):
+            if stream not in client.streams:
+                continue
             try:
                 await websocket.send_json(message)
             except Exception:

@@ -142,7 +142,7 @@ class AlertEngine:
             state = self._alert_state.get(key)
             if state is None:
                 first_match = self._pending_match.setdefault(key, now)
-                if now - first_match < (rule.hysteresis_seconds or 0):
+                if now - first_match < rule.activation_hold_seconds():
                     continue
                 self._pending_match.pop(key, None)
                 alert_id = f"{flight_id}:{zone_name}:{rule.name}:{int(now)}"

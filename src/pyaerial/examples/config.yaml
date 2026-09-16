@@ -22,6 +22,7 @@ home:
 
 # web:
 #   token: "shared-secret"   # optional; require ?token= on /ws/live
+#   origins: ["*"]           # default; restrict to a host list if the portal is public
 
 receivers:
   main:

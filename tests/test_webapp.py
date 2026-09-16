@@ -40,8 +40,77 @@ def test_health_and_api(monkeypatch):
         health = client.get("/health")
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
+        spec = client.get("/api")
+        assert spec.status_code == 200
+        body = spec.json()
+        assert body["websocket"] == "/ws/live"
+        assert "fetchFlights" in body["actions"]
         assert client.get("/api/flights").status_code == 404
         assert client.get("/api/stats").status_code == 404
+
+
+def test_websocket_hello_snapshot_and_subscribe():
+    from fastapi.testclient import TestClient
+
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    app = create_app(
+        config=make_config(), db=None, live_store=store, aircraft_db=None
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/live") as ws:
+            hello = ws.receive_json()
+            assert hello["type"] == "hello"
+            assert hello["protocol"] == "pyaerial.live"
+            assert "fetchFlights" in hello["actions"]
+            assert ws.receive_json()["type"] == "flights"
+            assert ws.receive_json()["type"] == "alerts"
+            assert ws.receive_json()["type"] == "stats"
+            ws.send_json(
+                {
+                    "type": "request",
+                    "id": "1",
+                    "action": "subscribe",
+                    "params": {"streams": ["flights"]},
+                }
+            )
+            reply = ws.receive_json()
+            assert reply["success"] is True
+            assert reply["data"]["streams"] == ["flights"]
+            ws.send_json(
+                {
+                    "type": "request",
+                    "id": "2",
+                    "action": "fetchStats",
+                    "params": {},
+                }
+            )
+            while True:
+                stats = ws.receive_json()
+                if stats.get("type") == "response" and stats.get("id") == "2":
+                    break
+            assert stats["success"] is True
+            assert "live_flights" in stats["data"]
+
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json()["type"] == "hello"
+
+
+def test_websocket_rejects_disallowed_origin():
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    config = make_config()
+    config.web.origins = []
+    app = create_app(config=config, db=None, live_store=None, aircraft_db=None)
+    with TestClient(app) as client:
+        try:
+            with client.websocket_connect(
+                "/ws/live", headers={"Origin": "https://evil.example"}
+            ) as ws:
+                ws.receive_json()
+            raise AssertionError("expected websocket to close")
+        except WebSocketDisconnect as exc:
+            assert exc.code == 1008
 
 
 def test_ready_uses_live_store_ping():

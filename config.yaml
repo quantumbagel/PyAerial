@@ -15,6 +15,9 @@ tracking:
 logging:
   level: info
 
+web:
+  origins: ["*"]
+
 home:
   latitude: 35.72748800696312
   longitude: -78.69594225530933

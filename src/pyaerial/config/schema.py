@@ -124,6 +124,17 @@ class RuleConfig(_Strict):
     on_deactivate: list[AlertActionConfig] = Field(default_factory=list)
     while_active: WhileActiveConfig | None = None
 
+    def activation_hold_seconds(self) -> float:
+        """Seconds `when` must hold before the rule activates.
+
+        ``hysteresis_seconds`` wins when set so existing configs that tune the
+        on-delay keep working. When it is left at 0, ``dwell_seconds`` is the
+        hold — otherwise Discord/webhooks fire on every 0.5s flicker.
+        """
+        if self.hysteresis_seconds > 0:
+            return float(self.hysteresis_seconds)
+        return float(self.dwell_seconds)
+
     @field_validator("color")
     @classmethod
     def _validate_color(cls, value: str | None) -> str | None:
@@ -181,6 +192,7 @@ class ZoneConfig(_Strict):
 
 class WebConfig(_Strict):
     token: str | None = None
+    origins: list[str] = Field(default_factory=lambda: ["*"])
 
 
 class Config(_Strict):

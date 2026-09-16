@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from pyaerial.api.broadcaster import LiveBroadcaster
 from pyaerial.api.payloads import sanitize_for_json
+from pyaerial.api.spec import websocket_api_spec
 from pyaerial.api.static import mount_spa
 from pyaerial.api.ws import handle_ws_request
 from pyaerial.config.schema import Config
@@ -28,14 +29,25 @@ log = logging.getLogger("pyaerial.webapp")
 _LOCAL_ORIGIN = re.compile(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$")
 
 
-def _origin_allowed(origin: str | None, host_header: str | None) -> bool:
+def _origin_allowed(
+    origin: str | None,
+    host_header: str | None,
+    allowed: list[str] | None = None,
+) -> bool:
     if not origin:
+        return True
+    allowed = allowed or []
+    if "*" in allowed:
         return True
     if _LOCAL_ORIGIN.match(origin):
         return True
     parsed = urlparse(origin)
-    request_host = (host_header or "").split(":")[0].lower()
     origin_host = (parsed.hostname or "").lower()
+    origin_norm = origin.rstrip("/")
+    allowed_norm = {item.rstrip("/") for item in allowed}
+    if origin_norm in allowed_norm or origin_host in {item.lower() for item in allowed}:
+        return True
+    request_host = (host_header or "").split(":")[0].lower()
     return bool(origin_host) and origin_host == request_host
 
 
@@ -105,18 +117,25 @@ def create_app(
             status_code=code,
         )
 
-    @app.websocket("/ws/live")
+    @app.get("/api")
+    def api_index():
+        return websocket_api_spec()
+
+    async def _reject(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.close(code=1008)
+
     async def ws_live(websocket: WebSocket):
         origin = websocket.headers.get("origin")
         host_header = websocket.headers.get("host")
-        if not _origin_allowed(origin, host_header):
-            await websocket.close(code=1008)
+        if not _origin_allowed(origin, host_header, config.web.origins):
+            await _reject(websocket)
             return
         token = websocket.query_params.get("token") or websocket.headers.get(
             "x-pyaerial-token"
         )
         if not _token_ok(config, token):
-            await websocket.close(code=1008)
+            await _reject(websocket)
             return
         await broadcaster.connect(websocket)
         try:
@@ -140,6 +159,19 @@ def create_app(
                 req_id = req.get("id")
                 action = req.get("action")
                 params = req.get("params") or {}
+                if not isinstance(params, dict):
+                    params = {}
+                if action == "subscribe":
+                    selected = broadcaster.set_streams(websocket, params.get("streams"))
+                    await websocket.send_json(
+                        {
+                            "type": "response",
+                            "id": req_id,
+                            "success": True,
+                            "data": {"streams": selected},
+                        }
+                    )
+                    continue
                 try:
                     res_data = await asyncio.to_thread(
                         ws_request_handler, action, params
@@ -166,6 +198,9 @@ def create_app(
             broadcaster.disconnect(websocket)
         except Exception:
             broadcaster.disconnect(websocket)
+
+    app.add_api_websocket_route("/ws/live", ws_live)
+    app.add_api_websocket_route("/ws", ws_live)
 
     mount_spa(app)
     return app

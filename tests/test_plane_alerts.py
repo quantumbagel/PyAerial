@@ -38,14 +38,20 @@ def _plane(lat: float = 35.725, lon: float = -78.695, t: float | None = None):
     }
 
 
-def test_while_active_starts_at_activation_time():
+def test_while_active_starts_at_activation_time(monkeypatch):
     config = make_config()
+    config.zones["pad"].rules[0].dwell_seconds = 1
     calc = PlaneCalculator(config, build_polygons(config.zones))
     try:
-        plane = _plane()
+        t0 = time.time()
+        monkeypatch.setattr(time, "time", lambda: t0)
+        plane = _plane(t=t0)
+        calc.calculate_plane(plane)
+        assert calc._alert_state == {}
+        monkeypatch.setattr(time, "time", lambda: t0 + 1.5)
         calc.calculate_plane(plane)
         keys = [k for k in calc._alert_state if k[0] == "abc123"]
-        assert keys, "expected an active alert for a plane inside the zone"
+        assert keys, "expected an active alert after dwell"
         state = calc._alert_state[keys[0]]
         assert state["last_periodic"] == state["activated_at"]
         assert state["last_periodic"] > 0
@@ -63,6 +69,40 @@ def test_forget_motion_drops_kalman():
         calc.forget_motion("abc123")
         assert "abc123" not in calc._kalman_filters
         assert "abc123" not in calc._smoothed_turn_rates
+    finally:
+        calc.close()
+
+
+def test_dwell_holds_activation_when_hysteresis_is_zero():
+    config = make_config()
+    assert config.zones["pad"].rules[0].hysteresis_seconds == 0
+    assert config.zones["pad"].rules[0].dwell_seconds == 60
+    calc = PlaneCalculator(config, build_polygons(config.zones))
+    try:
+        plane = _plane()
+        calc.calculate_plane(plane)
+        assert calc._alert_state == {}
+        assert any(key[0] == "abc123" for key in calc._pending_match)
+    finally:
+        calc.close()
+
+
+def test_metadata_lookup_failure_is_retried():
+    class _FailingDb:
+        available = True
+
+        def lookup_cached(self, icao: str):
+            raise RuntimeError("hexdb down")
+
+        def is_cached(self, icao: str) -> bool:
+            return False
+
+    config = make_config()
+    calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=_FailingDb())
+    try:
+        plane = _plane()
+        calc._bg_lookup_metadata(plane, plane[STORE_INFO][STORE_ICAO])
+        assert plane[STORE_INFO].get("metadata_resolved") is not True
     finally:
         calc.close()
 
