@@ -54,7 +54,7 @@ def make_config(
         }
     return Config(
         home=HomeConfig(latitude=35.7275, longitude=-78.6959),
-        receivers=receivers or {"mock": ReceiverConfig(type="mock")},
+        receivers=receivers or {"main": ReceiverConfig(type="dump1090")},
         zones=zones,
         tracking=tracking or TrackingConfig(),
     )

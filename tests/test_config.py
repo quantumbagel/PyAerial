@@ -74,7 +74,7 @@ home:
   longitude: -78.6959
 receivers:
   main:
-    type: mock
+    type: dump1090
 """
 
 

@@ -381,21 +381,3 @@ def run_engine(config: Config, *, aircraft_db_path: str = DEFAULT_AIRCRAFT_DB) -
     """Configure logging and run the engine until shutdown."""
     setup_logging(config.logging.level, log_file=config.logging.file)
     Engine(config, aircraft_db_path=aircraft_db_path).run()
-
-
-def start_isolated_engine(
-    config: Config,
-    *,
-    aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
-) -> Engine:
-    """Run the tracking engine in-process with a mock receiver and memory stores.
-
-    Used by ``pyaerial live --mock`` and ``view --mock``.
-    Never connects to the configured Redis/Mongo URIs.
-    """
-    from pyaerial.config.schema import ReceiverConfig
-
-    config.receivers = {"mock": ReceiverConfig(type="mock")}
-    engine = Engine(config, aircraft_db_path=aircraft_db_path, isolated=True)
-    threading.Thread(target=engine.run, daemon=True, name="mock-engine").start()
-    return engine

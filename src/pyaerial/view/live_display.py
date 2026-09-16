@@ -139,20 +139,16 @@ def run_live_loop(
 def run_live_cmd(
     config_path: str = "config.yaml",
     *,
-    mock: bool = False,
     interval: float = 1.0,
     once: bool = False,
 ) -> None:
     """CLI handler for pyaerial live command."""
     config = load_config(config_path)
-    live_store, engine = open_live_session(config, mock=mock)
+    live_store = open_live_session(config)
 
     try:
         run_live_loop(live_store, interval=interval, once=once)
     except KeyboardInterrupt:
         print("\n[live] Stopped.")
     finally:
-        if engine is not None:
-            engine.shutdown()
-        else:
-            live_store.close()
+        live_store.close()

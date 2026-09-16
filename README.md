@@ -4,7 +4,7 @@ _Scanning software for ADS-B / Mode S for AERPAW_
 
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.10.0-green.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.11.0-green.svg)](pyproject.toml)
 
 **PyAerial** is a high-performance Python 3 application designed to receive ADS-B / Mode S aircraft telemetry signals, track flight positions in real time, evaluate dynamic polygon geofences with early-warning rules, trigger multi-channel alerts, stream live data to a web portal, and persist completed flights to a database.
 
@@ -17,7 +17,6 @@ graph TD
     subgraph Inputs ["ADS-B / Mode S Data Sources"]
         DUMP1090["dump1090 (TCP Raw Stream)"]
         PY1090["py1090 (RTL-SDR Hardware)"]
-        MOCK_REC["Mock Receiver (Simulated Feed)"]
         REPLAY["Replay Receiver (Recorded Hex File)"]
     end
 
@@ -44,7 +43,6 @@ graph TD
 
     DUMP1090 --> ENGINE
     PY1090 --> ENGINE
-    MOCK_REC --> ENGINE
     REPLAY --> ENGINE
 
     ENGINE <--> AIRCRAFT_DB
@@ -66,7 +64,7 @@ graph TD
 ## Features
 
 - Decodes position, altitude, horizontal/vertical velocity, direction, callsign, and ICAO plane categories in real time via [`pyModeS`](https://github.com/junzis/pymodes).
-- Concurrently stream from TCP raw inputs (e.g. `dump1090`), direct hardware SDRs (`py1090` via `pyrtlsdr`), synthetic test feeds (`mock`), or a recorded dump1090 hex file (`replay`).
+- Concurrently stream from TCP raw inputs (e.g. `dump1090`), direct hardware SDRs (`py1090` via `pyrtlsdr`), or a recorded dump1090 hex file (`replay`).
 - Define custom polygon zones (inline coordinates, or a KML / KMZ / GeoJSON `file`) with rule constraints (`altitude`, `speed` / `horizontal_speed`, `heading` / `direction`, `distance`, `proximity`, `eta`) and lifecycle event hooks (`on_activate`, `on_deactivate`, `while_active`).
 - Out-of-the-box support for console output (`print`), HTTP POST (`webhook`), and Apache Kafka message topics (`kafka`).
 - Two storage methods:
@@ -79,26 +77,6 @@ graph TD
 ---
 
 ## Quick Start
-
-### Terminal mock feed
-
-Try the tracker without an SDR dongle, Redis, or MongoDB:
-
-```bash
-# Clone and install dependencies
-git clone https://github.com/quantumbagel/PyAerial.git
-cd PyAerial
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-
-# Simulated ADS-B approaches in the terminal
-pyaerial live --mock
-```
-
-`view --mock` is the same isolated engine in an interactive REPL. Planes appear after a short warm-up while the tracker ingests the simulated feed. The web portal is **not** a mock mode — it reads Redis and MongoDB written by `pyaerial run`.
-
----
 
 ### Dockerized Setup
 
@@ -194,13 +172,13 @@ pyaerial validate -c config.yaml
 pyaerial web -c config.yaml --host 0.0.0.0 --port 10090
 
 # Live flight viewer with 2-second refresh rate
-pyaerial live --interval 2.0 [--mock]
+pyaerial live --interval 2.0
 
 # Print single-frame flight snapshot and exit
-pyaerial live --once [--mock]
+pyaerial live --once
 
 # Interactive flight search & detail view
-pyaerial view [-c config.yaml] [--mock]
+pyaerial view [-c config.yaml]
 
 # Replay a recorded dump1090 capture (see examples/replay.yaml)
 pyaerial run -c src/pyaerial/examples/replay.yaml
@@ -304,7 +282,7 @@ Configuration is stored in YAML format. See [`config.yaml`](config.yaml) and [`s
 | `tracking`     | Tick rate, plane retention, live telemetry window, ETA options, status reporting             |
 | `logging`      | Log level and optional file logging                                                          |
 | `home`         | Receiver station latitude & longitude for ADS-B CPR decode (not the geofence)                |
-| `receivers`    | Named receiver instances (`dump1090`, `py1090`, `mock`, `replay`)                            |
+| `receivers`    | Named receiver instances (`dump1090`, `py1090`, `replay`)                                     |
 | `zones`        | Named polygons plus independent constraint rules (not an implicit inside-test)               |
 | `alert_colors` | Hex colors keyed by **rule name**                                                            |
 | `web`          | Optional `token` for `/ws/live`, and `origins` (default `*`) for cross-origin clients        |

@@ -44,14 +44,14 @@ def test_dead_receiver_waits_before_restart(tmp_path, monkeypatch):
     engine = _engine(tmp_path)
     try:
         handle = _ReceiverHandle(
-            name="mock",
-            method="mock",
+            name="main",
+            method="dump1090",
             receiver=_DummyReceiver(),
             thread=_dead_thread(),
             started_at=time.monotonic(),
             backoff=_RECEIVER_BACKOFF_INITIAL,
         )
-        engine._receivers["mock"] = handle
+        engine._receivers["main"] = handle
         starts: list[float] = []
         monkeypatch.setattr(
             engine,
@@ -75,14 +75,14 @@ def test_receiver_backoff_resets_after_long_run(tmp_path, monkeypatch):
     engine = _engine(tmp_path)
     try:
         handle = _ReceiverHandle(
-            name="mock",
-            method="mock",
+            name="main",
+            method="dump1090",
             receiver=_DummyReceiver(),
             thread=_dead_thread(),
             started_at=time.monotonic() - 30.0,
             backoff=_RECEIVER_BACKOFF_MAX,
         )
-        engine._receivers["mock"] = handle
+        engine._receivers["main"] = handle
         monkeypatch.setattr(engine, "_start_receiver", lambda *args, **kwargs: None)
 
         engine._restart_dead_receivers()
@@ -97,14 +97,14 @@ def test_receiver_backoff_caps(tmp_path, monkeypatch):
     engine = _engine(tmp_path)
     try:
         handle = _ReceiverHandle(
-            name="mock",
-            method="mock",
+            name="main",
+            method="dump1090",
             receiver=_DummyReceiver(),
             thread=_dead_thread(),
             started_at=time.monotonic(),
             backoff=_RECEIVER_BACKOFF_MAX,
         )
-        engine._receivers["mock"] = handle
+        engine._receivers["main"] = handle
         monkeypatch.setattr(engine, "_start_receiver", lambda *args, **kwargs: None)
 
         engine._restart_dead_receivers()
@@ -124,13 +124,13 @@ def test_alive_receiver_is_not_restarted(tmp_path, monkeypatch):
         thread = threading.Thread(target=_idle)
         thread.start()
         handle = _ReceiverHandle(
-            name="mock",
-            method="mock",
+            name="main",
+            method="dump1090",
             receiver=_DummyReceiver(),
             thread=thread,
             started_at=time.monotonic(),
         )
-        engine._receivers["mock"] = handle
+        engine._receivers["main"] = handle
         starts: list[int] = []
         monkeypatch.setattr(
             engine, "_start_receiver", lambda *args, **kwargs: starts.append(1)
@@ -210,17 +210,11 @@ def test_pending_finalize_retries_then_clears(tmp_path, monkeypatch):
         engine.shutdown()
 
 
-def test_start_isolated_engine_uses_memory_store(tmp_path):
-    from pyaerial.engine import start_isolated_engine
-
-    engine = start_isolated_engine(
-        make_config(),
-        aircraft_db_path=str(tmp_path / "aircraft.db"),
-    )
+def test_isolated_engine_uses_memory_store(tmp_path):
+    engine = _engine(tmp_path)
     try:
         assert engine.live_store.memory_only is True
         assert engine.live_store.ping() is True
-        assert "mock" in engine.config.receivers
-        assert engine.config.receivers["mock"].type == "mock"
+        assert engine.mongo_store.disabled is True
     finally:
         engine.shutdown()

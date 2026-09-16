@@ -5,10 +5,11 @@ import pytest
 from pyaerial.cli import _build_parser
 
 
-def test_web_cli_rejects_mock_flag():
+def test_cli_rejects_mock_flag():
     parser = _build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["web", "--mock"])
+    for command in ("run", "web", "live", "view"):
+        with pytest.raises(SystemExit):
+            parser.parse_args([command, "--mock"])
 
 
 def test_web_cli_has_host_and_port():
@@ -20,9 +21,9 @@ def test_web_cli_has_host_and_port():
     assert not hasattr(args, "mock")
 
 
-def test_live_and_view_keep_mock_flag():
+def test_live_and_view_have_no_mock_flag():
     parser = _build_parser()
-    live = parser.parse_args(["live", "--mock"])
-    view = parser.parse_args(["view", "--mock"])
-    assert live.mock is True
-    assert view.mock is True
+    live = parser.parse_args(["live"])
+    view = parser.parse_args(["view"])
+    assert not hasattr(live, "mock")
+    assert not hasattr(view, "mock")

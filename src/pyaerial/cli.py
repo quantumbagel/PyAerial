@@ -66,12 +66,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     view_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
     view_p.add_argument("--aircraft-db", default=DEFAULT_AIRCRAFT_DB)
-    view_p.add_argument("--mock", action="store_true", help="use mock live data store")
     view_p.set_defaults(func=_cmd_view)
 
     live_p = sub.add_parser("live", help="live flight display")
     live_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
-    live_p.add_argument("--mock", action="store_true", help="use mock live data store")
     live_p.add_argument(
         "--interval",
         type=float,
@@ -133,14 +131,13 @@ def _cmd_validate(args: argparse.Namespace) -> None:
 
 def _cmd_view(args: argparse.Namespace) -> None:
     setup_logging("warning")
-    run_view(args.config, aircraft_db_path=args.aircraft_db, mock=args.mock)
+    run_view(args.config, aircraft_db_path=args.aircraft_db)
 
 
 def _cmd_live(args: argparse.Namespace) -> None:
     setup_logging("warning")
     run_live_cmd(
         args.config,
-        mock=args.mock,
         interval=args.interval,
         once=args.once,
     )

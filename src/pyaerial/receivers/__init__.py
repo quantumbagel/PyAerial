@@ -76,7 +76,6 @@ def create_receiver(method: str, name: str, emit: Emit, arguments: dict) -> Rece
 def register_builtins() -> None:
     """Import built-in receivers so they register themselves."""
     from pyaerial.receivers import dump1090 as _dump1090  # noqa: F401
-    from pyaerial.receivers import mock as _mock  # noqa: F401
     from pyaerial.receivers import replay as _replay  # noqa: F401
 
     try:  # pyrtlsdr / librtlsdr may be unavailable on some systems.

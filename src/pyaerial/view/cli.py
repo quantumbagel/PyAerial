@@ -36,33 +36,26 @@ def run_view(
     config_path: str = "config.yaml",
     *,
     aircraft_db_path: str = DEFAULT_AIRCRAFT_DB,
-    mock: bool = False,
 ) -> None:
     """Run interactive flight viewer command-line session."""
     config = load_config(config_path)
     set_view_db_name(config.database.name)
     aircraft_db = AircraftDB(aircraft_db_path)
-    live_store, engine = open_live_session(
-        config, mock=mock, aircraft_db_path=aircraft_db_path
-    )
+    live_store = open_live_session(config)
 
     client: pymongo.MongoClient | None = None
-    if not mock:
-        try:
-            client = pymongo.MongoClient(
-                config.database.uri, serverSelectionTimeoutMS=2000
-            )
-        except Exception:
-            client = None
+    try:
+        client = pymongo.MongoClient(
+            config.database.uri, serverSelectionTimeoutMS=2000
+        )
+    except Exception:
+        client = None
 
     print("Ready for user input.")
     try:
         _run_view_loop(client, aircraft_db, live_store)
     finally:
-        if engine is not None:
-            engine.shutdown()
-        else:
-            live_store.close()
+        live_store.close()
         aircraft_db.close()
         if client is not None:
             client.close()
