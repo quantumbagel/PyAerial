@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
+import { maplibreGL } from '@maplibre/maplibre-gl-leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
 import { formatDateTime, formatZoneRule, isFlightLive } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight } from '../utils/planeIcon';
@@ -8,6 +9,8 @@ import { COLOR_HEX } from '../utils/colors';
 import { buildAlertPathSegments } from '../utils/alertPathSegments';
 import { MapToolbar } from './MapToolbar';
 import '@luomus/leaflet-smooth-wheel-zoom';
+
+const OPENFREEMAP_DARK = 'https://tiles.openfreemap.org/styles/dark';
 
 export interface MapViewHandle {
   map: L.Map | null;
@@ -132,13 +135,14 @@ export function MapView({
       zoomControl: false,
       zoomSnap: 0,
       zoomDelta: 1.0,
+      minZoom: 1,
       scrollWheelZoom: false,
       smoothWheelZoom: true,
       smoothSensitivity: 1,
     }).setView([35.727, -78.696], 8);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OpenStreetMap &copy; CARTO',
+    maplibreGL({
+      style: OPENFREEMAP_DARK,
     }).addTo(map);
     map.on('dragstart', () => onFollowDisabledRef.current());
     const recenterOnFollowedPlane = () => {

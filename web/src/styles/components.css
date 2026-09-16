@@ -128,6 +128,27 @@
     background-color: var(--panel);
 }
 
+.leaflet-gl-layer,
+.leaflet-gl-layer .maplibregl-map {
+    width: 100%;
+    height: 100%;
+}
+
+#map .maplibregl-ctrl-bottom-left,
+#map .maplibregl-ctrl-bottom-right {
+    display: none;
+}
+
+#map .leaflet-control-attribution {
+    background: var(--surface-overlay);
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+#map .leaflet-control-attribution a {
+    color: var(--text-secondary);
+}
+
 #map-controls {
     position: absolute;
     top: var(--space-2);
