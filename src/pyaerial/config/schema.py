@@ -75,6 +75,7 @@ class ReceiverConfig(_Strict):
     type: str
     host: str | None = None
     port: int | None = None
+    format: str | None = None
     options: dict[str, object] = Field(default_factory=dict)
 
     def receiver_arguments(self) -> dict[str, object]:
@@ -85,6 +86,8 @@ class ReceiverConfig(_Strict):
                 args.setdefault("tcp_connection_ip", self.host)
             if self.port is not None:
                 args.setdefault("tcp_connection_port", self.port)
+            if self.format is not None:
+                args.setdefault("format", self.format)
         return args
 
 

@@ -54,7 +54,8 @@ receivers:
   main:
     type: dump1090
     host: localhost
-    port: 30002
+    port: 30002          # AVR hex (`*8D...;`). Use 30005 + format: beast for RSSI.
+    # format: beast      # dump1090 Beast binary; default port 30005
   sdr:
     type: py1090
     options:
@@ -137,6 +138,8 @@ Each rule also accepts:
 
 Zone polygons are `[latitude, longitude]` rings, or a `file` path relative to the config (`.kml`, `.kmz`, `.geojson` / `.json`). Provide `coordinates` or `file`, not both. GeoJSON/KML use lon,lat internally; PyAerial converts to lat,lon.
 
+dump1090 `format`: `avr` (default, TCP port 30002) or `beast` (TCP port 30005). Beast includes per-message RSSI (dBFS) and a 12 MHz `clock` on the raw WebSocket stream. Port `30005` implies Beast unless `format` is set. Put `format` on the receiver or under `options`.
+
 Replay receiver `options`: `path` (required), `speed` (default `1.0`), `loop` (default `true`), `interval` (seconds between untimestamped lines, default `0.1`). See [`src/pyaerial/examples/replay.yaml`](src/pyaerial/examples/replay.yaml).
 
 ---
@@ -152,6 +155,7 @@ Redis serves as an in-memory buffer while flights are active.
 - `live:alerts:{flight_id}`: alert episodes for that flight
 - `live:active_alerts` / `live:alert_episodes`: global active set and episode index
 - `live:engine`: tracking-engine heartbeat (`seen_at`); expires if `pyaerial run` stops
+- `live:raw`: Redis pub/sub channel of raw receiver frames for `/ws/raw` (not a persisted key)
 
 Data is automatically cleared or transitioned when a flight expires from memory.
 

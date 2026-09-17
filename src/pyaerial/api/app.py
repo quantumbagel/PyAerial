@@ -15,8 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from pyaerial.api.broadcaster import LiveBroadcaster
-from pyaerial.api.payloads import sanitize_for_json
-from pyaerial.api.spec import websocket_api_spec
+from pyaerial.api.payloads import antenna_payload, sanitize_for_json
+from pyaerial.api.spec import WS_OPTIONAL_STREAMS, WS_STREAMS, websocket_api_spec
 from pyaerial.api.static import mount_spa
 from pyaerial.api.ws import handle_ws_request
 from pyaerial.config.schema import Config
@@ -58,6 +58,20 @@ def _token_ok(config: Config, token: str | None) -> bool:
     return token == expected
 
 
+_KNOWN_STREAMS = frozenset((*WS_STREAMS, *WS_OPTIONAL_STREAMS))
+
+
+def _requested_streams(websocket: WebSocket, *, raw_only: bool) -> list[str] | None:
+    if raw_only:
+        return ["raw"]
+    value = websocket.query_params.get("streams")
+    if not value:
+        return None
+    names = [part.strip() for part in value.split(",") if part.strip()]
+    chosen = [name for name in names if name in _KNOWN_STREAMS]
+    return chosen or None
+
+
 def create_app(
     *,
     config: Config,
@@ -65,7 +79,12 @@ def create_app(
     live_store: LiveStore | None = None,
     aircraft_db: AircraftDB | None = None,
 ) -> FastAPI:
-    broadcaster = LiveBroadcaster(live_store, aircraft_db, history=history)
+    broadcaster = LiveBroadcaster(
+        live_store,
+        aircraft_db,
+        history=history,
+        antenna=antenna_payload(config),
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -122,7 +141,7 @@ def create_app(
         await websocket.accept()
         await websocket.close(code=1008)
 
-    async def ws_live(websocket: WebSocket):
+    async def _ws_handler(websocket: WebSocket, *, raw_only: bool) -> None:
         origin = websocket.headers.get("origin")
         host_header = websocket.headers.get("host")
         if not _origin_allowed(origin, host_header, config.web.origins):
@@ -134,7 +153,9 @@ def create_app(
         if not _token_ok(config, token):
             await _reject(websocket)
             return
-        await broadcaster.connect(websocket)
+        await broadcaster.connect(
+            websocket, streams=_requested_streams(websocket, raw_only=raw_only)
+        )
         try:
             while True:
                 data = await websocket.receive_text()
@@ -159,7 +180,9 @@ def create_app(
                 if not isinstance(params, dict):
                     params = {}
                 if action == "subscribe":
-                    selected = broadcaster.set_streams(websocket, params.get("streams"))
+                    selected, added_raw = broadcaster.set_streams(
+                        websocket, params.get("streams")
+                    )
                     await websocket.send_json(
                         {
                             "type": "response",
@@ -168,6 +191,8 @@ def create_app(
                             "data": {"streams": selected},
                         }
                     )
+                    if added_raw:
+                        await broadcaster.send_antenna(websocket)
                     continue
                 try:
                     res_data = await asyncio.to_thread(
@@ -196,8 +221,15 @@ def create_app(
         except Exception:
             broadcaster.disconnect(websocket)
 
+    async def ws_live(websocket: WebSocket):
+        await _ws_handler(websocket, raw_only=False)
+
+    async def ws_raw(websocket: WebSocket):
+        await _ws_handler(websocket, raw_only=True)
+
     app.add_api_websocket_route("/ws/live", ws_live)
     app.add_api_websocket_route("/ws", ws_live)
+    app.add_api_websocket_route("/ws/raw", ws_raw)
 
     mount_spa(app)
     return app

@@ -13,6 +13,33 @@ from pyaerial.config.schema import Config
 FLIGHT_STATUS_LIVE = "live"
 
 
+def antenna_payload(config: Config) -> dict[str, Any]:
+    """Station location and configured receivers for the raw sensor stream."""
+    receivers: list[dict[str, Any]] = []
+    for name, receiver in config.receivers.items():
+        item: dict[str, Any] = {"name": name, "type": receiver.type}
+        if receiver.host:
+            item["host"] = receiver.host
+        if receiver.port is not None:
+            item["port"] = receiver.port
+        fmt = receiver.format or receiver.options.get("format")
+        if isinstance(fmt, str) and fmt:
+            item["format"] = fmt.lower()
+        elif receiver.type == "dump1090":
+            if receiver.port == 30005:
+                item["format"] = "beast"
+            else:
+                item["format"] = "avr"
+        receivers.append(item)
+    return {
+        "home": {
+            "latitude": config.home.latitude,
+            "longitude": config.home.longitude,
+        },
+        "receivers": receivers,
+    }
+
+
 def zones_payload(config: Config) -> dict[str, Any]:
     zones = []
     for name, zone in config.zones.items():

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 import redis
@@ -39,7 +41,9 @@ _KEY_ALERTS = "live:alerts:{flight_id}"
 _KEY_ACTIVE_ALERTS = "live:active_alerts"
 _KEY_ALERT_EPISODES = "live:alert_episodes"
 _KEY_ENGINE = "live:engine"
+_RAW_CHANNEL = "live:raw"
 _RECONNECT_DELAY = 2.0
+_RAW_PUBSUB_RETRY = 2.0
 
 
 class RedisLiveStore:
@@ -61,6 +65,11 @@ class RedisLiveStore:
         self._last_connect_attempt = 0.0
         self._last_ping_ok = 0.0
         self._reported_down = False
+        self._raw_listeners: list[Callable[[dict[str, Any]], None]] = []
+        self._raw_stop = threading.Event()
+        self._raw_thread: threading.Thread | None = None
+        self._raw_pubsub: Any = None
+        self._raw_callback: Callable[[dict[str, Any]], None] | None = None
         if memory_only:
             self._reported_down = True
             log.info("Live store running in memory-only mode (no Redis).")
@@ -620,7 +629,137 @@ class RedisLiveStore:
             log.error("Failed to pop live flight %s: %s", flight_id, exc)
             return {"flight": mem_flight, "alerts": mem_alerts}
 
+    def publish_raw(self, messages: list[dict[str, Any]]) -> None:
+        """Publish a batch of raw sensor frames to local listeners and Redis.
+
+        The web portal subscribes to ``live:raw`` and forwards batches to
+        WebSocket clients on the ``raw`` stream. Empty batches are ignored.
+        """
+        if not messages:
+            return
+        payload: dict[str, Any] = {
+            "timestamp": time.time(),
+            "messages": messages,
+        }
+        for listener in list(self._raw_listeners):
+            try:
+                listener(payload)
+            except Exception:
+                log.debug("Raw-frame listener failed", exc_info=True)
+        if not self._ensure_connected():
+            return
+        assert self.client is not None
+        try:
+            self.client.publish(
+                _RAW_CHANNEL, json.dumps(payload, separators=(",", ":"))
+            )
+        except RedisError as exc:
+            log.debug("Failed to publish raw frames: %s", exc)
+
+    def add_raw_listener(
+        self, callback: Callable[[dict[str, Any]], None]
+    ) -> Callable[[], None]:
+        """Register an in-process listener for :meth:`publish_raw`."""
+        self._raw_listeners.append(callback)
+
+        def remove() -> None:
+            try:
+                self._raw_listeners.remove(callback)
+            except ValueError:
+                pass
+
+        return remove
+
+    def start_raw_pubsub(
+        self, on_payload: Callable[[dict[str, Any]], None]
+    ) -> None:
+        """Listen for ``live:raw`` on Redis and invoke *on_payload*.
+
+        Always registers an in-process listener so tests (memory-only) and a
+        co-located engine see local publishes. A background thread subscribes
+        to Redis when this store is not memory-only.
+        """
+        if self._raw_callback is on_payload:
+            return
+        if self._raw_callback is not None:
+            self.stop_raw_pubsub()
+        self._raw_callback = on_payload
+        self.add_raw_listener(on_payload)
+        if self.memory_only:
+            return
+        self._raw_stop.clear()
+        self._raw_thread = threading.Thread(
+            target=self._raw_pubsub_loop,
+            name="pyaerial-raw-pubsub",
+            daemon=True,
+        )
+        self._raw_thread.start()
+
+    def stop_raw_pubsub(self) -> None:
+        callback = self._raw_callback
+        self._raw_callback = None
+        if callback is not None:
+            try:
+                self._raw_listeners.remove(callback)
+            except ValueError:
+                pass
+        self._raw_stop.set()
+        pubsub = self._raw_pubsub
+        self._raw_pubsub = None
+        if pubsub is not None:
+            try:
+                pubsub.close()
+            except Exception:
+                pass
+        thread = self._raw_thread
+        self._raw_thread = None
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+
+    def _raw_pubsub_loop(self) -> None:
+        while not self._raw_stop.is_set():
+            client: redis.Redis | None = None
+            pubsub = None
+            try:
+                client = redis.Redis.from_url(
+                    self.uri,
+                    decode_responses=True,
+                    socket_connect_timeout=2,
+                    socket_timeout=2,
+                )
+                pubsub = client.pubsub(ignore_subscribe_messages=True)
+                pubsub.subscribe(_RAW_CHANNEL)
+                self._raw_pubsub = pubsub
+                while not self._raw_stop.is_set():
+                    message = pubsub.get_message(timeout=1.0)
+                    if not message or message.get("type") != "message":
+                        continue
+                    data = message.get("data")
+                    try:
+                        payload = json.loads(data)
+                    except (TypeError, json.JSONDecodeError, ValueError):
+                        continue
+                    if isinstance(payload, dict) and self._raw_callback is not None:
+                        self._raw_callback(payload)
+            except Exception:
+                log.debug("Raw pub/sub listener reconnecting", exc_info=True)
+            finally:
+                self._raw_pubsub = None
+                if pubsub is not None:
+                    try:
+                        pubsub.close()
+                    except Exception:
+                        pass
+                if client is not None:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+            if self._raw_stop.wait(_RAW_PUBSUB_RETRY):
+                return
+
     def close(self) -> None:
+        self.stop_raw_pubsub()
         if self.client is not None:
             self.client.close()
             self.client = None

@@ -27,6 +27,21 @@ def test_zone_requires_coordinates_or_file():
         ZoneConfig(rules=[make_rule()])
 
 
+def test_dump1090_format_is_passed_to_receiver_arguments():
+    avr = ReceiverConfig(type="dump1090", host="localhost", port=30002)
+    args = avr.receiver_arguments()
+    assert args["tcp_connection_ip"] == "localhost"
+    assert args["tcp_connection_port"] == 30002
+    assert "format" not in args
+
+    beast = ReceiverConfig(
+        type="dump1090", host="localhost", port=30005, format="beast"
+    )
+    args = beast.receiver_arguments()
+    assert args["format"] == "beast"
+    assert args["tcp_connection_port"] == 30005
+
+
 def test_unknown_receiver_rejected():
     config = make_config(receivers={"x": ReceiverConfig(type="not-a-receiver")})
     with pytest.raises(ConfigError, match="unknown type"):

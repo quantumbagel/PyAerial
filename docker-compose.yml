@@ -11,6 +11,7 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     expose:
       - "30002"
+      - "30005"
     command: ["/opt/dump1090/dump1090", "--net", "--raw", "--quiet"]
   pyaerial:
     image: pyaerial:latest

@@ -153,7 +153,7 @@ def test_message_queue_drops_oldest(tmp_path):
         engine._enqueue_message("bb", 2.0, "r")
         engine._enqueue_message("cc", 3.0, "r")
         batch = engine._drain_messages()
-        assert [msg for msg, _ts, _recv in batch] == ["bb", "cc"]
+        assert [frame.hex for frame in batch] == ["bb", "cc"]
     finally:
         engine.shutdown()
 
@@ -216,5 +216,31 @@ def test_isolated_engine_uses_memory_store(tmp_path):
         assert engine.live_store.memory_only is True
         assert engine.live_store.ping() is True
         assert engine.history_store.disabled is True
+    finally:
+        engine.shutdown()
+
+
+def test_engine_publishes_raw_frames(tmp_path):
+    engine = _engine(tmp_path)
+    try:
+        seen: list[dict] = []
+        engine.live_store.add_raw_listener(lambda payload: seen.append(payload))
+        engine._enqueue_message(
+            "8d406b902015a678d4d220aa4bda",
+            1.5,
+            "main",
+            rssi=-12.34,
+            clock=9,
+        )
+        engine._publish_raw(engine._drain_messages())
+        assert len(seen) == 1
+        message = seen[0]["messages"][0]
+        assert message["hex"] == "8d406b902015a678d4d220aa4bda"
+        assert message["receiver"] == "main"
+        assert message["rssi"] == -12.3
+        assert message["clock"] == 9
+        assert message["df"] == 17
+        assert message["icao"] == "406b90"
+        assert message["timestamp"] == 1.5
     finally:
         engine.shutdown()

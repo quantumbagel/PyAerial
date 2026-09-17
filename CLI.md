@@ -10,7 +10,7 @@ PyAerial provides a unified command line interface via the `pyaerial` executable
 | `pyaerial view`     | Interactive terminal flight viewer (`list`, `dump aircraft`, `status`, `live`) |
 | `pyaerial live`     | Real-time ASCII terminal flight display                                        |
 
-The web portal exposes `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `/ws/live` (alias `/ws`). Other apps can consume the same live stream and request history over that socket. Pass `?token=` when `web.token` / `PYAERIAL_WEB_TOKEN` is set.
+The web portal exposes `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `/ws/live` (alias `/ws`). Raw dump1090 / receiver frames are on `/ws/raw` (or the opt-in `raw` stream on `/ws/live`). Other apps can consume the same live stream and request history over that socket. Pass `?token=` when `web.token` / `PYAERIAL_WEB_TOKEN` is set.
 
 ## Usage Options
 
@@ -70,7 +70,7 @@ Connect to `ws://<host>:<port>/ws/live` (or `/ws`). Native clients (no `Origin` 
 
 `GET /api` returns the same protocol document the socket sends on connect.
 
-On connect the server sends `hello`, then a snapshot (`flights`, `alerts`, `stats`). After that it pushes those streams plus `telemetry` and `ping`.
+On connect the server sends `hello`, then a snapshot (`flights`, `alerts`, `stats`). After that it pushes those streams plus `telemetry` and `ping`. The `raw` stream is **opt-in** (the portal does not subscribe): connect to `/ws/raw`, pass `?streams=raw`, or `subscribe` with `["raw"]`. The engine publishes frames over Redis (`live:raw`); RSSI is present when dump1090 is read in Beast format.
 
 Python example:
 
@@ -112,7 +112,7 @@ Server reply:
 
 | Action           | Params                                                                        | Notes                                                                                               |
 |------------------|-------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
-| `subscribe`      | `streams` (`flights`, `alerts`, `telemetry`, `stats`)                         | Limit pushed streams for this connection. Omit / `[]` = all.                                        |
+| `subscribe`      | `streams` (`flights`, `alerts`, `telemetry`, `stats`, `raw`)                   | Limit pushed streams. Omit / `[]` = default (not `raw`). Include `raw` for sensor frames.           |
 | `fetchFlights`   | `view` (`live` \| `history`); history: `skip`, `limit`, `q`, `since`, `until` | History `q` matches ICAO, callsign, or flight id. `since` / `until` are unix seconds on `end_time`. |
 | `fetchFlight`    | `flightId`, `view`                                                            | Single flight detail                                                                                |
 | `fetchTelemetry` | `flightId`, `view`, `since`                                                   | Track points after `since`                                                                          |
@@ -121,4 +121,28 @@ Server reply:
 | `fetchZones`     | —                                                                             | Home, polygons, `alert_colors`                                                                      |
 | `fetchConfig`    | —                                                                             | Portal display config                                                                               |
 
-Pushed messages: `hello`, `flights`, `alerts`, `telemetry`, `stats`, `ping`.
+Pushed messages: `hello`, `flights`, `alerts`, `telemetry`, `stats`, `raw`, `antenna`, `ping`.
+
+### Raw sensor stream
+
+`/ws/raw` (or `/ws/live?streams=raw`) sends `hello`, then `antenna` (home lat/lon and configured receivers), then `raw` batches as the tracking engine sees frames:
+
+```json
+{
+  "type": "raw",
+  "timestamp": 1721832000.5,
+  "messages": [
+    {
+      "hex": "8d406b902015a678d4d220aa4bda",
+      "timestamp": 1721832000.412,
+      "receiver": "main",
+      "df": 17,
+      "icao": "406b90",
+      "rssi": -18.5,
+      "clock": 123456
+    }
+  ]
+}
+```
+
+`rssi` (dBFS) and `clock` (dump1090 12 MHz timestamp) are present when the dump1090 receiver uses Beast (`format: beast`, typically port 30005). AVR on port 30002 is hex-only. `df` / `icao` are filled for DF17/18 frames.

@@ -30,6 +30,7 @@ receivers:
     type: dump1090
     host: localhost
     port: 30002
+    # format: beast   # and port: 30005 for RSSI on the /ws/raw stream
   # recorded:
   #   type: replay
   #   options:

@@ -33,6 +33,7 @@ receivers:
     type: dump1090
     host: "${DUMP1090_HOST:-localhost}"
     port: 30002
+    # format: beast   # and port: 30005 for RSSI on /ws/raw
 
 # Zones are named polygons plus independent rules. A rule fires when EVERY
 # `when` constraint holds — there is no implicit "inside the polygon" test.

@@ -2,7 +2,8 @@
 Receiver plugins: sources of raw ADS-B / Mode S messages.
 
 A receiver runs in its own thread, pulls raw hex messages from some transport,
-and emits ``(hex, timestamp)`` pairs via the ``emit`` callback given to it. New
+and emits hex frames via the ``emit`` callback given to it (optional ``rssi``
+and ``clock`` keyword arguments when the transport provides them). New
 receivers register themselves with :func:`register_receiver` and are then
 selectable by name from the configuration.
 """
@@ -12,9 +13,32 @@ from __future__ import annotations
 import abc
 import logging
 import threading
-from typing import Callable
+from typing import Callable, Protocol
 
-Emit = Callable[[str, float], None]
+from pyaerial.receivers.frames import RawFrame
+
+__all__ = [
+    "Emit",
+    "RawFrame",
+    "Receiver",
+    "available_receivers",
+    "create_receiver",
+    "register_builtins",
+    "register_receiver",
+]
+
+
+class Emit(Protocol):
+    """Callback used by receivers to hand a frame to the engine."""
+
+    def __call__(
+        self,
+        msg_hex: str,
+        timestamp: float,
+        *,
+        rssi: float | None = None,
+        clock: int | None = None,
+    ) -> None: ...
 
 _REGISTRY: dict[str, type["Receiver"]] = {}
 

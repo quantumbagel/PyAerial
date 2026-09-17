@@ -21,7 +21,8 @@ from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 from pyaerial.logging_setup import setup_logging
 from pyaerial.models import flight_id_for_plane
-from pyaerial.receivers import Receiver, available_receivers, create_receiver
+from pyaerial.receivers import RawFrame, Receiver, available_receivers, create_receiver
+from pyaerial.receivers.frames import raw_payload
 from pyaerial.store import HistoryStore, RedisLiveStore
 from pyaerial.tracker import Tracker
 
@@ -33,6 +34,7 @@ _RECEIVER_BACKOFF_RESET_AFTER = 10.0
 _MESSAGE_QUEUE_MAXSIZE = 10_000
 _PENDING_FINALIZE_MAX = 256
 _DROP_LOG_INTERVAL = 10.0
+_RAW_PUBLISH_BATCH = 2_000
 
 
 @dataclass
@@ -79,7 +81,7 @@ class Engine:
         self.calculator = PlaneCalculator(
             config, self.polygons, self.aircraft_db, self.live_store
         )
-        self._message_queue: queue.Queue[tuple[str, float, str]] = queue.Queue(
+        self._message_queue: queue.Queue[RawFrame] = queue.Queue(
             maxsize=_MESSAGE_QUEUE_MAXSIZE
         )
         self._receivers: dict[str, _ReceiverHandle] = {}
@@ -107,8 +109,16 @@ class Engine:
         *,
         backoff: float = _RECEIVER_BACKOFF_INITIAL,
     ) -> None:
-        def emit(msg_hex: str, timestamp: float, receiver_name: str = name) -> None:
-            self._enqueue_message(msg_hex, timestamp, receiver_name)
+        def emit(
+            msg_hex: str,
+            timestamp: float,
+            *,
+            rssi: float | None = None,
+            clock: int | None = None,
+        ) -> None:
+            self._enqueue_message(
+                msg_hex, timestamp, name, rssi=rssi, clock=clock
+            )
 
         try:
             receiver = create_receiver(method, name, emit, arguments)
@@ -134,10 +144,22 @@ class Engine:
         log.info("Started receiver %r (%s)", name, method)
 
     def _enqueue_message(
-        self, msg_hex: str, timestamp: float, receiver_name: str
+        self,
+        msg_hex: str,
+        timestamp: float,
+        receiver_name: str,
+        *,
+        rssi: float | None = None,
+        clock: int | None = None,
     ) -> None:
         """Push a raw frame onto the bounded queue, dropping the oldest if full."""
-        item = (msg_hex, timestamp, receiver_name)
+        item = RawFrame(
+            hex=msg_hex,
+            timestamp=timestamp,
+            receiver=receiver_name,
+            rssi=rssi,
+            clock=clock,
+        )
         try:
             self._message_queue.put_nowait(item)
             return
@@ -213,15 +235,22 @@ class Engine:
                 name, cfg.type, cfg.receiver_arguments(), backoff=next_backoff
             )
 
-    def _drain_messages(self) -> list[tuple[str, float, str]]:
-        batch: list[tuple[str, float, str]] = []
+    def _drain_messages(self) -> list[RawFrame]:
+        batch: list[RawFrame] = []
         while True:
             try:
-                msg_hex, timestamp, receiver = self._message_queue.get_nowait()
+                batch.append(self._message_queue.get_nowait())
             except queue.Empty:
                 break
-            batch.append((msg_hex, timestamp, receiver))
         return batch
+
+    def _publish_raw(self, frames: list[RawFrame]) -> None:
+        """Fan raw sensor frames out to the live store (Redis pub/sub)."""
+        if not frames:
+            return
+        payloads = [raw_payload(frame) for frame in frames]
+        for offset in range(0, len(payloads), _RAW_PUBLISH_BATCH):
+            self.live_store.publish_raw(payloads[offset : offset + _RAW_PUBLISH_BATCH])
 
     def run(self) -> None:
         """Blocking main loop."""
@@ -248,8 +277,9 @@ class Engine:
                 self._restart_dead_receivers()
 
                 raw = self._drain_messages()
-                pairs = [(hex_msg, ts) for hex_msg, ts, _recv in raw]
-                receivers = {hex_msg: recv for hex_msg, _ts, recv in raw if recv}
+                self._publish_raw(raw)
+                pairs = [(frame.hex, frame.timestamp) for frame in raw]
+                receivers = {frame.hex: frame.receiver for frame in raw if frame.receiver}
                 new_messages = self.tracker.collect_new_messages(pairs)
                 processed = self.tracker.ingest(new_messages, receivers=receivers)
 

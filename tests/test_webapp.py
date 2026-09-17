@@ -44,6 +44,8 @@ def test_health_and_api(monkeypatch):
         assert spec.status_code == 200
         body = spec.json()
         assert body["websocket"] == "/ws/live"
+        assert body["raw_websocket"] == "/ws/raw"
+        assert "raw" in body["streams"]
         assert "fetchFlights" in body["actions"]
         assert client.get("/api/flights").status_code == 404
         assert client.get("/api/stats").status_code == 404
@@ -62,6 +64,7 @@ def test_websocket_hello_snapshot_and_subscribe():
             assert hello["type"] == "hello"
             assert hello["protocol"] == "pyaerial.live"
             assert "fetchFlights" in hello["actions"]
+            assert "raw" in hello["streams"]
             assert ws.receive_json()["type"] == "flights"
             assert ws.receive_json()["type"] == "alerts"
             assert ws.receive_json()["type"] == "stats"
@@ -96,6 +99,80 @@ def test_websocket_hello_snapshot_and_subscribe():
 
         with client.websocket_connect("/ws") as ws:
             assert ws.receive_json()["type"] == "hello"
+
+
+def test_websocket_raw_endpoint_and_publish():
+    from fastapi.testclient import TestClient
+
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    app = create_app(
+        config=make_config(), history=None, live_store=store, aircraft_db=None
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/raw") as ws:
+            hello = ws.receive_json()
+            assert hello["type"] == "hello"
+            antenna = ws.receive_json()
+            assert antenna["type"] == "antenna"
+            assert "home" in antenna["antenna"]
+            assert antenna["antenna"]["receivers"][0]["name"] == "main"
+            store.publish_raw(
+                [
+                    {
+                        "hex": "8d406b902015a678d4d220aa4bda",
+                        "timestamp": 1.0,
+                        "receiver": "main",
+                        "rssi": -18.5,
+                        "df": 17,
+                        "icao": "406b90",
+                    }
+                ]
+            )
+            raw = ws.receive_json()
+            assert raw["type"] == "raw"
+            assert raw["messages"][0]["hex"] == "8d406b902015a678d4d220aa4bda"
+            assert raw["messages"][0]["rssi"] == -18.5
+
+
+def test_websocket_streams_query_param_raw_only():
+    from fastapi.testclient import TestClient
+
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    app = create_app(
+        config=make_config(), history=None, live_store=store, aircraft_db=None
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/live?streams=raw") as ws:
+            assert ws.receive_json()["type"] == "hello"
+            assert ws.receive_json()["type"] == "antenna"
+
+
+def test_websocket_subscribe_raw_sends_antenna():
+    from fastapi.testclient import TestClient
+
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    app = create_app(
+        config=make_config(), history=None, live_store=store, aircraft_db=None
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/live") as ws:
+            assert ws.receive_json()["type"] == "hello"
+            assert ws.receive_json()["type"] == "flights"
+            assert ws.receive_json()["type"] == "alerts"
+            assert ws.receive_json()["type"] == "stats"
+            ws.send_json(
+                {
+                    "type": "request",
+                    "id": "raw",
+                    "action": "subscribe",
+                    "params": {"streams": ["raw"]},
+                }
+            )
+            reply = ws.receive_json()
+            assert reply["success"] is True
+            assert reply["data"]["streams"] == ["raw"]
+            antenna = ws.receive_json()
+            assert antenna["type"] == "antenna"
 
 
 def test_websocket_rejects_disallowed_origin():

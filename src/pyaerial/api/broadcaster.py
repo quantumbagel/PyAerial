@@ -13,7 +13,7 @@ from fastapi import WebSocket
 from pyaerial.api.payloads import sanitize_for_json
 from pyaerial.api.protocol import LiveStore
 from pyaerial.api.queries import get_live_flights, get_stats, get_tracked_live_alerts
-from pyaerial.api.spec import WS_STREAMS, websocket_hello
+from pyaerial.api.spec import WS_STREAMS, available_streams, websocket_hello
 from pyaerial.enrich.aircraft_db import AircraftDB
 
 log = logging.getLogger("pyaerial.webapp")
@@ -21,14 +21,16 @@ log = logging.getLogger("pyaerial.webapp")
 _LIVE_POLL_INTERVAL = 1.0
 _PING_INTERVAL = 15.0
 _STATS_CACHE_TTL = 5.0
-_ALL_STREAMS = frozenset(WS_STREAMS)
+_RAW_QUEUE_MAX = 64
+_DEFAULT_STREAMS = frozenset(WS_STREAMS)
+_ALL_STREAMS = frozenset(available_streams())
 
 
 @dataclass
 class _Client:
     telemetry_since: float
     last_ping: float
-    streams: set[str] = field(default_factory=lambda: set(WS_STREAMS))
+    streams: set[str] = field(default_factory=lambda: set(_DEFAULT_STREAMS))
 
 
 def _flights_sig(flights: list[dict[str, Any]]) -> tuple:
@@ -64,12 +66,16 @@ class LiveBroadcaster:
         live_store: LiveStore | None,
         aircraft_db: AircraftDB | None,
         history: Any | None = None,
+        antenna: dict[str, Any] | None = None,
     ):
         self.live_store = live_store
         self.aircraft_db = aircraft_db
         self.history = history
+        self.antenna = antenna or {}
         self._clients: dict[WebSocket, _Client] = {}
         self._task: asyncio.Task | None = None
+        self._raw_task: asyncio.Task | None = None
+        self._raw_queue: asyncio.Queue | None = None
         self._pending_lookups: set[str] = set()
         self._last_flights_sig: tuple | None = None
         self._last_alerts_sig: tuple | None = None
@@ -78,38 +84,106 @@ class LiveBroadcaster:
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run_loop())
+        store = self.live_store
+        start_pubsub = getattr(store, "start_raw_pubsub", None)
+        if not callable(start_pubsub):
+            return
+        self._raw_queue = asyncio.Queue(maxsize=_RAW_QUEUE_MAX)
+        loop = asyncio.get_running_loop()
+        start_pubsub(lambda payload: self._enqueue_raw(loop, payload))
+        self._raw_task = asyncio.create_task(self._raw_loop())
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        store = self.live_store
+        stop_pubsub = getattr(store, "stop_raw_pubsub", None)
+        if callable(stop_pubsub):
+            stop_pubsub()
+        for task in (self._raw_task, self._task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._raw_task = None
+        self._task = None
 
-    async def connect(self, websocket: WebSocket) -> None:
+    def _enqueue_raw(self, loop: asyncio.AbstractEventLoop, payload: dict[str, Any]) -> None:
+        queue = self._raw_queue
+        if queue is None:
+            return
+
+        def _put() -> None:
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                pass
+
+        try:
+            loop.call_soon_threadsafe(_put)
+        except RuntimeError:
+            pass
+
+    async def _raw_loop(self) -> None:
+        queue = self._raw_queue
+        if queue is None:
+            return
+        while True:
+            payload = await queue.get()
+            try:
+                await self._broadcast_raw(payload)
+            except Exception:
+                log.exception("Raw sensor broadcast failed")
+
+    async def _broadcast_raw(self, payload: dict[str, Any]) -> None:
+        messages = payload.get("messages") or []
+        if not messages:
+            return
+        now = payload.get("timestamp") or time.time()
+        await self._broadcast(
+            {
+                "type": "raw",
+                "timestamp": now,
+                "messages": sanitize_for_json(messages),
+            }
+        )
+
+    async def connect(
+        self,
+        websocket: WebSocket,
+        *,
+        streams: list[str] | None = None,
+    ) -> None:
         await websocket.accept()
         now = time.time()
-        self._clients[websocket] = _Client(telemetry_since=now, last_ping=now)
+        client = _Client(telemetry_since=now, last_ping=now)
+        self._clients[websocket] = client
+        if streams is not None:
+            self.set_streams(websocket, streams)
         await websocket.send_json(websocket_hello())
         await self._send_snapshot(websocket)
 
     def disconnect(self, websocket: WebSocket) -> None:
         self._clients.pop(websocket, None)
 
-    def set_streams(self, websocket: WebSocket, streams: Any) -> list[str]:
+    def set_streams(self, websocket: WebSocket, streams: Any) -> tuple[list[str], bool]:
         client = self._clients.get(websocket)
         if client is None:
-            return []
+            return [], False
+        previous = set(client.streams)
         if not streams:
-            client.streams = set(WS_STREAMS)
+            client.streams = set(_DEFAULT_STREAMS)
         else:
             if isinstance(streams, str):
                 streams = [streams]
             chosen = {str(name) for name in streams if str(name) in _ALL_STREAMS}
-            client.streams = chosen or set(WS_STREAMS)
-        return sorted(client.streams)
+            client.streams = chosen or set(_DEFAULT_STREAMS)
+        return sorted(client.streams), "raw" in client.streams and "raw" not in previous
 
     def _cached_stats(self) -> dict[str, Any]:
         now = time.monotonic()
@@ -133,7 +207,7 @@ class LiveBroadcaster:
         )
         stats = self._cached_stats()
         client = self._clients.get(websocket)
-        streams = client.streams if client else _ALL_STREAMS
+        streams = client.streams if client else _DEFAULT_STREAMS
         if "flights" in streams:
             await websocket.send_json(
                 {"type": "flights", "flights": sanitize_for_json(flights)}
@@ -146,6 +220,17 @@ class LiveBroadcaster:
             await websocket.send_json(
                 {"type": "stats", "stats": sanitize_for_json(stats)}
             )
+        if "raw" in streams:
+            await self.send_antenna(websocket)
+
+    async def send_antenna(self, websocket: WebSocket) -> None:
+        await websocket.send_json(
+            {
+                "type": "antenna",
+                "timestamp": time.time(),
+                "antenna": sanitize_for_json(self.antenna),
+            }
+        )
 
     async def _run_loop(self) -> None:
         while True:
