@@ -60,5 +60,5 @@ class ReplayReceiver(Receiver):
                 hex_msg = parts[0]
                 sequential += self.interval
             if hex_msg:
-                frames.append((stamp, hex_msg))
+                frames.append((stamp, hex_msg.lower()))
         return frames

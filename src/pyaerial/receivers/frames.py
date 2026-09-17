@@ -9,6 +9,8 @@ _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 BEAST_ESC = 0x1A
 BEAST_MSG_LEN = {0x31: 2, 0x32: 7, 0x33: 14}
+BEAST_CLOCK_HZ = 12_000_000
+BEAST_CLOCK_MOD = 1 << 48
 _BEAST_BUF_MAX = 65_536
 
 
@@ -85,6 +87,36 @@ def parse_avr_line(line: str) -> tuple[str, int | None] | None:
     return hex_msg.lower(), clock
 
 
+def receive_times(wall: float, clocks: list[int | None]) -> list[float]:
+    """Spread a shared recv wall time across frames using 12 MHz tick deltas.
+
+    *wall* is when this process saw the TCP chunk (after the last frame).
+    Each frame with a clock is ``wall - (last_clock - clock) / 12e6``.
+    Frames without a clock keep *wall*. Equal results are jittered by 1 µs
+    so history's ``(flight_id, timestamp)`` key stays unique.
+    """
+    known = [clock for clock in clocks if clock is not None]
+    if not known:
+        times = [wall] * len(clocks)
+    else:
+        last = known[-1]
+        times = []
+        for clock in clocks:
+            if clock is None:
+                times.append(wall)
+                continue
+            delta_ticks = (last - clock) % BEAST_CLOCK_MOD
+            times.append(wall - delta_ticks / BEAST_CLOCK_HZ)
+    used: set[float] = set()
+    unique: list[float] = []
+    for stamp in times:
+        while stamp in used:
+            stamp += 1e-6
+        used.add(stamp)
+        unique.append(stamp)
+    return unique
+
+
 def beast_rssi_dbfs(level: int) -> float | None:
     """Convert a dump1090 Beast signal byte to dBFS.
 
@@ -96,25 +128,27 @@ def beast_rssi_dbfs(level: int) -> float | None:
     return 20.0 * math.log10(level / 255.0)
 
 
-def _read_unescaped(data: bytes, start: int, count: int) -> tuple[bytes, int] | None:
+def _read_unescaped(
+    data: bytes, start: int, count: int
+) -> tuple[bytes | None, int | None]:
     """Read *count* payload bytes from *start*, undoing Beast ``0x1a 0x1a`` escapes.
 
-    Returns ``(payload, next_index)``. ``None`` means the buffer is incomplete
-    (need more data). A bare ``0x1a`` that starts a new frame also returns
-    ``None`` so the caller can resync.
+    Returns ``(payload, next_index)`` on success. ``(None, None)`` means the
+    buffer is incomplete. ``(None, resync_index)`` means a bare ``0x1a`` starts
+    a new frame at *resync_index* — the caller should consume up to that ESC.
     """
     out = bytearray()
     index = start
     while len(out) < count:
         if index >= len(data):
-            return None
+            return None, None
         byte = data[index]
         index += 1
         if byte == BEAST_ESC:
             if index >= len(data):
-                return None
+                return None, None
             if data[index] != BEAST_ESC:
-                return None
+                return None, index - 1
             index += 1
             out.append(BEAST_ESC)
         else:
@@ -143,13 +177,16 @@ def try_parse_beast(buffer: bytes) -> tuple[tuple[str, float | None, int] | None
     if msg_len is None:
         return None, start + 1
 
-    payload = _read_unescaped(buffer, start + 2, 6 + 1 + msg_len)
-    if payload is None:
+    body, next_index = _read_unescaped(buffer, start + 2, 6 + 1 + msg_len)
+    if body is None:
+        if next_index is not None:
+            resync = next_index
+            if resync <= start:
+                return None, start + 1
+            return None, resync
         if start:
             return None, start
         return None, 0
-
-    body, next_index = payload
     clock = int.from_bytes(body[:6], "big")
     rssi = beast_rssi_dbfs(body[6])
     hex_msg = body[7:].hex()

@@ -18,7 +18,7 @@ from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.config.schema import Config
 from pyaerial.store.history import HistoryStore
 
-_MAX_LIMIT = 500
+_MAX_LIMIT = 200
 _MAX_SKIP = 100_000
 
 

@@ -22,6 +22,7 @@ _LIVE_POLL_INTERVAL = 1.0
 _PING_INTERVAL = 15.0
 _STATS_CACHE_TTL = 5.0
 _RAW_QUEUE_MAX = 64
+_CLIENT_QUEUE_MAX = 64
 _DEFAULT_STREAMS = frozenset(WS_STREAMS)
 _RAW_STREAMS = frozenset({"raw"})
 
@@ -32,6 +33,22 @@ class _Client:
     last_ping: float
     streams: set[str] = field(default_factory=lambda: set(_DEFAULT_STREAMS))
     raw_only: bool = False
+    outbox: asyncio.Queue | None = None
+    writer_task: asyncio.Task | None = None
+
+    def enqueue(self, message: dict[str, Any]) -> None:
+        queue = self.outbox
+        if queue is None:
+            return
+        if queue.full():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            queue.put_nowait(message)
+        except asyncio.QueueFull:
+            pass
 
 
 def _flights_sig(flights: list[dict[str, Any]]) -> tuple:
@@ -164,19 +181,55 @@ class LiveBroadcaster:
         await websocket.accept()
         now = time.time()
         client = _Client(telemetry_since=now, last_ping=now, raw_only=raw_only)
+        client.outbox = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
         self._clients[websocket] = client
+        client.writer_task = asyncio.create_task(self._writer(websocket, client))
         if raw_only:
             client.streams = set(_RAW_STREAMS)
-            await websocket.send_json(websocket_raw_hello())
-            await self.send_antenna(websocket)
+            client.enqueue(websocket_raw_hello())
+            client.enqueue(
+                {
+                    "type": "antenna",
+                    "timestamp": now,
+                    "antenna": sanitize_for_json(self.antenna),
+                }
+            )
             return
         if streams is not None:
             self.set_streams(websocket, streams)
-        await websocket.send_json(websocket_hello())
+        client.enqueue(websocket_hello())
         await self._send_snapshot(websocket)
 
+    async def _writer(self, websocket: WebSocket, client: _Client) -> None:
+        queue = client.outbox
+        if queue is None:
+            return
+        try:
+            while True:
+                message = await queue.get()
+                if message is None:
+                    return
+                await websocket.send_json(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        finally:
+            self.disconnect(websocket)
+
+    def send(self, websocket: WebSocket, message: dict[str, Any]) -> None:
+        client = self._clients.get(websocket)
+        if client is not None:
+            client.enqueue(message)
+
     def disconnect(self, websocket: WebSocket) -> None:
-        self._clients.pop(websocket, None)
+        client = self._clients.pop(websocket, None)
+        if client is None:
+            return
+        task = client.writer_task
+        client.writer_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
 
     def set_streams(self, websocket: WebSocket, streams: Any) -> list[str]:
         client = self._clients.get(websocket)
@@ -190,7 +243,9 @@ class LiveBroadcaster:
             if isinstance(streams, str):
                 streams = [streams]
             chosen = {str(name) for name in streams if str(name) in _DEFAULT_STREAMS}
-            client.streams = chosen or set(_DEFAULT_STREAMS)
+            if not chosen:
+                return []
+            client.streams = chosen
         return sorted(client.streams)
 
     def _cached_stats(self) -> dict[str, Any]:
@@ -216,26 +271,29 @@ class LiveBroadcaster:
         stats = self._cached_stats()
         client = self._clients.get(websocket)
         streams = client.streams if client else _DEFAULT_STREAMS
+        if client is None:
+            return
         if "flights" in streams:
-            await websocket.send_json(
+            client.enqueue(
                 {"type": "flights", "flights": sanitize_for_json(flights)}
             )
         if "alerts" in streams:
-            await websocket.send_json(
+            client.enqueue(
                 {"type": "alerts", "alerts": sanitize_for_json(alerts)}
             )
         if "stats" in streams:
-            await websocket.send_json(
+            client.enqueue(
                 {"type": "stats", "stats": sanitize_for_json(stats)}
             )
 
     async def send_antenna(self, websocket: WebSocket) -> None:
-        await websocket.send_json(
+        self.send(
+            websocket,
             {
                 "type": "antenna",
                 "timestamp": time.time(),
                 "antenna": sanitize_for_json(self.antenna),
-            }
+            },
         )
 
     async def _run_loop(self) -> None:
@@ -304,14 +362,15 @@ class LiveBroadcaster:
 
         await self._broadcast({"type": "stats", "stats": sanitize_for_json(stats)})
 
-        min_since = (
-            min(client.telemetry_since for client in self._clients.values())
-            if self._clients
-            else now
-        )
-        all_points = (
-            self.live_store.get_live_telemetry(min_since) if self.live_store else []
-        )
+        telemetry_clients = [
+            client
+            for client in self._clients.values()
+            if "telemetry" in client.streams
+        ]
+        all_points: list[dict[str, Any]] = []
+        if telemetry_clients and self.live_store:
+            min_since = min(client.telemetry_since for client in telemetry_clients)
+            all_points = self.live_store.get_live_telemetry(min_since)
         for websocket, client in list(self._clients.items()):
             if "telemetry" in client.streams:
                 points = [
@@ -320,30 +379,21 @@ class LiveBroadcaster:
                     if point.get("timestamp", 0) > client.telemetry_since
                 ]
                 if points:
-                    payload = {
-                        "type": "telemetry",
-                        "telemetry": sanitize_for_json(points),
-                        "timestamp": now,
-                    }
-                    try:
-                        await websocket.send_json(payload)
-                        client.telemetry_since = now
-                    except Exception:
-                        self.disconnect(websocket)
-                        continue
+                    client.enqueue(
+                        {
+                            "type": "telemetry",
+                            "telemetry": sanitize_for_json(points),
+                            "timestamp": now,
+                        }
+                    )
+                    client.telemetry_since = now
             if now - client.last_ping >= _PING_INTERVAL:
-                try:
-                    await websocket.send_json({"type": "ping", "timestamp": now})
-                    client.last_ping = now
-                except Exception:
-                    self.disconnect(websocket)
+                client.enqueue({"type": "ping", "timestamp": now})
+                client.last_ping = now
 
     async def _broadcast(self, message: dict[str, Any]) -> None:
         stream = message.get("type")
-        for websocket, client in list(self._clients.items()):
+        for _websocket, client in list(self._clients.items()):
             if stream not in client.streams:
                 continue
-            try:
-                await websocket.send_json(message)
-            except Exception:
-                self.disconnect(websocket)
+            client.enqueue(message)

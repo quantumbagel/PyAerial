@@ -26,6 +26,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - pyaerial_data:/data
+      - ./config.yaml:/opt/PyAerial/config.yaml:ro
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
       PYAERIAL_START_DUMP1090: "0"
@@ -44,6 +45,7 @@ services:
       - pyaerial
     volumes:
       - pyaerial_data:/data
+      - ./config.yaml:/opt/PyAerial/config.yaml:ro
     ports:
       - "10090:10090"
     environment:

@@ -57,6 +57,9 @@ def _heading_in_range(value: float, minimum: float | None, maximum: float | None
     """True if ``value`` (degrees) lies in the (possibly wrapping) heading window."""
     heading = value % 360.0
     if minimum is not None and maximum is not None:
+        # {min: 0, max: 360} is "all headings"; 360 % 360 == 0 would collapse it.
+        if (maximum - minimum) >= 360.0:
+            return True
         lo = minimum % 360.0
         hi = maximum % 360.0
         if lo <= hi:
@@ -65,6 +68,8 @@ def _heading_in_range(value: float, minimum: float | None, maximum: float | None
     if minimum is not None:
         return heading >= (minimum % 360.0)
     if maximum is not None:
+        if maximum >= 360.0:
+            return True
         return heading <= (maximum % 360.0)
     return True
 

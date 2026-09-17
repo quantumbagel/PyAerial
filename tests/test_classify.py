@@ -29,6 +29,13 @@ def _encode_velocity(icao: str, speed_kmh: float, heading_deg: float) -> str:
     return f"8D{icao.upper()}{me:014X}000000"
 
 
+def test_non_adsb_typecode_is_ignored():
+    home = HomeConfig(latitude=35.7275, longitude=-78.6959)
+    assert classify("00000000000000", home) is None
+    # Short Mode S / DF11-style frames must not raise on typecode is None.
+    assert classify("0000000000000000000000000000", home) is None
+
+
 def test_groundspeed_stored_as_kmh():
     home = HomeConfig(latitude=35.7275, longitude=-78.6959)
     # 100 kt encoded → classify should store ~185.2 km/h

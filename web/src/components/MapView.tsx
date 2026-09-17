@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
 import { maplibreGL } from '@maplibre/maplibre-gl-leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
-import { formatDateTime, formatZoneRule, isFlightLive } from '../utils/format';
+import { flightAlertSeverity, formatDateTime, formatZoneRule, isFlightLive } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight } from '../utils/planeIcon';
 import { zoneColorFor } from '../utils/zoneColors';
 import { COLOR_HEX } from '../utils/colors';
@@ -53,19 +53,22 @@ type MarkerState = {
   selected: boolean;
   live: boolean;
   activeAlertCount: number;
+  alertSeverity: string | null;
 };
 
 function markerNeedsUpdate(existing: MarkerState | undefined, flight: FlightSummary, isSelected: boolean): boolean {
   if (!existing) return true;
   const isLive = isFlightLive(flight);
   const alertCount = flight.active_alerts?.length ?? 0;
+  const alertSeverity = flightAlertSeverity(flight.active_alerts);
   return (
     existing.lat !== flight.latitude ||
     existing.lon !== flight.longitude ||
     existing.heading !== flight.heading ||
     existing.selected !== isSelected ||
     existing.live !== isLive ||
-    existing.activeAlertCount !== alertCount
+    existing.activeAlertCount !== alertCount ||
+    existing.alertSeverity !== alertSeverity
   );
 }
 
@@ -298,6 +301,7 @@ export function MapView({
         selected: isSelected,
         live: isLive,
         activeAlertCount: flight.active_alerts?.length ?? 0,
+        alertSeverity: flightAlertSeverity(flight.active_alerts),
       };
 
     });

@@ -73,9 +73,7 @@ def _run_view_loop(
         if verb not in {
             "about",
             "status",
-            "plane",
             "list",
-            "history",
             "help",
             "dump",
             "reset",
@@ -83,11 +81,6 @@ def _run_view_loop(
             "live",
         }:
             print(f"[err] Invalid verb: {verb}")
-            last_reset = False
-            continue
-
-        if verb in {"plane", "history"}:
-            print(f"[err] '{verb}' is not a command. Try 'list planes' or 'help'.")
             last_reset = False
             continue
 

@@ -150,6 +150,7 @@ class AlertEngine:
                     "activated_at": now,
                     "last_periodic": now,
                     "alert_id": alert_id,
+                    "eta": eta,
                 }
                 self._alert_state[key] = state
                 self._on_activate(
@@ -164,6 +165,7 @@ class AlertEngine:
                     alert_id,
                 )
             else:
+                state["eta"] = eta
                 self._refresh_active_alert(
                     plane,
                     zone_name,
@@ -225,13 +227,13 @@ class AlertEngine:
                         "zone": zone_name,
                         "rule": rule_name,
                         "activated_at": state["activated_at"],
-                        "eta": geofence_etas.get(zone_name, math.inf),
+                        "eta": geofence_etas.get(zone_name, state.get("eta")),
                     }
                 )
                 continue
             self._pending_unmatch.pop(key, None)
             self._alert_state.pop(key, None)
-            eta = geofence_etas.get(zone_name, math.inf)
+            eta = geofence_etas.get(zone_name, state.get("eta"))
             if rule is not None:
                 self._on_deactivate(
                     plane,
@@ -291,7 +293,7 @@ class AlertEngine:
         else:
             position = (0.0, 0.0)
 
-        geofence_etas = {z: math.inf for z in self.config.zones}
+        geofence_etas = {z: None for z in self.config.zones}
         for key in stale_keys:
             zone_name, rule_name = key[1], key[2]
             state = self._alert_state.pop(key)
@@ -301,12 +303,13 @@ class AlertEngine:
                 if zone
                 else None
             )
+            last_eta = state.get("eta")
             if rule is not None:
                 self._on_deactivate(
                     plane,
                     zone_name,
                     rule,
-                    math.inf,
+                    last_eta,
                     geofence_etas,
                     position,
                     callsign,
@@ -322,7 +325,7 @@ class AlertEngine:
                         STORE_CALLSIGN: callsign,
                         ALERT_CAT_TYPE: rule_name,
                         ALERT_CAT_ZONE: zone_name,
-                        ALERT_CAT_ETA: math.inf,
+                        ALERT_CAT_ETA: last_eta,
                     },
                     self._build_payload(plane, position),
                     alert_id=state["alert_id"],
@@ -337,8 +340,8 @@ class AlertEngine:
         plane: dict,
         zone_name: str,
         rule: RuleConfig,
-        eta: float,
-        geofence_etas: dict[str, float],
+        eta: float | None,
+        geofence_etas: dict[str, float | None],
         callsign: str,
         hook: str,
     ) -> dict:
@@ -354,15 +357,20 @@ class AlertEngine:
             or (self.config.alert_colors.get(rule.name) if self.config else None)
             or "#ef4444"
         )
+        finite_etas = {
+            name: (value if isinstance(value, (int, float)) and math.isfinite(value) else None)
+            for name, value in geofence_etas.items()
+        }
+        finite_eta = eta if isinstance(eta, (int, float)) and math.isfinite(eta) else None
         meta = {
             STORE_ICAO: info.get(STORE_ICAO, ""),
             STORE_CALLSIGN: callsign,
             ALERT_CAT_TYPE: rule.name,
             ALERT_CAT_ZONE: zone_name,
-            ALERT_CAT_ETA: eta,
+            ALERT_CAT_ETA: finite_eta,
             "color": color,
             ALERT_CAT_REASON: {
-                "zones": geofence_etas,
+                "zones": finite_etas,
                 "rule": rule.name,
                 "hook": hook,
             },
@@ -446,8 +454,8 @@ class AlertEngine:
         plane: dict,
         zone_name: str,
         rule: RuleConfig,
-        eta: float,
-        geofence_etas: dict[str, float],
+        eta: float | None,
+        geofence_etas: dict[str, float | None],
         position: tuple[float, float],
         callsign: str,
         now: float,

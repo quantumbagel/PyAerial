@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
 import type { Alert, FlightSummary, PortalView, TelemetryPoint } from '../api/types';
 
+const MAX_PATH_FETCHES = 4;
+
 export function useFlightPaths(
   portalView: PortalView,
   activeFlightId: string | null,
@@ -116,13 +118,14 @@ export function useFlightPaths(
 
   useEffect(() => {
     if (!showAllPaths || !portalView) return;
-    filteredFlights.forEach((f) => {
-      if (
+    const missing = filteredFlights.filter(
+      (f) =>
         !pathCoordsRef.current[f.flight_id] &&
-        !pendingPathFetches.current.has(f.flight_id)
-      ) {
-        fetchAndSetPath(f.flight_id, portalView);
-      }
+        !pendingPathFetches.current.has(f.flight_id),
+    );
+    const room = Math.max(0, MAX_PATH_FETCHES - pendingPathFetches.current.size);
+    missing.slice(0, room).forEach((f) => {
+      fetchAndSetPath(f.flight_id, portalView);
     });
   }, [showAllPaths, filteredFlights, portalView, fetchAndSetPath]);
 

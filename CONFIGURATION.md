@@ -13,7 +13,7 @@ Environment variables override selected keys; see [CLI.md](CLI.md). String value
 | `receivers` | Named instances: `dump1090`, `py1090`, `replay` |
 | `zones` | Named polygons plus independent rules (not an implicit inside-test) |
 | `alert_colors` | Hex colors keyed by **rule name** |
-| `web` | Optional `token` for `/ws/live`; `origins` (default `*`) |
+| `web` | Optional `token` for `/ws/live` and `/ws/raw`; `origins` (default `*`) |
 
 ```yaml
 database:
@@ -27,9 +27,10 @@ tracking:
   duplicate_packet_merging: 5     # Seconds window to dedup duplicate hex frames
   status_message_top_planes: 5    # Top planes to show in console status lines
   advanced_status: true
+  status_interval: 10             # Seconds between info-level status log lines
   use_kalman_eta: false           # Use Kalman-smoothed velocity for ETA
   curved_projection: false        # Turn-rate-aware curved-path ETA projection
-  telemetry_keep_seconds: 600     # How long live track points are kept in Redis
+  telemetry_keep_seconds: 600     # How long live track points are kept in Redis (history keeps the full in-memory track)
 
 logging:
   level: info

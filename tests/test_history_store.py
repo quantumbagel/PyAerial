@@ -100,6 +100,31 @@ def test_finalize_writes_flight_telemetry_and_alerts(tmp_path):
     store.close()
 
 
+def test_finalize_persists_alert_reason_dict_and_finite_eta(tmp_path):
+    store = _store(tmp_path)
+    alerts = [
+        {
+            "alert_id": "abc123-1:pad:warn",
+            "zone": "pad",
+            "rule": "warn",
+            "icao": "abc123",
+            "callsign": "SWA123",
+            "activated_at": 1.0,
+            "deactivated_at": 9.0,
+            "eta": float("inf"),
+            "reason": {"zones": {"pad": float("inf")}, "rule": "warn", "hook": "deactivate"},
+            "position": {"type": "Point", "coordinates": [-78.695, 35.725]},
+        }
+    ]
+    assert store.finalize_plane(_plane(), alerts=alerts) is True
+    stored = store.get_alerts()
+    assert len(stored) == 1
+    assert stored[0]["eta"] is None
+    assert stored[0]["reason"]["rule"] == "warn"
+    assert stored[0]["reason"]["zones"]["pad"] is None
+    store.close()
+
+
 def test_unretained_flight_is_not_written(tmp_path):
     store = _store(tmp_path)
     assert store.finalize_plane(_plane(), alerts=[]) is True

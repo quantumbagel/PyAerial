@@ -1,9 +1,8 @@
 """
-Alerter plugins: actions taken when a plane satisfies a zone level.
+Alerter plugins: actions taken when a plane matches a zone rule.
 
-Alerters replace the old hardcoded ``if method == 'print' / elif 'kafka'`` block.
-New alerters register with :func:`register_alerter` and are selectable via a
-category's ``alert_method``.
+New alerters register with :func:`register_alerter` and are selected by a
+rule action ``method`` (``print``, ``webhook``, ``kafka``).
 """
 
 from __future__ import annotations

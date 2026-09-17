@@ -114,7 +114,10 @@ class WebhookAlerter(Alerter):
                 "webhook URL must be https (http allowed only for localhost)"
             )
         self.url = url
-        self.headers = arguments.get("headers", {})
+        headers = arguments.get("headers") or {}
+        if not isinstance(headers, dict):
+            raise ValueError("webhook headers must be an object of string keys")
+        self.headers = {str(key): str(value) for key, value in headers.items()}
         self.http_method = arguments.get("method", "POST")
         self.payload_format = arguments.get("format", "json")  # json, discord, slack
 

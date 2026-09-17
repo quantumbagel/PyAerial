@@ -148,7 +148,7 @@ export function PortalApp() {
           />
         }
       />
-      <DisconnectedBanner status={portal.wsStatus} />
+      <DisconnectedBanner status={portal.wsStatus} message={portal.bootstrapError} />
     </>
   );
 }

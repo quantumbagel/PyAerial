@@ -152,6 +152,8 @@ export function DetailsDrawer({
       heading: flightSummary.heading ?? base.heading,
       speed: flightSummary.speed ?? base.speed,
       altitude: flightSummary.altitude ?? base.altitude,
+      active_alerts: flightSummary.active_alerts ?? base.active_alerts,
+      alert_stats: flightSummary.alert_stats ?? base.alert_stats,
     };
   }, [flightDetail, flightSummary]);
 
@@ -258,27 +260,27 @@ export function DetailsDrawer({
                   {flightDetail?.country && flightDetail.country !== 'Unknown' ? flightDetail.country : '—'}
                 </span>
                 <span className="ui-field-label">
-                  {isFlightLive(flightDetail ?? {}) ? 'Active Alerts' : 'Alert Summary'}
+                  {isFlightLive(displayFlight ?? {}) ? 'Active Alerts' : 'Alert Summary'}
                 </span>
                 <span
                   className={`ui-field-value${
-                    (flightDetail?.active_alerts?.length ?? 0) > 0
+                    (displayFlight?.active_alerts?.length ?? 0) > 0
                       ? ' ui-field-value--warn'
-                      : (flightDetail?.alert_stats?.episode_count ?? 0) > 0
+                      : (displayFlight?.alert_stats?.episode_count ?? 0) > 0
                       ? ' ui-field-value--accent'
                       : ' ui-field-value--muted'
                   }`}
                   id="detail-active-alerts"
                 >
-                  {isFlightLive(flightDetail ?? {})
-                    ? (flightDetail?.active_alerts?.length ?? 0) > 0
-                      ? formatActiveAlerts(flightDetail?.active_alerts)
-                      : (flightDetail?.alert_stats?.episode_count ?? 0) > 0
-                      ? `None (${flightDetail?.alert_stats?.episode_count} past episode${
-                          flightDetail?.alert_stats?.episode_count === 1 ? '' : 's'
+                  {isFlightLive(displayFlight ?? {})
+                    ? (displayFlight?.active_alerts?.length ?? 0) > 0
+                      ? formatActiveAlerts(displayFlight?.active_alerts)
+                      : (displayFlight?.alert_stats?.episode_count ?? 0) > 0
+                      ? `None (${displayFlight?.alert_stats?.episode_count} past episode${
+                          displayFlight?.alert_stats?.episode_count === 1 ? '' : 's'
                         })`
                       : 'None'
-                    : formatFlightAlertSummary(flightDetail ?? {})}
+                    : formatFlightAlertSummary(displayFlight ?? {})}
                 </span>
               </div>
             </div>

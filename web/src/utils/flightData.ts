@@ -28,7 +28,7 @@ export const FLIGHT_SORT_OPTIONS: { value: FlightSortField; label: string }[] = 
   { value: 'last_seen', label: 'Last Seen' },
   { value: 'first_seen', label: 'First Seen' },
   { value: 'duration', label: 'Duration' },
-  { value: 'alerts', label: 'Active Alerts' },
+  { value: 'alerts', label: 'Alerts' },
   { value: 'callsign', label: 'Callsign' },
   { value: 'icao', label: 'ICAO' },
   { value: 'model', label: 'Model' },

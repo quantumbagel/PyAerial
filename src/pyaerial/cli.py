@@ -142,7 +142,12 @@ def _cmd_live(args: argparse.Namespace) -> None:
 
 
 def _cmd_web(args: argparse.Namespace) -> None:
-    setup_logging("info")
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"Configuration error:\n{exc}", file=sys.stderr)
+        sys.exit(1)
+    setup_logging(config.logging.level, log_file=config.logging.file)
     from pyaerial.webapp import run_webapp
 
     run_webapp(

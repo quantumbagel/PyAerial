@@ -97,8 +97,9 @@ class KinematicKalmanFilter:
 
         # Update velocity based on position residual if dt > 0
         if dt > 0:
-            self.vn += 0.2 * (res_lat_m / dt)
-            self.ve += 0.2 * (res_lon_m / dt)
+            safe_dt = max(dt, 0.05)
+            self.vn += 0.2 * (res_lat_m / safe_dt)
+            self.ve += 0.2 * (res_lon_m / safe_dt)
 
         # Update covariances
         self.p_lat *= 1.0 - k_lat

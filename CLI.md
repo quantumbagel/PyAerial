@@ -10,7 +10,7 @@
 | `pyaerial view` | Interactive viewer (`list`, `dump aircraft`, `status`, `live`) |
 | `pyaerial live` | ASCII terminal table |
 
-`pyaerial web` serves `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `ws://…/ws/live` (alias `/ws`). Raw receiver frames are only on `/ws/raw` (not on `/ws/live`). Other clients can consume the live socket and request history. Pass `?token=` when `web.token` or `PYAERIAL_WEB_TOKEN` is set.
+`pyaerial web` serves `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `ws://…/ws/live` (alias `/ws`). Raw receiver frames are only on `/ws/raw` (not on `/ws/live`). Other clients can consume the live socket and request history. Prefer the `x-pyaerial-token` header when `web.token` or `PYAERIAL_WEB_TOKEN` is set (`?token=` also works).
 
 **Commands**
 
@@ -59,11 +59,11 @@ The full YAML schema is in [CONFIGURATION.md](CONFIGURATION.md).
 
 **WebSocket**
 
-Connect to `ws://<host>:<port>/ws/live` (or `/ws`). Native clients with no `Origin` header are accepted. Browser apps on another host need `web.origins: ["*"]` or an explicit list (the default is `*`). If `web.token` is set, pass it as `?token=` or the `x-pyaerial-token` header.
+Connect to `ws://<host>:<port>/ws/live` (or `/ws`). Native clients with no `Origin` header are accepted. Browser apps on another host need `web.origins: ["*"]` or an explicit list (the default is `*`). If `web.token` is set, pass it as `x-pyaerial-token` (preferred) or `?token=`.
 
-`GET /api` returns the same protocol document the socket sends on connect.
+`GET /api` is the discovery document (`websocket`, `raw_websocket`, nested `actions`). It is larger than the per-socket `hello` payload (`type`, `protocol`, `version`, `streams`, `actions`).
 
-On connect `/ws/live` sends `hello`, then a snapshot of `flights`, `alerts`, and `stats`. After that it pushes those streams plus `telemetry` and `ping`. Raw frames are not on this socket: connect to `/ws/raw`. The engine publishes frames on Redis `live:raw`. RSSI and `clock` are present when dump1090 is read in Beast format.
+On connect `/ws/live` sends `hello` (`protocol: pyaerial.live`), then a snapshot of `flights`, `alerts`, and `stats`. After that it pushes those streams plus `telemetry` and `ping`. Raw frames are not on this socket: connect to `/ws/raw`. The engine publishes frames on Redis `live:raw`. RSSI and `clock` are present when dump1090 is read in Beast format.
 
 ```python
 import asyncio, json, websockets
@@ -104,19 +104,19 @@ asyncio.run(main())
 | Action | Params | Notes |
 |--------|--------|-------|
 | `subscribe` | `streams` (`flights`, `alerts`, `telemetry`, `stats`) | Omit or pass `[]` for the default set. `raw` is not a live stream; use `/ws/raw`. |
-| `fetchFlights` | `view` (`live` or `history`); history also takes `skip`, `limit`, `q`, `since`, `until` | History `q` matches ICAO, callsign, or flight id. `since` / `until` are unix seconds on `end_time`. |
-| `fetchFlight` | `flightId`, `view` | Single flight |
+| `fetchFlights` | `view` (`live` or `history`); history also takes `skip`, `limit`, `q`, `since`, `until` | History `q` matches ICAO, callsign, or flight id. `since` / `until` are unix seconds on `end_time`. History `limit` is capped at 200. |
+| `fetchFlight` | `flightId`, `view` | Single flight. Missing id returns `success: false`. |
 | `fetchTelemetry` | `flightId`, `view`, `since` | Track points after `since` |
 | `fetchAlerts` | `view`; history also takes `skip`, `limit`, `q`, `since`, `until`, `flightId`, `rule` | History `q` matches ICAO, callsign, zone, rule, or flight id |
 | `fetchStats` | none | Live and retained counts, `redis` / `history` booleans, `engine_seen_at` |
 | `fetchZones` | none | Home, polygons, `alert_colors` |
 | `fetchConfig` | none | Portal display config |
 
-Pushed `/ws/live` message types are `hello`, `flights`, `alerts`, `telemetry`, `stats`, and `ping`. `/ws/raw` sends `hello`, `antenna`, `raw`, and `ping`.
+Pushed `/ws/live` message types are `hello`, `flights`, `alerts`, `telemetry`, `stats`, and `ping`. `/ws/raw` sends `hello` (`protocol: pyaerial.raw`, no live actions), `antenna`, `raw`, and `ping`.
 
 **Raw sensor stream**
 
-`/ws/raw` sends `hello`, then `antenna` (home lat/lon and configured receivers), then `raw` batches as the engine sees frames:
+`/ws/raw` speaks `pyaerial.raw` and does not accept live RPCs (`fetchFlights`, `subscribe`, …). It sends `hello`, then `antenna` (home lat/lon and configured receivers), then `raw` batches as the engine sees frames:
 
 ```json
 {

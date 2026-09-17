@@ -101,8 +101,12 @@ def test_metadata_lookup_failure_is_retried():
     calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=_FailingDb())
     try:
         plane = _plane()
-        calc._bg_lookup_metadata(plane, plane[STORE_INFO][STORE_ICAO])
+        icao = plane[STORE_INFO][STORE_ICAO]
+        calc._bg_lookup_metadata(icao)
         assert plane[STORE_INFO].get("metadata_resolved") is not True
+        result = calc._pending_results.get(icao)
+        assert result is not None
+        assert result["resolved"] is False
     finally:
         calc.close()
 

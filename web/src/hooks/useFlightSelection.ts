@@ -75,9 +75,9 @@ export function useFlightSelection({
   const appendSelectedTelemetry = useCallback((points: TelemetryPoint[]) => {
     setFlightTelemetry((prev) => {
       const ts = new Set(prev.map((t) => t.timestamp));
-      return [...prev, ...points.filter((p) => !ts.has(p.timestamp))].sort(
-        (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
-      );
+      return [...prev, ...points.filter((p) => !ts.has(p.timestamp))]
+        .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+        .slice(-400);
     });
     const latestPoint = points[points.length - 1];
     if (latestPoint) {

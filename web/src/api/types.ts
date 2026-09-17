@@ -105,6 +105,8 @@ export interface ServerStats {
 export type WsStatus = 'connecting' | 'connected' | 'reconnecting';
 
 export type LiveMessage =
+  | { type: 'hello'; protocol: string; version: number; streams: string[]; actions: string[] }
+  | { type: 'ping'; timestamp?: number }
   | { type: 'flights'; flights: FlightSummary[] }
   | { type: 'telemetry'; telemetry: TelemetryPoint[]; timestamp: number }
   | { type: 'alerts'; alerts: Alert[] }

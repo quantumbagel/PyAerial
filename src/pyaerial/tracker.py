@@ -14,7 +14,6 @@ from collections import defaultdict
 from pyaerial.classify import ClassifiedMessage, classify
 from pyaerial.config.schema import Config
 from pyaerial.constants import (
-    STORE_CALC_DATA,
     STORE_FIRST_PACKET,
     STORE_ICAO,
     STORE_INFO,
@@ -157,19 +156,30 @@ class Tracker:
         else:
             plane = Plane.from_mapping(self.planes[icao])
             self.planes[icao] = plane
+            info = plane[STORE_INFO]
             for key, value in message_data[STORE_INFO].items():
-                plane[STORE_INFO][key] = value
+                if key == STORE_ICAO:
+                    info[key] = value
+                    continue
+                if value in ("", None, []) and info.get(key) not in (None, "", []):
+                    continue
+                info[key] = value
 
             recv = plane.setdefault(STORE_RECV_DATA, {})
             for field, value in message_data[STORE_RECV_DATA].items():
                 datum = Datum(value, timestamp)
                 series = recv.setdefault(field, [])
-                if not series or series[-1].value != datum.value:
+                if not series:
                     series.append(datum)
-                elif timestamp > series[-1].time:
-                    # Same value, newer time: keep the sample current so a
-                    # stopped aircraft ages to speed 0 instead of freezing.
-                    series[-1].time = timestamp
+                    continue
+                last = series[-1]
+                if last.value == datum.value:
+                    if timestamp > last.time:
+                        last.time = timestamp
+                    continue
+                if datum.time <= last.time:
+                    datum = Datum(datum.value, last.time + 1e-6)
+                series.append(datum)
 
         internal = plane.internal
         if STORE_FIRST_PACKET not in internal:
@@ -190,21 +200,5 @@ class Tracker:
             if receiver not in seen:
                 seen.append(receiver)
 
-        self._trim_series(plane, timestamp)
-
-    def _trim_series(self, plane: Plane, now: float) -> None:
-        keep = self.config.tracking.telemetry_keep_seconds
-        if keep <= 0:
-            return
-        cutoff = now - keep
-        for bucket in (STORE_RECV_DATA, STORE_CALC_DATA):
-            fields = plane.get(bucket)
-            if not isinstance(fields, dict):
-                continue
-            for field, series in list(fields.items()):
-                if not series:
-                    continue
-                trimmed = [datum for datum in series if datum.time >= cutoff]
-                if not trimmed:
-                    trimmed = series[-1:]
-                fields[field] = trimmed
+        # Live Redis trims to telemetry_keep_seconds. The in-memory series is
+        # the archive source for SQLite on expire, so it is not clipped here.

@@ -18,6 +18,7 @@ def live_flight_detail(doc: dict[str, Any], flight_id: str) -> dict[str, Any]:
         "owner": doc.get("owner") or info.get("owner"),
         "country": doc.get("country") or info.get("country"),
         "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type"),
+        "registration": doc.get("registration") or info.get("registration"),
         "is_live": True,
         "status": "live",
     }
@@ -47,6 +48,7 @@ def live_flight_summary(
         "owner": doc.get("owner") or info.get("owner"),
         "country": doc.get("country") or info.get("country"),
         "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type"),
+        "registration": doc.get("registration") or info.get("registration"),
         "latitude": lat,
         "longitude": lon,
         "altitude": alt,

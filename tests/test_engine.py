@@ -174,11 +174,11 @@ def test_pending_finalize_is_capped(tmp_path, monkeypatch):
         engine._finalize_plane(_plane("bbb", 1.0))
         engine._finalize_plane(_plane("ccc", 1.0))
 
-        assert len(engine._pending_finalize) == 2
-        assert "aaa-1" not in engine._pending_finalize
+        assert len(engine._pending_finalize) == 3
+        assert "aaa-1" in engine._pending_finalize
         assert "bbb-1" in engine._pending_finalize
         assert "ccc-1" in engine._pending_finalize
-        assert "aaa-1" in popped
+        assert popped == []
     finally:
         engine.shutdown()
 

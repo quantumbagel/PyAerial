@@ -15,7 +15,12 @@ import socket
 import time
 
 from pyaerial.receivers import Receiver, register_receiver
-from pyaerial.receivers.frames import BeastParser, parse_avr_line
+from pyaerial.receivers.frames import (
+    BeastParser,
+    _BEAST_BUF_MAX,
+    parse_avr_line,
+    receive_times,
+)
 
 _RECV_BUFFER = 4096
 _SOCKET_TIMEOUT = 1.0
@@ -89,15 +94,21 @@ class Dump1090Receiver(Receiver):
                 return "socket connection closed by peer"
 
             buffer += chunk.decode("utf-8", errors="ignore")
+            if len(buffer) > _BEAST_BUF_MAX:
+                buffer = buffer[-1024:]
             lines = buffer.split("\n")
             buffer = lines.pop()
-            now = time.time()
+            parsed_rows: list[tuple[str, int | None]] = []
             for line in lines:
                 parsed = parse_avr_line(line)
-                if not parsed:
-                    continue
-                hex_msg, clock = parsed
-                self.emit(hex_msg, now, rssi=None, clock=clock)
+                if parsed:
+                    parsed_rows.append(parsed)
+            if not parsed_rows:
+                continue
+            now = time.time()
+            stamps = receive_times(now, [clock for _hex, clock in parsed_rows])
+            for (hex_msg, clock), stamp in zip(parsed_rows, stamps):
+                self.emit(hex_msg, stamp, rssi=None, clock=clock)
 
         return None
 
@@ -113,7 +124,11 @@ class Dump1090Receiver(Receiver):
             if not chunk:
                 return "socket connection closed by peer"
 
+            frames = parser.feed(chunk)
+            if not frames:
+                continue
             now = time.time()
-            for hex_msg, rssi, clock in parser.feed(chunk):
-                self.emit(hex_msg, now, rssi=rssi, clock=clock)
+            stamps = receive_times(now, [clock for _hex, _rssi, clock in frames])
+            for (hex_msg, rssi, clock), stamp in zip(frames, stamps):
+                self.emit(hex_msg, stamp, rssi=rssi, clock=clock)
         return None

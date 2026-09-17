@@ -22,6 +22,7 @@ from pyaerial.constants import (
     STORE_INTERNAL,
     STORE_MOST_RECENT_PACKET,
 )
+from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.models import flight_id_for_plane, iter_telemetry_samples
 
 log = logging.getLogger("pyaerial.store")
@@ -31,16 +32,41 @@ _FLIGHT_STATUS_COMPLETED = "completed"
 _FLIGHT_STATUS_LIVE = "live"
 
 
+def _bind_eta(eta: Any) -> float | None:
+    if eta is None:
+        return None
+    try:
+        value = float(eta)
+    except (TypeError, ValueError):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):
+        return None
+    return value
+
+
+def _bind_reason(reason: Any) -> str | None:
+    if reason is None:
+        return None
+    if isinstance(reason, str):
+        return reason
+    return json_dumps(reason, default=str)
+
+
 def build_telemetry_docs(
     plane: dict, flight_id: str, icao: str
 ) -> list[dict[str, Any]]:
     """Build telemetry documents from a plane's in-memory time series."""
     docs: list[dict[str, Any]] = []
+    used_ts: set[float] = set()
     for timestamp, lat, lon, alt, speed, heading in iter_telemetry_samples(plane):
+        stamp = timestamp
+        while stamp in used_ts:
+            stamp += 1e-6
+        used_ts.add(stamp)
         doc: dict[str, Any] = {
             "flight_id": flight_id,
             "icao": icao,
-            "timestamp": timestamp,
+            "timestamp": stamp,
             "latitude": lat,
             "longitude": lon,
         }
@@ -111,6 +137,7 @@ class HistoryStore:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")
             self._ensure_schema(conn)
+            self._migrate_schema(conn)
             self._conn = conn
             if self._reported_down:
                 log.info("Reconnected to history database %s", self.path)
@@ -184,7 +211,16 @@ class HistoryStore:
                 ON alerts(activated_at DESC);
             """
         )
+        conn.execute("PRAGMA user_version = 1")
         conn.commit()
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(flights)")}
+        if "registration" not in columns:
+            conn.execute(
+                "ALTER TABLE flights ADD COLUMN registration TEXT NOT NULL DEFAULT ''"
+            )
+            conn.commit()
 
     def _ensure_connected(self) -> bool:
         if self.disabled:
@@ -284,7 +320,7 @@ class HistoryStore:
                             info.get("country") or "",
                             info.get("aircraft_type") or "",
                             info.get("registration") or "",
-                            json.dumps(
+                            json_dumps(
                                 {str(k): v for k, v in info.items()}, default=str
                             ),
                         ),
@@ -294,7 +330,7 @@ class HistoryStore:
                     )
                     self._conn.executemany(
                         """
-                        INSERT INTO telemetry (
+                        INSERT OR REPLACE INTO telemetry (
                             flight_id, timestamp, icao, latitude, longitude,
                             altitude, speed, heading
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -336,8 +372,8 @@ class HistoryStore:
                                 1 if alert.get("active", False) else 0,
                                 alert.get("activated_at"),
                                 alert.get("deactivated_at"),
-                                alert.get("eta"),
-                                alert.get("reason"),
+                                _bind_eta(alert.get("eta")),
+                                _bind_reason(alert.get("reason")),
                                 alert.get("last_updated"),
                                 lat,
                                 lon,
@@ -673,6 +709,12 @@ class HistoryStore:
 
     def _alert_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         raw = _row_dict(row)
+        reason = raw["reason"]
+        if isinstance(reason, str) and reason[:1] in "{[":
+            try:
+                reason = json.loads(reason)
+            except json.JSONDecodeError:
+                pass
         return {
             "alert_id": raw["alert_id"],
             "flight_id": raw["flight_id"],
@@ -684,7 +726,7 @@ class HistoryStore:
             "activated_at": raw["activated_at"],
             "deactivated_at": raw["deactivated_at"],
             "eta": raw["eta"],
-            "reason": raw["reason"],
+            "reason": reason,
             "last_updated": raw["last_updated"],
             "latitude": raw["latitude"],
             "longitude": raw["longitude"],

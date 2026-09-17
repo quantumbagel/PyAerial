@@ -24,6 +24,9 @@ import { usePortalData } from './usePortalData';
 
 export function usePortalApp() {
   const [portalView, setPortalView] = useState<PortalView>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const view = params.get('view');
+    if (view === 'live' || view === 'history') return view;
     const saved = localStorage.getItem('portalView');
     return saved === 'live' || saved === 'history' ? saved : 'live';
   });
@@ -226,29 +229,21 @@ export function usePortalApp() {
   const { activeFlightId, closeDrawer, setFollowSelectedPlane, syncFlightAlerts, selectFlight } =
     selection;
 
+  const pendingUrlFlight = useRef<string | null>(
+    new URLSearchParams(window.location.search).get('flight'),
+  );
   const urlFlightApplied = useRef(false);
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const view = params.get('view');
-    if (view === 'live' || view === 'history') {
-      setPortalView(view);
-    }
-  }, [setPortalView]);
 
   useEffect(() => {
-    if (urlFlightApplied.current) return;
-    const flight = new URLSearchParams(window.location.search).get('flight');
-    if (!flight) {
-      urlFlightApplied.current = true;
-      return;
-    }
-    if (portal.flightsData.some((item) => item.flight_id === flight)) {
-      selectFlight(flight);
-      urlFlightApplied.current = true;
-    }
-  }, [portal.flightsData, selectFlight]);
+    const id = pendingUrlFlight.current;
+    if (!id || urlFlightApplied.current) return;
+    urlFlightApplied.current = true;
+    pendingUrlFlight.current = null;
+    selectFlight(id);
+  }, [selectFlight]);
 
   useEffect(() => {
+    if (pendingUrlFlight.current && !urlFlightApplied.current) return;
     const params = new URLSearchParams(window.location.search);
     if (portalView === 'history') params.set('view', 'history');
     else params.delete('view');

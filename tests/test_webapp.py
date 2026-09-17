@@ -117,8 +117,9 @@ def test_websocket_raw_endpoint_and_publish():
         with client.websocket_connect("/ws/raw") as ws:
             hello = ws.receive_json()
             assert hello["type"] == "hello"
+            assert hello["protocol"] == "pyaerial.raw"
             assert hello["streams"] == ["raw"]
-            assert "raw" in hello["streams"]
+            assert hello["actions"] == []
             antenna = ws.receive_json()
             assert antenna["type"] == "antenna"
             assert "home" in antenna["antenna"]
@@ -151,8 +152,20 @@ def test_websocket_raw_endpoint_and_publish():
                 reply = ws.receive_json()
                 if reply.get("type") == "response" and reply.get("id") == "sub":
                     break
-            assert reply["success"] is True
-            assert reply["data"]["streams"] == ["raw"]
+            assert reply["success"] is False
+            ws.send_json(
+                {
+                    "type": "request",
+                    "id": "flights",
+                    "action": "fetchFlights",
+                    "params": {},
+                }
+            )
+            while True:
+                denied = ws.receive_json()
+                if denied.get("type") == "response" and denied.get("id") == "flights":
+                    break
+            assert denied["success"] is False
 
 
 def test_websocket_live_ignores_raw_stream():
@@ -187,14 +200,7 @@ def test_websocket_live_ignores_raw_stream():
                 assert reply.get("type") != "antenna"
                 if reply.get("type") == "response" and reply.get("id") == "raw":
                     break
-            assert reply["success"] is True
-            assert "raw" not in reply["data"]["streams"]
-            assert set(reply["data"]["streams"]) == {
-                "alerts",
-                "flights",
-                "stats",
-                "telemetry",
-            }
+            assert reply["success"] is False
 
 
 def test_websocket_rejects_disallowed_origin():

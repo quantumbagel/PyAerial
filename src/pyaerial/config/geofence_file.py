@@ -56,13 +56,20 @@ def _from_kml(text: str) -> list[list[float]]:
         root = ET.fromstring(text)
     except ET.ParseError as exc:
         raise GeofenceFileError(f"invalid KML: {exc}") from exc
+    found: list[list[list[float]]] = []
     for elem in root.iter():
         if _local_tag(elem.tag) != "polygon":
             continue
         points = _kml_polygon_points(elem)
         if points is not None:
-            return points
-    raise GeofenceFileError("no Polygon coordinates found in KML")
+            found.append(points)
+    if not found:
+        raise GeofenceFileError("no Polygon coordinates found in KML")
+    if len(found) > 1:
+        raise GeofenceFileError(
+            "KML contains multiple Polygons; use one polygon per zone file"
+        )
+    return found[0]
 
 
 def _kml_polygon_points(polygon: ET.Element) -> list[list[float]] | None:
@@ -91,6 +98,8 @@ def _kml_coordinate_pairs(text: str) -> list[list[float]]:
             lat = float(parts[1])
         except ValueError:
             continue
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            continue
         points.append([lat, lon])
     return points
 
@@ -102,12 +111,19 @@ def _from_geojson(obj: object) -> list[list[float]]:
     if kind == "Feature":
         return _from_geojson(obj.get("geometry") or {})
     if kind == "FeatureCollection":
+        polygons: list[list[list[float]]] = []
         for feature in obj.get("features") or []:
             try:
-                return _from_geojson(feature)
+                polygons.append(_from_geojson(feature))
             except GeofenceFileError:
                 continue
-        raise GeofenceFileError("FeatureCollection has no polygon")
+        if not polygons:
+            raise GeofenceFileError("FeatureCollection has no polygon")
+        if len(polygons) > 1:
+            raise GeofenceFileError(
+                "FeatureCollection has multiple polygons; use one polygon per zone file"
+            )
+        return polygons[0]
     if kind == "GeometryCollection":
         for geometry in obj.get("geometries") or []:
             try:
@@ -121,6 +137,10 @@ def _from_geojson(obj: object) -> list[list[float]]:
         polygons = obj.get("coordinates") or []
         if not polygons:
             raise GeofenceFileError("empty MultiPolygon")
+        if len(polygons) > 1:
+            raise GeofenceFileError(
+                "MultiPolygon has multiple areas; use a single Polygon or split zones"
+            )
         return _ring_to_latlon(polygons[0])
     raise GeofenceFileError(f"unsupported GeoJSON type {kind!r}; need a Polygon")
 
@@ -139,6 +159,8 @@ def _ring_to_latlon(coordinates: object) -> list[list[float]]:
             lon = float(point[0])
             lat = float(point[1])
         except (TypeError, ValueError):
+            continue
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
             continue
         points.append([lat, lon])
     if len(points) < 3:

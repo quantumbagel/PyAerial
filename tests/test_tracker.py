@@ -3,6 +3,7 @@ from __future__ import annotations
 from pyaerial.classify import classify
 from pyaerial.config.schema import HomeConfig
 from pyaerial.constants import (
+    STORE_CALLSIGN,
     STORE_FIRST_PACKET,
     STORE_ICAO,
     STORE_INFO,
@@ -82,7 +83,7 @@ def test_value_change_appends():
     assert series[-1].value == 35.71
 
 
-def test_telemetry_series_are_capped():
+def test_telemetry_series_are_not_clipped_to_live_window():
     from pyaerial.config.schema import TrackingConfig
     from pyaerial.classify import ClassifiedMessage
 
@@ -109,4 +110,30 @@ def test_telemetry_series_are_capped():
     )
     tracker._merge(classified, 112.0)
     series = plane[STORE_RECV_DATA][STORE_LAT]
-    assert all(item.time >= 107.0 for item in series)
+    assert [item.time for item in series] == [100.0, 101.0, 110.0, 112.0]
+
+
+def test_blank_callsign_does_not_clobber_existing():
+    from pyaerial.classify import ClassifiedMessage
+
+    tracker = Tracker(make_config())
+    plane = {
+        STORE_INFO: {STORE_ICAO: "abc123", STORE_CALLSIGN: "SWA123"},
+        STORE_RECV_DATA: {},
+        STORE_INTERNAL: {
+            STORE_FIRST_PACKET: 100.0,
+            STORE_MOST_RECENT_PACKET: 100.0,
+            STORE_TOTAL_PACKETS: 1,
+            STORE_PACKET_TYPE: {},
+        },
+    }
+    tracker.planes["abc123"] = plane
+    classified = ClassifiedMessage(
+        data={
+            STORE_INFO: {STORE_ICAO: "abc123", STORE_CALLSIGN: ""},
+            STORE_RECV_DATA: {},
+        },
+        typecode_category=1,
+    )
+    tracker._merge(classified, 110.0)
+    assert plane[STORE_INFO][STORE_CALLSIGN] == "SWA123"

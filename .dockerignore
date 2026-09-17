@@ -8,10 +8,16 @@ __pycache__
 web/node_modules
 src/pyaerial/static
 data
+tests
 *.sqlite
 *.sqlite3
+*.db
+*.db-wal
+*.db-shm
 aircraft.db
 live_telemetry.db
+pyaerial.db
+historical-view.yml
 .idea
 .vscode
 .DS_Store

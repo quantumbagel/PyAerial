@@ -220,11 +220,14 @@ def get_telemetry(
     if view == "live":
         if live_store is None:
             return []
-        return live_store.get_telemetry(flight_id, since=since)
+        return [
+            {**telemetry_point(doc), "flight_id": flight_id}
+            for doc in live_store.get_telemetry(flight_id, since=since)
+        ]
     if history is None:
         return []
     return [
-        telemetry_point(doc)
+        {**telemetry_point(doc), "flight_id": flight_id}
         for doc in history.get_telemetry(flight_id, since=since)
     ]
 

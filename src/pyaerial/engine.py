@@ -375,15 +375,12 @@ class Engine:
         if flight_id in self._pending_finalize:
             self._pending_finalize[flight_id] = plane
             return
-        while len(self._pending_finalize) >= _PENDING_FINALIZE_MAX:
-            dropped_id, _dropped = next(iter(self._pending_finalize.items()))
-            del self._pending_finalize[dropped_id]
-            self.live_store.pop_flight(dropped_id)
+        if len(self._pending_finalize) >= _PENDING_FINALIZE_MAX:
             log.error(
-                "Pending finalize cap (%d) reached; dropped retry for %s "
-                "(history still unwritable; live copy removed)",
+                "Pending finalize cap (%d) reached (%d waiting); "
+                "keeping live copies until history is writable",
                 _PENDING_FINALIZE_MAX,
-                dropped_id,
+                len(self._pending_finalize) + 1,
             )
         self._pending_finalize[flight_id] = plane
 

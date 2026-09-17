@@ -69,46 +69,51 @@ def should_retain(
         for rule in zone.rules:
             if not rule.retain:
                 continue
-            valid = _count_valid_ticks(
+            matched = _matching_seconds(
                 plane,
                 polygon,
                 rule.when,
                 first_time,
                 last_time,
             )
-            if valid >= rule.dwell_seconds:
+            if matched >= rule.dwell_seconds:
                 return True
     return False
 
 
-def _count_valid_ticks(
+def _matching_seconds(
     plane: dict,
     polygon: Polygon,
     when: dict,
     first_time: float,
     last_time: float,
-) -> int:
+) -> float:
+    """Wall-clock seconds during which ``when`` held, using sample timestamps."""
     lat_series = plane.get(STORE_RECV_DATA, {}).get(STORE_LAT, [])
     if not lat_series:
-        return 0
+        return 0.0
     samples = [
         datum for datum in lat_series if first_time <= datum.time <= last_time
     ]
-    if len(samples) > 3600:
-        step = max(1, len(samples) // 1800)
-        samples = samples[::step]
-    valid = 0
+    matched_seconds = 0.0
+    prev_time: float | None = None
+    prev_match = False
     for lat in samples:
         lon = get_latest(STORE_RECV_DATA, STORE_LONG, plane, lat.time)
         heading = get_latest(STORE_CALC_DATA, STORE_HEADING, plane, lat.time)
         speed = get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat.time)
         if None in (lon, heading, speed):
+            prev_match = False
+            prev_time = lat.time
             continue
         position = (lat.value, lon.value)
         eta = geo.time_to_enter_geofence(
             position, heading.value, speed.value, polygon, _ETA_HORIZON
         )
         resolver = evaluate.make_resolver(plane, eta, polygon, position, lat.time)
-        if evaluate.when_passes(when, resolver):
-            valid += 1
-    return valid
+        matched = evaluate.when_passes(when, resolver)
+        if matched and prev_match and prev_time is not None:
+            matched_seconds += max(0.0, lat.time - prev_time)
+        prev_match = matched
+        prev_time = lat.time
+    return matched_seconds

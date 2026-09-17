@@ -57,8 +57,8 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
     except Exception:
         return None
 
-    if typecode == -1:
-        # Non-ADS-B / undecodable Mode S. Do not spawn a ghost plane.
+    # pyModeS v2 used -1; v3 returns None for non-DF17/18 (short Mode S, DF11).
+    if typecode is None or typecode == -1:
         return None
 
     try:
@@ -77,15 +77,16 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
         except Exception:
             return None
         ca = decoded.get("category")
-        callsign = decoded.get("callsign", "")
+        callsign = decoded.get("callsign") or ""
+        callsign = callsign.replace("_", "").strip()
+        info = {
+            STORE_ICAO: icao,
+            STORE_PLANE_CATEGORY: [typecode, ca],
+        }
         if callsign:
-            callsign = callsign.replace("_", "")
+            info[STORE_CALLSIGN] = callsign
         data = {
-            STORE_INFO: {
-                STORE_ICAO: icao,
-                STORE_CALLSIGN: callsign,
-                STORE_PLANE_CATEGORY: [typecode, ca],
-            },
+            STORE_INFO: info,
             STORE_RECV_DATA: {},
         }
         category = CAT_IDENT

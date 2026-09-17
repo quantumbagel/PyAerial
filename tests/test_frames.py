@@ -5,9 +5,11 @@ from pyaerial.receivers.frames import (
     BEAST_ESC,
     BeastParser,
     RawFrame,
+    _read_unescaped,
     beast_rssi_dbfs,
     parse_avr_line,
     raw_payload,
+    receive_times,
     try_parse_beast,
 )
 
@@ -108,6 +110,33 @@ def test_try_parse_beast_skips_garbage():
     assert frame is not None
     assert frame[0] == hex_msg
     assert consumed == len(buffer)
+
+
+def test_receive_times_spreads_chunk_using_clock_deltas():
+    stamps = receive_times(100.0, [12_000_000, 18_000_000, 24_000_000])
+    assert stamps[-1] == 100.0
+    assert abs(stamps[0] - 99.0) < 1e-9
+    assert abs(stamps[1] - 99.5) < 1e-9
+    assert stamps[0] < stamps[1] < stamps[2]
+
+
+def test_receive_times_uniquifies_identical_clocks():
+    stamps = receive_times(10.0, [1, 1, None])
+    assert stamps[0] != stamps[1]
+    assert len(set(stamps[:2])) == 2
+
+
+def test_beast_parser_resyncs_on_bare_esc_in_payload():
+    hex_msg = "8d406b902015a678d4d220aa4bda"
+    good = _beast_frame(hex_msg, clock=2)
+    payload, hint = _read_unescaped(bytes([0x00, 0x01, BEAST_ESC, 0x33]), 0, 10)
+    assert payload is None
+    assert hint == 2
+    # Truncated long frame, then a bare ESC that starts the real frame.
+    garbage = bytes([BEAST_ESC, 0x33, 0x11, 0x22]) + good
+    parser = BeastParser()
+    frames = parser.feed(garbage)
+    assert any(frame[0] == hex_msg for frame in frames)
 
 
 def test_dump1090_defaults_to_avr():

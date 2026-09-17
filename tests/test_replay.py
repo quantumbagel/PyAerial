@@ -9,8 +9,8 @@ def test_replay_loads_timestamped_and_bare_hex(tmp_path):
     receiver = ReplayReceiver("replay", lambda *_args: None, {"path": str(path), "loop": False})
     frames = receiver._load()
     assert len(frames) == 2
-    assert frames[0][1] == "AABBCC"
-    assert frames[1][1] == "DDEEFF"
+    assert frames[0][1] == "aabbcc"
+    assert frames[1][1] == "ddeeff"
 
 
 def test_replay_missing_file():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import re
@@ -55,7 +56,28 @@ def _token_ok(config: Config, token: str | None) -> bool:
     expected = config.web.token
     if not expected:
         return True
-    return token == expected
+    if not token:
+        return False
+    return hmac.compare_digest(str(token), str(expected))
+
+
+def _cors_kwargs(config: Config) -> dict[str, Any]:
+    origins = list(config.web.origins or [])
+    local_regex = r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
+    if "*" in origins:
+        return {
+            "allow_origins": ["*"],
+            "allow_credentials": False,
+            "allow_methods": ["GET", "HEAD", "OPTIONS"],
+            "allow_headers": ["*"],
+        }
+    return {
+        "allow_origins": origins,
+        "allow_origin_regex": local_regex,
+        "allow_credentials": True,
+        "allow_methods": ["GET", "HEAD", "OPTIONS"],
+        "allow_headers": ["*"],
+    }
 
 
 _KNOWN_STREAMS = frozenset(WS_STREAMS)
@@ -93,14 +115,7 @@ def create_app(
     app = FastAPI(title="PyAerial Web Portal", lifespan=lifespan)
     app.state.history = history
     app.state.live_store = live_store
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[],
-        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-        allow_credentials=True,
-        allow_methods=["GET", "HEAD", "OPTIONS"],
-        allow_headers=["*"],
-    )
+    app.add_middleware(CORSMiddleware, **_cors_kwargs(config))
 
     def ws_request_handler(action: str, params: dict[str, Any]) -> Any:
         return handle_ws_request(
@@ -163,13 +178,14 @@ def create_app(
                     req = json.loads(data)
                 except Exception as parse_exc:
                     log.error("Error parsing WS message: %s", parse_exc)
-                    await websocket.send_json(
+                    broadcaster.send(
+                        websocket,
                         {
                             "type": "response",
                             "id": None,
                             "success": False,
                             "error": "Invalid request",
-                        }
+                        },
                     )
                     continue
                 if not (isinstance(req, dict) and req.get("type") == "request"):
@@ -179,45 +195,86 @@ def create_app(
                 params = req.get("params") or {}
                 if not isinstance(params, dict):
                     params = {}
-                if action == "subscribe":
-                    selected = broadcaster.set_streams(
-                        websocket, params.get("streams")
+                if raw_only:
+                    broadcaster.send(
+                        websocket,
+                        {
+                            "type": "response",
+                            "id": req_id,
+                            "success": False,
+                            "error": "Live actions are not available on /ws/raw",
+                        },
                     )
-                    await websocket.send_json(
+                    continue
+                if action == "subscribe":
+                    requested = params.get("streams")
+                    selected = broadcaster.set_streams(websocket, requested)
+                    if requested and not selected:
+                        broadcaster.send(
+                            websocket,
+                            {
+                                "type": "response",
+                                "id": req_id,
+                                "success": False,
+                                "error": "Unknown streams",
+                            },
+                        )
+                        continue
+                    broadcaster.send(
+                        websocket,
                         {
                             "type": "response",
                             "id": req_id,
                             "success": True,
                             "data": {"streams": selected},
-                        }
+                        },
                     )
                     continue
                 try:
                     res_data = await asyncio.to_thread(
                         ws_request_handler, action, params
                     )
-                    await websocket.send_json(
+                    if action == "fetchFlight" and res_data is None:
+                        broadcaster.send(
+                            websocket,
+                            {
+                                "type": "response",
+                                "id": req_id,
+                                "success": False,
+                                "error": "not found",
+                            },
+                        )
+                        continue
+                    broadcaster.send(
+                        websocket,
                         {
                             "type": "response",
                             "id": req_id,
                             "success": True,
                             "data": sanitize_for_json(res_data),
-                        }
+                        },
                     )
                 except Exception as inner_exc:
                     log.error("Error executing action %s: %s", action, inner_exc)
-                    await websocket.send_json(
+                    broadcaster.send(
+                        websocket,
                         {
                             "type": "response",
                             "id": req_id,
                             "success": False,
                             "error": "Request failed",
-                        }
+                        },
                     )
         except WebSocketDisconnect:
-            broadcaster.disconnect(websocket)
+            pass
         except Exception:
+            log.exception("WebSocket handler failed")
+        finally:
             broadcaster.disconnect(websocket)
+            try:
+                await websocket.close()
+            except Exception:
+                pass
 
     async def ws_live(websocket: WebSocket):
         await _ws_handler(websocket, raw_only=False)

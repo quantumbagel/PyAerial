@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-import math
 import time
 from collections import defaultdict
 from typing import Any, Iterable
 
 from pyaerial.enrich.aircraft_db import AircraftDB, normalize_photo_url
 from pyaerial.config.schema import Config
+from pyaerial.jsonutil import sanitize
+
+
+def sanitize_for_json(data: Any) -> Any:
+    """Convert non-finite floats to null so responses are valid JSON."""
+    return sanitize(data)
 
 FLIGHT_STATUS_LIVE = "live"
 
@@ -118,26 +123,10 @@ def telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
     if "latitude" in doc and "longitude" in doc:
         point["latitude"] = doc["latitude"]
         point["longitude"] = doc["longitude"]
-    elif "position" in doc:
-        position = doc.get("position") or {}
-        coords = position.get("coordinates") or [None, None]
-        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
-            point["longitude"] = coords[0]
-            point["latitude"] = coords[1]
     return point
 
 
-def sanitize_for_json(data: Any) -> Any:
-    """Convert non-finite floats to null so responses are valid JSON."""
-    if isinstance(data, float):
-        return data if math.isfinite(data) else None
-    if isinstance(data, dict):
-        return {key: sanitize_for_json(value) for key, value in data.items()}
-    if isinstance(data, list):
-        return [sanitize_for_json(value) for value in data]
-    if isinstance(data, tuple):
-        return [sanitize_for_json(value) for value in data]
-    return data
+
 
 
 def _alert_coords(doc: dict[str, Any]) -> tuple[Any, Any]:

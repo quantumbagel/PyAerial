@@ -32,6 +32,13 @@ def test_when_passes_heading_wraps_across_north():
     assert not evaluate.when_passes(spec, lambda _f: 180.0)
 
 
+def test_when_passes_heading_full_circle():
+    spec = {"heading": FieldConstraint(minimum=0, maximum=360)}
+    assert evaluate.when_passes(spec, lambda _f: 0.0)
+    assert evaluate.when_passes(spec, lambda _f: 180.0)
+    assert evaluate.when_passes(spec, lambda _f: 359.9)
+
+
 def test_when_passes_missing_value_fails():
     spec = {"altitude": FieldConstraint(maximum=1000)}
     assert not evaluate.when_passes(spec, lambda _f: None)
