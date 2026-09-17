@@ -5,7 +5,8 @@ Run ``dump1090 --net --raw`` (or broadcast raw messages over TCP) and point this
 receiver at the host/port.
 
 AVR text (default, port 30002) carries hex frames. Beast binary (port 30005,
-``options.format: beast``) also carries per-message RSSI and a 12 MHz clock.
+``options.format: beast``) also carries per-message RSSI (dBFS) and a
+12 MHz-tick clock.
 """
 
 from __future__ import annotations

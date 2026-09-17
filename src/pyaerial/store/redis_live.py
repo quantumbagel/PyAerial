@@ -632,8 +632,8 @@ class RedisLiveStore:
     def publish_raw(self, messages: list[dict[str, Any]]) -> None:
         """Publish a batch of raw sensor frames to local listeners and Redis.
 
-        The web portal subscribes to ``live:raw`` and forwards batches to
-        WebSocket clients on the ``raw`` stream. Empty batches are ignored.
+        The web app subscribes to ``live:raw`` and forwards batches to
+        ``/ws/raw`` clients. Empty batches are ignored.
         """
         if not messages:
             return

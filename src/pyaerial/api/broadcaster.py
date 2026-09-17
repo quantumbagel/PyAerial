@@ -13,7 +13,7 @@ from fastapi import WebSocket
 from pyaerial.api.payloads import sanitize_for_json
 from pyaerial.api.protocol import LiveStore
 from pyaerial.api.queries import get_live_flights, get_stats, get_tracked_live_alerts
-from pyaerial.api.spec import WS_STREAMS, available_streams, websocket_hello
+from pyaerial.api.spec import WS_STREAMS, websocket_hello, websocket_raw_hello
 from pyaerial.enrich.aircraft_db import AircraftDB
 
 log = logging.getLogger("pyaerial.webapp")
@@ -23,7 +23,7 @@ _PING_INTERVAL = 15.0
 _STATS_CACHE_TTL = 5.0
 _RAW_QUEUE_MAX = 64
 _DEFAULT_STREAMS = frozenset(WS_STREAMS)
-_ALL_STREAMS = frozenset(available_streams())
+_RAW_STREAMS = frozenset({"raw"})
 
 
 @dataclass
@@ -31,6 +31,7 @@ class _Client:
     telemetry_since: float
     last_ping: float
     streams: set[str] = field(default_factory=lambda: set(_DEFAULT_STREAMS))
+    raw_only: bool = False
 
 
 def _flights_sig(flights: list[dict[str, Any]]) -> tuple:
@@ -158,11 +159,17 @@ class LiveBroadcaster:
         websocket: WebSocket,
         *,
         streams: list[str] | None = None,
+        raw_only: bool = False,
     ) -> None:
         await websocket.accept()
         now = time.time()
-        client = _Client(telemetry_since=now, last_ping=now)
+        client = _Client(telemetry_since=now, last_ping=now, raw_only=raw_only)
         self._clients[websocket] = client
+        if raw_only:
+            client.streams = set(_RAW_STREAMS)
+            await websocket.send_json(websocket_raw_hello())
+            await self.send_antenna(websocket)
+            return
         if streams is not None:
             self.set_streams(websocket, streams)
         await websocket.send_json(websocket_hello())
@@ -171,19 +178,20 @@ class LiveBroadcaster:
     def disconnect(self, websocket: WebSocket) -> None:
         self._clients.pop(websocket, None)
 
-    def set_streams(self, websocket: WebSocket, streams: Any) -> tuple[list[str], bool]:
+    def set_streams(self, websocket: WebSocket, streams: Any) -> list[str]:
         client = self._clients.get(websocket)
         if client is None:
-            return [], False
-        previous = set(client.streams)
+            return []
+        if client.raw_only:
+            return ["raw"]
         if not streams:
             client.streams = set(_DEFAULT_STREAMS)
         else:
             if isinstance(streams, str):
                 streams = [streams]
-            chosen = {str(name) for name in streams if str(name) in _ALL_STREAMS}
+            chosen = {str(name) for name in streams if str(name) in _DEFAULT_STREAMS}
             client.streams = chosen or set(_DEFAULT_STREAMS)
-        return sorted(client.streams), "raw" in client.streams and "raw" not in previous
+        return sorted(client.streams)
 
     def _cached_stats(self) -> dict[str, Any]:
         now = time.monotonic()
@@ -220,8 +228,6 @@ class LiveBroadcaster:
             await websocket.send_json(
                 {"type": "stats", "stats": sanitize_for_json(stats)}
             )
-        if "raw" in streams:
-            await self.send_antenna(websocket)
 
     async def send_antenna(self, websocket: WebSocket) -> None:
         await websocket.send_json(

@@ -13,6 +13,14 @@ Rule `when` constraints and stored telemetry use the same units. The portal and 
 | ETA | s | time to the zone boundary along the projected path (`0` if already inside) |
 | Latitude / longitude | degrees (WGS84) | ADS-B CPR |
 
+Raw sensor frames on `/ws/raw` (not `/ws/live`) use:
+
+| Field | Unit | Source |
+|-------|------|--------|
+| `timestamp` | unix seconds (float) | Engine receive time |
+| `rssi` | dBFS | dump1090 Beast signal byte |
+| `clock` | 12 MHz ticks (48-bit integer) | dump1090 Beast / `@` AVR; 1 tick = 1/12 000 000 s ≈ 83.3 ns. Free-running sample counter, not wall-clock time. |
+
 A zone is a named polygon plus independent rules. A rule fires when every `when` constraint holds. Include `eta`, `distance`, or `proximity` to tie a rule to the zone.
 
 Zone coordinates in config are `[latitude, longitude]`. Rule field details are in [CONFIGURATION.md](CONFIGURATION.md).

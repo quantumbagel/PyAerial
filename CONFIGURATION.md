@@ -132,7 +132,7 @@ Polygons are `[latitude, longitude]` rings, or a `file` path relative to the con
 
 **Receivers**
 
-dump1090 `format` is `avr` (default, TCP 30002) or `beast` (TCP 30005). Beast adds per-message RSSI (dBFS) and a 12 MHz `clock` on the raw WebSocket stream. Port `30005` implies Beast unless `format` is set. Put `format` on the receiver or under `options`.
+dump1090 `format` is `avr` (default, TCP 30002) or `beast` (TCP 30005). Beast adds per-message RSSI (dBFS) and a 12 MHz-tick `clock` on `/ws/raw`. Port `30005` implies Beast unless `format` is set. Put `format` on the receiver or under `options`.
 
 Replay `options` are `path` (required), `speed` (default `1.0`), `loop` (default `true`), and `interval` (seconds between untimestamped lines, default `0.1`). See [`src/pyaerial/examples/replay.yaml`](src/pyaerial/examples/replay.yaml).
 

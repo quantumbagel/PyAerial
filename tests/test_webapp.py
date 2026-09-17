@@ -46,7 +46,11 @@ def test_health_and_api(monkeypatch):
         assert body["websocket"] == "/ws/live"
         assert body["raw_websocket"] == "/ws/raw"
         assert "raw" in body["streams"]
+        assert "flights" in body["streams"]
         assert "fetchFlights" in body["actions"]
+        assert "12 MHz" in body["streams"]["raw"]
+        assert "/ws/raw" in body["connect"]
+        assert "?streams=" in body["connect"]
         assert client.get("/api/flights").status_code == 404
         assert client.get("/api/stats").status_code == 404
 
@@ -64,7 +68,8 @@ def test_websocket_hello_snapshot_and_subscribe():
             assert hello["type"] == "hello"
             assert hello["protocol"] == "pyaerial.live"
             assert "fetchFlights" in hello["actions"]
-            assert "raw" in hello["streams"]
+            assert "raw" not in hello["streams"]
+            assert "flights" in hello["streams"]
             assert ws.receive_json()["type"] == "flights"
             assert ws.receive_json()["type"] == "alerts"
             assert ws.receive_json()["type"] == "stats"
@@ -112,6 +117,8 @@ def test_websocket_raw_endpoint_and_publish():
         with client.websocket_connect("/ws/raw") as ws:
             hello = ws.receive_json()
             assert hello["type"] == "hello"
+            assert hello["streams"] == ["raw"]
+            assert "raw" in hello["streams"]
             antenna = ws.receive_json()
             assert antenna["type"] == "antenna"
             assert "home" in antenna["antenna"]
@@ -132,9 +139,23 @@ def test_websocket_raw_endpoint_and_publish():
             assert raw["type"] == "raw"
             assert raw["messages"][0]["hex"] == "8d406b902015a678d4d220aa4bda"
             assert raw["messages"][0]["rssi"] == -18.5
+            ws.send_json(
+                {
+                    "type": "request",
+                    "id": "sub",
+                    "action": "subscribe",
+                    "params": {"streams": ["flights"]},
+                }
+            )
+            while True:
+                reply = ws.receive_json()
+                if reply.get("type") == "response" and reply.get("id") == "sub":
+                    break
+            assert reply["success"] is True
+            assert reply["data"]["streams"] == ["raw"]
 
 
-def test_websocket_streams_query_param_raw_only():
+def test_websocket_live_ignores_raw_stream():
     from fastapi.testclient import TestClient
 
     store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
@@ -143,23 +164,15 @@ def test_websocket_streams_query_param_raw_only():
     )
     with TestClient(app) as client:
         with client.websocket_connect("/ws/live?streams=raw") as ws:
-            assert ws.receive_json()["type"] == "hello"
-            assert ws.receive_json()["type"] == "antenna"
-
-
-def test_websocket_subscribe_raw_sends_antenna():
-    from fastapi.testclient import TestClient
-
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
-    app = create_app(
-        config=make_config(), history=None, live_store=store, aircraft_db=None
-    )
-    with TestClient(app) as client:
-        with client.websocket_connect("/ws/live") as ws:
-            assert ws.receive_json()["type"] == "hello"
+            hello = ws.receive_json()
+            assert hello["type"] == "hello"
+            assert "raw" not in hello["streams"]
             assert ws.receive_json()["type"] == "flights"
             assert ws.receive_json()["type"] == "alerts"
             assert ws.receive_json()["type"] == "stats"
+            store.publish_raw(
+                [{"hex": "8d406b902015a678d4d220aa4bda", "timestamp": 1.0}]
+            )
             ws.send_json(
                 {
                     "type": "request",
@@ -168,11 +181,20 @@ def test_websocket_subscribe_raw_sends_antenna():
                     "params": {"streams": ["raw"]},
                 }
             )
-            reply = ws.receive_json()
+            while True:
+                reply = ws.receive_json()
+                assert reply.get("type") != "raw"
+                assert reply.get("type") != "antenna"
+                if reply.get("type") == "response" and reply.get("id") == "raw":
+                    break
             assert reply["success"] is True
-            assert reply["data"]["streams"] == ["raw"]
-            antenna = ws.receive_json()
-            assert antenna["type"] == "antenna"
+            assert "raw" not in reply["data"]["streams"]
+            assert set(reply["data"]["streams"]) == {
+                "alerts",
+                "flights",
+                "stats",
+                "telemetry",
+            }
 
 
 def test_websocket_rejects_disallowed_origin():

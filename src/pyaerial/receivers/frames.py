@@ -14,7 +14,12 @@ _BEAST_BUF_MAX = 65_536
 
 @dataclass(frozen=True, slots=True)
 class RawFrame:
-    """One Mode S / ADS-B frame as received from a sensor."""
+    """One Mode S / ADS-B frame as received from a sensor.
+
+    ``timestamp`` is unix seconds (engine receive time). ``rssi`` is dBFS.
+    ``clock`` is the dump1090 48-bit timestamp in 12 MHz ticks
+    (1 tick = 1/12_000_000 s), when the transport provides it.
+    """
 
     hex: str
     timestamp: float
@@ -40,7 +45,7 @@ def frame_fields(hex_msg: str) -> dict[str, object]:
 
 
 def raw_payload(frame: RawFrame) -> dict[str, object]:
-    """JSON object for one raw frame on the live websocket."""
+    """JSON object for one raw frame on the ``/ws/raw`` websocket."""
     item = frame_fields(frame.hex)
     item["timestamp"] = frame.timestamp
     if frame.receiver:
@@ -55,8 +60,8 @@ def raw_payload(frame: RawFrame) -> dict[str, object]:
 def parse_avr_line(line: str) -> tuple[str, int | None] | None:
     """Parse one dump1090 AVR line (``*HEX;`` or ``@CLOCKHEX;``).
 
-    Returns ``(hex, clock)`` where *clock* is the 48-bit 12 MHz timestamp
-    from the ``@`` form, or ``None`` for classic ``*`` AVR.
+    Returns ``(hex, clock)`` where *clock* is the 48-bit timestamp in
+    12 MHz ticks from the ``@`` form, or ``None`` for classic ``*`` AVR.
     """
     text = line.strip()
     if not text:

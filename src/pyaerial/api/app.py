@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 
 from pyaerial.api.broadcaster import LiveBroadcaster
 from pyaerial.api.payloads import antenna_payload, sanitize_for_json
-from pyaerial.api.spec import WS_OPTIONAL_STREAMS, WS_STREAMS, websocket_api_spec
+from pyaerial.api.spec import WS_STREAMS, websocket_api_spec
 from pyaerial.api.static import mount_spa
 from pyaerial.api.ws import handle_ws_request
 from pyaerial.config.schema import Config
@@ -58,12 +58,10 @@ def _token_ok(config: Config, token: str | None) -> bool:
     return token == expected
 
 
-_KNOWN_STREAMS = frozenset((*WS_STREAMS, *WS_OPTIONAL_STREAMS))
+_KNOWN_STREAMS = frozenset(WS_STREAMS)
 
 
-def _requested_streams(websocket: WebSocket, *, raw_only: bool) -> list[str] | None:
-    if raw_only:
-        return ["raw"]
+def _requested_streams(websocket: WebSocket) -> list[str] | None:
     value = websocket.query_params.get("streams")
     if not value:
         return None
@@ -154,7 +152,9 @@ def create_app(
             await _reject(websocket)
             return
         await broadcaster.connect(
-            websocket, streams=_requested_streams(websocket, raw_only=raw_only)
+            websocket,
+            streams=None if raw_only else _requested_streams(websocket),
+            raw_only=raw_only,
         )
         try:
             while True:
@@ -180,7 +180,7 @@ def create_app(
                 if not isinstance(params, dict):
                     params = {}
                 if action == "subscribe":
-                    selected, added_raw = broadcaster.set_streams(
+                    selected = broadcaster.set_streams(
                         websocket, params.get("streams")
                     )
                     await websocket.send_json(
@@ -191,8 +191,6 @@ def create_app(
                             "data": {"streams": selected},
                         }
                     )
-                    if added_raw:
-                        await broadcaster.send_antenna(websocket)
                     continue
                 try:
                     res_data = await asyncio.to_thread(

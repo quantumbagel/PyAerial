@@ -10,7 +10,7 @@
 | `pyaerial view` | Interactive viewer (`list`, `dump aircraft`, `status`, `live`) |
 | `pyaerial live` | ASCII terminal table |
 
-`pyaerial web` serves `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `ws://…/ws/live` (alias `/ws`). Raw receiver frames are on `/ws/raw`, or on the opt-in `raw` stream of `/ws/live`. Other clients can consume the same socket and request history. Pass `?token=` when `web.token` or `PYAERIAL_WEB_TOKEN` is set.
+`pyaerial web` serves `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `ws://…/ws/live` (alias `/ws`). Raw receiver frames are only on `/ws/raw` (not on `/ws/live`). Other clients can consume the live socket and request history. Pass `?token=` when `web.token` or `PYAERIAL_WEB_TOKEN` is set.
 
 **Commands**
 
@@ -42,7 +42,7 @@ Environment variables override values in `config.yaml`. The `-c` flag still take
 | `PYAERIAL_LOG_LEVEL` | `logging.level` | `debug`, `info`, `warning`, `error` |
 | `PYAERIAL_LOG_FILE` | `logging.file` | Log file path |
 | `PYAERIAL_HZ` | `tracking.hz` | Engine tick rate (Hz) |
-| `PYAERIAL_WEB_TOKEN` | `web.token` | Shared secret for `/ws/live` |
+| `PYAERIAL_WEB_TOKEN` | `web.token` | Shared secret for `/ws/live` and `/ws/raw` |
 | `PYAERIAL_WEB_ORIGINS` | `web.origins` | Comma-separated origins (`*` = any) |
 
 YAML strings also expand `${VAR}` and `${VAR:-default}`. A referenced variable with no default must be set, or `pyaerial validate` / load fails.
@@ -63,7 +63,7 @@ Connect to `ws://<host>:<port>/ws/live` (or `/ws`). Native clients with no `Orig
 
 `GET /api` returns the same protocol document the socket sends on connect.
 
-On connect the server sends `hello`, then a snapshot of `flights`, `alerts`, and `stats`. After that it pushes those streams plus `telemetry` and `ping`. The `raw` stream is opt-in (the portal does not subscribe): connect to `/ws/raw`, pass `?streams=raw`, or `subscribe` with `["raw"]`. The engine publishes frames on Redis `live:raw`. RSSI is present when dump1090 is read in Beast format.
+On connect `/ws/live` sends `hello`, then a snapshot of `flights`, `alerts`, and `stats`. After that it pushes those streams plus `telemetry` and `ping`. Raw frames are not on this socket: connect to `/ws/raw`. The engine publishes frames on Redis `live:raw`. RSSI and `clock` are present when dump1090 is read in Beast format.
 
 ```python
 import asyncio, json, websockets
@@ -103,7 +103,7 @@ asyncio.run(main())
 
 | Action | Params | Notes |
 |--------|--------|-------|
-| `subscribe` | `streams` (`flights`, `alerts`, `telemetry`, `stats`, `raw`) | Omit or pass `[]` for the default set (not `raw`). Include `raw` for sensor frames. |
+| `subscribe` | `streams` (`flights`, `alerts`, `telemetry`, `stats`) | Omit or pass `[]` for the default set. `raw` is not a live stream; use `/ws/raw`. |
 | `fetchFlights` | `view` (`live` or `history`); history also takes `skip`, `limit`, `q`, `since`, `until` | History `q` matches ICAO, callsign, or flight id. `since` / `until` are unix seconds on `end_time`. |
 | `fetchFlight` | `flightId`, `view` | Single flight |
 | `fetchTelemetry` | `flightId`, `view`, `since` | Track points after `since` |
@@ -112,11 +112,11 @@ asyncio.run(main())
 | `fetchZones` | none | Home, polygons, `alert_colors` |
 | `fetchConfig` | none | Portal display config |
 
-Pushed message types are `hello`, `flights`, `alerts`, `telemetry`, `stats`, `raw`, `antenna`, and `ping`.
+Pushed `/ws/live` message types are `hello`, `flights`, `alerts`, `telemetry`, `stats`, and `ping`. `/ws/raw` sends `hello`, `antenna`, `raw`, and `ping`.
 
 **Raw sensor stream**
 
-`/ws/raw` (or `/ws/live?streams=raw`) sends `hello`, then `antenna` (home lat/lon and configured receivers), then `raw` batches as the engine sees frames:
+`/ws/raw` sends `hello`, then `antenna` (home lat/lon and configured receivers), then `raw` batches as the engine sees frames:
 
 ```json
 {
@@ -136,4 +136,4 @@ Pushed message types are `hello`, `flights`, `alerts`, `telemetry`, `stats`, `ra
 }
 ```
 
-`rssi` (dBFS) and `clock` (dump1090 12 MHz timestamp) appear when the dump1090 receiver uses Beast (`format: beast`, typically port 30005). AVR on port 30002 is hex-only. `df` and `icao` are filled for DF17/18 frames.
+`rssi` (dBFS) and `clock` (dump1090 12 MHz ticks: 48-bit integer, 1 tick = 1/12 000 000 s ≈ 83.3 ns; not unix time) appear when the dump1090 receiver uses Beast (`format: beast`, typically port 30005) or timestamped AVR (`@CLOCKHEX;`). Classic AVR `*HEX;` on port 30002 is hex-only. `df` and `icao` are filled for DF17/18 frames. `timestamp` on each message is unix seconds (engine receive time).
