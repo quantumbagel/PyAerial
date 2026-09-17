@@ -1,8 +1,8 @@
 """
-Kinematic Extended Kalman Filter (EKF) and Dead Reckoning for PyAerial.
+Decoupled 2D position filter with a heuristic velocity nudge.
 
-Provides 2D state tracking (latitude, longitude, north velocity, east velocity)
-for smoothing noisy position reports and dead-reckoning during signal gaps.
+Used for optional Kalman-smoothed speed/heading when ``use_kalman_eta`` is on.
+Filtered lat/lon are not the live telemetry source.
 """
 
 from __future__ import annotations
@@ -95,17 +95,19 @@ class KinematicKalmanFilter:
         self.lat += (k_lat * res_lat_m) / m_per_deg_lat
         self.lon += (k_lon * res_lon_m) / m_per_deg_lon
 
-        # Update velocity based on position residual if dt > 0
-        if dt > 0:
-            safe_dt = max(dt, 0.05)
-            self.vn += 0.2 * (res_lat_m / safe_dt)
-            self.ve += 0.2 * (res_lon_m / safe_dt)
+        if dt >= _MIN_VEL_DT:
+            self.vn += 0.2 * (res_lat_m / dt)
+            self.ve += 0.2 * (res_lon_m / dt)
 
-        # Update covariances
         self.p_lat *= 1.0 - k_lat
         self.p_lon *= 1.0 - k_lon
 
         speed_m_s = math.hypot(self.vn, self.ve)
+        if speed_m_s > _MAX_SPEED_MPS:
+            scale = _MAX_SPEED_MPS / speed_m_s
+            self.vn *= scale
+            self.ve *= scale
+            speed_m_s = _MAX_SPEED_MPS
         heading_deg = (math.degrees(math.atan2(self.ve, self.vn)) + 360.0) % 360.0
 
         return self.lat, self.lon, speed_m_s, heading_deg

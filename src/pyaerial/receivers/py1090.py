@@ -34,22 +34,36 @@ TH_AMP_DIFF = 0.8  # amplitude threshold difference between a 0 and 1 bit
 @register_receiver("py1090")
 class Py1090Receiver(Receiver):
     def configure(self, arguments: dict) -> None:
-        self.rtl_index = str(arguments.get("rtl_index", "0"))
+        raw = arguments.get("rtl_index", 0)
+        try:
+            self.rtl_index: Any = int(raw)
+        except (TypeError, ValueError):
+            self.rtl_index = str(raw)
         self.signal_buffer: list[float] = []
         self.noise_floor = 1e6
 
     def _initialize_sdr(self):
         address: Any = self.rtl_index
-        serials = rtlsdr.RtlSdr.get_device_serial_addresses()
-        if address in serials:
-            address = rtlsdr.RtlSdr.get_default_input_device(address)
+        try:
+            serials = list(rtlsdr.RtlSdr.get_device_serial_addresses() or [])
+        except Exception:
+            serials = []
+        if str(address) in serials:
+            lookup = getattr(rtlsdr.RtlSdr, "get_device_index_by_serial", None)
+            if callable(lookup):
+                try:
+                    address = lookup(str(address))
+                except Exception:
+                    return None
+            else:
+                return None
         try:
             sdr = rtlsdr.RtlSdr(address)
-        except rtlsdr.rtlsdr.LibUSBError:
+        except Exception:
             return None
         sdr.sample_rate = SAMPLING_RATE
         sdr.center_freq = MODES_FREQUENCY
-        sdr.gain = 496
+        sdr.gain = 49.6
         return sdr
 
     def _calc_noise(self) -> float:

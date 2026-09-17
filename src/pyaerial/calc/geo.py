@@ -40,6 +40,10 @@ def calculate_heading(
     return ((math.atan2(y, x) * 180 / math.pi) + 360) % 360
 
 
+_MIN_SPEED_DT = 0.2
+_MAX_SPEED_KMH = 3000.0
+
+
 def calculate_speed(
     previous: tuple[float, float],
     current: tuple[float, float],
@@ -48,9 +52,9 @@ def calculate_speed(
 ) -> float:
     """Average ground speed (km/h) implied by moving between two fixes."""
     elapsed = current_time - previous_time
-    if elapsed <= 0:
+    if elapsed < _MIN_SPEED_DT:
         return 0.0
-    return geodesic(previous, current).m / elapsed * 3.6
+    return min(geodesic(previous, current).m / elapsed * 3.6, _MAX_SPEED_KMH)
 
 
 def distance_to_polygon(polygon: Polygon, position: tuple[float, float]) -> float:

@@ -29,6 +29,8 @@ from pyaerial.constants import (
 )
 from pyaerial.units import FT_PER_MIN_TO_MPS, FT_TO_M, KT_TO_KMH
 
+_MAX_CPR_JUMP_DEG = 0.5
+
 log = logging.getLogger("pyaerial.classify")
 
 # Internal packet-type buckets used for status reporting.
@@ -45,7 +47,11 @@ class ClassifiedMessage:
     typecode_category: int
 
 
-def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
+def classify(
+    msg: str,
+    home: HomeConfig,
+    last_position: tuple[float, float] | None = None,
+) -> ClassifiedMessage | None:
     """
     Classify a single ADS-B message.
 
@@ -92,12 +98,15 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
         category = CAT_IDENT
 
     elif 5 <= typecode <= 8:
+        ref = last_position or (home.latitude, home.longitude)
         try:
-            decoded = pms.decode(msg, surface_ref=(home.latitude, home.longitude))
+            decoded = pms.decode(msg, surface_ref=ref)
         except Exception:
             return None
         lat = decoded.get("latitude")
         lon = decoded.get("longitude")
+        if not _plausible_fix(lat, lon, last_position):
+            return None
         speed = decoded.get("groundspeed")
         angle = decoded.get("track")
         data = {
@@ -112,12 +121,15 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
         category = CAT_SURFACE
 
     elif 9 <= typecode <= 18 or 20 <= typecode <= 22:
+        ref = last_position or (home.latitude, home.longitude)
         try:
-            decoded = pms.decode(msg, reference=(home.latitude, home.longitude))
+            decoded = pms.decode(msg, reference=ref)
         except Exception:
             return None
         lat = decoded.get("latitude")
         lon = decoded.get("longitude")
+        if not _plausible_fix(lat, lon, last_position):
+            return None
         alt = decoded.get("altitude")
         data = {
             STORE_INFO: {STORE_ICAO: icao},
@@ -163,6 +175,23 @@ def classify(msg: str, home: HomeConfig) -> ClassifiedMessage | None:
 
 def _valid_icao(icao: object) -> bool:
     return isinstance(icao, str) and len(icao) == 6 and icao != "000000"
+
+
+def _plausible_fix(
+    lat: object,
+    lon: object,
+    last_position: tuple[float, float] | None,
+) -> bool:
+    if lat is None or lon is None:
+        return True
+    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+        return False
+    if last_position is None:
+        return True
+    return (
+        abs(float(lat) - last_position[0]) <= _MAX_CPR_JUMP_DEG
+        and abs(float(lon) - last_position[1]) <= _MAX_CPR_JUMP_DEG
+    )
 
 
 def _strip_nulls(data: dict) -> dict:

@@ -50,8 +50,10 @@ def test_unchanged_value_refreshes_timestamp():
     )
     tracker._merge(classified, 150.0)
     series = plane[STORE_RECV_DATA][STORE_LAT]
-    assert len(series) == 1
-    assert series[0].time == 150.0
+    assert len(series) == 2
+    assert series[0].time == 100.0
+    assert series[1].time == 150.0
+    assert series[0].value == series[1].value == 35.7
 
 
 def test_value_change_appends():
@@ -81,6 +83,32 @@ def test_value_change_appends():
     series = plane[STORE_RECV_DATA][STORE_LAT]
     assert len(series) == 2
     assert series[-1].value == 35.71
+
+
+def test_older_packet_does_not_rewind_last_update():
+    tracker = Tracker(make_config())
+    plane = {
+        STORE_INFO: {STORE_ICAO: "abc123"},
+        STORE_RECV_DATA: {STORE_LAT: [Datum(35.7, 150.0)]},
+        STORE_INTERNAL: {
+            STORE_FIRST_PACKET: 100.0,
+            STORE_MOST_RECENT_PACKET: 150.0,
+            STORE_TOTAL_PACKETS: 1,
+            STORE_PACKET_TYPE: {},
+        },
+    }
+    tracker.planes["abc123"] = plane
+    from pyaerial.classify import ClassifiedMessage
+
+    classified = ClassifiedMessage(
+        data={
+            STORE_INFO: {STORE_ICAO: "abc123"},
+            STORE_RECV_DATA: {STORE_LAT: 35.71},
+        },
+        typecode_category=3,
+    )
+    tracker._merge(classified, 120.0)
+    assert plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] == 150.0
 
 
 def test_telemetry_series_are_not_clipped_to_live_window():

@@ -57,17 +57,10 @@ class Dump1090Receiver(Receiver):
 
     def run(self) -> str | None:
         try:
-            resolved = socket.gethostbyname(self.ip)
-        except socket.gaierror as exc:
-            return f"could not resolve host {self.ip!r}: {exc}"
-
-        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.settimeout(_SOCKET_TIMEOUT)
-        try:
-            client.connect((resolved, self.port))
-        except (ConnectionRefusedError, OSError) as exc:
+            client = socket.create_connection((self.ip, self.port), timeout=_SOCKET_TIMEOUT)
+        except OSError as exc:
             return f"failed to connect to {self.ip}:{self.port} ({exc})"
-
+        client.settimeout(_SOCKET_TIMEOUT)
         self.log.info(
             "Connected to dump1090 %s stream at %s:%s",
             self.format,
@@ -79,7 +72,10 @@ class Dump1090Receiver(Receiver):
                 return self._run_beast(client)
             return self._run_avr(client)
         finally:
-            client.close()
+            try:
+                client.close()
+            except OSError:
+                pass
 
     def _run_avr(self, client: socket.socket) -> str | None:
         buffer = ""

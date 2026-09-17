@@ -41,6 +41,8 @@ class _Client:
         if queue is None:
             return
         if queue.full():
+            if message.get("type") in {"stats", "ping"}:
+                return
             try:
                 queue.get_nowait()
             except asyncio.QueueEmpty:
@@ -58,10 +60,19 @@ def _flights_sig(flights: list[dict[str, Any]]) -> tuple:
             flight.get("timestamp"),
             flight.get("latitude"),
             flight.get("longitude"),
+            flight.get("callsign"),
+            flight.get("model"),
+            flight.get("owner"),
             len(flight.get("active_alerts") or []),
         )
         for flight in flights
     )
+
+
+def _stats_sig(stats: dict[str, Any] | None) -> tuple:
+    if not stats:
+        return ()
+    return tuple(sorted((key, stats[key]) for key in stats if isinstance(stats[key], (int, float, str, bool))))
 
 
 def _alerts_sig(alerts: list[dict[str, Any]]) -> tuple:
@@ -97,6 +108,7 @@ class LiveBroadcaster:
         self._pending_lookups: set[str] = set()
         self._last_flights_sig: tuple | None = None
         self._last_alerts_sig: tuple | None = None
+        self._last_stats_sig: tuple | None = None
         self._last_stats: dict[str, Any] | None = None
         self._last_stats_at = 0.0
 
@@ -307,7 +319,11 @@ class LiveBroadcaster:
             await asyncio.sleep(_LIVE_POLL_INTERVAL)
 
     async def _background_tick(self) -> None:
-        flights = self.live_store.get_flights() if self.live_store else []
+        if not self._clients or all(c.raw_only for c in self._clients.values()):
+            return
+        if not self.live_store:
+            return
+        flights = await asyncio.to_thread(self.live_store.get_flights)
 
         if self.aircraft_db and self.aircraft_db.available and flights:
             for flight in flights:
@@ -331,9 +347,10 @@ class LiveBroadcaster:
         finally:
             self._pending_lookups.discard(icao)
 
-    async def _broadcast_tick(self) -> None:
+    def _collect_live_payload(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], float]:
         now = time.time()
-
         flights = (
             get_live_flights(self.live_store, self.aircraft_db)
             if self.live_store
@@ -345,6 +362,32 @@ class LiveBroadcaster:
             else []
         )
         stats = self._cached_stats()
+        telemetry_clients = [
+            client
+            for client in self._clients.values()
+            if "telemetry" in client.streams
+        ]
+        all_points: list[dict[str, Any]] = []
+        if telemetry_clients and self.live_store:
+            min_since = min(client.telemetry_since for client in telemetry_clients)
+            all_points = self.live_store.get_live_telemetry(min_since)
+        return flights, alerts, stats, all_points, now
+
+    async def _broadcast_tick(self) -> None:
+        clients = list(self._clients.values())
+        if not clients:
+            return
+        now = time.time()
+        if all(client.raw_only for client in clients):
+            for client in clients:
+                if now - client.last_ping >= _PING_INTERVAL:
+                    client.enqueue({"type": "ping", "timestamp": now})
+                    client.last_ping = now
+            return
+
+        flights, alerts, stats, all_points, now = await asyncio.to_thread(
+            self._collect_live_payload
+        )
 
         flights_sig = _flights_sig(flights)
         if flights_sig != self._last_flights_sig:
@@ -360,18 +403,12 @@ class LiveBroadcaster:
                 {"type": "alerts", "alerts": sanitize_for_json(alerts)}
             )
 
-        await self._broadcast({"type": "stats", "stats": sanitize_for_json(stats)})
+        stats_sig = _stats_sig(stats)
+        if stats_sig != self._last_stats_sig:
+            self._last_stats_sig = stats_sig
+            await self._broadcast({"type": "stats", "stats": sanitize_for_json(stats)})
 
-        telemetry_clients = [
-            client
-            for client in self._clients.values()
-            if "telemetry" in client.streams
-        ]
-        all_points: list[dict[str, Any]] = []
-        if telemetry_clients and self.live_store:
-            min_since = min(client.telemetry_since for client in telemetry_clients)
-            all_points = self.live_store.get_live_telemetry(min_since)
-        for websocket, client in list(self._clients.items()):
+        for _websocket, client in list(self._clients.items()):
             if "telemetry" in client.streams:
                 points = [
                     point
@@ -386,7 +423,8 @@ class LiveBroadcaster:
                             "timestamp": now,
                         }
                     )
-                    client.telemetry_since = now
+                    max_ts = max(float(point.get("timestamp") or 0) for point in points)
+                    client.telemetry_since = max(max_ts, client.telemetry_since)
             if now - client.last_ping >= _PING_INTERVAL:
                 client.enqueue({"type": "ping", "timestamp": now})
                 client.last_ping = now

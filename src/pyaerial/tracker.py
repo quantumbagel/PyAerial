@@ -11,6 +11,8 @@ import logging
 import time
 from collections import defaultdict
 
+from pyModeS.util import icao as pms_icao
+
 from pyaerial.classify import ClassifiedMessage, classify
 from pyaerial.config.schema import Config
 from pyaerial.constants import (
@@ -18,6 +20,8 @@ from pyaerial.constants import (
     STORE_ICAO,
     STORE_INFO,
     STORE_INTERNAL,
+    STORE_LAT,
+    STORE_LONG,
     STORE_MOST_RECENT_PACKET,
     STORE_PACKET_TYPE,
     STORE_RECV_DATA,
@@ -47,7 +51,9 @@ class Tracker:
         processed = 0
         for msg_hex, timestamp in messages:
             try:
-                classified = classify(msg_hex, self.config.home)
+                classified = classify(
+                    msg_hex, self.config.home, last_position=self._last_position(msg_hex)
+                )
             except (ValueError, KeyError, IndexError, TypeError) as exc:
                 log.debug("Could not classify message %s: %s", msg_hex, exc)
                 continue
@@ -175,7 +181,10 @@ class Tracker:
                 last = series[-1]
                 if last.value == datum.value:
                     if timestamp > last.time:
-                        last.time = timestamp
+                        if len(series) >= 2 and series[-2].value == last.value:
+                            last.time = timestamp
+                        else:
+                            series.append(Datum(last.value, timestamp))
                     continue
                 if datum.time <= last.time:
                     datum = Datum(datum.value, last.time + 1e-6)
@@ -186,7 +195,9 @@ class Tracker:
             internal[STORE_FIRST_PACKET] = timestamp
             internal[STORE_TOTAL_PACKETS] = 0
             internal[STORE_PACKET_TYPE] = defaultdict(int)
-        internal[STORE_MOST_RECENT_PACKET] = timestamp
+        previous = internal.get(STORE_MOST_RECENT_PACKET)
+        if previous is None or timestamp > previous:
+            internal[STORE_MOST_RECENT_PACKET] = timestamp
         internal[STORE_TOTAL_PACKETS] += 1
         pkt_types = internal[STORE_PACKET_TYPE]
         if not isinstance(pkt_types, defaultdict):
@@ -202,3 +213,20 @@ class Tracker:
 
         # Live Redis trims to telemetry_keep_seconds. The in-memory series is
         # the archive source for SQLite on expire, so it is not clipped here.
+
+    def _last_position(self, msg_hex: str) -> tuple[float, float] | None:
+        try:
+            icao = pms_icao(msg_hex)
+        except Exception:
+            return None
+        if not isinstance(icao, str):
+            return None
+        plane = self.planes.get(icao) or self.planes.get(icao.lower())
+        if plane is None:
+            return None
+        recv = plane.get(STORE_RECV_DATA) or {}
+        lat_series = recv.get(STORE_LAT) or []
+        lon_series = recv.get(STORE_LONG) or []
+        if not lat_series or not lon_series:
+            return None
+        return (lat_series[-1].value, lon_series[-1].value)

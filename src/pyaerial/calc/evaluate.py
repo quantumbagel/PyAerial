@@ -135,14 +135,15 @@ def make_predicted_resolver(
     (curved if *curved* is ``True``), extrapolates altitude using vertical
     speed, and recomputes ETA from the predicted position.
     """
+    project_turn = turn_rate if curved else 0.0
     predicted_pos = geo.dead_reckon_curved(
         position,
         heading,
         speed_kph,
-        turn_rate,
+        project_turn,
         predict_seconds,
     )
-    predicted_heading = heading + turn_rate * predict_seconds
+    predicted_heading = heading + project_turn * predict_seconds
 
     if curved and abs(turn_rate) >= 0.1:
         predicted_eta = geo.time_to_enter_geofence_curved(

@@ -43,7 +43,7 @@ class DatabaseConfig(_Strict):
 
 class TrackingConfig(_Strict):
     backdate_packets: int = Field(default=10, gt=0)
-    remember_planes: float = Field(default=30, gt=0)
+    remember_planes: float = Field(default=120, gt=0)
     status_message_top_planes: int = Field(default=5, ge=-1)
     advanced_status: bool = True
     hz: float = Field(default=2, gt=0)
@@ -71,12 +71,26 @@ class HomeConfig(_Strict):
     longitude: float = Field(ge=-180, le=180)
 
 
+_DUMP1090_FORMATS = {"avr", "raw", "beast", "binary"}
+
+
 class ReceiverConfig(_Strict):
     type: str
     host: str | None = None
     port: int | None = None
     format: str | None = None
     options: dict[str, object] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _dump1090_format(self) -> "ReceiverConfig":
+        if self.type == "dump1090" and self.format is not None:
+            fmt = str(self.format).lower()
+            if fmt not in _DUMP1090_FORMATS:
+                raise ValueError(
+                    "dump1090 format must be one of avr, raw, beast, binary"
+                )
+            self.format = fmt
+        return self
 
     def receiver_arguments(self) -> dict[str, object]:
         """Build the argument dict expected by receiver plugins."""
@@ -198,6 +212,12 @@ class ZoneConfig(_Strict):
         for point in value:
             if len(point) != 2:
                 raise ValueError("each coordinate must be a [latitude, longitude] pair")
+            lat, lon = point[0], point[1]
+            if not -90.0 <= lat <= 90.0 or not -180.0 <= lon <= 180.0:
+                raise ValueError(
+                    "each coordinate must be [latitude, longitude] within "
+                    "±90 / ±180"
+                )
         return value
 
     @model_validator(mode="after")
@@ -217,7 +237,7 @@ class Config(_Strict):
     tracking: TrackingConfig = Field(default_factory=TrackingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     home: HomeConfig
-    receivers: dict[str, ReceiverConfig]
+    receivers: dict[str, ReceiverConfig] = Field(min_length=1)
     zones: dict[str, ZoneConfig] = Field(default_factory=dict)
     alert_colors: dict[str, str] = Field(default_factory=dict)
     web: WebConfig = Field(default_factory=WebConfig)

@@ -338,7 +338,8 @@ export function usePortalData({
   useEffect(() => {
     if (portalView !== 'live') return undefined;
     fetchLiveData();
-    return undefined;
+    const timer = setInterval(fetchLiveData, 15000);
+    return () => clearInterval(timer);
   }, [portalView, fetchLiveData]);
 
   useEffect(() => {
@@ -363,6 +364,9 @@ export function usePortalData({
     return connectLiveSocket({
       onOpen: () => {
         setWsStatus('connected');
+        isInitialAlertsLoad.current = true;
+        loadZones();
+        loadConfig();
         if (portalViewRef.current === 'live') {
           fetchLiveData();
           const flightId = activeFlightIdRef.current;
@@ -445,11 +449,13 @@ export function usePortalData({
           setIsLoadingAlerts(false);
           setAlertsData((prev) => {
             const dedupedIncoming = dedupeAlerts(message.alerts);
+            const skipUnread = isInitialAlertsLoad.current;
             isInitialAlertsLoad.current = false;
 
             const prevMap = new Map(prev.map((a) => [alertEpisodeIdentity(a), a]));
             const events: { alert: Alert; eventType: 'activated' | 'deactivated' }[] = [];
 
+            if (!skipUnread) {
             dedupedIncoming.forEach((curr: Alert) => {
               const key = alertEpisodeIdentity(curr);
               const prevAlert = prevMap.get(key);
@@ -473,6 +479,7 @@ export function usePortalData({
               if (activatedCount > 0 && sidebarTabRef.current !== 'alerts') {
                 setUnreadAlertsCount((c) => c + activatedCount);
               }
+            }
             }
             // Merge rather than replace: the WS snapshot only covers currently
             // tracked flights, so replacement would drop ended episodes for

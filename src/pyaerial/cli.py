@@ -129,16 +129,27 @@ def _cmd_validate(args: argparse.Namespace) -> None:
 
 def _cmd_view(args: argparse.Namespace) -> None:
     setup_logging("warning")
-    run_view(args.config, aircraft_db_path=args.aircraft_db)
+    try:
+        run_view(args.config, aircraft_db_path=args.aircraft_db)
+    except ConfigError as exc:
+        print(f"Configuration error:\n{exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _cmd_live(args: argparse.Namespace) -> None:
     setup_logging("warning")
-    run_live_cmd(
-        args.config,
-        interval=args.interval,
-        once=args.once,
-    )
+    if args.interval <= 0:
+        print("Configuration error:\n  --interval must be greater than 0", file=sys.stderr)
+        sys.exit(1)
+    try:
+        run_live_cmd(
+            args.config,
+            interval=args.interval,
+            once=args.once,
+        )
+    except ConfigError as exc:
+        print(f"Configuration error:\n{exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _cmd_web(args: argparse.Namespace) -> None:

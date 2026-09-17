@@ -23,3 +23,22 @@ def test_calculate_speed_is_kmh():
     # ~111 km of latitude in 1 hour → ~111 km/h
     speed = geo.calculate_speed((35.0, -78.0), (36.0, -78.0), 0.0, 3600.0)
     assert 100.0 < speed < 130.0
+
+
+def test_calculate_speed_rejects_microsecond_dt():
+    speed = geo.calculate_speed((35.7, -78.7), (35.7005, -78.7), 1.0, 1.0 + 1e-6)
+    assert speed == 0.0
+
+
+def test_predict_seconds_straight_when_curved_disabled():
+    from pyaerial.calc import evaluate
+
+    polygon = Polygon([(35.72, -78.70), (35.73, -78.70), (35.73, -78.69), (35.72, -78.69)])
+    plane: dict = {}
+    curved = evaluate.make_predicted_resolver(
+        plane, polygon, (35.70, -78.695), 0.0, 400.0, 10.0, 30.0, curved=True
+    )
+    straight = evaluate.make_predicted_resolver(
+        plane, polygon, (35.70, -78.695), 0.0, 400.0, 10.0, 30.0, curved=False
+    )
+    assert curved("eta") != straight("eta") or curved("distance") != straight("distance")

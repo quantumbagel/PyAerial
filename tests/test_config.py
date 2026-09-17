@@ -42,6 +42,27 @@ def test_dump1090_format_is_passed_to_receiver_arguments():
     assert args["tcp_connection_port"] == 30005
 
 
+def test_dump1090_unknown_format_rejected():
+    with pytest.raises(ValidationError, match="avr, raw, beast, binary"):
+        ReceiverConfig(type="dump1090", host="localhost", format="sbs")
+
+
+def test_empty_receivers_rejected():
+    from pyaerial.config.schema import Config, HomeConfig
+
+    with pytest.raises(ValidationError):
+        Config(
+            home=HomeConfig(latitude=35.7, longitude=-78.7),
+            receivers={},
+        )
+
+
+def test_remember_planes_default_is_two_minutes():
+    from pyaerial.config.schema import TrackingConfig
+
+    assert TrackingConfig().remember_planes == 120
+
+
 def test_unknown_receiver_rejected():
     config = make_config(receivers={"x": ReceiverConfig(type="not-a-receiver")})
     with pytest.raises(ConfigError, match="unknown type"):

@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from pyaerial.receivers import Receiver, register_receiver
+from pyaerial.receivers.frames import parse_avr_line
 
 
 @register_receiver("replay")
@@ -43,22 +44,27 @@ class ReplayReceiver(Receiver):
         frames: list[tuple[float, str]] = []
         sequential = 0.0
         for raw in self.path.read_text(errors="ignore").splitlines():
-            line = raw.strip().replace("*", "").replace(";", "")
+            line = raw.strip()
             if not line or line.startswith("#"):
                 continue
             parts = line.split()
+            stamp: float | None = None
+            hex_msg = ""
             if len(parts) >= 2:
                 try:
                     stamp = float(parts[0])
-                    hex_msg = parts[1]
+                    parsed = parse_avr_line(parts[1])
+                    hex_msg = parsed[0] if parsed else parts[1]
                 except ValueError:
-                    stamp = sequential
-                    hex_msg = parts[0]
-                    sequential += self.interval
-            else:
+                    stamp = None
+            if stamp is None:
+                parsed = parse_avr_line(line)
+                if not parsed:
+                    continue
+                hex_msg = parsed[0]
                 stamp = sequential
-                hex_msg = parts[0]
                 sequential += self.interval
-            if hex_msg:
-                frames.append((stamp, hex_msg.lower()))
+            hex_msg = "".join(ch for ch in hex_msg.lower() if ch in "0123456789abcdef")
+            if hex_msg and len(hex_msg) % 2 == 0:
+                frames.append((stamp, hex_msg))
         return frames

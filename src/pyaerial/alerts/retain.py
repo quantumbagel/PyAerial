@@ -116,4 +116,8 @@ def _matching_seconds(
             matched_seconds += max(0.0, lat.time - prev_time)
         prev_match = matched
         prev_time = lat.time
+    if prev_match and prev_time is not None:
+        matched_seconds += max(0.0, last_time - prev_time)
+    if matched_seconds == 0.0 and samples and prev_match:
+        matched_seconds = max(0.0, last_time - first_time)
     return matched_seconds

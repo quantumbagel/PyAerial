@@ -128,8 +128,7 @@ class Kinematics:
             self._kalman_filters[icao] = kf
             kf.last_update_time = current_time
         elif current_time > kf.last_update_time:
-            prev_fix = lat_series[-2] if len(lat_series) >= 2 else current_lat
-            dt_kf = min(max(0.0, current_time - prev_fix.time), 30.0)
+            dt_kf = min(max(0.0, current_time - kf.last_update_time), 30.0)
             kf.update(current[0], current[1], dt_kf)
             kf.last_update_time = current_time
 
@@ -170,12 +169,14 @@ class Kinematics:
             kf=kf,
         )
 
-        patch_append(
-            plane, STORE_CALC_DATA, STORE_HORIZ_SPEED, Datum(final_speed, speed_time)
-        )
-        patch_append(
-            plane, STORE_CALC_DATA, STORE_HEADING, Datum(final_heading, speed_time)
-        )
+        has_adsb_velocity = STORE_HORIZ_SPEED in recv or STORE_HEADING in recv
+        if len(lat_series) >= 2 or has_adsb_velocity:
+            patch_append(
+                plane, STORE_CALC_DATA, STORE_HORIZ_SPEED, Datum(final_speed, speed_time)
+            )
+            patch_append(
+                plane, STORE_CALC_DATA, STORE_HEADING, Datum(final_heading, speed_time)
+            )
 
         now = time.time()
         age = min(max(0.0, now - current_time), self.config.tracking.remember_planes)

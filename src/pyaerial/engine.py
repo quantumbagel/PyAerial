@@ -70,8 +70,6 @@ class Engine:
             telemetry_keep_seconds=config.tracking.telemetry_keep_seconds,
         )
         self._last_status_log = 0.0
-        if not isolated:
-            self.live_store.clear_all()
         self.history_store = HistoryStore(
             config.database.path,
             config=config,
@@ -91,6 +89,8 @@ class Engine:
         self._pending_finalize: dict[str, dict] = {}
         self._dropped_messages = 0
         self._last_drop_log = 0.0
+        if not isolated:
+            self._archive_startup_live_flights()
 
     def start_receivers(self) -> None:
         for name, receiver_cfg in self.config.receivers.items():
@@ -122,7 +122,7 @@ class Engine:
 
         try:
             receiver = create_receiver(method, name, emit, arguments)
-        except KeyError as exc:
+        except (KeyError, ValueError, TypeError, OSError) as exc:
             log.error("Receiver %s: %s", name, exc)
             return
 
@@ -295,6 +295,8 @@ class Engine:
                         self._finalize_plane(plane)
                     log.debug("Expired %d plane(s): %s", len(expired), expired)
                 self._retry_pending_finalizes()
+                self._retry_orphan_live_flights()
+                self.live_store.retry_pending_pops()
 
                 summary = self.tracker.top_planes_summary()
                 status = f"processed {processed} msg(s). " if processed else ""
@@ -344,6 +346,8 @@ class Engine:
             self._finalize_plane(plane)
         self.tracker.planes.clear()
         self._retry_pending_finalizes()
+        self._retry_orphan_live_flights()
+        self.live_store.retry_pending_pops()
 
         self.calculator.close()
         self.live_store.clear_engine()
@@ -395,6 +399,20 @@ class Engine:
             else:
                 still[flight_id] = plane
         self._pending_finalize = still
+
+    def _archive_startup_live_flights(self) -> None:
+        """Persist leftover Redis live copies from a previous engine process."""
+        for plane in self.live_store.planes_for_finalize():
+            self._finalize_plane(plane)
+
+    def _retry_orphan_live_flights(self) -> None:
+        tracked = {flight_id_for_plane(plane) for plane in self.tracker.planes.values()}
+        tracked |= set(self._pending_finalize)
+        leftover = self.live_store.flight_ids() - tracked
+        for flight_id in leftover:
+            plane = self.live_store.plane_for_finalize(flight_id)
+            if plane is not None:
+                self._finalize_plane(plane)
 
     def _install_signal_handlers(self) -> None:
         def _handler(signum, _frame):

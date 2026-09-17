@@ -570,10 +570,18 @@ def _dump_flight(
             "data": data_points,
         }
 
+    alerts = history.get_alerts(flight_id=flight_id)
+    zone = None
+    rule = None
+    if alerts:
+        zone = alerts[0].get("zone")
+        rule = alerts[0].get("rule")
     info_doc = {
         "category": "info",
-        "zone": flight_doc.get("zone"),
-        "rule": flight_doc.get("rule"),
+        "zone": zone,
+        "rule": rule,
+        "start_time": flight_doc.get("start_time"),
+        "end_time": flight_doc.get("end_time"),
     }
     if "info" in flight_doc:
         info_doc.update(flight_doc["info"])

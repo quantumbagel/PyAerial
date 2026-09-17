@@ -382,7 +382,7 @@ class HistoryStore:
                         )
                     self._conn.executemany(
                         """
-                        INSERT INTO alerts (
+                        INSERT OR REPLACE INTO alerts (
                             alert_id, flight_id, icao, callsign, zone, rule,
                             active, activated_at, deactivated_at, eta, reason,
                             last_updated, latitude, longitude, altitude

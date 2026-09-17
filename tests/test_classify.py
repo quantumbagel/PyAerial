@@ -36,6 +36,13 @@ def test_non_adsb_typecode_is_ignored():
     assert classify("0000000000000000000000000000", home) is None
 
 
+def test_cpr_jump_from_last_fix_is_dropped():
+    home = HomeConfig(latitude=35.7275, longitude=-78.6959)
+    # A far-away last fix should reject a home-relative ghost (jump > 0.5 deg).
+    msg = "8DABC12399000000000000"
+    assert classify(msg, home, last_position=(10.0, 10.0)) is None
+
+
 def test_groundspeed_stored_as_kmh():
     home = HomeConfig(latitude=35.7275, longitude=-78.6959)
     # 100 kt encoded → classify should store ~185.2 km/h

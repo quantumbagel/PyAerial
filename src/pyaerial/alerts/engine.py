@@ -63,10 +63,10 @@ class AlertEngine:
         self._pending_unmatch: dict[tuple[str, str, str], float] = {}
 
     def close(self) -> None:
+        self._alert_executor.shutdown(wait=True, cancel_futures=False)
         for alerter in self._alerters.values():
             alerter.close()
         self._alerters.clear()
-        self._alert_executor.shutdown(wait=True, cancel_futures=True)
         self._alert_state.clear()
         self._pending_match.clear()
         self._pending_unmatch.clear()

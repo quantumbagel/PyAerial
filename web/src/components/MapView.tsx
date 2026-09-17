@@ -2,7 +2,14 @@ import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
 import { maplibreGL } from '@maplibre/maplibre-gl-leaflet';
 import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
-import { flightAlertSeverity, formatDateTime, formatZoneRule, isFlightLive } from '../utils/format';
+import {
+  flightAlertSeverity,
+  formatAltitudeCell,
+  formatDateTime,
+  formatSpeedCell,
+  formatZoneRule,
+  isFlightLive,
+} from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight } from '../utils/planeIcon';
 import { zoneColorFor } from '../utils/zoneColors';
 import { COLOR_HEX } from '../utils/colors';
@@ -216,7 +223,7 @@ export function MapView({
         fillOpacity: 1.0,
       }).addTo(map);
       marker.bindTooltip(
-        `Time: ${formatDateTime(selectedTelemetryPoint.timestamp)}<br/>Alt: ${selectedTelemetryPoint.altitude} m<br/>Speed: ${selectedTelemetryPoint.speed} km/h`,
+        `Time: ${formatDateTime(selectedTelemetryPoint.timestamp)}<br/>Alt: ${formatAltitudeCell(selectedTelemetryPoint.altitude)}<br/>Speed: ${formatSpeedCell(selectedTelemetryPoint.speed)}`,
       );
       selectedTelemetryMarker.current = marker;
       map.panTo(pos);
@@ -273,7 +280,13 @@ export function MapView({
       }
     });
 
-    filteredFlights.forEach((flight) => {
+    const selected =
+      activeFlightId && !filteredIds.has(activeFlightId)
+        ? flights.find((flight) => flight.flight_id === activeFlightId)
+        : undefined;
+    const visibleFlights = selected ? [...filteredFlights, selected] : filteredFlights;
+
+    visibleFlights.forEach((flight) => {
       if (flight.latitude == null || flight.longitude == null) return;
       const isSelected = flight.flight_id === activeFlightId;
       const isLive = isFlightLive(flight);

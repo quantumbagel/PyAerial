@@ -130,7 +130,14 @@ def get_tracked_live_alerts(
     filtered = [alert for alert in alerts if alert.get("flight_id") in flight_ids]
     filtered.sort(key=lambda alert: alert.get("activated_at") or 0, reverse=True)
     if limit:
-        filtered = filtered[:limit]
+        active = [
+            alert
+            for alert in filtered
+            if alert.get("active", True) and not alert.get("deactivated_at")
+        ]
+        rest = [alert for alert in filtered if alert not in active]
+        filtered = active + rest
+        filtered = filtered[: max(limit, len(active))]
     return filtered
 
 
@@ -179,6 +186,8 @@ def get_flight_detail(
         [flight_id],
         flight_ends={flight_id: flight_end},
     ).get(flight_id)
+    last = history.latest_telemetry([flight_id]).get(flight_id) or {}
+    last_point = telemetry_point(last) if last else {}
     return enrich_flight_detail(
         {
             "flight_id": doc["_id"],
@@ -187,6 +196,12 @@ def get_flight_detail(
             "alert_stats": alert_stats,
             "start_time": doc.get("start_time"),
             "end_time": doc.get("end_time"),
+            "latitude": last_point.get("latitude"),
+            "longitude": last_point.get("longitude"),
+            "altitude": last_point.get("altitude"),
+            "speed": last_point.get("speed"),
+            "heading": last_point.get("heading"),
+            "timestamp": last_point.get("timestamp") or flight_end,
             "callsign": doc.get("callsign")
             or info.get("callsign")
             or enriched.get("callsign"),

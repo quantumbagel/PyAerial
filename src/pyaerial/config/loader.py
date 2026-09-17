@@ -156,6 +156,30 @@ def _validate_cross_references(config: Config, path: Path) -> None:
             f"available: {', '.join(sorted(known_receivers))}"
         )
 
+    replay_problems: list[str] = []
+    for name, cfg in config.receivers.items():
+        if cfg.type != "replay":
+            continue
+        raw_path = cfg.options.get("path")
+        if not raw_path:
+            replay_problems.append(f"receivers.{name}: replay requires options.path")
+            continue
+        replay_path = Path(str(raw_path)).expanduser()
+        if not replay_path.is_absolute():
+            replay_path = (path.parent / replay_path).resolve()
+        else:
+            replay_path = replay_path.resolve()
+        cfg.options["path"] = str(replay_path)
+        if not replay_path.is_file():
+            replay_problems.append(
+                f"receivers.{name}.options.path: not found: {replay_path}"
+            )
+    if replay_problems:
+        raise ConfigError(
+            f"configuration file {path} is invalid:\n"
+            + "\n".join(f"  - {item}" for item in replay_problems)
+        )
+
     known_alerters = set(available_alerters())
     problems: list[str] = []
     for zone_name, zone in config.zones.items():

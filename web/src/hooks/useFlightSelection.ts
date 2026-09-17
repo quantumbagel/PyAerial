@@ -124,7 +124,7 @@ export function useFlightSelection({
         setDrawerTab(initialTab);
       }
       try {
-        const [detail, , alerts] = await Promise.all([
+        const [detail, telemetry, alerts] = await Promise.all([
           api.fetchFlight(flightId, portalViewRef.current),
           loadFlightTelemetry(flightId, portalViewRef.current, token),
           loadFlightAlerts(flightId, portalViewRef.current),
@@ -141,22 +141,24 @@ export function useFlightSelection({
         if (!initialTab) {
           setDrawerTab(alerts && alerts.length > 0 ? 'alerts' : 'telemetry');
         }
-        if (
-          panToLatest &&
-          detail.latitude != null &&
-          detail.longitude != null &&
-          mapRef.current?.map
-        ) {
+        const lastFix = [...(telemetry || [])]
+          .reverse()
+          .find((point) => point.latitude != null && point.longitude != null);
+        const lat = detail.latitude ?? lastFix?.latitude;
+        const lon = detail.longitude ?? lastFix?.longitude;
+        if (panToLatest && lat != null && lon != null && mapRef.current?.map) {
           mapRef.current.map.setView(
-            [detail.latitude, detail.longitude],
+            [lat, lon],
             Math.max(mapRef.current.map.getZoom(), 11),
           );
         }
-        // Live detail/alerts continue via the WebSocket snapshot and alert stream.
       } catch (err) {
         if (token !== selectionTokenRef.current) return;
         setIsLoading(false);
-        const message = 'Failed to load flight details.';
+        const raw = err instanceof Error ? err.message : '';
+        const message = /not found/i.test(raw)
+          ? 'Flight not found.'
+          : 'Failed to load flight details.';
         console.error(message, err);
         setSelectionError(message);
       }
