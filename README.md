@@ -4,7 +4,7 @@ _Scanning software for ADS-B / Mode S for AERPAW_
 
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://python.org)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Version](https://img.shields.io/badge/version-0.11.0-green.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.12.0-green.svg)](pyproject.toml)
 
 **PyAerial** is a high-performance Python 3 application designed to receive ADS-B / Mode S aircraft telemetry signals, track flight positions in real time, evaluate dynamic polygon geofences with early-warning rules, trigger multi-channel alerts, stream live data to a web portal, and persist completed flights to a database.
 
