@@ -16,7 +16,7 @@ tracking:
 logging:
   level: info
 
-# CPR decode reference for ADS-B positions — not the geofence and not the ETA target.
+# CPR decode reference for ADS-B positions, not the geofence and not the ETA target.
 home:
   latitude: 36.6810752
   longitude: -78.8758528
@@ -38,7 +38,7 @@ receivers:
   #     loop: true
 
 # Zones are named polygons plus independent rules. A rule fires when EVERY
-# `when` constraint holds — there is no implicit "inside the polygon" test.
+# `when` constraint holds.
 # Tie a rule to this zone with eta, distance, or proximity.
 # Units: altitude metres (not feet), speed km/h, eta seconds to the polygon
 # boundary along the current track (0 if already inside), distance km,

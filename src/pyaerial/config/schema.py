@@ -129,7 +129,7 @@ class RuleConfig(_Strict):
 
         ``hysteresis_seconds`` wins when set so existing configs that tune the
         on-delay keep working. When it is left at 0, ``dwell_seconds`` is the
-        hold — otherwise Discord/webhooks fire on every 0.5s flicker.
+        hold. Otherwise, Discord/webhooks fire on every 0.5s flicker.
         """
         if self.hysteresis_seconds > 0:
             return float(self.hysteresis_seconds)

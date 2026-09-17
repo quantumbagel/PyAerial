@@ -126,7 +126,7 @@ class PlaneCalculator:
                     country = record.get("country") or ""
                     aircraft_type = record.get("typecode") or ""
                 elif not self.aircraft_db.is_cached(icao):
-                    # Transport/API failure — retry on a later tick.
+                    # This is a transport/API failure
                     resolved = False
 
             with self._lock:

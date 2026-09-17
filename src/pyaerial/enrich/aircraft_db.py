@@ -139,7 +139,7 @@ class AircraftDB:
         try:
             record = self._fetch_from_apis(icao)
         except Exception as exc:
-            # Transport / 5xx — do not persist a negative cache entry.
+            # Transport / 5xx, do not persist a negative cache entry.
             log.warning("Aircraft API lookup failed for %s: %s", icao, exc)
             return None
 

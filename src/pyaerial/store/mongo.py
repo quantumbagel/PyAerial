@@ -175,7 +175,7 @@ class MongoStore:
         Returns True when it is safe to drop the live Redis copy: the flight
         was written, was intentionally discarded, or persistence is disabled.
         Returns False when the flight should have been written but Mongo was
-        unavailable — the caller must keep the live data and retry.
+        unavailable.
         """
         if self.disabled:
             return True

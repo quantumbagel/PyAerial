@@ -1,4 +1,7 @@
 include README.md
+include CLI.md
+include CONFIGURATION.md
+include UNITS.md
 include scripts/run-engine.sh
 graft src/pyaerial/static
 graft src/pyaerial/examples

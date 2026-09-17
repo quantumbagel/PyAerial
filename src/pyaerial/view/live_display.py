@@ -18,7 +18,7 @@ def live_empty_message(
     engine_seen_at: float | None = None,
     now: float | None = None,
 ) -> str:
-    """Why the live table is empty — engine down vs Redis down vs no traffic."""
+    """Explain why the live table is empty."""
     if not redis_ok:
         return "Redis is unreachable. Start Redis or check database.redis_uri."
     seen = engine_seen_at
