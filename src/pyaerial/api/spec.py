@@ -83,7 +83,7 @@ def websocket_api_spec() -> dict[str, Any]:
                 "params": {"streams": available_streams()},
                 "notes": (
                     "Limit which streams this connection receives. Omit or pass [] for "
-                    "the default set (flights, alerts, telemetry, stats — not raw). "
+                    "the default set (flights, alerts, telemetry, stats, not raw). "
                     "Include 'raw' to receive sensor frames."
                 ),
             },

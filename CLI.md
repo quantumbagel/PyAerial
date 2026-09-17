@@ -1,58 +1,51 @@
-# CLI Reference
+# CLI
 
-PyAerial provides a unified command line interface via the `pyaerial` executable:
+`pyaerial` is the only command-line entry point.
 
-| Subcommand          | Description                                                                    |
-|---------------------|--------------------------------------------------------------------------------|
-| `pyaerial run`      | Start the flight tracking engine (writes Redis / SQLite)                       |
-| `pyaerial web`      | Start the web portal (reads Redis / SQLite; does not track)                    |
-| `pyaerial validate` | Check configuration file syntax, schema, and cross-references                  |
-| `pyaerial view`     | Interactive terminal flight viewer (`list`, `dump aircraft`, `status`, `live`) |
-| `pyaerial live`     | Real-time ASCII terminal flight display                                        |
+| Subcommand | Role |
+|------------|------|
+| `pyaerial run` | Tracking engine (writes Redis and SQLite) |
+| `pyaerial web` | Portal (reads Redis and SQLite; does not track) |
+| `pyaerial validate` | Config syntax, schema, and cross-references |
+| `pyaerial view` | Interactive viewer (`list`, `dump aircraft`, `status`, `live`) |
+| `pyaerial live` | ASCII terminal table |
 
-The web portal exposes `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `/ws/live` (alias `/ws`). Raw dump1090 / receiver frames are on `/ws/raw` (or the opt-in `raw` stream on `/ws/live`). Other apps can consume the same live stream and request history over that socket. Pass `?token=` when `web.token` / `PYAERIAL_WEB_TOKEN` is set.
+`pyaerial web` serves `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `ws://…/ws/live` (alias `/ws`). Raw receiver frames are on `/ws/raw`, or on the opt-in `raw` stream of `/ws/live`. Other clients can consume the same socket and request history. Pass `?token=` when `web.token` or `PYAERIAL_WEB_TOKEN` is set.
 
-## Usage Options
+**Commands**
 
 ```bash
-# Run tracking engine with a custom config
 pyaerial run -c /path/to/config.yaml --aircraft-db /path/to/aircraft.db
 
-# Validate configuration
 pyaerial validate -c config.yaml
 
-# Launch web portal on custom host and port (requires `pyaerial run` + Redis)
+# Requires `pyaerial run` + Redis
 pyaerial web -c config.yaml --host 0.0.0.0 --port 10090
 
-# Live flight viewer with 2-second refresh rate
 pyaerial live --interval 2.0
-
-# Print single-frame flight snapshot and exit
 pyaerial live --once
 
-# Interactive flight search & detail view
 pyaerial view [-c config.yaml]
 
-# Replay a recorded dump1090 capture (see examples/replay.yaml)
 pyaerial run -c src/pyaerial/examples/replay.yaml
 ```
 
-## Environment Variable Overrides
+**Environment overrides**
 
-Environment variables override values in your `config.yaml`:
+Environment variables override values in `config.yaml`. The `-c` flag still takes precedence over `PYAERIAL_CONFIG`.
 
-| Environment Variable   | Overrides Config Key | Description                                           |
-|------------------------|----------------------|-------------------------------------------------------|
-| `PYAERIAL_CONFIG`      | Config path          | Default configuration file (`-c` still wins)          |
-| `PYAERIAL_HISTORY`     | `database.path`      | SQLite history file path                              |
-| `PYAERIAL_REDIS`       | `database.redis_uri` | Redis connection URI                                  |
-| `PYAERIAL_LOG_LEVEL`   | `logging.level`      | Logging level (`debug`, `info`, `warning`, `error`)   |
-| `PYAERIAL_LOG_FILE`    | `logging.file`       | Output log file path                                  |
-| `PYAERIAL_HZ`          | `tracking.hz`        | Engine loop tick rate (Hz)                            |
-| `PYAERIAL_WEB_TOKEN`   | `web.token`          | Optional shared secret for `/ws/live`                 |
-| `PYAERIAL_WEB_ORIGINS` | `web.origins`        | Comma-separated allowed WebSocket origins (`*` = any) |
+| Variable | Config key | Notes |
+|----------|------------|-------|
+| `PYAERIAL_CONFIG` | Config path | Default file when `-c` is omitted |
+| `PYAERIAL_HISTORY` | `database.path` | SQLite history file |
+| `PYAERIAL_REDIS` | `database.redis_uri` | Redis URI |
+| `PYAERIAL_LOG_LEVEL` | `logging.level` | `debug`, `info`, `warning`, `error` |
+| `PYAERIAL_LOG_FILE` | `logging.file` | Log file path |
+| `PYAERIAL_HZ` | `tracking.hz` | Engine tick rate (Hz) |
+| `PYAERIAL_WEB_TOKEN` | `web.token` | Shared secret for `/ws/live` |
+| `PYAERIAL_WEB_ORIGINS` | `web.origins` | Comma-separated origins (`*` = any) |
 
-String values in `config.yaml` also expand `${VAR}` and `${VAR:-default}`. A referenced variable with no default must be set, or `pyaerial validate` / load fails. Use this for webhook secrets:
+YAML strings also expand `${VAR}` and `${VAR:-default}`. A referenced variable with no default must be set, or `pyaerial validate` / load fails.
 
 ```yaml
 on_activate:
@@ -62,17 +55,15 @@ on_activate:
       format: discord
 ```
 
-See [CONFIGURATION.md](CONFIGURATION.md) for the full YAML schema.
+The full YAML schema is in [CONFIGURATION.md](CONFIGURATION.md).
 
-## WebSocket protocol
+**WebSocket**
 
-Connect to `ws://<host>:<port>/ws/live` (or `/ws`). Native clients (no `Origin` header) are accepted. Browser apps on another host need `web.origins: ["*"]` or an explicit origin list (the default is `*`). If `web.token` is set, pass it as `?token=` or the `x-pyaerial-token` header.
+Connect to `ws://<host>:<port>/ws/live` (or `/ws`). Native clients with no `Origin` header are accepted. Browser apps on another host need `web.origins: ["*"]` or an explicit list (the default is `*`). If `web.token` is set, pass it as `?token=` or the `x-pyaerial-token` header.
 
 `GET /api` returns the same protocol document the socket sends on connect.
 
-On connect the server sends `hello`, then a snapshot (`flights`, `alerts`, `stats`). After that it pushes those streams plus `telemetry` and `ping`. The `raw` stream is **opt-in** (the portal does not subscribe): connect to `/ws/raw`, pass `?streams=raw`, or `subscribe` with `["raw"]`. The engine publishes frames over Redis (`live:raw`); RSSI is present when dump1090 is read in Beast format.
-
-Python example:
+On connect the server sends `hello`, then a snapshot of `flights`, `alerts`, and `stats`. After that it pushes those streams plus `telemetry` and `ping`. The `raw` stream is opt-in (the portal does not subscribe): connect to `/ws/raw`, pass `?streams=raw`, or `subscribe` with `["raw"]`. The engine publishes frames on Redis `live:raw`. RSSI is present when dump1090 is read in Beast format.
 
 ```python
 import asyncio, json, websockets
@@ -98,34 +89,34 @@ async def main():
 asyncio.run(main())
 ```
 
-Client request:
+**Request**
 
 ```json
 { "type": "request", "id": "1", "action": "fetchFlights", "params": { "view": "live" } }
 ```
 
-Server reply:
+**Reply**
 
 ```json
 { "type": "response", "id": "1", "success": true, "data": [] }
 ```
 
-| Action           | Params                                                                        | Notes                                                                                               |
-|------------------|-------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
-| `subscribe`      | `streams` (`flights`, `alerts`, `telemetry`, `stats`, `raw`)                   | Limit pushed streams. Omit / `[]` = default (not `raw`). Include `raw` for sensor frames.           |
-| `fetchFlights`   | `view` (`live` \| `history`); history: `skip`, `limit`, `q`, `since`, `until` | History `q` matches ICAO, callsign, or flight id. `since` / `until` are unix seconds on `end_time`. |
-| `fetchFlight`    | `flightId`, `view`                                                            | Single flight detail                                                                                |
-| `fetchTelemetry` | `flightId`, `view`, `since`                                                   | Track points after `since`                                                                          |
-| `fetchAlerts`    | `view`; history: `skip`, `limit`, `q`, `since`, `until`, `flightId`, `rule`   | History `q` matches ICAO, callsign, zone, rule, or flight id                                        |
-| `fetchStats`     | —                                                                             | Live / retained counts, `redis` / `history` booleans, `engine_seen_at`                              |
-| `fetchZones`     | —                                                                             | Home, polygons, `alert_colors`                                                                      |
-| `fetchConfig`    | —                                                                             | Portal display config                                                                               |
+| Action | Params | Notes |
+|--------|--------|-------|
+| `subscribe` | `streams` (`flights`, `alerts`, `telemetry`, `stats`, `raw`) | Omit or pass `[]` for the default set (not `raw`). Include `raw` for sensor frames. |
+| `fetchFlights` | `view` (`live` or `history`); history also takes `skip`, `limit`, `q`, `since`, `until` | History `q` matches ICAO, callsign, or flight id. `since` / `until` are unix seconds on `end_time`. |
+| `fetchFlight` | `flightId`, `view` | Single flight |
+| `fetchTelemetry` | `flightId`, `view`, `since` | Track points after `since` |
+| `fetchAlerts` | `view`; history also takes `skip`, `limit`, `q`, `since`, `until`, `flightId`, `rule` | History `q` matches ICAO, callsign, zone, rule, or flight id |
+| `fetchStats` | none | Live and retained counts, `redis` / `history` booleans, `engine_seen_at` |
+| `fetchZones` | none | Home, polygons, `alert_colors` |
+| `fetchConfig` | none | Portal display config |
 
-Pushed messages: `hello`, `flights`, `alerts`, `telemetry`, `stats`, `raw`, `antenna`, `ping`.
+Pushed message types are `hello`, `flights`, `alerts`, `telemetry`, `stats`, `raw`, `antenna`, and `ping`.
 
-### Raw sensor stream
+**Raw sensor stream**
 
-`/ws/raw` (or `/ws/live?streams=raw`) sends `hello`, then `antenna` (home lat/lon and configured receivers), then `raw` batches as the tracking engine sees frames:
+`/ws/raw` (or `/ws/live?streams=raw`) sends `hello`, then `antenna` (home lat/lon and configured receivers), then `raw` batches as the engine sees frames:
 
 ```json
 {
@@ -145,4 +136,4 @@ Pushed messages: `hello`, `flights`, `alerts`, `telemetry`, `stats`, `raw`, `ant
 }
 ```
 
-`rssi` (dBFS) and `clock` (dump1090 12 MHz timestamp) are present when the dump1090 receiver uses Beast (`format: beast`, typically port 30005). AVR on port 30002 is hex-only. `df` / `icao` are filled for DF17/18 frames.
+`rssi` (dBFS) and `clock` (dump1090 12 MHz timestamp) appear when the dump1090 receiver uses Beast (`format: beast`, typically port 30005). AVR on port 30002 is hex-only. `df` and `icao` are filled for DF17/18 frames.

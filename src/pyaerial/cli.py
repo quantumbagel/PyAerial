@@ -1,13 +1,11 @@
 """
 PyAerial command-line interface.
 
-Subcommands::
-
-    run        Start the tracking engine
+    run        Start the tracking engine (writes Redis and SQLite)
     validate   Check a configuration file without running
-    view       Interactive flight viewer for saved & live flights
-    live       Live flight terminal display
-    web        Start live flight tracker web portal
+    view       Interactive flight viewer
+    live       ASCII terminal flight display
+    web        Start the web portal (reads Redis and SQLite; does not track)
 """
 
 from __future__ import annotations
@@ -35,7 +33,7 @@ def main(argv: list[str] | None = None) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pyaerial",
-        description="PyAerial ADS-B / Mode S tracking and geofence alerting",
+        description="ADS-B / Mode S tracking with zone rules, alerts, Redis live state, and SQLite history",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"

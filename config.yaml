@@ -9,8 +9,8 @@ tracking:
   duplicate_packet_merging: 5
   status_message_top_planes: 5
   advanced_status: true
-  use_kalman_eta: true          # Use Kalman-smoothed velocity for more stable ETA
-  curved_projection: true       # Enable turn-rate-aware curved-path ETA projection
+  use_kalman_eta: true          # Kalman-smoothed velocity for ETA
+  curved_projection: true       # Turn-rate-aware curved-path ETA
 
 logging:
   level: info
@@ -18,7 +18,7 @@ logging:
 web:
   origins: ["*"]
 
-# CPR decode reference for ADS-B positions — not the geofence and not the ETA target.
+# CPR decode reference for ADS-B positions, not the geofence and not the ETA target.
 home:
   latitude: 35.72748800696312
   longitude: -78.69594225530933
@@ -36,7 +36,7 @@ receivers:
     # format: beast   # and port: 30005 for RSSI on /ws/raw
 
 # Zones are named polygons plus independent rules. A rule fires when EVERY
-# `when` constraint holds — there is no implicit "inside the polygon" test.
+# `when` constraint holds. There is no implicit "inside the polygon" test.
 # Tie a rule to this zone with eta, distance, or proximity.
 # Units: altitude metres (not feet), speed km/h, eta seconds to the polygon
 # boundary along the current track (0 if already inside), distance km,
