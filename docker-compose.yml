@@ -19,16 +19,16 @@ services:
     build:
       context: .
     depends_on:
-      mongodb:
-        condition: service_started
       redis:
         condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - pyaerial_data:/data
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
       PYAERIAL_START_DUMP1090: "0"
-      PYAERIAL_MONGODB: mongodb://pyaerial:${MONGO_PASSWORD:-pyaerial}@mongodb:27017/?authSource=admin
+      PYAERIAL_HISTORY: /data/pyaerial.db
       PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:-pyaerial}@redis:6379/0
       # With --profile sdr this is the dump1090 service. Without SDR, set
       # DUMP1090_HOST to an existing receiver (e.g. host.docker.internal).
@@ -39,15 +39,16 @@ services:
     container_name: pyaerial_web
     restart: always
     depends_on:
-      - mongodb
       - redis
       - pyaerial
+    volumes:
+      - pyaerial_data:/data
     ports:
       - "10090:10090"
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
       PYAERIAL_START_DUMP1090: "0"
-      PYAERIAL_MONGODB: mongodb://pyaerial:${MONGO_PASSWORD:-pyaerial}@mongodb:27017/?authSource=admin
+      PYAERIAL_HISTORY: /data/pyaerial.db
       PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:-pyaerial}@redis:6379/0
     command:
       [
@@ -65,15 +66,6 @@ services:
       interval: 15s
       timeout: 3s
       retries: 5
-  mongodb:
-    image: mongo:7
-    container_name: pyaerial_database
-    restart: always
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: pyaerial
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-pyaerial}
-    volumes:
-      - pyaerial_mongo:/data/db
   redis:
     image: redis:7-alpine
     container_name: pyaerial_redis
@@ -81,4 +73,4 @@ services:
     command: redis-server --save "" --appendonly no --requirepass ${REDIS_PASSWORD:-pyaerial}
 
 volumes:
-  pyaerial_mongo:
+  pyaerial_data:

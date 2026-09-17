@@ -16,6 +16,5 @@ Every calculated or received metric and its corresponding unit. See [CONFIGURATI
 A zone is a named polygon plus independent rules. A rule fires when every `when` constraint holds. Include `eta`, `distance`, or `proximity` to tie a rule to the zone.
 
 Zone coordinates in config are `[latitude, longitude]`.
-MongoDB GeoJSON positions are `[longitude, latitude]`.
 
 The web portal and Discord/Slack webhooks display altitude as m + ft and speed as km/h + kt.

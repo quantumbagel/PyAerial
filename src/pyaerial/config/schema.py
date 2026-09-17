@@ -22,9 +22,23 @@ class _Strict(BaseModel):
 
 
 class DatabaseConfig(_Strict):
-    uri: str = "mongodb://localhost:27017"
-    name: str | None = None
+    path: str = "pyaerial.db"
     redis_uri: str = "redis://localhost:6379/0"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_mongo_keys(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        leftover = [key for key in ("uri", "name") if key in data]
+        if leftover:
+            labels = ", ".join(f"database.{key}" for key in leftover)
+            raise ValueError(
+                f"{labels} (MongoDB) are no longer used. "
+                "Set database.path to a SQLite file (default pyaerial.db) "
+                "and keep database.redis_uri for the live store."
+            )
+        return data
 
 
 class TrackingConfig(_Strict):

@@ -1,5 +1,5 @@
 database:
-  uri: mongodb://localhost:27017
+  path: pyaerial.db
   redis_uri: redis://localhost:6379/0
 
 tracking:
@@ -76,7 +76,7 @@ zones:
         when:
           altitude: { max: 2000 }  # metres
           eta: { max: 120 }        # seconds to boundary (0 if already inside)
-        dwell_seconds: 60          # on-delay; also Mongo retain threshold
+        dwell_seconds: 60          # on-delay; also history retain threshold
         on_activate:
           - method: print
           # Webhook URLs are secrets. Uncomment and export PYAERIAL_WEBHOOK_URL;
@@ -92,7 +92,7 @@ zones:
         when:
           altitude: { max: 1500 }  # metres
           eta: { max: 60 }         # seconds to boundary (0 if already inside)
-        dwell_seconds: 60          # on-delay; also Mongo retain threshold
+        dwell_seconds: 60          # on-delay; also history retain threshold
         on_activate:
           - method: print
         on_deactivate:

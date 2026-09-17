@@ -22,7 +22,7 @@ from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 from pyaerial.logging_setup import setup_logging
 from pyaerial.models import flight_id_for_plane
 from pyaerial.receivers import Receiver, available_receivers, create_receiver
-from pyaerial.store import MongoStore, RedisLiveStore
+from pyaerial.store import HistoryStore, RedisLiveStore
 from pyaerial.tracker import Tracker
 
 log = logging.getLogger("pyaerial.engine")
@@ -70,7 +70,12 @@ class Engine:
         self._last_status_log = 0.0
         if not isolated:
             self.live_store.clear_all()
-        self.mongo_store = MongoStore(config, self.polygons, disabled=isolated)
+        self.history_store = HistoryStore(
+            config.database.path,
+            config=config,
+            polygons=self.polygons,
+            disabled=isolated,
+        )
         self.calculator = PlaneCalculator(
             config, self.polygons, self.aircraft_db, self.live_store
         )
@@ -226,7 +231,7 @@ class Engine:
 
         hz = self.config.tracking.hz
         tick_budget = 1.0 / hz
-        store = "memory" if self._isolated else "redis+mongodb"
+        store = "memory" if self._isolated else "redis+sqlite"
         log.info(
             "PyAerial running at up to %.1f Hz with %d receiver(s), store=%s",
             hz,
@@ -313,25 +318,25 @@ class Engine:
         self.calculator.close()
         self.live_store.clear_engine()
         self.live_store.close()
-        self.mongo_store.close()
+        self.history_store.close()
         self.aircraft_db.close()
         log.info("Shutdown complete")
 
     def _finalize_plane(self, plane: dict) -> None:
-        """Deactivate alerts, persist to Mongo, then drop the live Redis copy.
+        """Deactivate alerts, persist to SQLite, then drop the live Redis copy.
 
-        Redis is only popped after Mongo accepts the write (or the flight is
-        intentionally not retained) so a Mongo outage cannot lose history.
+        Redis is only popped after the archive accepts the write (or the flight
+        is intentionally not retained) so a disk outage cannot lose history.
         """
         self.calculator.deactivate_plane(plane)
         flight_id = flight_id_for_plane(plane)
         alerts = self.live_store.get_alerts(flight_id=flight_id, active_only=False)
-        if self.mongo_store.finalize_plane(plane, alerts=alerts):
+        if self.history_store.finalize_plane(plane, alerts=alerts):
             self._pending_finalize.pop(flight_id, None)
             self.live_store.pop_flight(flight_id)
         else:
             log.warning(
-                "Deferred persist for %s; keeping live data until Mongo is back",
+                "Deferred persist for %s; keeping live data until history is writable",
                 flight_id,
             )
             self._enqueue_pending_finalize(flight_id, plane)
@@ -346,7 +351,7 @@ class Engine:
             self.live_store.pop_flight(dropped_id)
             log.error(
                 "Pending finalize cap (%d) reached; dropped retry for %s "
-                "(Mongo still down; live copy removed)",
+                "(history still unwritable; live copy removed)",
                 _PENDING_FINALIZE_MAX,
                 dropped_id,
             )
@@ -358,7 +363,7 @@ class Engine:
         still: dict[str, dict] = {}
         for flight_id, plane in self._pending_finalize.items():
             alerts = self.live_store.get_alerts(flight_id=flight_id, active_only=False)
-            if self.mongo_store.finalize_plane(plane, alerts=alerts):
+            if self.history_store.finalize_plane(plane, alerts=alerts):
                 self.live_store.pop_flight(flight_id)
             else:
                 still[flight_id] = plane

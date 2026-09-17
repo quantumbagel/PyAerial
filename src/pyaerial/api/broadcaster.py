@@ -63,11 +63,11 @@ class LiveBroadcaster:
         self,
         live_store: LiveStore | None,
         aircraft_db: AircraftDB | None,
-        db: Any | None = None,
+        history: Any | None = None,
     ):
         self.live_store = live_store
         self.aircraft_db = aircraft_db
-        self.db = db
+        self.history = history
         self._clients: dict[WebSocket, _Client] = {}
         self._task: asyncio.Task | None = None
         self._pending_lookups: set[str] = set()
@@ -115,7 +115,7 @@ class LiveBroadcaster:
         now = time.monotonic()
         if self._last_stats is not None and now - self._last_stats_at < _STATS_CACHE_TTL:
             return self._last_stats
-        stats = get_stats(self.live_store, self.db)
+        stats = get_stats(self.live_store, self.history)
         self._last_stats = stats
         self._last_stats_at = now
         return stats

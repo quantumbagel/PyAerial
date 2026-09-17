@@ -5,7 +5,7 @@
 # Then: pyaerial run -c src/pyaerial/examples/replay.yaml
 
 database:
-  uri: mongodb://localhost:27017
+  path: pyaerial.db
   redis_uri: redis://localhost:6379/0
 
 home:

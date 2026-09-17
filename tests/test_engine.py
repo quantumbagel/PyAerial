@@ -161,7 +161,7 @@ def test_message_queue_drops_oldest(tmp_path):
 def test_pending_finalize_is_capped(tmp_path, monkeypatch):
     engine = _engine(tmp_path)
     try:
-        monkeypatch.setattr(engine.mongo_store, "finalize_plane", lambda *a, **k: False)
+        monkeypatch.setattr(engine.history_store, "finalize_plane", lambda *a, **k: False)
         popped: list[str] = []
         monkeypatch.setattr(
             engine.live_store, "pop_flight", lambda flight_id: popped.append(flight_id)
@@ -199,7 +199,7 @@ def test_pending_finalize_retries_then_clears(tmp_path, monkeypatch):
             calls["n"] += 1
             return calls["n"] > 1
 
-        monkeypatch.setattr(engine.mongo_store, "finalize_plane", _finalize)
+        monkeypatch.setattr(engine.history_store, "finalize_plane", _finalize)
         plane = _plane()
         engine._finalize_plane(plane)
         assert engine._pending_finalize
@@ -215,6 +215,6 @@ def test_isolated_engine_uses_memory_store(tmp_path):
     try:
         assert engine.live_store.memory_only is True
         assert engine.live_store.ping() is True
-        assert engine.mongo_store.disabled is True
+        assert engine.history_store.disabled is True
     finally:
         engine.shutdown()

@@ -125,7 +125,7 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     print(f"Configuration {args.config!r} is valid.")
     print(f"  receivers: {', '.join(config.receivers)}")
     print(f"  zones: {', '.join(config.zones) or '(none)'}")
-    print(f"  database: {config.database.uri}")
+    print(f"  history: {config.database.path}")
     print(f"  hz: {config.tracking.hz}")
 
 

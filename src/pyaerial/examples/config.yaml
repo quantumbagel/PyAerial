@@ -1,5 +1,5 @@
 database:
-  uri: mongodb://localhost:27017
+  path: pyaerial.db
   redis_uri: redis://localhost:6379/0
 
 tracking:
@@ -64,7 +64,7 @@ zones:
         when:
           altitude: { max: 1000 }  # metres
           eta: { max: 120 }        # seconds to boundary (0 if already inside)
-        dwell_seconds: 60          # on-delay; also Mongo retain threshold
+        dwell_seconds: 60          # on-delay; also history retain threshold
         # hysteresis_seconds: 15
         # predict_seconds: 20
         on_activate:
@@ -74,7 +74,7 @@ zones:
         when:
           altitude: { max: 500 }   # metres
           eta: { max: 60 }         # seconds to boundary (0 if already inside)
-        dwell_seconds: 60          # on-delay; also Mongo retain threshold
+        dwell_seconds: 60          # on-delay; also history retain threshold
         on_activate:
           - method: print
         retain: true               # archive the flight after it expires, if dwell is met

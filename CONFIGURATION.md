@@ -8,7 +8,7 @@ Environment variables can override selected keys; see [CLI.md](CLI.md#environmen
 
 | Section        | Description                                                                           |
 |----------------|---------------------------------------------------------------------------------------|
-| `database`     | MongoDB URI, optional database name, and Redis URI                                    |
+| `database`     | SQLite history file path and Redis URI                                                |
 | `tracking`     | Tick rate, plane retention, live telemetry window, ETA options, status reporting      |
 | `logging`      | Log level and optional file logging                                                   |
 | `home`         | Receiver station latitude & longitude for ADS-B CPR decode (not the geofence)         |
@@ -21,9 +21,8 @@ Environment variables can override selected keys; see [CLI.md](CLI.md#environmen
 
 ```yaml
 database:
-  uri: mongodb://localhost:27017
+  path: pyaerial.db               # SQLite archive of retained flights
   redis_uri: redis://localhost:6379/0
-  # name: pyaerial   # Optional DB name (defaults to URI path or 'pyaerial')
 
 tracking:
   hz: 2                           # Main loop frequency (Hz)
@@ -156,20 +155,22 @@ Redis serves as an in-memory buffer while flights are active.
 
 Data is automatically cleared or transitioned when a flight expires from memory.
 
-### MongoDB (Historical Retention)
+### SQLite (Historical Retention)
 
-When a flight expires from the live store it is written to MongoDB only if **retain** says so:
+When a flight expires from the live store it is written to the SQLite file at `database.path` only if **retain** says so:
 
 1. A recorded alert episode whose rule has `retain: true` lasted at least `dwell_seconds`, or
 2. Reconstructing the track against a `retain: true` rule shows at least `dwell_seconds` of matching samples.
 
 A rule with `retain: false` never archives a flight on its own. Live Redis keys are still written for every active episode.
 
-| Collection  | Purpose                                                                                                      |
+The engine and web portal share one file (WAL mode). Relative paths resolve against the config file directory. ICAO metadata stays in a separate `aircraft.db` cache; it is not stored in Redis or in this archive.
+
+| Table       | Purpose                                                                                                      |
 |-------------|--------------------------------------------------------------------------------------------------------------|
-| `flights`   | Retained flight summary documents (ICAO, callsign, start/end times, max speed, min altitude, alert flags)    |
+| `flights`   | Retained flight summary rows (ICAO, callsign, start/end times)                                               |
 | `telemetry` | Time-series track points linked by `flight_id`                                                               |
-| `alerts`    | Recorded alert episodes detailing zone name, rule name, activation/deactivation times, and spatial telemetry |
+| `alerts`    | Recorded alert episodes detailing zone name, rule name, activation/deactivation times, and position          |
 
 Flight IDs follow the format: `{icao}-{first_packet_timestamp}` (e.g. `a1b2c3-1721832000`).
 

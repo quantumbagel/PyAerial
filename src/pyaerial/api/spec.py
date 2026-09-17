@@ -52,7 +52,7 @@ def websocket_api_spec() -> dict[str, Any]:
             "telemetry": "New track points since the client last received telemetry.",
             "stats": (
                 "live_flights / active_alerts / retained_flights / historical_alerts, "
-                "plus redis / mongo booleans and engine_seen_at (unix seconds, or null "
+                "plus redis / history booleans and engine_seen_at (unix seconds, or null "
                 "if the tracking engine is not writing a heartbeat)."
             ),
         },

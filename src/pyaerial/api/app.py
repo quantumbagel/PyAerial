@@ -10,7 +10,6 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
 
-import pymongo
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,6 +21,7 @@ from pyaerial.api.static import mount_spa
 from pyaerial.api.ws import handle_ws_request
 from pyaerial.config.schema import Config
 from pyaerial.enrich.aircraft_db import AircraftDB
+from pyaerial.store.history import HistoryStore
 from pyaerial.store.live import LiveStore
 
 log = logging.getLogger("pyaerial.webapp")
@@ -61,11 +61,11 @@ def _token_ok(config: Config, token: str | None) -> bool:
 def create_app(
     *,
     config: Config,
-    db: pymongo.database.Database | None = None,
+    history: HistoryStore | None = None,
     live_store: LiveStore | None = None,
     aircraft_db: AircraftDB | None = None,
 ) -> FastAPI:
-    broadcaster = LiveBroadcaster(live_store, aircraft_db, db=db)
+    broadcaster = LiveBroadcaster(live_store, aircraft_db, history=history)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -74,7 +74,7 @@ def create_app(
         await broadcaster.stop()
 
     app = FastAPI(title="PyAerial Web Portal", lifespan=lifespan)
-    app.state.db = db
+    app.state.history = history
     app.state.live_store = live_store
     app.add_middleware(
         CORSMiddleware,
@@ -90,7 +90,7 @@ def create_app(
             action,
             params,
             config=config,
-            db=db,
+            history=history,
             live_store=live_store,
             aircraft_db=aircraft_db,
         )
@@ -102,18 +102,15 @@ def create_app(
     @app.get("/ready")
     def ready():
         redis_ok = True
-        mongo_ok = True
+        history_ok = True
         if live_store is not None:
             redis_ok = bool(live_store.ping())
-        if db is not None:
-            try:
-                db.client.admin.command("ping")
-            except Exception:
-                mongo_ok = False
-        status = "ok" if redis_ok and mongo_ok else "degraded"
+        if history is not None:
+            history_ok = bool(history.ping())
+        status = "ok" if redis_ok and history_ok else "degraded"
         code = 200 if redis_ok else 503
         return JSONResponse(
-            {"status": status, "redis": redis_ok, "mongo": mongo_ok},
+            {"status": status, "redis": redis_ok, "history": history_ok},
             status_code=code,
         )
 

@@ -6,11 +6,9 @@ import json
 import time
 from typing import Any
 
-import pymongo
-
 from pyaerial.constants import STORE_CALC_DATA, STORE_INFO, STORE_RECV_DATA
 from pyaerial.enrich.aircraft_db import AircraftDB
-from pyaerial.view.db import get_mongo_db
+from pyaerial.store.history import HistoryStore
 from pyaerial.view.format import (
     format_duration,
     format_size,
@@ -19,23 +17,17 @@ from pyaerial.view.format import (
 )
 
 
-def cmd_status(client: pymongo.MongoClient | None, live_store: Any = None) -> None:
-    db = get_mongo_db(client)
-
-    if db is not None:
-        try:
-            saved_planes = len(db.get_collection("flights").distinct("icao"))
-            saved_flights = db.get_collection("flights").count_documents({})
-            stats = db.command("dbStats")
-            total_size = stats.get("dataSize", 0)
-            mongo_summary = (
-                f"Saved {saved_planes} plane(s) and {saved_flights} flight(s). "
-                f"Total data size: {total_size} bytes."
-            )
-        except Exception:
-            mongo_summary = "Saved MongoDB data: unavailable."
+def cmd_status(history: HistoryStore | None, live_store: Any = None) -> None:
+    if history is not None and history.ping():
+        saved_planes = len(history.distinct_icaos())
+        saved_flights = history.count_flights()
+        total_size = history.data_size()
+        history_summary = (
+            f"Saved {saved_planes} plane(s) and {saved_flights} flight(s). "
+            f"Total data size: {total_size} bytes."
+        )
     else:
-        mongo_summary = "Saved MongoDB database: disconnected."
+        history_summary = "Saved history database: disconnected."
 
     if live_store is not None:
         try:
@@ -43,13 +35,13 @@ def cmd_status(client: pymongo.MongoClient | None, live_store: Any = None) -> No
             live_summary = f"Live tracking: {len(live_flights)} active flight(s)."
         except Exception:
             live_summary = "Live store: unavailable."
-        print(f"{live_summary} {mongo_summary}")
+        print(f"{live_summary} {history_summary}")
     else:
-        print(mongo_summary)
+        print(history_summary)
 
 
 def cmd_list(
-    client: pymongo.MongoClient | None,
+    history: HistoryStore | None,
     parts: list[str],
     aircraft_db: AircraftDB,
     live_store: Any = None,
@@ -58,7 +50,6 @@ def cmd_list(
         print("[err] No argument supplied to command list!")
         return
 
-    db = get_mongo_db(client)
     arg = parts[1].lower()
 
     if arg == "planes":
@@ -76,12 +67,8 @@ def cmd_list(
             except Exception:
                 pass
 
-        if db is not None:
-            try:
-                distinct_mongo = db.get_collection("flights").distinct("icao")
-                planes_set.update(d.lower() for d in distinct_mongo)
-            except Exception:
-                pass
+        if history is not None:
+            planes_set.update(icao.lower() for icao in history.distinct_icaos())
 
         formatted_planes = []
         for p in sorted(planes_set):
@@ -97,7 +84,7 @@ def cmd_list(
             print("[err] list flights requires a plane id")
             return
         plane_id = parts[2].lower()
-        if not _verify_plane(client, plane_id, live_store=live_store):
+        if not _verify_plane(history, plane_id, live_store=live_store):
             return
 
         flights: list[str] = []
@@ -113,14 +100,10 @@ def cmd_list(
             except Exception:
                 pass
 
-        if db is not None:
-            try:
-                cursor = db.get_collection("flights").find(
-                    {"icao": plane_id}, {"_id": 1}
-                )
-                flights.extend(doc["_id"] for doc in cursor)
-            except Exception:
-                pass
+        if history is not None:
+            flights.extend(
+                doc["_id"] for doc in history.flights_for_icao(plane_id)
+            )
 
         print(f"Flights for plane {plane_id} ({len(flights)}): {' '.join(flights)}")
 
@@ -129,24 +112,22 @@ def cmd_list(
             print("[err] list plane requires a plane id")
             return
         plane_id = parts[2].lower()
-        if not _verify_plane(client, plane_id, live_store=live_store):
+        if not _verify_plane(history, plane_id, live_store=live_store):
             return
 
-        _display_plane_details(client, live_store, plane_id, aircraft_db)
+        _display_plane_details(history, live_store, plane_id, aircraft_db)
 
     else:
         print(f"I don't know the argument {arg!r}!")
 
 
 def cmd_reset(
-    client: pymongo.MongoClient | None,
+    history: HistoryStore | None,
     parts: list[str],
     last_reset: bool = False,
     reset_for: str = "",
     live_store: Any = None,
 ) -> tuple[bool, str]:
-    db = get_mongo_db(client)
-
     if len(parts) == 1:
         if not last_reset or reset_for:
             print(
@@ -155,28 +136,8 @@ def cmd_reset(
             )
             return True, ""
 
-        if db is not None:
-            db.drop_collection("flights")
-            db.drop_collection("telemetry")
-            db.drop_collection("alerts")
-
-            db.get_collection("flights").create_index([("icao", pymongo.ASCENDING)])
-            db.get_collection("flights").create_index([("status", pymongo.ASCENDING)])
-            db.get_collection("telemetry").create_index(
-                [("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)]
-            )
-            db.get_collection("telemetry").create_index(
-                [("icao", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)]
-            )
-            db.get_collection("telemetry").create_index(
-                [("position", pymongo.GEOSPHERE)]
-            )
-            db.get_collection("alerts").create_index(
-                [("timestamp", pymongo.DESCENDING)]
-            )
-            db.get_collection("alerts").create_index(
-                [("flight_id", pymongo.ASCENDING), ("timestamp", pymongo.ASCENDING)]
-            )
+        if history is not None:
+            history.reset_all()
 
         if live_store is not None and hasattr(live_store, "clear_all"):
             live_store.clear_all()
@@ -191,10 +152,8 @@ def cmd_reset(
         )
         return True, target
 
-    if db is not None:
-        db.get_collection("flights").delete_many({"icao": target})
-        db.get_collection("telemetry").delete_many({"icao": target})
-        db.get_collection("alerts").delete_many({"icao": target})
+    if history is not None:
+        history.delete_icao(target)
     if live_store is not None:
         flight_ids = []
         if hasattr(live_store, "get_flights"):
@@ -209,7 +168,7 @@ def cmd_reset(
 
 
 def cmd_dump(
-    client: pymongo.MongoClient | None,
+    history: HistoryStore | None,
     parts: list[str],
     aircraft_db: AircraftDB,
     live_store: Any = None,
@@ -221,7 +180,6 @@ def cmd_dump(
         )
         return
 
-    db = get_mongo_db(client)
     arg = parts[1].lower()
 
     if arg in {"aircraft", "opensky"}:
@@ -249,20 +207,16 @@ def cmd_dump(
                 for lf in live_flights:
                     pid = lf.get("icao", "").lower()
                     if pid:
-                        data[pid] = _dump_plane(client, pid, live_store=live_store)
+                        data[pid] = _dump_plane(history, pid, live_store=live_store)
             except Exception:
                 pass
 
-        if db is not None:
-            try:
-                distinct_planes = db.get_collection("flights").distinct("icao")
-                for plane_id in distinct_planes:
-                    if plane_id.lower() not in data:
-                        data[plane_id.lower()] = _dump_plane(
-                            client, plane_id.lower(), live_store=live_store
-                        )
-            except Exception:
-                pass
+        if history is not None:
+            for plane_id in history.distinct_icaos():
+                if plane_id.lower() not in data:
+                    data[plane_id.lower()] = _dump_plane(
+                        history, plane_id.lower(), live_store=live_store
+                    )
 
         print(json.dumps(data, indent=2, default=str))
         return
@@ -272,11 +226,11 @@ def cmd_dump(
         and arg not in {"flight", "all", "aircraft", "opensky", "live"}
     ):
         plane_id = parts[2] if arg == "plane" else parts[1]
-        if not _verify_plane(client, plane_id, live_store=live_store):
+        if not _verify_plane(history, plane_id, live_store=live_store):
             return
         print(
             json.dumps(
-                {plane_id: _dump_plane(client, plane_id, live_store=live_store)},
+                {plane_id: _dump_plane(history, plane_id, live_store=live_store)},
                 indent=2,
                 default=str,
             )
@@ -289,15 +243,15 @@ def cmd_dump(
             return
         plane_id, flight_id = parts[2], parts[3]
         if not _verify_plane(
-            client, plane_id, live_store=live_store
-        ) or not _verify_flight(client, plane_id, flight_id, live_store=live_store):
+            history, plane_id, live_store=live_store
+        ) or not _verify_flight(history, plane_id, flight_id, live_store=live_store):
             return
         print(
             json.dumps(
                 {
                     plane_id: {
                         flight_id: _dump_flight(
-                            client, flight_id, live_store=live_store
+                            history, flight_id, live_store=live_store
                         )
                     }
                 },
@@ -311,7 +265,7 @@ def cmd_dump(
 
 
 def _verify_plane(
-    client: pymongo.MongoClient | None, plane_id: str, live_store: Any = None
+    history: HistoryStore | None, plane_id: str, live_store: Any = None
 ) -> bool:
     plane_id_lower = plane_id.lower()
 
@@ -323,18 +277,15 @@ def _verify_plane(
         except Exception:
             pass
 
-    db = get_mongo_db(client)
-    if db is not None:
-        record = db.get_collection("flights").find_one({"icao": plane_id_lower})
-        if record is not None:
-            return True
+    if history is not None and history.has_icao(plane_id_lower):
+        return True
 
     print(f"I don't know the plane {plane_id!r}!")
     return False
 
 
 def _verify_flight(
-    client: pymongo.MongoClient | None,
+    history: HistoryStore | None,
     plane_id: str,
     flight_id: str,
     live_store: Any = None,
@@ -349,26 +300,19 @@ def _verify_flight(
         except Exception:
             pass
 
-    db = get_mongo_db(client)
-    if db is not None:
-        record = db.get_collection("flights").find_one(
-            {"icao": plane_id_lower, "_id": flight_id}
-        )
-        if record is not None:
-            return True
+    if history is not None and history.has_flight(plane_id_lower, flight_id):
+        return True
 
     print(f"I don't know the flight id {flight_id!r}")
     return False
 
 
 def _display_plane_details(
-    client: pymongo.MongoClient | None,
+    history: HistoryStore | None,
     live_store: Any,
     plane_id: str,
     aircraft_db: AircraftDB,
 ) -> None:
-    db = get_mongo_db(client)
-
     meta = aircraft_db.lookup_cached(plane_id) if aircraft_db else {}
     if not meta:
         meta = {}
@@ -376,11 +320,8 @@ def _display_plane_details(
     category = meta.get("category") or meta.get("aircraft_type") or "n/a"
 
     saved_flights: list[dict] = []
-    if db is not None:
-        try:
-            saved_flights = list(db.get_collection("flights").find({"icao": plane_id}))
-        except Exception:
-            pass
+    if history is not None:
+        saved_flights = history.flights_for_icao(plane_id)
 
     live_flight: dict | None = None
     if live_store is not None:
@@ -408,9 +349,7 @@ def _display_plane_details(
 
     for fdoc in saved_flights:
         fid = fdoc["_id"]
-        tel_docs = []
-        if db is not None:
-            tel_docs = list(db.get_collection("telemetry").find({"flight_id": fid}))
+        tel_docs = history.get_telemetry(fid) if history is not None else []
 
         for tdoc in tel_docs:
             ts = tdoc.get("timestamp")
@@ -450,8 +389,8 @@ def _display_plane_details(
         if st and et:
             most_recent_duration = max(0.0, et - st)
         most_recent_status = "completed"
-        if db is not None:
-            tel_docs = list(db.get_collection("telemetry").find({"flight_id": fid}))
+        if history is not None:
+            tel_docs = history.get_telemetry(fid)
             for tdoc in tel_docs:
                 for k in (
                     "latitude",
@@ -520,9 +459,8 @@ def _display_plane_details(
 
 
 def _dump_plane(
-    client: pymongo.MongoClient | None, plane_id: str, live_store: Any = None
+    history: HistoryStore | None, plane_id: str, live_store: Any = None
 ) -> dict:
-    db = get_mongo_db(client)
     plane_id_lower = plane_id.lower()
     results: dict = {}
 
@@ -533,35 +471,25 @@ def _dump_plane(
                 if lf.get("icao", "").lower() == plane_id_lower:
                     fid = lf.get("flight_id", f"{plane_id_lower}-live")
                     results[fid] = _dump_flight(
-                        client, fid, live_store=live_store
+                        history, fid, live_store=live_store
                     )
         except Exception:
             pass
 
-    if db is not None:
-        try:
-            cursor = db.get_collection("flights").find(
-                {"icao": plane_id_lower}, {"_id": 1}
-            )
-            for doc in cursor:
-                fid = doc["_id"]
-                if fid not in results:
-                    results[fid] = _dump_flight(
-                        client, fid, live_store=live_store
-                    )
-        except Exception:
-            pass
+    if history is not None:
+        for doc in history.flights_for_icao(plane_id_lower):
+            fid = doc["_id"]
+            if fid not in results:
+                results[fid] = _dump_flight(history, fid, live_store=live_store)
 
     return results
 
 
 def _dump_flight(
-    client: pymongo.MongoClient | None,
+    history: HistoryStore | None,
     flight_id: str,
     live_store: Any = None,
 ) -> dict:
-    db = get_mongo_db(client)
-
     if live_store is not None:
         try:
             live_flight = (
@@ -613,37 +541,20 @@ def _dump_flight(
         except Exception:
             pass
 
-    if db is None:
+    if history is None:
         return {}
 
-    flight_doc = db.get_collection("flights").find_one({"_id": flight_id})
+    flight_doc = history.get_flight(flight_id)
     if not flight_doc:
         return {}
 
-    telemetry_cursor = (
-        db.get_collection("telemetry")
-        .find({"flight_id": flight_id})
-        .sort("timestamp", pymongo.ASCENDING)
-    )
-
     series_data = {}
-    for doc in telemetry_cursor:
+    for doc in history.get_telemetry(flight_id):
         t = doc["timestamp"]
-        has_pos = False
-        if "position" in doc and doc["position"].get("type") == "Point":
-            coords = doc["position"].get("coordinates", [])
-            if len(coords) == 2:
-                series_data.setdefault("longitude", []).append([t, coords[0]])
-                series_data.setdefault("latitude", []).append([t, coords[1]])
-                has_pos = True
-
         for k, v in doc.items():
-            if k in ("_id", "flight_id", "icao", "timestamp", "position"):
+            if k in ("_id", "flight_id", "icao", "timestamp"):
                 continue
-            if has_pos and k in ("latitude", "longitude"):
-                continue
-            field = k
-            series_data.setdefault(field, []).append([t, v])
+            series_data.setdefault(k, []).append([t, v])
 
     result: dict = {}
     for field, data_points in series_data.items():

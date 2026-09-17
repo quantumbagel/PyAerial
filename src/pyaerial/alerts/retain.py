@@ -1,4 +1,4 @@
-"""Decide whether a completed flight is interesting enough to keep in Mongo."""
+"""Decide whether a completed flight is interesting enough to keep in history."""
 
 from __future__ import annotations
 

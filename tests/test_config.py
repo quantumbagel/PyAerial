@@ -84,11 +84,11 @@ def test_env_interpolation_default(tmp_path):
         _MINIMAL_YAML
         + """
 database:
-  uri: "${PYAERIAL_TEST_MONGO:-mongodb://localhost:27017}"
+  path: "${PYAERIAL_TEST_HISTORY:-history.db}"
 """
     )
     config = load_config(cfg_path)
-    assert config.database.uri == "mongodb://localhost:27017"
+    assert config.database.path == str((tmp_path / "history.db").resolve())
 
 
 def test_env_interpolation_webhook_url(tmp_path, monkeypatch):
@@ -123,8 +123,21 @@ def test_env_interpolation_missing_fails(tmp_path, monkeypatch):
         _MINIMAL_YAML
         + """
 database:
-  uri: "${PYAERIAL_MISSING_SECRET}"
+  path: "${PYAERIAL_MISSING_SECRET}"
 """
     )
     with pytest.raises(ConfigError, match="unset environment variable"):
+        load_config(cfg_path)
+
+
+def test_mongo_database_keys_are_rejected(tmp_path):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        _MINIMAL_YAML
+        + """
+database:
+  uri: mongodb://localhost:27017
+"""
+    )
+    with pytest.raises(ConfigError, match="no longer used"):
         load_config(cfg_path)

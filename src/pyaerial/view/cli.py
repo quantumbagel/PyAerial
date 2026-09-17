@@ -8,13 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
-import pymongo
-
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 from pyaerial.config import load_config
 from pyaerial.enrich.aircraft_db import AircraftDB
+from pyaerial.store.history import HistoryStore
 from pyaerial.view.commands import cmd_dump, cmd_list, cmd_reset, cmd_status
-from pyaerial.view.db import set_view_db_name
 from pyaerial.view.live_display import run_live_loop
 from pyaerial.view.store import open_live_session
 
@@ -39,30 +37,21 @@ def run_view(
 ) -> None:
     """Run interactive flight viewer command-line session."""
     config = load_config(config_path)
-    set_view_db_name(config.database.name)
     aircraft_db = AircraftDB(aircraft_db_path)
     live_store = open_live_session(config)
-
-    client: pymongo.MongoClient | None = None
-    try:
-        client = pymongo.MongoClient(
-            config.database.uri, serverSelectionTimeoutMS=2000
-        )
-    except Exception:
-        client = None
+    history = HistoryStore(config.database.path)
 
     print("Ready for user input.")
     try:
-        _run_view_loop(client, aircraft_db, live_store)
+        _run_view_loop(history, aircraft_db, live_store)
     finally:
         live_store.close()
         aircraft_db.close()
-        if client is not None:
-            client.close()
+        history.close()
 
 
 def _run_view_loop(
-    client: pymongo.MongoClient | None,
+    history: HistoryStore | None,
     aircraft_db: AircraftDB,
     live_store: Any,
 ) -> None:
@@ -108,12 +97,12 @@ def _run_view_loop(
                 "Source: https://github.com/quantumbagel/PyAerial"
             )
         elif verb == "status":
-            cmd_status(client, live_store=live_store)
+            cmd_status(history, live_store=live_store)
         elif verb == "list":
-            cmd_list(client, parts, aircraft_db, live_store=live_store)
+            cmd_list(history, parts, aircraft_db, live_store=live_store)
         elif verb == "reset":
             last_reset, reset_for = cmd_reset(
-                client, parts, last_reset, reset_for, live_store=live_store
+                history, parts, last_reset, reset_for, live_store=live_store
             )
         elif verb == "exit":
             print("logout")
@@ -121,7 +110,7 @@ def _run_view_loop(
         elif verb == "help":
             print(HELP_TEXT)
         elif verb == "dump":
-            cmd_dump(client, parts, aircraft_db, live_store=live_store)
+            cmd_dump(history, parts, aircraft_db, live_store=live_store)
         elif verb == "live":
             try:
                 run_live_loop(live_store)

@@ -4,8 +4,8 @@ PyAerial provides a unified command line interface via the `pyaerial` executable
 
 | Subcommand          | Description                                                                    |
 |---------------------|--------------------------------------------------------------------------------|
-| `pyaerial run`      | Start the flight tracking engine (writes Redis / MongoDB)                      |
-| `pyaerial web`      | Start the web portal (reads Redis / MongoDB; does not track)                   |
+| `pyaerial run`      | Start the flight tracking engine (writes Redis / SQLite)                       |
+| `pyaerial web`      | Start the web portal (reads Redis / SQLite; does not track)                    |
 | `pyaerial validate` | Check configuration file syntax, schema, and cross-references                  |
 | `pyaerial view`     | Interactive terminal flight viewer (`list`, `dump aircraft`, `status`, `live`) |
 | `pyaerial live`     | Real-time ASCII terminal flight display                                        |
@@ -44,7 +44,7 @@ Environment variables override values in your `config.yaml`:
 | Environment Variable   | Overrides Config Key | Description                                           |
 |------------------------|----------------------|-------------------------------------------------------|
 | `PYAERIAL_CONFIG`      | Config path          | Default configuration file (`-c` still wins)          |
-| `PYAERIAL_MONGODB`     | `database.uri`       | MongoDB connection URI                                |
+| `PYAERIAL_HISTORY`     | `database.path`      | SQLite history file path                              |
 | `PYAERIAL_REDIS`       | `database.redis_uri` | Redis connection URI                                  |
 | `PYAERIAL_LOG_LEVEL`   | `logging.level`      | Logging level (`debug`, `info`, `warning`, `error`)   |
 | `PYAERIAL_LOG_FILE`    | `logging.file`       | Output log file path                                  |
@@ -117,7 +117,7 @@ Server reply:
 | `fetchFlight`    | `flightId`, `view`                                                            | Single flight detail                                                                                |
 | `fetchTelemetry` | `flightId`, `view`, `since`                                                   | Track points after `since`                                                                          |
 | `fetchAlerts`    | `view`; history: `skip`, `limit`, `q`, `since`, `until`, `flightId`, `rule`   | History `q` matches ICAO, callsign, zone, rule, or flight id                                        |
-| `fetchStats`     | —                                                                             | Live / retained counts, `redis` / `mongo` booleans, `engine_seen_at`                                |
+| `fetchStats`     | —                                                                             | Live / retained counts, `redis` / `history` booleans, `engine_seen_at`                              |
 | `fetchZones`     | —                                                                             | Home, polygons, `alert_colors`                                                                      |
 | `fetchConfig`    | —                                                                             | Portal display config                                                                               |
 

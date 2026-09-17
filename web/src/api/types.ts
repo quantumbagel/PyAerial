@@ -98,7 +98,7 @@ export interface ServerStats {
   retained_flights: number;
   historical_alerts: number;
   redis?: boolean;
-  mongo?: boolean;
+  history?: boolean;
   engine_seen_at?: number | null;
 }
 

@@ -5,9 +5,7 @@ from __future__ import annotations
 import math
 import time
 from collections import defaultdict
-from typing import Any
-
-import pymongo
+from typing import Any, Iterable
 
 from pyaerial.enrich.aircraft_db import AircraftDB, normalize_photo_url
 from pyaerial.config.schema import Config
@@ -116,6 +114,8 @@ def sanitize_for_json(data: Any) -> Any:
 
 
 def _alert_coords(doc: dict[str, Any]) -> tuple[Any, Any]:
+    if doc.get("latitude") is not None or doc.get("longitude") is not None:
+        return doc.get("latitude"), doc.get("longitude")
     position = doc.get("position") or {}
     coords = position.get("coordinates") or [None, None]
     if not isinstance(coords, (list, tuple)) or len(coords) < 2:
@@ -175,7 +175,7 @@ def live_alert_stats(active_alerts: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def alert_stats_by_flight(
-    db: pymongo.database.Database,
+    alerts: Iterable[dict[str, Any]],
     flight_ids: list[str],
     *,
     flight_ends: dict[str, float] | None = None,
@@ -184,7 +184,7 @@ def alert_stats_by_flight(
         return {}
     ends = flight_ends or {}
     episodes: dict[str, dict[str, dict[str, float | None]]] = defaultdict(dict)
-    for doc in db.get_collection("alerts").find({"flight_id": {"$in": flight_ids}}):
+    for doc in alerts:
         flight_id = doc.get("flight_id")
         alert_id = (
             doc.get("alert_id")

@@ -24,7 +24,10 @@ hs_err_pid*.log
 data/
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
 aircraft.db
+pyaerial.db
 live_telemetry.db
 
 # Frontend

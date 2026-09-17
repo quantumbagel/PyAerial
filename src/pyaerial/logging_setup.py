@@ -55,5 +55,5 @@ def setup_logging(
 
     # Quiet down noisy third-party libraries unless we are debugging.
     if numeric_level > logging.DEBUG:
-        for noisy in ("pymongo", "kafka", "urllib3"):
+        for noisy in ("kafka", "urllib3"):
             logging.getLogger(noisy).setLevel(logging.WARNING)

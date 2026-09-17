@@ -33,12 +33,15 @@ def run_webapp(
     except Exception as e:
         log.warning("Could not initialize AircraftDB at %s: %s", aircraft_db_path, e)
         aircraft_db = None
-    client = None
+    history = None
     live_store = None
 
-    config, client, db, live_store = connect_stores(config_path)
+    config, history, live_store = connect_stores(config_path)
     app = create_app(
-        config=config, db=db, live_store=live_store, aircraft_db=aircraft_db
+        config=config,
+        history=history,
+        live_store=live_store,
+        aircraft_db=aircraft_db,
     )
 
     index = STATIC_DIR / "index.html"
@@ -50,8 +53,8 @@ def run_webapp(
     except KeyboardInterrupt:
         print("\nStopping web server...")
     finally:
-        if client:
-            client.close()
+        if history:
+            history.close()
         if live_store:
             live_store.close()
         if aircraft_db:

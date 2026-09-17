@@ -16,7 +16,7 @@ function stats(overrides: Partial<ServerStats> = {}): ServerStats {
     retained_flights: 0,
     historical_alerts: 0,
     redis: true,
-    mongo: true,
+    history: true,
     engine_seen_at: Date.now() / 1000 - 1,
     ...overrides,
   };
@@ -37,7 +37,7 @@ describe('isEngineLive', () => {
 });
 
 describe('emptyFlightsMessage', () => {
-  it('explains filters, mongo, redis, and a missing engine', () => {
+  it('explains filters, archive, redis, and a missing engine', () => {
     expect(
       emptyFlightsMessage({ view: 'live', hasFilters: true, stats: stats() }),
     ).toMatch(/filters/);
@@ -45,9 +45,9 @@ describe('emptyFlightsMessage', () => {
       emptyFlightsMessage({
         view: 'history',
         hasFilters: false,
-        stats: stats({ mongo: false }),
+        stats: stats({ history: false }),
       }),
-    ).toMatch(/MongoDB/);
+    ).toMatch(/archive/);
     expect(
       emptyFlightsMessage({ view: 'history', hasFilters: false, stats: stats() }),
     ).toMatch(/retain rule/);

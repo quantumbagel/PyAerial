@@ -23,8 +23,8 @@ export function emptyFlightsMessage({
 }): string {
   if (hasFilters) return 'No flights match your filters.';
   if (view === 'history') {
-    if (stats?.mongo === false) {
-      return 'Historical data is unavailable (MongoDB not connected).';
+    if (stats?.history === false) {
+      return 'Historical data is unavailable (archive not connected).';
     }
     return 'No retained flights yet. Completed flights are archived only when a retain rule holds for its dwell time.';
   }
@@ -48,8 +48,8 @@ export function emptyAlertsMessage({
 }): string {
   if (hasFilters) return 'No alerts match your filters.';
   if (view === 'history') {
-    if (stats?.mongo === false) {
-      return 'Historical alerts are unavailable (MongoDB not connected).';
+    if (stats?.history === false) {
+      return 'Historical alerts are unavailable (archive not connected).';
     }
     return 'No retained alerts yet.';
   }

@@ -32,7 +32,7 @@ graph TD
 
     subgraph Storage ["Dual-Tier Data Storage"]
         REDIS[("Redis Live Store<br/>(In-Flight Buffers & Alerts)")]
-        MONGO[("MongoDB History Store<br/>(Retained Flight Records)")]
+        SQLITE[("SQLite History Store<br/>(Retained Flight Records)")]
     end
 
     subgraph Frontend ["Web Portal & Interfaces"]
@@ -50,10 +50,10 @@ graph TD
     GEOFENCE --> ALERTERS
 
     ENGINE --> REDIS
-    ENGINE --> MONGO
+    ENGINE --> SQLITE
 
     REDIS --> WEBAPP
-    MONGO --> WEBAPP
+    SQLITE --> WEBAPP
     REDIS --> CLI
 
     WEBAPP <--> WEBUI
@@ -69,8 +69,8 @@ graph TD
 - Out-of-the-box support for console output (`print`), HTTP POST (`webhook`), and Apache Kafka message topics (`kafka`).
 - Two storage methods:
   - Redis: live flight telemetry, active states, and real-time alert events (`live:flight:{id}`, `live:telemetry:{id}`, `live:alerts:{id}`, `live:active_alerts`, `live:alert_episodes`).
-  - MongoDB: Persistent historical storage for important completed flights, track points, and alert episodes.
-- ICAO metadata (model, operator, registration, photos) is cached in `aircraft.db` after lookups to HexDB / Planespotters; the file is a local cache, not a fully offline index.
+  - SQLite: persistent historical storage for retained completed flights, track points, and alert episodes (`database.path`, default `pyaerial.db`).
+- ICAO metadata (model, operator, registration, photos) is cached in `aircraft.db` after lookups to HexDB / Planespotters; the file is a local cache, not a fully offline index. It stays in SQLite rather than Redis so lookups survive restarts without hitting those APIs again.
 - Webapp with real-time radar, flight tracking, alert feeds, and historical flight browse (track + telemetry table).
 - Terminal interfaces including an interactive flight viewer (`pyaerial view`) and a live dump1090-style ASCII table display (`pyaerial live`).
 
@@ -80,14 +80,14 @@ graph TD
 
 ### Dockerized Setup
 
-Run PyAerial with MongoDB, Redis, and the tracking engine + web portal:
+Run PyAerial with Redis, a shared SQLite archive volume, and the tracking engine + web portal:
 
 ```bash
-# Start MongoDB, Redis, engine, and portal (no in-cluster dump1090)
+# Start Redis, engine, and portal (no in-cluster dump1090)
 docker compose up --build
 ```
 
-Compose uses a bridge network and publishes only the web portal on port 10090. MongoDB and Redis are not exposed on the host and require the `MONGO_PASSWORD` / `REDIS_PASSWORD` env vars (default `pyaerial`).
+Compose uses a bridge network and publishes only the web portal on port 10090. Redis is not exposed on the host and requires the `REDIS_PASSWORD` env var (default `pyaerial`). Engine and web share `/data/pyaerial.db` on the `pyaerial_data` volume.
 
 The engine connects to dump1090 at `DUMP1090_HOST` (default `dump1090`, the optional compose service name). Without the SDR profile that host is not running, so either start dump1090 in-cluster or point at an existing receiver:
 
@@ -105,14 +105,14 @@ A standalone `docker run` of the image still supervises dump1090 via `scripts/ru
 
 ### No Docker Setup
 
-1. Edit [`config.yaml`](config.yaml) with your ground station coordinates and database connection details.
-2. Ensure MongoDB and Redis services are running locally or in Docker.
+1. Edit [`config.yaml`](config.yaml) with your ground station coordinates and storage paths.
+2. Ensure Redis is running locally or in Docker. SQLite history is a local file (`database.path`); no extra database daemon is required.
 3. Start your ADS-B message feeder (e.g. `dump1090 --net --raw`).
 4. Start the tracking engine:
    ```bash
    pyaerial run -c config.yaml
    ```
-5. In another terminal, start the web portal (reads Redis / MongoDB; does not start tracking):
+5. In another terminal, start the web portal (reads Redis / SQLite; does not start tracking):
    ```bash
    pyaerial web -c config.yaml
    ```
@@ -149,7 +149,7 @@ pip install -e ".[all]"
 
 | Document | Contents |
 |----------|----------|
-| [CONFIGURATION.md](CONFIGURATION.md) | YAML schema, geofence rules, Redis / MongoDB storage |
+| [CONFIGURATION.md](CONFIGURATION.md) | YAML schema, geofence rules, Redis / SQLite storage |
 | [CLI.md](CLI.md) | Commands, environment variables, WebSocket protocol |
 | [UNITS.md](UNITS.md) | Stored units for telemetry and rule fields |
 
@@ -157,8 +157,8 @@ PyAerial provides a unified command line interface via the `pyaerial` executable
 
 | Subcommand          | Description                                                   |
 |---------------------|---------------------------------------------------------------|
-| `pyaerial run`      | Start the flight tracking engine (writes Redis / MongoDB)     |
-| `pyaerial web`      | Start the web portal (reads Redis / MongoDB; does not track)  |
+| `pyaerial run`      | Start the flight tracking engine (writes Redis / SQLite)      |
+| `pyaerial web`      | Start the web portal (reads Redis / SQLite; does not track)   |
 | `pyaerial validate` | Check configuration file syntax, schema, and cross-references |
 | `pyaerial view`     | Interactive terminal flight viewer (`list`, `dump aircraft`, `status`, `live`) |
 | `pyaerial live`     | Real-time ASCII terminal flight display                       |

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pymongo
-
 from pyaerial.api.payloads import app_config_payload, view_param, zones_payload
 from pyaerial.api.protocol import LiveStore
 from pyaerial.api.queries import (
@@ -18,6 +16,7 @@ from pyaerial.api.queries import (
 )
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.config.schema import Config
+from pyaerial.store.history import HistoryStore
 
 _MAX_LIMIT = 500
 _MAX_SKIP = 100_000
@@ -45,7 +44,7 @@ def handle_ws_request(
     params: dict[str, Any],
     *,
     config: Config,
-    db: pymongo.database.Database | None,
+    history: HistoryStore | None,
     live_store: LiveStore | None,
     aircraft_db: AircraftDB | None,
 ) -> Any:
@@ -56,7 +55,7 @@ def handle_ws_request(
         if view == "live":
             return get_live_flights(live_store, aircraft_db)
         return get_history_flights(
-            db,
+            history,
             aircraft_db,
             skip=_clamp_int(params.get("skip"), 0, 0, _MAX_SKIP),
             limit=_clamp_int(params.get("limit"), 50, 1, _MAX_LIMIT),
@@ -70,7 +69,7 @@ def handle_ws_request(
             _flight_id_param(params),
             view,
             live_store=live_store,
-            db=db,
+            history=history,
             aircraft_db=aircraft_db,
         )
 
@@ -82,7 +81,7 @@ def handle_ws_request(
             view,
             since,
             live_store=live_store,
-            db=db,
+            history=history,
         )
 
     if action == "fetchAlerts":
@@ -112,12 +111,12 @@ def handle_ws_request(
             limit=limit,
             skip=skip,
             live_store=live_store,
-            db=db,
+            history=history,
             active_only=active_only,
         )
 
     if action == "fetchStats":
-        return get_stats(live_store, db)
+        return get_stats(live_store, history)
 
     if action == "fetchZones":
         return zones_payload(config)

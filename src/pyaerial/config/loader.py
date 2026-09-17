@@ -29,7 +29,7 @@ class ConfigError(Exception):
 
 
 _ENV_OVERRIDES = {
-    "PYAERIAL_MONGODB": ("database", "uri"),
+    "PYAERIAL_HISTORY": ("database", "path"),
     "PYAERIAL_REDIS": ("database", "redis_uri"),
     "PYAERIAL_LOG_LEVEL": ("logging", "level"),
     "PYAERIAL_LOG_FILE": ("logging", "file"),
@@ -85,10 +85,21 @@ def load_config(
     except ValidationError as exc:
         raise ConfigError(_format_validation_error(config_path, exc)) from exc
 
+    _resolve_history_path(config, config_path)
     _validate_cross_references(config, config_path)
 
     log.debug("Loaded configuration from %s", config_path)
     return config
+
+
+def _resolve_history_path(config: Config, config_path: Path) -> None:
+    """Resolve a relative history SQLite path against the config file directory."""
+    history_path = Path(config.database.path).expanduser()
+    if not history_path.is_absolute():
+        history_path = (config_path.parent / history_path).resolve()
+    else:
+        history_path = history_path.resolve()
+    config.database.path = str(history_path)
 
 
 def _resolve_zone_files(data: dict, config_path: Path) -> dict:

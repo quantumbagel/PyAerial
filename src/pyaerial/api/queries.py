@@ -2,16 +2,9 @@
 
 from __future__ import annotations
 
-import logging
-import re
-import time
 from typing import Any
 
-import pymongo
-from pymongo.errors import PyMongoError
-
 from pyaerial.api.payloads import (
-    FLIGHT_STATUS_LIVE,
     alert_stats_by_flight,
     enrich_flight_detail,
     enrich_flight_summary,
@@ -23,28 +16,9 @@ from pyaerial.api.payloads import (
 )
 from pyaerial.api.protocol import LiveStore
 from pyaerial.enrich.aircraft_db import AircraftDB
-
-log = logging.getLogger("pyaerial.webapp")
+from pyaerial.store.history import HistoryStore
 
 _MAX_Q = 80
-_MONGO_FAIL_TTL = 10.0
-_mongo_fail_until = 0.0
-
-
-def _mongo_available(db: pymongo.database.Database | None) -> bool:
-    """Ping Mongo, but don't retry a failure on every WebSocket request."""
-    global _mongo_fail_until
-    if db is None:
-        return False
-    now = time.time()
-    if now < _mongo_fail_until:
-        return False
-    try:
-        db.client.admin.command("ping")
-        return True
-    except Exception:
-        _mongo_fail_until = now + _MONGO_FAIL_TTL
-        return False
 
 
 def _normalize_q(q: str | None) -> str | None:
@@ -54,75 +28,8 @@ def _normalize_q(q: str | None) -> str | None:
     return text or None
 
 
-def _text_query(q: str) -> dict[str, str]:
-    return {"$regex": re.escape(q), "$options": "i"}
-
-
-def history_flight_filter(
-    *,
-    q: str | None = None,
-    since: float | None = None,
-    until: float | None = None,
-) -> dict[str, Any]:
-    filt: dict[str, Any] = {
-        "status": {"$ne": FLIGHT_STATUS_LIVE},
-        "$or": [{"retained": True}, {"retained": {"$exists": False}}],
-    }
-    end_filt: dict[str, Any] = {}
-    if since is not None:
-        end_filt["$gte"] = since
-    if until is not None:
-        end_filt["$lte"] = until
-    if end_filt:
-        filt["end_time"] = end_filt
-    query = _normalize_q(q)
-    if query:
-        pattern = _text_query(query)
-        retain_or = filt.pop("$or")
-        filt["$and"] = [
-            {"$or": retain_or},
-            {
-                "$or": [
-                    {"icao": pattern},
-                    {"callsign": pattern},
-                    {"_id": pattern},
-                ]
-            },
-        ]
-    return filt
-
-
-def history_alert_filter(
-    *,
-    since: float = 0.0,
-    until: float | None = None,
-    flight_id: str | None = None,
-    rule: str | None = None,
-    q: str | None = None,
-) -> dict[str, Any]:
-    filt: dict[str, Any] = {}
-    activated: dict[str, Any] = {}
-    if since:
-        activated["$gte"] = since
-    if until is not None:
-        activated["$lte"] = until
-    if activated:
-        filt["activated_at"] = activated
-    if flight_id:
-        filt["flight_id"] = flight_id
-    if rule:
-        filt["rule"] = rule
-    query = _normalize_q(q)
-    if query:
-        pattern = _text_query(query)
-        filt["$or"] = [
-            {"icao": pattern},
-            {"callsign": pattern},
-            {"zone": pattern},
-            {"rule": pattern},
-            {"flight_id": pattern},
-        ]
-    return filt
+def _history_available(history: HistoryStore | None) -> bool:
+    return bool(history is not None and history.ping())
 
 
 def get_live_flights(
@@ -137,7 +44,7 @@ def get_live_flights(
 
 
 def get_history_flights(
-    db: pymongo.database.Database | None,
+    history: HistoryStore | None,
     aircraft_db: AircraftDB | None,
     *,
     skip: int = 0,
@@ -146,21 +53,18 @@ def get_history_flights(
     since: float | None = None,
     until: float | None = None,
 ) -> list[dict[str, Any]]:
-    if db is None or not _mongo_available(db):
+    if not _history_available(history):
         return []
+    assert history is not None
     skip = max(0, skip)
     limit = min(max(limit, 1), 200)
-    flights_col = db.get_collection("flights")
-    telemetry_col = db.get_collection("telemetry")
-    filt = history_flight_filter(q=q, since=since, until=until)
-
-    try:
-        selected_docs = list(
-            flights_col.find(filt).sort("end_time", -1).skip(skip).limit(limit)
-        )
-    except PyMongoError as exc:
-        log.warning("MongoDB unavailable for historical flights: %s", exc)
-        return []
+    selected_docs = history.list_flights(
+        skip=skip,
+        limit=limit,
+        q=_normalize_q(q),
+        since=since,
+        until=until,
+    )
     if not selected_docs:
         return []
 
@@ -169,22 +73,12 @@ def get_history_flights(
         doc["_id"]: doc.get("end_time") or doc.get("start_time") or 0
         for doc in selected_docs
     }
-    alert_stats = alert_stats_by_flight(db, selected_ids, flight_ends=flight_ends)
-    latest_telemetry = {
-        doc["_id"]: doc["doc"]
-        for doc in telemetry_col.aggregate(
-            [
-                {"$match": {"flight_id": {"$in": selected_ids}}},
-                {"$sort": {"timestamp": -1}},
-                {
-                    "$group": {
-                        "_id": "$flight_id",
-                        "doc": {"$first": "$$ROOT"},
-                    }
-                },
-            ]
-        )
-    }
+    alert_stats = alert_stats_by_flight(
+        history.alerts_for_flights(selected_ids),
+        selected_ids,
+        flight_ends=flight_ends,
+    )
+    latest_telemetry = history.latest_telemetry(selected_ids)
 
     return [
         flight_summary(
@@ -245,7 +139,7 @@ def get_flight_detail(
     view: str,
     *,
     live_store: LiveStore | None,
-    db: pymongo.database.Database | None,
+    history: HistoryStore | None,
     aircraft_db: AircraftDB | None,
 ) -> dict[str, Any] | None:
     if view == "live":
@@ -271,9 +165,9 @@ def get_flight_detail(
             flight_data, flight_data.get("icao", ""), aircraft_db
         )
 
-    if db is None:
+    if history is None:
         return None
-    doc = db.get_collection("flights").find_one({"_id": flight_id})
+    doc = history.get_flight(flight_id)
     if not doc:
         return None
     icao = doc.get("icao", "")
@@ -281,7 +175,7 @@ def get_flight_detail(
     info = doc.get("info", {})
     flight_end = doc.get("end_time") or doc.get("start_time") or 0
     alert_stats = alert_stats_by_flight(
-        db,
+        history.alerts_for_flights([flight_id]),
         [flight_id],
         flight_ends={flight_id: flight_end},
     ).get(flight_id)
@@ -321,19 +215,18 @@ def get_telemetry(
     since: float,
     *,
     live_store: LiveStore | None,
-    db: pymongo.database.Database | None,
+    history: HistoryStore | None,
 ) -> list[dict[str, Any]]:
     if view == "live":
         if live_store is None:
             return []
         return live_store.get_telemetry(flight_id, since=since)
-    if db is None:
+    if history is None:
         return []
-    filt: dict[str, Any] = {"flight_id": flight_id}
-    if since > 0:
-        filt["timestamp"] = {"$gt": since}
-    cursor = db.get_collection("telemetry").find(filt).sort("timestamp", 1)
-    return [telemetry_point(doc) for doc in cursor]
+    return [
+        telemetry_point(doc)
+        for doc in history.get_telemetry(flight_id, since=since)
+    ]
 
 
 def get_alerts(
@@ -347,7 +240,7 @@ def get_alerts(
     limit: int = 0,
     skip: int = 0,
     live_store: LiveStore | None,
-    db: pymongo.database.Database | None,
+    history: HistoryStore | None,
     active_only: bool | None = None,
 ) -> list[dict[str, Any]]:
     if view == "live":
@@ -363,30 +256,26 @@ def get_alerts(
             skip=skip,
             active_only=resolved_active_only,
         )
-    if db is None or not _mongo_available(db):
+    if not _history_available(history):
         return []
-    filt = history_alert_filter(
-        since=since,
-        until=until,
-        flight_id=flight_id,
-        rule=rule,
-        q=q,
-    )
-    try:
-        cursor = db.get_collection("alerts").find(filt).sort("activated_at", -1)
-        if skip:
-            cursor = cursor.skip(skip)
-        if limit:
-            cursor = cursor.limit(limit)
-        return [format_alert(doc) for doc in cursor]
-    except PyMongoError as exc:
-        log.warning("MongoDB unavailable for historical alerts: %s", exc)
-        return []
+    assert history is not None
+    return [
+        format_alert(doc)
+        for doc in history.get_alerts(
+            since=since,
+            until=until,
+            flight_id=flight_id,
+            rule=rule,
+            q=_normalize_q(q),
+            limit=limit,
+            skip=skip,
+        )
+    ]
 
 
 def get_stats(
     live_store: LiveStore | None,
-    db: pymongo.database.Database | None,
+    history: HistoryStore | None,
 ) -> dict[str, Any]:
     live_flights = len(live_store.get_flights()) if live_store else 0
     active_alerts = (
@@ -402,24 +291,16 @@ def get_stats(
             engine_seen_at = None
     retained_flights = 0
     historical_alerts = 0
-    mongo_ok = _mongo_available(db)
-    if mongo_ok and db is not None:
-        try:
-            retained_flights = db.get_collection("flights").count_documents(
-                {
-                    "status": {"$ne": FLIGHT_STATUS_LIVE},
-                    "$or": [{"retained": True}, {"retained": {"$exists": False}}],
-                }
-            )
-            historical_alerts = db.get_collection("alerts").count_documents({})
-        except Exception:
-            mongo_ok = False
+    history_ok = _history_available(history)
+    if history_ok and history is not None:
+        retained_flights = history.count_flights()
+        historical_alerts = history.count_alerts()
     return {
         "live_flights": live_flights,
         "active_alerts": active_alerts,
         "retained_flights": retained_flights,
         "historical_alerts": historical_alerts,
         "redis": redis_ok,
-        "mongo": mongo_ok,
+        "history": history_ok,
         "engine_seen_at": engine_seen_at,
     }
