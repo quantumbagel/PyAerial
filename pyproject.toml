@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyaerial"
-version = "0.15.0"
+version = "0.16.0"
 description = "ADS-B / Mode S tracking with polygon zone rules, alerts, Redis live state, and SQLite history."
 readme = "README.md"
 requires-python = ">=3.11"

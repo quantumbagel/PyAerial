@@ -4,7 +4,7 @@ _Scanning software for ADS-B / Mode S for AERPAW_
 
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://python.org)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Version](https://img.shields.io/badge/version-0.15.0-green.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.16.0-green.svg)](pyproject.toml)
 
 PyAerial decodes ADS-B / Mode S frames, tracks aircraft, evaluates polygon zone rules, fires alerts, streams live state over WebSocket, and archives retained flights to SQLite.
 
