@@ -11,7 +11,7 @@
 | `pyaerial validate` | Syntax, schema, and filesystem cross-reference verification |
 | `pyaerial reset` | Retention purger (`--yes`; optional single ICAO; clears Redis only when engine is stopped) |
 
-The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias), whereas high-volume RF sensor frames stream exclusively over `/ws/raw`. When `web.token` or `PYAERIAL_WEB_TOKEN` is configured, client connections must supply the token through a `?token=` query parameter. Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).
+The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias), whereas high-volume RF sensor frames stream exclusively over `/ws/raw`. Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).
 
 **Command execution**
 
@@ -48,7 +48,6 @@ Runtime settings accept environment variable overrides; explicit `-c` flags take
 | `PYAERIAL_LOG_LEVEL` | `logging.level` | Logging severity (`debug`, `info`, `warning`, `error`) |
 | `PYAERIAL_LOG_FILE` | `logging.file` | Destination log file path |
 | `PYAERIAL_HZ` | `tracking.hz` | Engine evaluation frequency in Hz |
-| `PYAERIAL_WEB_TOKEN` | `web.token` | Shared secret token for `/ws/live` and `/ws/raw` |
 | `PYAERIAL_WEB_ORIGINS` | `web.origins` | Allowed browser origins (`*` permits all) |
 
 Configuration strings support `${VAR}` and `${VAR:-default}` environment interpolation, but referenced variables without defaults must be set in the host environment or startup validation fails.

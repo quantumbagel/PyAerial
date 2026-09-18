@@ -51,8 +51,7 @@ def test_health_and_api(monkeypatch):
         assert "12 MHz" in body["streams"]["raw"]
         assert "/ws/raw" in body["connect"]
         assert "?streams=" in body["connect"]
-        assert body["auth"]["query"] == "token"
-        assert "header" not in body["auth"]
+        assert "auth" not in body
         assert client.get("/api/flights").status_code == 404
         assert client.get("/api/stats").status_code == 404
 
@@ -216,34 +215,6 @@ def test_websocket_allows_same_host_even_if_not_in_allowlist():
             "/ws/live",
             headers={"Origin": "http://testserver", "Host": "testserver"},
         ) as ws:
-            hello = ws.receive_json()
-            assert hello["type"] == "hello"
-
-
-def test_websocket_rejects_missing_token():
-    from fastapi.testclient import TestClient
-    from starlette.websockets import WebSocketDisconnect
-
-    config = make_config()
-    config.web.token = "secret"
-    app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
-    with TestClient(app) as client:
-        try:
-            with client.websocket_connect("/ws/live") as ws:
-                ws.receive_json()
-            raise AssertionError("expected websocket to close")
-        except WebSocketDisconnect as exc:
-            assert exc.code == 1008
-
-
-def test_websocket_accepts_token_query():
-    from fastapi.testclient import TestClient
-
-    config = make_config()
-    config.web.token = "secret"
-    app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
-    with TestClient(app) as client:
-        with client.websocket_connect("/ws/live?token=secret") as ws:
             hello = ws.receive_json()
             assert hello["type"] == "hello"
 

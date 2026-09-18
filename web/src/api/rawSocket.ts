@@ -17,9 +17,7 @@ function connect() {
   isClosed = false;
   if (ws) return;
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = new URLSearchParams(window.location.search).get('token');
-  const qs = token ? `?token=${encodeURIComponent(token)}` : '';
-  ws = new WebSocket(`${protocol}//${window.location.host}/ws/raw${qs}`);
+  ws = new WebSocket(`${protocol}//${window.location.host}/ws/raw`);
 
   ws.onopen = () => {
     backoff = 1000;

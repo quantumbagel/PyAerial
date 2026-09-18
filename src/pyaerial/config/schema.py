@@ -222,7 +222,6 @@ class ZoneConfig(_Strict):
 
 
 class WebConfig(_Strict):
-    token: str | None = None
     origins: list[str] = Field(default_factory=lambda: ["*"])
 
 

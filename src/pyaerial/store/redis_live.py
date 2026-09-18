@@ -56,6 +56,7 @@ def _engine_heartbeat_payload(token: str, seen_at: float | None = None) -> str:
         }
     )
 
+
 _KEY_FLIGHTS = "live:flights"
 _KEY_FLIGHT = "live:flight:{flight_id}"
 _KEY_TELEMETRY = "live:telemetry:{flight_id}"
@@ -120,7 +121,15 @@ class RedisLiveStore:
             self.client.ping()
             if self._reported_down:
                 log.info("Reconnected to Redis at %s", self.uri)
-                self._backfill_redis_from_mem()
+                if self.writer:
+                    if not self.claim_engine():
+                        self.writer = False
+                        log.error(
+                            "Reconnected to Redis but another engine holds "
+                            "live:engine; yielding the live writer"
+                        )
+                    else:
+                        self._backfill_redis_from_mem()
             else:
                 log.info("Connected to Redis at %s", self.uri)
             self._reported_down = False
@@ -211,7 +220,11 @@ class RedisLiveStore:
         try:
             raw = self.client.get(_KEY_ENGINE)
             doc = _safe_json_loads(raw) if raw else None
-            if raw and not self._owns_heartbeat(doc) and self._heartbeat_is_fresh(doc, now):
+            if (
+                raw
+                and not self._owns_heartbeat(doc)
+                and self._heartbeat_is_fresh(doc, now)
+            ):
                 return
             self.client.set(_KEY_ENGINE, payload, ex=LIVE_ENGINE_TTL_SECONDS)
         except RedisError as exc:
@@ -248,6 +261,27 @@ class RedisLiveStore:
             return False
         return self._heartbeat_is_fresh(doc)
 
+    def ensure_writer(self) -> bool:
+        """True if this process may write live Redis keys.
+
+        Redis down: keep tracking in memory. Once Redis is back, reclaim the
+        heartbeat or yield if another engine holds a fresh token.
+        """
+        if self.memory_only:
+            return True
+        if not self.writer:
+            return False
+        if not self._ensure_connected() or self.client is None:
+            return True
+        if self.other_engine_is_live() or not self.claim_engine():
+            self.writer = False
+            log.error(
+                "Another tracking engine holds a fresh live:engine heartbeat; "
+                "yielding the live writer"
+            )
+            return False
+        return True
+
     def claim_engine(self) -> bool:
         """Take ownership of the live writer heartbeat, or refuse if another engine is up.
 
@@ -263,7 +297,9 @@ class RedisLiveStore:
             return True
         payload = _engine_heartbeat_payload(self._engine_token, now)
         try:
-            if self.client.set(_KEY_ENGINE, payload, ex=LIVE_ENGINE_TTL_SECONDS, nx=True):
+            if self.client.set(
+                _KEY_ENGINE, payload, ex=LIVE_ENGINE_TTL_SECONDS, nx=True
+            ):
                 return True
             raw = self.client.get(_KEY_ENGINE)
             doc = _safe_json_loads(raw) if raw else None
@@ -279,12 +315,20 @@ class RedisLiveStore:
             return True
 
     def clear_engine(self) -> None:
-        """Drop the engine heartbeat so readers immediately see it as stopped."""
+        """Drop this process's engine heartbeat so readers see it as stopped.
+
+        A foreign live token is left alone so a yielding loser cannot drop
+        the winner's heartbeat.
+        """
         self._mem.engine_seen_at = None
         if not self._ensure_connected():
             return
         assert self.client is not None
         try:
+            raw = self.client.get(_KEY_ENGINE)
+            doc = _safe_json_loads(raw) if raw else None
+            if raw and not self._owns_heartbeat(doc):
+                return
             self.client.delete(_KEY_ENGINE)
         except RedisError as exc:
             log.debug("Could not clear engine heartbeat: %s", exc)
@@ -315,6 +359,8 @@ class RedisLiveStore:
 
     def write_live_planes(self, planes: dict[str, dict]) -> None:
         if not planes:
+            return
+        if not self.writer and not self.memory_only:
             return
         for plane in planes.values():
             self._upsert_live_flight(plane)
@@ -366,7 +412,7 @@ class RedisLiveStore:
         else:
             self._mem.alert_episodes.insert(0, doc)
 
-        if not self._ensure_connected():
+        if not self.writer or not self._ensure_connected():
             return
         assert self.client is not None
         encoded = json_dumps(doc)
@@ -436,7 +482,7 @@ class RedisLiveStore:
                 self._mem.alert_episodes[i] = doc
                 break
 
-        if not self._ensure_connected():
+        if not self.writer or not self._ensure_connected():
             return
         assert self.client is not None
         try:
@@ -655,7 +701,10 @@ class RedisLiveStore:
                     raw_alerts = []
                     for value in self.client.hvals(_KEY_ACTIVE_ALERTS):
                         parsed = _safe_json_loads(value)
-                        if isinstance(parsed, dict) and parsed.get("flight_id") == flight_id:
+                        if (
+                            isinstance(parsed, dict)
+                            and parsed.get("flight_id") == flight_id
+                        ):
                             raw_alerts.append(value)
                 else:
                     raw_alerts = self.client.hvals(
@@ -705,6 +754,11 @@ class RedisLiveStore:
             if a.get("flight_id") == flight_id:
                 self._mem.active_alerts.pop(a["alert_id"], None)
 
+        if not self.writer:
+            return {
+                "flight": mem_flight,
+                "alerts": mem_alerts,
+            }
         if not self._ensure_connected():
             self._pending_pops.add(flight_id)
             return {
@@ -726,7 +780,7 @@ class RedisLiveStore:
             return {"flight": mem_flight, "alerts": mem_alerts}
 
     def retry_pending_pops(self) -> None:
-        if not self._pending_pops:
+        if not self.writer or not self._pending_pops:
             return
         if not self._ensure_connected():
             return
@@ -810,9 +864,7 @@ class RedisLiveStore:
     def _delete_redis_flight(self, flight_id: str) -> dict[str, Any]:
         assert self.client is not None
         raw_flight = self.client.get(_KEY_FLIGHT.format(flight_id=flight_id))
-        flight_alerts_raw = self.client.hgetall(
-            _KEY_ALERTS.format(flight_id=flight_id)
-        )
+        flight_alerts_raw = self.client.hgetall(_KEY_ALERTS.format(flight_id=flight_id))
         raw_alerts = list(flight_alerts_raw.values())
         active_raw = []
         for alert_id, raw in self.client.hgetall(_KEY_ACTIVE_ALERTS).items():
@@ -868,9 +920,7 @@ class RedisLiveStore:
             return
         assert self.client is not None
         try:
-            self.client.publish(
-                _RAW_CHANNEL, json_dumps(payload)
-            )
+            self.client.publish(_RAW_CHANNEL, json_dumps(payload))
         except RedisError as exc:
             log.debug("Failed to publish raw frames: %s", exc)
 
@@ -888,9 +938,7 @@ class RedisLiveStore:
 
         return remove
 
-    def start_raw_pubsub(
-        self, on_payload: Callable[[dict[str, Any]], None]
-    ) -> None:
+    def start_raw_pubsub(self, on_payload: Callable[[dict[str, Any]], None]) -> None:
         """Listen for ``live:raw`` on Redis and invoke *on_payload*.
 
         Always registers an in-process listener so tests (memory-only) and a
@@ -931,7 +979,11 @@ class RedisLiveStore:
                 pass
         thread = self._raw_thread
         self._raw_thread = None
-        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
             thread.join(timeout=2.0)
 
     def _raw_pubsub_loop(self) -> None:
@@ -1019,7 +1071,7 @@ class RedisLiveStore:
         self._mem.flights[flight_id] = flight_doc
         self._write_telemetry_points(plane, flight_id, icao)
 
-        if not self._ensure_connected():
+        if not self.writer or not self._ensure_connected():
             return
         assert self.client is not None
         encoded = json_dumps(flight_doc)
@@ -1043,7 +1095,7 @@ class RedisLiveStore:
 
         pipe = (
             self.client.pipeline()
-            if self._ensure_connected() and self.client is not None
+            if self.writer and self._ensure_connected() and self.client is not None
             else None
         )
         key = _KEY_TELEMETRY.format(flight_id=flight_id) if pipe else None
@@ -1064,9 +1116,7 @@ class RedisLiveStore:
 
             self._mem.telemetry[flight_id].append(point)
             if pipe and key:
-                pipe.zadd(
-                    key, {json_dumps(point): timestamp}
-                )
+                pipe.zadd(key, {json_dumps(point): timestamp})
             last_written = max(last_written, timestamp)
 
         # Advance the cursor after the in-memory write so a failed Redis
@@ -1107,7 +1157,9 @@ class RedisLiveStore:
                     self._delete_redis_flight(flight_id)
                     self._pending_pops.discard(flight_id)
                 except RedisError as exc:
-                    log.debug("Could not drop pending Redis flight %s: %s", flight_id, exc)
+                    log.debug(
+                        "Could not drop pending Redis flight %s: %s", flight_id, exc
+                    )
             pipe = self.client.pipeline()
             for flight_id, doc in self._mem.flights.items():
                 pipe.sadd(_KEY_FLIGHTS, flight_id)

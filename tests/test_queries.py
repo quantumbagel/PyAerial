@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import time
 
-from pyaerial.api.queries import get_stats
+import pytest
+
+from pyaerial.api.queries import (
+    get_alerts,
+    get_history_flights,
+    get_stats,
+    get_telemetry,
+)
+from pyaerial.store.history import HistoryUnavailable
 from pyaerial.store.redis_live import RedisLiveStore
 
 
@@ -85,6 +93,51 @@ def test_touch_engine_does_not_overwrite_foreign_heartbeat():
     second.client = first.client
     second.touch_engine()
     assert first.client.get("live:engine") == owned
+
+
+def test_ensure_writer_yields_to_foreign_token():
+    first = _writer_on_fake()
+    assert first.claim_engine() is True
+    second = _writer_on_fake()
+    second.client = first.client
+    assert second.ensure_writer() is False
+    assert second.writer is False
+    assert first.ensure_writer() is True
+    assert first.writer is True
+
+
+def test_clear_engine_does_not_delete_foreign_heartbeat():
+    first = _writer_on_fake()
+    assert first.claim_engine() is True
+    owned = first.client.get("live:engine")
+    second = _writer_on_fake()
+    second.client = first.client
+    second.clear_engine()
+    assert first.client.get("live:engine") == owned
+
+
+def test_write_live_planes_skips_redis_after_yield():
+    first = _writer_on_fake()
+    assert first.claim_engine() is True
+    second = _writer_on_fake()
+    second.client = first.client
+    assert second.ensure_writer() is False
+    second.write_live_planes({"x": {}})
+    assert first.client.get("live:engine") is not None
+
+
+def test_history_queries_error_when_archive_down():
+    class Down:
+        def ping(self):
+            return False
+
+    down = Down()
+    with pytest.raises(HistoryUnavailable):
+        get_history_flights(down, None)
+    with pytest.raises(HistoryUnavailable):
+        get_alerts("history", live_store=None, history=down)
+    with pytest.raises(HistoryUnavailable):
+        get_telemetry("x", "history", 0.0, live_store=None, history=down)
 
 
 def test_get_stats_without_store():

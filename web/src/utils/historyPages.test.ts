@@ -30,6 +30,14 @@ describe('fetchHistoryPages', () => {
     expect(result!.hasMore).toBe(false);
   });
 
+  it('propagates loader errors instead of treating them as an empty page', async () => {
+    await expect(
+      fetchHistoryPages(50, async () => {
+        throw new Error('archive down');
+      }),
+    ).rejects.toThrow('archive down');
+  });
+
   it('aborts when stillCurrent becomes false', async () => {
     let live = true;
     const load = vi.fn(async () => {

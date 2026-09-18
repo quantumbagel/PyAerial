@@ -56,10 +56,6 @@ def websocket_api_spec() -> dict[str, Any]:
         "websocket": WS_PATH,
         "raw_websocket": WS_RAW_PATH,
         "aliases": list(WS_ALIASES),
-        "auth": {
-            "query": "token",
-            "note": "Required only when web.token is set.",
-        },
         "connect": (
             "Open /ws/live, read the hello + snapshot (flights, alerts, stats), "
             "then either listen for pushed streams or send type=request messages. "

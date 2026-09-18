@@ -4,6 +4,21 @@ import type { Alert, FlightSummary, PortalView, TelemetryPoint } from '../api/ty
 
 const MAX_PATH_FETCHES = 4;
 
+/** True when this id still needs a path fetch (not pending, failed, or already fetched). */
+export function pathNeedsFetch(
+  flightId: string,
+  pathCoords: Record<string, [number, number][]>,
+  pending: Set<string>,
+  failed: Set<string>,
+  fetched: Set<string>,
+): boolean {
+  if (pending.has(flightId) || failed.has(flightId) || fetched.has(flightId)) {
+    return false;
+  }
+  // Empty [] is a successful fetch with no lat/lon and must stay terminal.
+  return !Object.prototype.hasOwnProperty.call(pathCoords, flightId);
+}
+
 export function useFlightPaths(
   portalView: PortalView,
   activeFlightId: string | null,
@@ -16,6 +31,7 @@ export function useFlightPaths(
 
   const pendingPathFetches = useRef(new Set<string>());
   const failedPathFetches = useRef(new Set<string>());
+  const fetchedPathFetches = useRef(new Set<string>());
   const showAllPathsRef = useRef(showAllPaths);
   const pathCoordsRef = useRef(pathCoords);
   const filteredFlightsRef = useRef(filteredFlights);
@@ -50,38 +66,24 @@ export function useFlightPaths(
       if (!showAllPathsRef.current && activeFlightIdRef.current !== flightId) return;
       const validTelemetry = telemetry.filter((p) => p.latitude != null && p.longitude != null);
       const latlngs = validTelemetry.map((p) => [p.latitude!, p.longitude!] as [number, number]);
-      if (latlngs.length === 0) {
-        setPathCoords((prev) => {
-          const next = { ...prev };
-          delete next[flightId];
-          return next;
-        });
-        setPathTelemetry((prev) => {
-          const next = { ...prev };
-          delete next[flightId];
-          return next;
-        });
-        setPathAlerts((prev) => {
-          const next = { ...prev };
-          delete next[flightId];
-          return next;
-        });
-      } else {
-        setPathCoords((prev) => ({ ...prev, [flightId]: latlngs }));
-        setPathTelemetry((prev) => ({ ...prev, [flightId]: validTelemetry }));
-        setPathAlerts((prev) => ({ ...prev, [flightId]: alerts }));
-      }
+      fetchedPathFetches.current.add(flightId);
+      setPathCoords((prev) => ({ ...prev, [flightId]: latlngs }));
+      setPathTelemetry((prev) => ({ ...prev, [flightId]: validTelemetry }));
+      setPathAlerts((prev) => ({ ...prev, [flightId]: alerts }));
     } catch (err) {
       console.error('Failed to fetch flight path', err);
       failedPathFetches.current.add(flightId);
     } finally {
       pendingPathFetches.current.delete(flightId);
       if (showAllPathsRef.current && portalViewRef.current === view) {
-        const missing = filteredFlightsRef.current.filter(
-          (f) =>
-            !pathCoordsRef.current[f.flight_id] &&
-            !pendingPathFetches.current.has(f.flight_id) &&
-            !failedPathFetches.current.has(f.flight_id),
+        const missing = filteredFlightsRef.current.filter((f) =>
+          pathNeedsFetch(
+            f.flight_id,
+            pathCoordsRef.current,
+            pendingPathFetches.current,
+            failedPathFetches.current,
+            fetchedPathFetches.current,
+          ),
         );
         const room = Math.max(0, MAX_PATH_FETCHES - pendingPathFetches.current.size);
         missing.slice(0, room).forEach((f) => {
@@ -95,8 +97,14 @@ export function useFlightPaths(
     async (flightId: string | null, view: PortalView) => {
       if (showAllPathsRef.current) {
         failedPathFetches.current.clear();
-        const missing = filteredFlightsRef.current.filter(
-          (f) => !pathCoordsRef.current[f.flight_id],
+        const missing = filteredFlightsRef.current.filter((f) =>
+          pathNeedsFetch(
+            f.flight_id,
+            pathCoordsRef.current,
+            pendingPathFetches.current,
+            failedPathFetches.current,
+            fetchedPathFetches.current,
+          ),
         );
         await Promise.all(
           missing.slice(0, MAX_PATH_FETCHES).map((f) => fetchAndSetPath(f.flight_id, view)),
@@ -124,6 +132,9 @@ export function useFlightPaths(
   }, [showAllPaths]);
 
   const resetPaths = useCallback(() => {
+    fetchedPathFetches.current.clear();
+    failedPathFetches.current.clear();
+    pendingPathFetches.current.clear();
     setPathCoords({});
     setPathTelemetry({});
     setPathAlerts({});
@@ -135,6 +146,7 @@ export function useFlightPaths(
 
   useEffect(() => {
     failedPathFetches.current.clear();
+    fetchedPathFetches.current.clear();
   }, [showAllPaths, portalView]);
 
   useEffect(() => {
@@ -153,11 +165,14 @@ export function useFlightPaths(
     setPathCoords(pruneIfNeeded);
     setPathTelemetry(pruneIfNeeded);
     setPathAlerts(pruneIfNeeded);
-    const missing = filteredFlights.filter(
-      (f) =>
-        !pathCoordsRef.current[f.flight_id] &&
-        !pendingPathFetches.current.has(f.flight_id) &&
-        !failedPathFetches.current.has(f.flight_id),
+    const missing = filteredFlights.filter((f) =>
+      pathNeedsFetch(
+        f.flight_id,
+        pathCoordsRef.current,
+        pendingPathFetches.current,
+        failedPathFetches.current,
+        fetchedPathFetches.current,
+      ),
     );
     const room = Math.max(0, MAX_PATH_FETCHES - pendingPathFetches.current.size);
     missing.slice(0, room).forEach((f) => {

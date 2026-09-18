@@ -16,7 +16,7 @@ from pyaerial.api.payloads import (
 )
 from pyaerial.api.protocol import LiveStore
 from pyaerial.enrich.aircraft_db import AircraftDB
-from pyaerial.store.history import HistoryStore
+from pyaerial.store.history import HistoryStore, HistoryUnavailable
 
 _MAX_Q = 80
 
@@ -30,6 +30,19 @@ def _normalize_q(q: str | None) -> str | None:
 
 def _history_available(history: HistoryStore | None) -> bool:
     return bool(history is not None and history.ping())
+
+
+def _require_history(history: HistoryStore | None) -> HistoryStore | None:
+    """Return the archive, or raise if it is configured but unreadable.
+
+    ``None`` means no archive is attached (empty result is correct). A store
+    that fails ``ping()`` must not look like an empty page.
+    """
+    if history is None:
+        return None
+    if not history.ping():
+        raise HistoryUnavailable("history archive is unavailable")
+    return history
 
 
 def get_live_flights(
@@ -53,9 +66,9 @@ def get_history_flights(
     since: float | None = None,
     until: float | None = None,
 ) -> list[dict[str, Any]]:
-    if not _history_available(history):
+    history = _require_history(history)
+    if history is None:
         return []
-    assert history is not None
     skip = max(0, skip)
     limit = min(max(limit, 1), 200)
     selected_docs = history.list_flights(
@@ -172,6 +185,7 @@ def get_flight_detail(
             flight_data, flight_data.get("icao", ""), aircraft_db
         )
 
+    history = _require_history(history)
     if history is None:
         return None
     doc = history.get_flight(flight_id)
@@ -239,6 +253,7 @@ def get_telemetry(
             {**telemetry_point(doc), "flight_id": flight_id}
             for doc in live_store.get_telemetry(flight_id, since=since)
         ]
+    history = _require_history(history)
     if history is None:
         return []
     return [
@@ -274,9 +289,9 @@ def get_alerts(
             skip=skip,
             active_only=resolved_active_only,
         )
-    if not _history_available(history):
+    history = _require_history(history)
+    if history is None:
         return []
-    assert history is not None
     return [
         format_alert(doc)
         for doc in history.get_alerts(
@@ -296,9 +311,7 @@ def get_stats(
     history: HistoryStore | None,
 ) -> dict[str, Any]:
     live_flights = len(live_store.get_flights()) if live_store else 0
-    active_alerts = (
-        len(live_store.get_alerts(active_only=True)) if live_store else 0
-    )
+    active_alerts = len(live_store.get_alerts(active_only=True)) if live_store else 0
     redis_ok = bool(live_store.ping()) if live_store is not None else False
     engine_seen_at = None
     getter = getattr(live_store, "engine_seen_at", None) if live_store else None

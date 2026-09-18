@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import logging
 import re
@@ -55,14 +54,6 @@ def _origin_allowed(
             return True
     return False
 
-
-def _token_ok(config: Config, token: str | None) -> bool:
-    expected = config.web.token
-    if not expected:
-        return True
-    if not token:
-        return False
-    return hmac.compare_digest(str(token), str(expected))
 
 
 def _cors_kwargs(config: Config) -> dict[str, Any]:
@@ -163,10 +154,6 @@ def create_app(
         host_header = websocket.headers.get("host")
         if not _origin_allowed(origin, host_header, config.web.origins):
             await _reject(websocket, "origin not allowed")
-            return
-        token = websocket.query_params.get("token")
-        if not _token_ok(config, token):
-            await _reject(websocket, "unauthorized")
             return
         await broadcaster.connect(
             websocket,

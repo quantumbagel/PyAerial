@@ -32,7 +32,6 @@ _ENV_OVERRIDES = {
     "PYAERIAL_LOG_LEVEL": ("logging", "level"),
     "PYAERIAL_LOG_FILE": ("logging", "file"),
     "PYAERIAL_HZ": ("tracking", "hz"),
-    "PYAERIAL_WEB_TOKEN": ("web", "token"),
     "PYAERIAL_WEB_ORIGINS": ("web", "origins"),
 }
 

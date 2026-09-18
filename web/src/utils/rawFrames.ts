@@ -56,7 +56,7 @@ export function emptyRawMessage({
 }): string {
   if (hasFilters) return 'No frames match your filters.';
   if (rawStatus === 'rejected') {
-    return 'Raw stream access denied. Check web.token / PYAERIAL_WEB_TOKEN.';
+    return 'Raw stream access denied. Check web.origins.';
   }
   if (stats?.redis === false) {
     return 'Live store (Redis) is unreachable. The portal cannot see receiver frames.';

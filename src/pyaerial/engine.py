@@ -97,6 +97,7 @@ class Engine:
         self._pending_finalize: dict[str, dict] = {}
         self._dropped_messages = 0
         self._last_drop_log = 0.0
+        self._yielded_writer = False
         if not isolated:
             if not self.live_store.claim_engine():
                 raise RuntimeError(
@@ -129,9 +130,7 @@ class Engine:
             rssi: float | None = None,
             clock: int | None = None,
         ) -> None:
-            self._enqueue_message(
-                msg_hex, timestamp, name, rssi=rssi, clock=clock
-            )
+            self._enqueue_message(msg_hex, timestamp, name, rssi=rssi, clock=clock)
 
         try:
             receiver = create_receiver(method, name, emit, arguments)
@@ -287,12 +286,20 @@ class Engine:
         try:
             while self._running and not self._shutdown.is_set():
                 start = time.time()
+                if not self._isolated and not self.live_store.ensure_writer():
+                    log.error(
+                        "Another tracking engine holds live Redis; yielding writer"
+                    )
+                    self._yielded_writer = True
+                    break
                 self._restart_dead_receivers()
 
                 raw = self._drain_messages()
                 self._publish_raw(raw)
                 pairs = [(frame.hex, frame.timestamp) for frame in raw]
-                receivers = {frame.hex: frame.receiver for frame in raw if frame.receiver}
+                receivers = {
+                    frame.hex: frame.receiver for frame in raw if frame.receiver
+                }
                 new_messages = self.tracker.collect_new_messages(pairs)
                 processed = self.tracker.ingest(new_messages, receivers=receivers)
 
@@ -317,7 +324,10 @@ class Engine:
                     f"{status}Tracking {len(self.tracker.planes)} plane(s). {summary}"
                 )
                 now_mono = time.monotonic()
-                if now_mono - self._last_status_log >= self.config.tracking.status_interval:
+                if (
+                    now_mono - self._last_status_log
+                    >= self.config.tracking.status_interval
+                ):
                     log.info("%s", status_line)
                     self._last_status_log = now_mono
                 else:
@@ -355,15 +365,22 @@ class Engine:
             if handle.thread.ident is not None:
                 handle.thread.join(timeout=2.0)
 
-        for plane in list(self.tracker.planes.values()):
-            self._finalize_plane(plane)
-        self.tracker.planes.clear()
-        self._retry_pending_finalizes()
-        self._retry_orphan_live_flights()
-        self.live_store.retry_pending_pops()
+        if self._yielded_writer:
+            log.info(
+                "Yielded live writer; leaving Redis and in-flight archive "
+                "to the other engine"
+            )
+            self.tracker.planes.clear()
+        else:
+            for plane in list(self.tracker.planes.values()):
+                self._finalize_plane(plane)
+            self.tracker.planes.clear()
+            self._retry_pending_finalizes()
+            self._retry_orphan_live_flights()
+            self.live_store.retry_pending_pops()
+            self.live_store.clear_engine()
 
         self.calculator.close()
-        self.live_store.clear_engine()
         self.live_store.close()
         self.history_store.close()
         self.aircraft_db.close()

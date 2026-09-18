@@ -3,7 +3,12 @@ from __future__ import annotations
 import threading
 import time
 
-from pyaerial.constants import STORE_FIRST_PACKET, STORE_ICAO, STORE_INFO, STORE_INTERNAL
+from pyaerial.constants import (
+    STORE_FIRST_PACKET,
+    STORE_ICAO,
+    STORE_INFO,
+    STORE_INTERNAL,
+)
 from pyaerial.engine import (
     Engine,
     _RECEIVER_BACKOFF_INITIAL,
@@ -161,7 +166,9 @@ def test_message_queue_drops_oldest(tmp_path):
 def test_pending_finalize_is_capped(tmp_path, monkeypatch):
     engine = _engine(tmp_path)
     try:
-        monkeypatch.setattr(engine.history_store, "finalize_plane", lambda *a, **k: False)
+        monkeypatch.setattr(
+            engine.history_store, "finalize_plane", lambda *a, **k: False
+        )
         popped: list[str] = []
         monkeypatch.setattr(
             engine.live_store, "pop_flight", lambda flight_id: popped.append(flight_id)
@@ -206,6 +213,23 @@ def test_pending_finalize_retries_then_clears(tmp_path, monkeypatch):
         engine._retry_pending_finalizes()
         assert engine._pending_finalize == {}
         assert popped == ["abc123-1"]
+    finally:
+        engine.shutdown()
+
+
+def test_yielded_shutdown_skips_finalize(tmp_path, monkeypatch):
+    engine = _engine(tmp_path)
+    try:
+        engine._yielded_writer = True
+        engine.tracker.planes["abc123"] = _plane()
+        called: list[int] = []
+        monkeypatch.setattr(
+            engine, "_finalize_plane", lambda *args, **kwargs: called.append(1)
+        )
+        monkeypatch.setattr(engine.live_store, "clear_engine", lambda: called.append(2))
+        engine.shutdown()
+        assert called == []
+        assert engine.tracker.planes == {}
     finally:
         engine.shutdown()
 

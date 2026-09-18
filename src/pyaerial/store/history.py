@@ -34,6 +34,17 @@ _FLIGHT_STATUS_COMPLETED = "completed"
 _FLIGHT_STATUS_LIVE = "live"
 
 
+class HistoryUnavailable(RuntimeError):
+    """Configured SQLite archive cannot be read."""
+
+
+def _unavailable(action: str, exc: sqlite3.Error | None = None) -> HistoryUnavailable:
+    if exc is not None:
+        log.warning("History database unavailable for %s: %s", action, exc)
+        return HistoryUnavailable(f"history archive is unavailable ({action}): {exc}")
+    return HistoryUnavailable(f"history archive is unavailable ({action})")
+
+
 def _bind_eta(eta: Any) -> float | None:
     if eta is None:
         return None
@@ -83,9 +94,7 @@ def build_telemetry_docs(
 
 
 def _contains_pattern(query: str) -> str:
-    escaped = (
-        query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    )
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
 
 
@@ -398,9 +407,7 @@ class HistoryStore:
                                 alert_id,
                                 flight_id,
                                 alert.get("icao", icao),
-                                alert.get("callsign")
-                                or info.get(STORE_CALLSIGN)
-                                or "",
+                                alert.get("callsign") or info.get(STORE_CALLSIGN) or "",
                                 alert.get("zone", ""),
                                 alert.get("rule", ""),
                                 1 if alert.get("active", False) else 0,
@@ -439,7 +446,7 @@ class HistoryStore:
         until: float | None = None,
     ) -> list[dict[str, Any]]:
         if not self._ensure_connected():
-            return []
+            raise _unavailable("flights")
         assert self._conn is not None
         clauses = ["status != ?", "retained = 1"]
         params: list[Any] = [_FLIGHT_STATUS_LIVE]
@@ -466,12 +473,11 @@ class HistoryStore:
                 rows = self._conn.execute(sql, params).fetchall()
             return [self._flight_from_row(row) for row in rows]
         except sqlite3.Error as exc:
-            log.warning("History database unavailable for flights: %s", exc)
-            return []
+            raise _unavailable("flights", exc) from exc
 
     def get_flight(self, flight_id: str) -> dict[str, Any] | None:
         if not self._ensure_connected():
-            return None
+            raise _unavailable("flight")
         assert self._conn is not None
         try:
             with self._lock:
@@ -480,14 +486,13 @@ class HistoryStore:
                 ).fetchone()
             return self._flight_from_row(row) if row else None
         except sqlite3.Error as exc:
-            log.warning("History database unavailable for flight %s: %s", flight_id, exc)
-            return None
+            raise _unavailable("flight", exc) from exc
 
     def get_telemetry(
         self, flight_id: str, *, since: float = 0.0
     ) -> list[dict[str, Any]]:
         if not self._ensure_connected():
-            return []
+            raise _unavailable("telemetry")
         assert self._conn is not None
         sql = "SELECT * FROM telemetry WHERE flight_id = ?"
         params: list[Any] = [flight_id]
@@ -500,14 +505,13 @@ class HistoryStore:
                 rows = self._conn.execute(sql, params).fetchall()
             return [self._telemetry_from_row(row) for row in rows]
         except sqlite3.Error as exc:
-            log.warning(
-                "History database unavailable for telemetry %s: %s", flight_id, exc
-            )
-            return []
+            raise _unavailable("telemetry", exc) from exc
 
     def latest_telemetry(self, flight_ids: list[str]) -> dict[str, dict[str, Any]]:
-        if not flight_ids or not self._ensure_connected():
+        if not flight_ids:
             return {}
+        if not self._ensure_connected():
+            raise _unavailable("latest telemetry")
         assert self._conn is not None
         placeholders = ",".join("?" * len(flight_ids))
         sql = f"""
@@ -525,8 +529,7 @@ class HistoryStore:
                 rows = self._conn.execute(sql, flight_ids).fetchall()
             return {row["flight_id"]: self._telemetry_from_row(row) for row in rows}
         except sqlite3.Error as exc:
-            log.warning("History database unavailable for latest telemetry: %s", exc)
-            return {}
+            raise _unavailable("latest telemetry", exc) from exc
 
     def get_alerts(
         self,
@@ -540,7 +543,7 @@ class HistoryStore:
         skip: int = 0,
     ) -> list[dict[str, Any]]:
         if not self._ensure_connected():
-            return []
+            raise _unavailable("alerts")
         assert self._conn is not None
         clauses: list[str] = []
         params: list[Any] = []
@@ -579,12 +582,13 @@ class HistoryStore:
                 rows = self._conn.execute(sql, params).fetchall()
             return [self._alert_from_row(row) for row in rows]
         except sqlite3.Error as exc:
-            log.warning("History database unavailable for alerts: %s", exc)
-            return []
+            raise _unavailable("alerts", exc) from exc
 
     def alerts_for_flights(self, flight_ids: list[str]) -> list[dict[str, Any]]:
-        if not flight_ids or not self._ensure_connected():
+        if not flight_ids:
             return []
+        if not self._ensure_connected():
+            raise _unavailable("alert stats")
         assert self._conn is not None
         placeholders = ",".join("?" * len(flight_ids))
         try:
@@ -595,8 +599,7 @@ class HistoryStore:
                 ).fetchall()
             return [self._alert_from_row(row) for row in rows]
         except sqlite3.Error as exc:
-            log.warning("History database unavailable for alert stats: %s", exc)
-            return []
+            raise _unavailable("alert stats", exc) from exc
 
     def count_flights(self) -> int:
         if not self._ensure_connected():

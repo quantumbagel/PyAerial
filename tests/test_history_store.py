@@ -22,7 +22,9 @@ from pyaerial.constants import (
     STORE_RECV_DATA,
 )
 from pyaerial.models import Datum
-from pyaerial.store.history import HistoryStore
+import pytest
+
+from pyaerial.store.history import HistoryStore, HistoryUnavailable
 from helpers import make_config, make_rule
 from pyaerial.config.schema import ZoneConfig
 
@@ -169,7 +171,11 @@ def test_finalize_persists_alert_reason_dict_and_finite_eta(tmp_path):
             "activated_at": 1.0,
             "deactivated_at": 9.0,
             "eta": float("inf"),
-            "reason": {"zones": {"pad": float("inf")}, "rule": "warn", "hook": "deactivate"},
+            "reason": {
+                "zones": {"pad": float("inf")},
+                "rule": "warn",
+                "hook": "deactivate",
+            },
             "position": {"type": "Point", "coordinates": [-78.695, 35.725]},
         }
     ]
@@ -237,9 +243,7 @@ def test_portal_history_queries_use_sqlite(tmp_path):
     )
     assert detail is not None
     assert detail["model"] == "A320"
-    tel = get_telemetry(
-        "abc123-1", "history", 0.0, live_store=None, history=store
-    )
+    tel = get_telemetry("abc123-1", "history", 0.0, live_store=None, history=store)
     assert len(tel) == 2
     hist_alerts = get_alerts("history", live_store=None, history=store, q="warn")
     assert len(hist_alerts) == 1
@@ -268,4 +272,15 @@ def test_reset_and_delete_icao(tmp_path):
     store.reset_all()
     assert store.list_flights() == []
     assert store.count_alerts() == 0
+    store.close()
+
+
+def test_list_flights_errors_when_disconnected(tmp_path):
+    store = _store(tmp_path, disabled=True)
+    with pytest.raises(HistoryUnavailable):
+        store.list_flights()
+    with pytest.raises(HistoryUnavailable):
+        store.get_alerts()
+    with pytest.raises(HistoryUnavailable):
+        store.get_telemetry("abc123-1")
     store.close()

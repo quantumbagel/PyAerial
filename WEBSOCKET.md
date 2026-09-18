@@ -10,9 +10,7 @@ PyAerial exposes real-time aircraft tracking, spatial alert notifications, histo
 | `ws://<host>:<port>/ws/raw` | `pyaerial.raw` | `antenna`, `raw`, `ping` | Not supported | Low-level RF frame stream directly from receivers |
 | `http://<host>:<port>/api` | HTTP (JSON) | None | None | Machine-readable API discovery specification |
 
-**Authentication and access control**
-
-When `web.token` or the `PYAERIAL_WEB_TOKEN` environment variable is defined, connecting clients must supply the shared secret through the `?token=` query parameter. Connections failing authentication are rejected immediately with WebSocket closure code `1008` (`unauthorized`).
+**Origin validation**
 
 Browser-based connections validate the HTTP `Origin` header against entries declared in `web.origins`. Setting `web.origins: ["*"]` accepts any browser origin, while native TCP and backend clients omitting the `Origin` header connect unconditionally. Unauthorized origins are rejected with closure code `1008` (`origin not allowed`).
 
@@ -273,11 +271,9 @@ import json
 import websockets
 
 SERVER_URI = "ws://127.0.0.1:10090/ws/live"
-AUTH_TOKEN = None  # Set if web.token is configured in config.yaml
-
+ 
 async def monitor_flights():
-    uri = f"{SERVER_URI}?token={AUTH_TOKEN}" if AUTH_TOKEN else SERVER_URI
-    async with websockets.connect(uri) as ws:
+    async with websockets.connect(SERVER_URI) as ws:
         handshake = json.loads(await ws.recv())
         assert handshake.get("type") == "hello", "Invalid server handshake"
 
@@ -335,11 +331,8 @@ interface ServerMessage {
   error?: string;
 }
 
-const TOKEN = process.env.PYAERIAL_WEB_TOKEN;
-const WS_URL = TOKEN
-  ? `ws://127.0.0.1:10090/ws/live?token=${encodeURIComponent(TOKEN)}`
-  : 'ws://127.0.0.1:10090/ws/live';
-
+const WS_URL = 'ws://127.0.0.1:10090/ws/live';
+ 
 const ws = new WebSocket(WS_URL);
 
 ws.on('open', () => {

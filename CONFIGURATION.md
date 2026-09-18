@@ -15,7 +15,7 @@ String values support environment variable interpolation via `${VAR}` and `${VAR
 | `receivers` | Named transport inputs (`dump1090`, `replay`) |
 | `zones` | Named polygonal geofences and associated rule arrays |
 | `alert_colors` | Hex color overrides mapped to rule names for map rendering |
-| `web` | Optional API authentication token and allowed browser origins (documented in [WEBSOCKET.md](WEBSOCKET.md)) |
+| `web` | Allowed browser origins (documented in [WEBSOCKET.md](WEBSOCKET.md)) |
 
 **Annotated configuration**
 
@@ -49,7 +49,7 @@ alert_colors:
   alert: "#ef4444"
 
 # web:
-#   token: "shared-secret"
+#   origins: ["*"]
 
 receivers:
   main:
