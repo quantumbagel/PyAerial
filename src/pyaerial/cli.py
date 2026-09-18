@@ -110,7 +110,11 @@ def _cmd_run(args: argparse.Namespace) -> None:
     except ConfigError as exc:
         print(f"Configuration error:\n{exc}", file=sys.stderr)
         sys.exit(1)
-    run_engine(config, aircraft_db_path=args.aircraft_db)
+    try:
+        run_engine(config, aircraft_db_path=args.aircraft_db)
+    except RuntimeError as exc:
+        print(f"Engine error:\n{exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _cmd_validate(args: argparse.Namespace) -> None:

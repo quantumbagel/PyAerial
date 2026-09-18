@@ -20,6 +20,7 @@ from pyaerial.view.format import (
     format_timestamp,
     packet_field_name,
 )
+from pyaerial.view.live_display import live_empty_message
 
 
 def _engine_is_live(live_store: Any, now: float | None = None) -> bool:
@@ -43,14 +44,33 @@ def cmd_status(history: HistoryStore | None, live_store: Any = None) -> None:
         history_summary = "Saved history database: disconnected."
 
     if live_store is not None:
-        try:
-            live_flights = live_store.get_flights()
-            live_summary = f"Live tracking: {len(live_flights)} active flight(s)."
-        except Exception:
-            live_summary = "Live store: unavailable."
+        live_summary = _live_status_line(live_store)
         print(f"{live_summary} {history_summary}")
     else:
         print(history_summary)
+
+
+def _live_status_line(live_store: Any) -> str:
+    ping = getattr(live_store, "ping", None)
+    redis_ok = True
+    try:
+        if callable(ping):
+            redis_ok = bool(ping())
+    except Exception:
+        redis_ok = False
+    if not redis_ok:
+        return live_empty_message(redis_ok=False)
+    try:
+        live_flights = live_store.get_flights() or []
+    except Exception:
+        return "Live store: unavailable."
+    if live_flights:
+        return f"Live tracking: {len(live_flights)} active flight(s)."
+    seen = None
+    getter = getattr(live_store, "engine_seen_at", None)
+    if callable(getter):
+        seen = getter()
+    return live_empty_message(redis_ok=True, engine_seen_at=seen)
 
 
 def cmd_list(
@@ -149,8 +169,13 @@ def cmd_reset(
             )
             return True, ""
 
+        history_ok = True
         if history is not None:
-            history.reset_all()
+            reset = getattr(history, "reset_all", None)
+            history_ok = bool(reset()) if callable(reset) else True
+            if not history_ok:
+                print("[err] History database is disconnected; nothing was reset.")
+                return False, ""
 
         if live_store is not None and hasattr(live_store, "clear_all"):
             if _engine_is_live(live_store):
@@ -160,10 +185,9 @@ def cmd_reset(
                     "`pyaerial run` first to drop live tracks. History was reset."
                 )
                 return False, ""
-            else:
-                live_store.clear_all()
-                print("[success] Database reset. Dropped all planes and flights.")
-                return False, ""
+            live_store.clear_all()
+            print("[success] Database reset. Dropped all planes and flights.")
+            return False, ""
 
         print("[success] History reset.")
         return False, ""
@@ -175,8 +199,15 @@ def cmd_reset(
         )
         return True, target
 
+    history_ok = True
     if history is not None:
-        history.delete_icao(target)
+        delete = getattr(history, "delete_icao", None)
+        history_ok = bool(delete(target)) if callable(delete) else True
+        if not history_ok:
+            print(
+                f"[err] History database is disconnected; plane {target} was not deleted."
+            )
+            return False, ""
     if live_store is not None:
         if _engine_is_live(live_store):
             print(
@@ -216,14 +247,35 @@ def cmd_dump(
             print("[err] dump aircraft requires an ICAO id")
             return
         plane = parts[2]
-        record = aircraft_db.lookup_cached(plane) if aircraft_db else None
+        lookup = None
+        if aircraft_db is not None:
+            lookup = getattr(aircraft_db, "lookup_cached_fast", None) or getattr(
+                aircraft_db, "lookup_cached", None
+            )
+        record = lookup(plane) if callable(lookup) else None
         print(json.dumps(record, indent=2) if record else "No record found.")
         return
 
     if arg == "live":
-        live_flights = []
-        if live_store is not None:
-            live_flights = live_store.get_flights()
+        if live_store is None:
+            print("[]")
+            return
+        ping = getattr(live_store, "ping", None)
+        try:
+            redis_ok = bool(ping()) if callable(ping) else True
+        except Exception:
+            redis_ok = False
+        if not redis_ok:
+            print(live_empty_message(redis_ok=False))
+            return
+        live_flights = live_store.get_flights() or []
+        if not live_flights:
+            seen = None
+            getter = getattr(live_store, "engine_seen_at", None)
+            if callable(getter):
+                seen = getter()
+            print(live_empty_message(redis_ok=True, engine_seen_at=seen))
+            return
         print(json.dumps(live_flights, indent=2, default=str))
         return
 
@@ -342,7 +394,12 @@ def _display_plane_details(
     plane_id: str,
     aircraft_db: AircraftDB,
 ) -> None:
-    meta = aircraft_db.lookup_cached(plane_id) if aircraft_db else {}
+    lookup = None
+    if aircraft_db:
+        lookup = getattr(aircraft_db, "lookup_cached_fast", None) or getattr(
+            aircraft_db, "lookup_cached", None
+        )
+    meta = lookup(plane_id) if callable(lookup) else {}
     if not meta:
         meta = {}
     callsign = meta.get("callsign") or "n/a"

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from pyaerial.calc.kalman import KinematicKalmanFilter
 from pyaerial.config.schema import Config
+from pyaerial.constants import MIN_VEL_DT
 from pyaerial.units import MPS_TO_KMH
 
 _MIN_KALMAN_SPEED_MPS = 1.4
@@ -33,7 +34,7 @@ def estimate_turn_rate_deg_s(
     Small rates are snapped to zero so straight tracks stay straight
     in curved ETA projection.
     """
-    if elapsed_s <= 0:
+    if elapsed_s < MIN_VEL_DT:
         return 0.0 if prev_smoothed is None else prev_smoothed
 
     raw = heading_delta_deg(heading_then, heading_now) / elapsed_s

@@ -69,6 +69,30 @@ def test_unknown_receiver_rejected():
         _validate_cross_references(config, "config.yaml")
 
 
+def test_dump1090_beast_on_avr_port_rejected():
+    config = make_config(
+        receivers={
+            "main": ReceiverConfig(
+                type="dump1090", host="localhost", port=30002, format="beast"
+            )
+        }
+    )
+    with pytest.raises(ConfigError, match="Beast binary"):
+        _validate_cross_references(config, "config.yaml")
+
+
+def test_dump1090_avr_on_beast_port_rejected():
+    config = make_config(
+        receivers={
+            "main": ReceiverConfig(
+                type="dump1090", host="localhost", port=30005, format="avr"
+            )
+        }
+    )
+    with pytest.raises(ConfigError, match="AVR text"):
+        _validate_cross_references(config, "config.yaml")
+
+
 def test_unknown_alerter_rejected():
     from pathlib import Path
 

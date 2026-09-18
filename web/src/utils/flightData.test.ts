@@ -86,4 +86,45 @@ describe('applyTelemetryPoint', () => {
     expect(next[0].heading).toBe(90);
     expect(next[0].latitude).toBe(35.71);
   });
+
+  it('applies velocity-only points without requiring coordinates', () => {
+    const existing = flight({
+      flight_id: 'live_1',
+      is_live: true,
+      latitude: 35.7,
+      longitude: -78.7,
+      speed: 180,
+      heading: 90,
+      timestamp: 200,
+    });
+    const next = applyTelemetryPoint([existing], {
+      flight_id: 'live_1',
+      timestamp: 300,
+      speed: 210,
+      heading: 95,
+    });
+    expect(next[0].latitude).toBe(35.7);
+    expect(next[0].speed).toBe(210);
+    expect(next[0].heading).toBe(95);
+  });
+
+  it('ignores older telemetry than the current summary', () => {
+    const existing = flight({
+      flight_id: 'live_1',
+      is_live: true,
+      latitude: 35.7,
+      longitude: -78.7,
+      speed: 180,
+      timestamp: 400,
+    });
+    const next = applyTelemetryPoint([existing], {
+      flight_id: 'live_1',
+      timestamp: 300,
+      speed: 10,
+      latitude: 1,
+      longitude: 1,
+    });
+    expect(next[0].speed).toBe(180);
+    expect(next[0].latitude).toBe(35.7);
+  });
 });

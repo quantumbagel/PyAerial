@@ -125,6 +125,38 @@ def test_finalize_does_not_replace_completed_telemetry(tmp_path):
     store.close()
 
 
+def test_finalize_upgrades_when_incoming_telemetry_is_longer(tmp_path):
+    store = _store(tmp_path)
+    alerts = [
+        {
+            "alert_id": "abc123-1:pad:warn",
+            "zone": "pad",
+            "rule": "warn",
+            "activated_at": 1.0,
+            "deactivated_at": 80.0,
+        }
+    ]
+    short = _plane()
+    short[STORE_RECV_DATA][STORE_LAT] = [Datum(35.725, 1.0)]
+    short[STORE_RECV_DATA][STORE_LONG] = [Datum(-78.695, 1.0)]
+    assert store.finalize_plane(short, alerts=alerts, from_snapshot=True) is True
+    assert len(store.get_telemetry("abc123-1")) == 1
+    longer = _plane()
+    assert store.finalize_plane(longer, alerts=alerts) is True
+    points = store.get_telemetry("abc123-1")
+    assert len(points) == 2
+    assert points[0]["latitude"] == 35.725
+    store.close()
+
+
+def test_snapshot_finalize_keeps_uninteresting_track(tmp_path):
+    store = _store(tmp_path)
+    plane = _plane()
+    assert store.finalize_plane(plane, alerts=[], from_snapshot=True) is True
+    assert store.count_flights() == 1
+    store.close()
+
+
 def test_finalize_persists_alert_reason_dict_and_finite_eta(tmp_path):
     store = _store(tmp_path)
     alerts = [

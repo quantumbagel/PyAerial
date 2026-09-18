@@ -32,7 +32,7 @@ _LOCAL_ORIGIN = re.compile(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 
 def _origin_allowed(
     origin: str | None,
-    _host_header: str | None,
+    host_header: str | None,
     allowed: list[str] | None = None,
 ) -> bool:
     if not origin:
@@ -48,6 +48,11 @@ def _origin_allowed(
     allowed_norm = {item.rstrip("/") for item in allowed}
     if origin_norm in allowed_norm or origin_host in {item.lower() for item in allowed}:
         return True
+    if host_header:
+        origin_netloc = (parsed.netloc or "").lower()
+        host_norm = host_header.split(",")[0].strip().lower()
+        if origin_netloc and origin_netloc == host_norm:
+            return True
     return False
 
 

@@ -195,7 +195,7 @@ def test_pending_finalize_retries_then_clears(tmp_path, monkeypatch):
 
         calls = {"n": 0}
 
-        def _finalize(plane, alerts=None):
+        def _finalize(plane, alerts=None, **_kwargs):
             calls["n"] += 1
             return calls["n"] > 1
 
@@ -238,7 +238,7 @@ def test_finalize_closes_active_alerts(tmp_path, monkeypatch):
         )
         captured: list[list] = []
 
-        def _finalize(plane, alerts=None):
+        def _finalize(plane, alerts=None, **_kwargs):
             captured.append(list(alerts or []))
             return True
 

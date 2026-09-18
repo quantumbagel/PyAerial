@@ -102,7 +102,7 @@ export interface ServerStats {
   engine_seen_at?: number | null;
 }
 
-export type WsStatus = 'connecting' | 'connected' | 'reconnecting';
+export type WsStatus = 'connecting' | 'connected' | 'reconnecting' | 'rejected';
 
 export type LiveMessage =
   | { type: 'hello'; protocol: string; version: number; streams: string[]; actions: string[] }

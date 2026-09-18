@@ -7,7 +7,7 @@
 | `pyaerial run` | Tracking engine (writes Redis and SQLite) |
 | `pyaerial web` | Portal (reads Redis and SQLite; does not track) |
 | `pyaerial validate` | Config syntax, schema, and cross-references |
-| `pyaerial view` | Interactive viewer (`list`, `dump aircraft`, `status`, `live`) |
+| `pyaerial view` | Interactive viewer (`list`, `dump`, `reset`, `status`, `live`) |
 | `pyaerial live` | ASCII terminal table |
 
 `pyaerial web` serves `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `ws://…/ws/live` (alias `/ws`). Raw receiver frames are only on `/ws/raw` (not on `/ws/live`). Other clients can consume the live socket and request history. Prefer the `x-pyaerial-token` header when `web.token` or `PYAERIAL_WEB_TOKEN` is set (`?token=` also works).
@@ -41,6 +41,7 @@ Environment variables override values in `config.yaml`. The `-c` flag still take
 |----------|------------|-------|
 | `PYAERIAL_CONFIG` | Config path | Default file when `-c` is omitted |
 | `PYAERIAL_HISTORY` | `database.path` | SQLite history file |
+| `PYAERIAL_AIRCRAFT_DB` | `--aircraft-db` default | HexDB / Planespotters cache (cwd `aircraft.db`) |
 | `PYAERIAL_REDIS` | `database.redis_uri` | Redis URI |
 | `PYAERIAL_LOG_LEVEL` | `logging.level` | `debug`, `info`, `warning`, `error` |
 | `PYAERIAL_LOG_FILE` | `logging.file` | Log file path |

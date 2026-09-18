@@ -4,7 +4,11 @@
 #   nc localhost 30002 > src/pyaerial/examples/captures/adsb.raw
 #
 # Lines may be bare hex (`8DABCDEF...`) or `timestamp hex`.
+# Untimestamped lines are emitted as fast as the engine can take (interval: 0).
+# `speed` only scales timestamped captures (realtime multiplier).
 # Then: pyaerial run -c src/pyaerial/examples/replay.yaml
+#
+# validate requires captures/adsb.raw to exist.
 
 database:
   path: pyaerial.db
@@ -20,6 +24,7 @@ receivers:
     options:
       path: captures/adsb.raw
       speed: 4.0
+      interval: 0
       loop: true
 
 zones: {}

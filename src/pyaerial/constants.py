@@ -59,10 +59,15 @@ DEFAULT_CONFIG_FILE = os.environ.get("PYAERIAL_CONFIG", "config.yaml")
 # Redis `live:engine` heartbeat TTL. Portal treats a missing/expired key as
 # "tracking engine is not running." Keep in sync with web empty-state stale age.
 LIVE_ENGINE_TTL_SECONDS = 10
-# constants.py lives at src/pyaerial/constants.py → project root is two parents up.
-DEFAULT_AIRCRAFT_DB = str(
-    (Path(__file__).resolve().parent.parent.parent / "aircraft.db").resolve()
+# Local HexDB/Planespotters cache. Override with PYAERIAL_AIRCRAFT_DB or --aircraft-db.
+# Relative paths resolve against the process working directory, not the package layout.
+DEFAULT_AIRCRAFT_DB = os.environ.get(
+    "PYAERIAL_AIRCRAFT_DB", str(Path.cwd() / "aircraft.db")
 )
+# Dead-reckon alerts only while the last position is this fresh (seconds).
+# Ident/velocity packets keep the plane in memory for remember_planes, but
+# coasting that whole window produces false geofence hits.
+MAX_COAST_SECONDS = 5.0
 
 # --- Kinematics ---------------------------------------------------------------
 # Mid-latitude meters per degree of latitude (flat-earth local frame).

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -45,6 +46,24 @@ def _safe_json_loads(raw: Any) -> Any | None:
         return json.loads(raw)
     except (json.JSONDecodeError, TypeError, ValueError):
         return None
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _engine_heartbeat_payload(seen_at: float | None = None) -> str:
+    return json_dumps({"seen_at": seen_at if seen_at is not None else time.time(), "pid": os.getpid()})
 
 _KEY_FLIGHTS = "live:flights"
 _KEY_FLIGHT = "live:flight:{flight_id}"
@@ -183,7 +202,7 @@ class RedisLiveStore:
         if not self._ensure_connected():
             return
         assert self.client is not None
-        payload = json_dumps({"seen_at": now})
+        payload = _engine_heartbeat_payload(now)
         try:
             self.client.set(_KEY_ENGINE, payload, ex=LIVE_ENGINE_TTL_SECONDS)
         except RedisError as exc:
@@ -203,6 +222,43 @@ class RedisLiveStore:
             except (RedisError, json.JSONDecodeError, TypeError, ValueError) as exc:
                 log.debug("Could not read engine heartbeat: %s", exc)
         return self._mem.engine_seen_at
+
+    def other_engine_is_live(self) -> bool:
+        """True when another process holds a fresh live:engine heartbeat."""
+        if self.memory_only:
+            return False
+        if not self._ensure_connected() or self.client is None:
+            return False
+        try:
+            raw = self.client.get(_KEY_ENGINE)
+        except RedisError as exc:
+            log.debug("Could not read engine heartbeat: %s", exc)
+            return False
+        doc = _safe_json_loads(raw) if raw else None
+        if not isinstance(doc, dict):
+            return False
+        seen = doc.get("seen_at")
+        if not isinstance(seen, (int, float)):
+            return False
+        if time.time() - seen >= LIVE_ENGINE_TTL_SECONDS:
+            return False
+        pid = doc.get("pid")
+        if isinstance(pid, int) and pid == os.getpid():
+            return False
+        if isinstance(pid, int):
+            return _pid_is_alive(pid)
+        # Pre-pid heartbeat from an older engine: treat a fresh key as live.
+        return True
+
+    def claim_engine(self) -> bool:
+        """Take ownership of the live writer heartbeat, or refuse if another engine is up."""
+        if self.memory_only:
+            self.touch_engine()
+            return True
+        if self.other_engine_is_live():
+            return False
+        self.touch_engine()
+        return True
 
     def clear_engine(self) -> None:
         """Drop the engine heartbeat so readers immediately see it as stopped."""
@@ -1007,6 +1063,12 @@ class RedisLiveStore:
             self._mem.telemetry[flight_id] = trimmed or points[-1:]
             if pipe and key:
                 pipe.zremrangebyscore(key, "-inf", cutoff)
+                kept = self._mem.telemetry[flight_id]
+                if kept:
+                    last_point = kept[-1]
+                    last_ts = last_point.get("timestamp")
+                    if isinstance(last_ts, (int, float)) and last_ts < cutoff:
+                        pipe.zadd(key, {json_dumps(last_point): last_ts})
         if pipe:
             try:
                 pipe.execute()
@@ -1019,18 +1081,15 @@ class RedisLiveStore:
         if not self.writer or self.client is None:
             return
         try:
-            stale_ids = set(self._pending_pops)
-            try:
-                redis_ids = set(self.client.smembers(_KEY_FLIGHTS))
-            except RedisError:
-                redis_ids = set()
-            stale_ids |= redis_ids - set(self._mem.flights)
-            for flight_id in stale_ids:
+            # Only delete keys this process already decided to pop. Redis ids
+            # that are not in mem may be leftovers from a previous engine and
+            # must be archived by the engine, not wiped here.
+            for flight_id in list(self._pending_pops):
                 try:
                     self._delete_redis_flight(flight_id)
                     self._pending_pops.discard(flight_id)
                 except RedisError as exc:
-                    log.debug("Could not drop stale Redis flight %s: %s", flight_id, exc)
+                    log.debug("Could not drop pending Redis flight %s: %s", flight_id, exc)
             pipe = self.client.pipeline()
             for flight_id, doc in self._mem.flights.items():
                 pipe.sadd(_KEY_FLIGHTS, flight_id)
@@ -1061,7 +1120,7 @@ class RedisLiveStore:
             if self._mem.engine_seen_at is not None:
                 pipe.set(
                     _KEY_ENGINE,
-                    json_dumps({"seen_at": self._mem.engine_seen_at}),
+                    _engine_heartbeat_payload(self._mem.engine_seen_at),
                     ex=LIVE_ENGINE_TTL_SECONDS,
                 )
             pipe.execute()

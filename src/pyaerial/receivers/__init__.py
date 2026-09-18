@@ -25,6 +25,7 @@ __all__ = [
     "create_receiver",
     "register_builtins",
     "register_receiver",
+    "unavailable_receivers",
 ]
 
 
@@ -41,6 +42,7 @@ class Emit(Protocol):
     ) -> None: ...
 
 _REGISTRY: dict[str, type["Receiver"]] = {}
+_UNAVAILABLE: dict[str, str] = {}
 
 
 class Receiver(abc.ABC):
@@ -88,8 +90,18 @@ def available_receivers() -> list[str]:
     return sorted(_REGISTRY)
 
 
+def unavailable_receivers() -> dict[str, str]:
+    """Receiver types that failed to import, mapped to the reason."""
+    return dict(_UNAVAILABLE)
+
+
 def create_receiver(method: str, name: str, emit: Emit, arguments: dict) -> Receiver:
     """Instantiate the receiver registered under ``method``."""
+    if method in _UNAVAILABLE:
+        raise KeyError(
+            f"receiver {method!r} is unavailable ({_UNAVAILABLE[method]}). "
+            "Install the optional extra, e.g. pip install 'pyaerial[sdr]'."
+        )
     if method not in _REGISTRY:
         raise KeyError(
             f"unknown receiver method {method!r}; available: {available_receivers()}"
@@ -105,8 +117,10 @@ def register_builtins() -> None:
     try:  # pyrtlsdr / librtlsdr may be unavailable on some systems.
         from pyaerial.receivers import py1090 as _py1090  # noqa: F401
     except Exception as exc:  # pragma: no cover - optional dependency
-        logging.getLogger("pyaerial.receiver").debug(
-            "py1090 receiver unavailable: %s", exc
+        _UNAVAILABLE["py1090"] = str(exc)
+        logging.getLogger("pyaerial.receiver").warning(
+            "py1090 receiver unavailable (%s). Install with: pip install 'pyaerial[sdr]'",
+            exc,
         )
 
 

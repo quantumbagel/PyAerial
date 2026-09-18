@@ -24,6 +24,12 @@ def test_reader_skips_redis_backfill():
     store._backfill_redis_from_mem()
 
 
+def test_memory_store_claim_engine_succeeds():
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    assert store.claim_engine() is True
+    assert store.other_engine_is_live() is False
+
+
 def test_get_stats_without_store():
     stats = get_stats(None, None)
     assert stats["redis"] is False

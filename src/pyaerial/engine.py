@@ -100,6 +100,11 @@ class Engine:
         self._dropped_messages = 0
         self._last_drop_log = 0.0
         if not isolated:
+            if not self.live_store.claim_engine():
+                raise RuntimeError(
+                    "Another tracking engine is already running (fresh live Redis "
+                    "heartbeat). Stop the other `pyaerial run` process first."
+                )
             self._archive_startup_live_flights()
 
     def start_receivers(self) -> None:
@@ -366,7 +371,7 @@ class Engine:
         self.aircraft_db.close()
         log.info("Shutdown complete")
 
-    def _finalize_plane(self, plane: dict) -> None:
+    def _finalize_plane(self, plane: dict, *, from_snapshot: bool = False) -> None:
         """Deactivate alerts, persist to SQLite, then drop the live Redis copy.
 
         Redis is only popped after the archive accepts the write (or the flight
@@ -380,7 +385,9 @@ class Engine:
                 flight_id=flight_id, active_only=False
             )
         ]
-        if self.history_store.finalize_plane(plane, alerts=alerts):
+        if self.history_store.finalize_plane(
+            plane, alerts=alerts, from_snapshot=from_snapshot
+        ):
             self._pending_finalize.pop(flight_id, None)
             self.live_store.pop_flight(flight_id)
         else:
@@ -407,6 +414,7 @@ class Engine:
         if not self._pending_finalize:
             return
         still: dict[str, dict] = {}
+        tracked = {flight_id_for_plane(plane) for plane in self.tracker.planes.values()}
         for flight_id, plane in self._pending_finalize.items():
             alerts = [
                 _closed_alert(alert)
@@ -414,7 +422,10 @@ class Engine:
                     flight_id=flight_id, active_only=False
                 )
             ]
-            if self.history_store.finalize_plane(plane, alerts=alerts):
+            snapshot = flight_id not in tracked
+            if self.history_store.finalize_plane(
+                plane, alerts=alerts, from_snapshot=snapshot
+            ):
                 self.live_store.pop_flight(flight_id)
             else:
                 still[flight_id] = plane
@@ -423,7 +434,7 @@ class Engine:
     def _archive_startup_live_flights(self) -> None:
         """Persist leftover Redis live copies from a previous engine process."""
         for plane in self.live_store.planes_for_finalize():
-            self._finalize_plane(plane)
+            self._finalize_plane(plane, from_snapshot=True)
 
     def _retry_orphan_live_flights(self) -> None:
         tracked = {flight_id_for_plane(plane) for plane in self.tracker.planes.values()}
@@ -432,7 +443,7 @@ class Engine:
         for flight_id in leftover:
             plane = self.live_store.plane_for_finalize(flight_id)
             if plane is not None:
-                self._finalize_plane(plane)
+                self._finalize_plane(plane, from_snapshot=True)
 
     def _install_signal_handlers(self) -> None:
         def _handler(signum, _frame):

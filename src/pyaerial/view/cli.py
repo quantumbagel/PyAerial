@@ -19,14 +19,22 @@ from pyaerial.view.store import open_live_session
 HELP_TEXT = """
 PyAerial Flight Viewer
 
-help      - display this help text
-about     - info about PyAerial
-exit      - close this terminal
-reset     - reset database or individual planes (requires confirmation)
-list      - show summarized information (planes, flights, plane <id>)
-dump      - show raw information (plane <id>, flight <id>, live, all, aircraft <icao>)
-status    - database and live stream summary
-live      - start live flight display
+help                         - display this help text
+about                        - info about PyAerial
+exit                         - close this terminal
+reset                        - wipe history (and live Redis if the engine is stopped)
+reset <icao>                 - delete one plane from history (live skipped if engine is up)
+list planes                  - ICAOs in live Redis and history
+list flights <icao>          - flight ids for one plane
+list plane <icao>            - summary for one plane
+dump plane <icao>            - raw live + history payload for a plane
+dump <icao>                  - same as dump plane <icao>
+dump flight <icao> <flight>  - raw payload for one flight
+dump live                    - live Redis flights as JSON
+dump all                     - every plane
+dump aircraft <icao>         - cached HexDB / Planespotters record (no network)
+status                       - live Redis + history summary
+live                         - start live flight display
 """.strip()
 
 
@@ -41,7 +49,7 @@ def run_view(
     live_store = open_live_session(config)
     history = HistoryStore(config.database.path)
 
-    print("Ready for user input.")
+    print("Ready for user input. Type help for commands.")
     try:
         _run_view_loop(history, aircraft_db, live_store)
     finally:

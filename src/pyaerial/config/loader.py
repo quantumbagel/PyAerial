@@ -141,19 +141,53 @@ def _resolve_zone_files(data: dict, config_path: Path) -> dict:
 def _validate_cross_references(config: Config, path: Path) -> None:
     """Check receiver types, alerter methods, and webhook options."""
     from pyaerial.alerters import available_alerters
-    from pyaerial.receivers import available_receivers
+    from pyaerial.receivers import available_receivers, unavailable_receivers
 
     known_receivers = set(available_receivers())
-    unknown_receivers = [
-        f"{name} ({cfg.type})"
-        for name, cfg in config.receivers.items()
-        if cfg.type not in known_receivers
-    ]
-    if unknown_receivers:
+    missing_extras = unavailable_receivers()
+    unknown_receivers = []
+    extra_problems = []
+    for name, cfg in config.receivers.items():
+        if cfg.type in known_receivers:
+            continue
+        if cfg.type in missing_extras:
+            extra_problems.append(
+                f"receivers.{name}: type {cfg.type!r} is not installed "
+                f"({missing_extras[cfg.type]}). For py1090 run: pip install 'pyaerial[sdr]'"
+            )
+            continue
+        unknown_receivers.append(f"{name} ({cfg.type})")
+    if extra_problems or unknown_receivers:
+        lines = [f"configuration file {path} is invalid:"]
+        lines.extend(f"  - {item}" for item in extra_problems)
+        if unknown_receivers:
+            lines.append(
+                "  - receivers: unknown type(s): "
+                f"{', '.join(unknown_receivers)}; "
+                f"available: {', '.join(sorted(known_receivers))}"
+            )
+        raise ConfigError("\n".join(lines))
+
+    dump1090_problems: list[str] = []
+    for name, cfg in config.receivers.items():
+        if cfg.type != "dump1090":
+            continue
+        fmt = cfg.format
+        port = cfg.port
+        if port == 30002 and fmt in {"beast", "binary"}:
+            dump1090_problems.append(
+                f"receivers.{name}: format {fmt} is Beast binary; "
+                "port 30002 is AVR text. Use port 30005, or format: avr."
+            )
+        if port == 30005 and fmt in {"avr", "raw"}:
+            dump1090_problems.append(
+                f"receivers.{name}: format {fmt} is AVR text; "
+                "port 30005 is Beast binary. Use port 30002, or format: beast."
+            )
+    if dump1090_problems:
         raise ConfigError(
             f"configuration file {path} is invalid:\n"
-            f"  - receivers: unknown type(s): {', '.join(unknown_receivers)}; "
-            f"available: {', '.join(sorted(known_receivers))}"
+            + "\n".join(f"  - {item}" for item in dump1090_problems)
         )
 
     replay_problems: list[str] = []

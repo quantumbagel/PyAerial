@@ -66,11 +66,15 @@ def calculate_speed(
     current: tuple[float, float],
     previous_time: float,
     current_time: float,
-) -> float:
-    """Average ground speed (km/h) implied by moving between two fixes."""
+) -> float | None:
+    """Average ground speed (km/h) implied by moving between two fixes.
+
+    Returns ``None`` when the interval is too short to estimate speed so the
+    caller can keep the previous value instead of treating the sample as a stop.
+    """
     elapsed = current_time - previous_time
     if elapsed < MIN_SPEED_DT:
-        return 0.0
+        return None
     speed_mps = geodesic(previous, current).m / elapsed
     return min(speed_mps, MAX_SPEED_MPS) * MPS_TO_KMH
 

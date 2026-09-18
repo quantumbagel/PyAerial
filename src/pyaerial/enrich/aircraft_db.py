@@ -55,9 +55,7 @@ class AircraftDB:
     def __init__(self, path: str | Path):
         path = Path(path)
         if not path.is_absolute():
-            # Resolve relative to the project root directory
-            project_root = Path(__file__).resolve().parent.parent.parent.parent
-            path = (project_root / path).resolve()
+            path = (Path.cwd() / path).resolve()
 
         self.path = path
         # Ensure parent directory exists

@@ -120,16 +120,18 @@ export function useFlightPaths(
     if (!showAllPaths || !portalView) return;
     const keep = new Set(filteredFlights.map((f) => f.flight_id));
     if (activeFlightId) keep.add(activeFlightId);
-    const prune = <T,>(prev: Record<string, T>) => {
+    const pruneIfNeeded = <T,>(prev: Record<string, T>) => {
+      let changed = false;
       const next: Record<string, T> = {};
       for (const [id, value] of Object.entries(prev)) {
         if (keep.has(id)) next[id] = value;
+        else changed = true;
       }
-      return next;
+      return changed ? next : prev;
     };
-    setPathCoords(prune);
-    setPathTelemetry(prune);
-    setPathAlerts(prune);
+    setPathCoords(pruneIfNeeded);
+    setPathTelemetry(pruneIfNeeded);
+    setPathAlerts(pruneIfNeeded);
     const missing = filteredFlights.filter(
       (f) =>
         !pathCoordsRef.current[f.flight_id] &&
@@ -139,7 +141,7 @@ export function useFlightPaths(
     missing.slice(0, room).forEach((f) => {
       fetchAndSetPath(f.flight_id, portalView);
     });
-  }, [showAllPaths, filteredFlights, portalView, fetchAndSetPath, activeFlightId, pathCoords]);
+  }, [showAllPaths, filteredFlights, portalView, fetchAndSetPath, activeFlightId]);
 
   return {
     showAllPaths,

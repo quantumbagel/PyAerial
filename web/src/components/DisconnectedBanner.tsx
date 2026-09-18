@@ -10,11 +10,13 @@ export function DisconnectedBanner({
 }) {
   const visible = status !== 'connected' || Boolean(message);
   const text =
-    status !== 'connected'
-      ? status === 'reconnecting'
-        ? 'Reconnecting…'
-        : 'Connecting…'
-      : message || '';
+    status === 'rejected'
+      ? message || 'Access denied.'
+      : status !== 'connected'
+        ? status === 'reconnecting'
+          ? 'Reconnecting…'
+          : 'Connecting…'
+        : message || '';
   return (
     <div
       className={`disconnected-banner${visible ? ' disconnected-banner--visible' : ''}`}
@@ -22,7 +24,7 @@ export function DisconnectedBanner({
       aria-live="assertive"
       aria-hidden={!visible}
     >
-      {status !== 'connected' ? (
+      {status !== 'connected' && status !== 'rejected' ? (
         <Spinner className="disconnected-banner__spinner" />
       ) : null}
       <span className="disconnected-banner__text">{text}</span>

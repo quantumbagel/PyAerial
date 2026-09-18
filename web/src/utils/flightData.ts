@@ -231,10 +231,11 @@ export function applyTelemetryPoint(
   point: TelemetryPoint,
 ): FlightSummary[] {
   const flightId = point.flight_id;
-  if (!flightId || point.latitude == null || point.longitude == null) return flights;
+  if (!flightId) return flights;
   const next = [...flights];
   let flight = next.find((f) => f.flight_id === flightId);
   if (!flight) {
+    if (point.latitude == null || point.longitude == null) return flights;
     flight = {
       flight_id: flightId,
       icao: point.icao || '',
@@ -257,6 +258,9 @@ export function applyTelemetryPoint(
     next.push(flight);
   } else {
     const idx = next.indexOf(flight);
+    const pointTime = point.timestamp ?? 0;
+    const currentTime = flightKinematicTime(flight);
+    if (pointTime < currentTime) return flights;
     next[idx] = {
       ...flight,
       latitude: point.latitude ?? flight.latitude,

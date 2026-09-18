@@ -116,15 +116,15 @@ export function Sidebar({
     if (portalView === 'live') {
       return serverStats?.live_flights ?? flightCount;
     }
-    return serverStats?.retained_flights ?? flightCount;
+    return flightCount;
   }, [serverStats, portalView, flightCount]);
 
   const displayAlertCount = useMemo(() => {
     if (portalView === 'live') {
       return serverStats?.active_alerts ?? activeAlertsCount;
     }
-    return serverStats?.historical_alerts ?? allAlerts.length;
-  }, [serverStats, portalView, activeAlertsCount, allAlerts.length]);
+    return alerts.length;
+  }, [serverStats, portalView, activeAlertsCount, alerts.length]);
 
   const alertCountByFlight = useMemo(() => {
     const map = new Map<string, number>();

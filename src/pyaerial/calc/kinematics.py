@@ -15,7 +15,9 @@ from pyaerial.calc.motion import (
 )
 from pyaerial.config.schema import Config
 from pyaerial.constants import (
+    MAX_COAST_SECONDS,
     MAX_KALMAN_DT,
+    MIN_SPEED_DT,
     STORE_CALC_DATA,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
@@ -79,35 +81,48 @@ class Kinematics:
         current = (current_lat.value, current_lon.value)
         current_time = current_lat.time
 
+        prev_speed_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HORIZ_SPEED, [])
+        prev_heading_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HEADING, [])
+        previous_calc_speed = prev_speed_series[-1].value if prev_speed_series else 0.0
+        previous_calc_heading = (
+            prev_heading_series[-1].value if prev_heading_series else 0.0
+        )
+
         if len(lat_series) < 2:
-            speed = 0.0
-            heading = 0.0
+            speed = previous_calc_speed
+            heading = previous_calc_heading
             previous_time = current_time
         else:
-            if len(lat_series) < self.backdate:
+            # backdate_packets=1 would compare the current sample to itself.
+            steps = max(int(self.backdate), 2)
+            if len(lat_series) < steps:
                 previous_lat = lat_series[0]
             else:
-                previous_lat = lat_series[-self.backdate]
+                previous_lat = lat_series[-steps]
             previous_lon = (
                 get_latest(STORE_RECV_DATA, STORE_LONG, plane, previous_lat.time)
                 or lon_series[0]
             )
             previous = (previous_lat.value, previous_lon.value)
             previous_time = previous_lat.time
-            speed = geo.calculate_speed(previous, current, previous_time, current_time)
-            heading = geo.calculate_heading(previous, current)
+            computed = geo.calculate_speed(
+                previous, current, previous_time, current_time
+            )
+            speed = previous_calc_speed if computed is None else computed
+            if current_time - previous_time < MIN_SPEED_DT:
+                heading = previous_calc_heading
+            else:
+                heading = geo.calculate_heading(previous, current)
 
         final_speed, speed_time = self._choose_speed(plane, speed, current_time)
         final_heading = self._choose_heading(plane, heading, current_time)
 
-        prev_speed_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HORIZ_SPEED, [])
         if prev_speed_series:
             final_speed = (
                 _SPEED_SMOOTH_ALPHA * final_speed
                 + (1.0 - _SPEED_SMOOTH_ALPHA) * prev_speed_series[-1].value
             )
 
-        prev_heading_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HEADING, [])
         if prev_heading_series:
             prev_heading = prev_heading_series[-1].value
             rad_current = math.radians(final_heading)
@@ -163,9 +178,9 @@ class Kinematics:
             )
 
         now = time.time()
-        age = min(max(0.0, now - current_time), self.config.tracking.remember_planes)
+        age = max(0.0, now - current_time)
         alert_position = current
-        if age > 0.5 and motion.speed_kph > 0:
+        if 0.5 < age <= MAX_COAST_SECONDS and motion.speed_kph > 0:
             alert_position = geo.dead_reckon_curved(
                 current,
                 motion.heading_deg,

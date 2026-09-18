@@ -9,6 +9,20 @@ from pyaerial.receivers import Receiver, register_receiver
 from pyaerial.receivers.frames import parse_avr_line
 
 
+def _as_bool(value: object, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+    return default
+
+
 @register_receiver("replay")
 class ReplayReceiver(Receiver):
     """Play hex frames from a text file (optional ``timestamp hex`` per line)."""
@@ -18,9 +32,19 @@ class ReplayReceiver(Receiver):
         if not path:
             raise ValueError("replay receiver requires options.path")
         self.path = Path(str(path))
-        self.speed = float(arguments.get("speed", 1.0)) or 1.0
-        self.loop = bool(arguments.get("loop", True))
-        self.interval = float(arguments.get("interval", 0.1))
+        try:
+            self.speed = float(arguments.get("speed", 1.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("replay options.speed must be a number") from exc
+        if self.speed <= 0:
+            raise ValueError("replay options.speed must be greater than 0")
+        self.loop = _as_bool(arguments.get("loop", True), default=True)
+        try:
+            self.interval = float(arguments.get("interval", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("replay options.interval must be a number") from exc
+        if self.interval < 0:
+            raise ValueError("replay options.interval must be >= 0")
 
     def run(self) -> str | None:
         if not self.path.is_file():

@@ -29,7 +29,7 @@ def test_calculate_speed_is_kmh():
 
 def test_calculate_speed_rejects_microsecond_dt():
     speed = geo.calculate_speed((35.7, -78.7), (35.7005, -78.7), 1.0, 1.0 + 1e-6)
-    assert speed == 0.0
+    assert speed is None
 
 
 def test_wrap_longitude_and_shortest_delta():

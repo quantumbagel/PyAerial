@@ -50,3 +50,24 @@ def test_replay_loop_false_waits_until_stop(tmp_path):
     thread.join(timeout=1.0)
     assert not thread.is_alive()
     assert emitted
+
+
+def test_replay_quoted_false_does_not_loop(tmp_path):
+    path = tmp_path / "raw.txt"
+    path.write_text("AABBCC\n")
+    receiver = ReplayReceiver(
+        "replay",
+        lambda *_args: None,
+        {"path": str(path), "loop": "false", "interval": 0},
+    )
+    assert receiver.loop is False
+
+
+def test_replay_rejects_non_positive_speed(tmp_path):
+    path = tmp_path / "raw.txt"
+    path.write_text("AABBCC\n")
+    try:
+        ReplayReceiver("replay", lambda *_args: None, {"path": str(path), "speed": 0})
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "speed" in str(exc)

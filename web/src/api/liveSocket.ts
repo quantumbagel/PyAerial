@@ -3,7 +3,7 @@ import type { LiveMessage } from './types';
 export type LiveSocketHandlers = {
   onMessage: (message: LiveMessage) => void;
   onOpen?: () => void;
-  onClose?: () => void;
+  onClose?: (code?: number, reason?: string) => void;
 };
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -11,6 +11,7 @@ const MAX_QUEUE_SIZE = 64;
 
 let ws: WebSocket | null = null;
 let isClosed = false;
+let policyRejected = false;
 let backoff = 1000;
 const handlersSet = new Set<LiveSocketHandlers>();
 const pendingRequests = new Map<
@@ -83,6 +84,7 @@ function flushQueue() {
 }
 
 function connect() {
+  if (policyRejected) return;
   isClosed = false;
   if (ws) return;
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -122,10 +124,11 @@ function connect() {
 
   ws.onclose = (event) => {
     ws = null;
-    handlersSet.forEach((h) => h.onClose?.());
+    handlersSet.forEach((h) => h.onClose?.(event.code, event.reason));
     rejectAllPending('Connection closed');
 
     if (event.code === 1008) {
+      policyRejected = true;
       isClosed = true;
       return;
     }
@@ -172,6 +175,12 @@ export function sendWsRequest<T>(action: string, params: Record<string, unknown>
           params,
         }),
       );
+      return;
+    }
+
+    if (policyRejected) {
+      clearTimeout(timer);
+      reject(new Error('Connection rejected'));
       return;
     }
 

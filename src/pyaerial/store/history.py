@@ -20,7 +20,9 @@ from pyaerial.constants import (
     STORE_ICAO,
     STORE_INFO,
     STORE_INTERNAL,
+    STORE_LAT,
     STORE_MOST_RECENT_PACKET,
+    STORE_RECV_DATA,
 )
 from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.models import flight_id_for_plane, iter_telemetry_samples
@@ -262,7 +264,11 @@ class HistoryStore:
             self._close_conn()
 
     def finalize_plane(
-        self, plane: dict, *, alerts: list[dict[str, Any]] | None = None
+        self,
+        plane: dict,
+        *,
+        alerts: list[dict[str, Any]] | None = None,
+        from_snapshot: bool = False,
     ) -> bool:
         """Persist a completed flight if retention rules are met.
 
@@ -270,6 +276,10 @@ class HistoryStore:
         was written, was intentionally discarded, or persistence is disabled.
         Returns False when the flight should have been written but SQLite was
         unavailable.
+
+        ``from_snapshot`` marks a crash/orphan reconstruction from the clipped
+        live window. Those are persisted whenever they have a position or
+        alerts, and a later longer series may upgrade the archive.
         """
         if self.disabled:
             return True
@@ -278,28 +288,49 @@ class HistoryStore:
             log.error("Cannot retain flights without a Config")
             return False
         retained = should_retain(plane, alert_docs, self.config, self.polygons)
+        if not retained and from_snapshot:
+            recv = plane.get(STORE_RECV_DATA) or {}
+            retained = bool(alert_docs) or bool(recv.get(STORE_LAT))
         if not retained:
             log.debug("Discarded uninteresting flight %s", flight_id_for_plane(plane))
             return True
         if not self._ensure_connected():
             return False
         flight_id = flight_id_for_plane(plane)
+        icao = str(plane.get(STORE_INFO, {}).get(STORE_ICAO, "")).lower()
+        telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         if self.has_completed_flight(flight_id):
-            log.debug("Already archived completed flight %s", flight_id)
-            return True
-        if self._persist_completed_flight(plane, flight_id, alert_docs):
+            existing = self.telemetry_count(flight_id)
+            if len(telemetry_docs) <= existing:
+                log.debug("Already archived completed flight %s", flight_id)
+                return True
+            log.info(
+                "Upgrading archived flight %s (%d -> %d telemetry points)",
+                flight_id,
+                existing,
+                len(telemetry_docs),
+            )
+        if self._persist_completed_flight(
+            plane, flight_id, alert_docs, telemetry_docs=telemetry_docs
+        ):
             log.debug("Retained completed flight %s", flight_id)
             return True
         return False
 
     def _persist_completed_flight(
-        self, plane: dict, flight_id: str, alerts: list[dict[str, Any]]
+        self,
+        plane: dict,
+        flight_id: str,
+        alerts: list[dict[str, Any]],
+        *,
+        telemetry_docs: list[dict[str, Any]] | None = None,
     ) -> bool:
         assert self._conn is not None
         info = plane.get(STORE_INFO, {})
         internal = plane[STORE_INTERNAL]
         icao = info[STORE_ICAO].lower()
-        telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
+        if telemetry_docs is None:
+            telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         try:
             with self._lock:
                 with self._conn:
@@ -648,6 +679,20 @@ class HistoryStore:
         except sqlite3.Error:
             return False
 
+    def telemetry_count(self, flight_id: str) -> int:
+        if not self._ensure_connected():
+            return 0
+        assert self._conn is not None
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM telemetry WHERE flight_id = ?",
+                    (flight_id,),
+                ).fetchone()
+            return int(row["n"] if row is not None else 0)
+        except sqlite3.Error:
+            return 0
+
     def has_completed_flight(self, flight_id: str) -> bool:
         if not self._ensure_connected():
             return False
@@ -662,9 +707,9 @@ class HistoryStore:
         except sqlite3.Error:
             return False
 
-    def reset_all(self) -> None:
+    def reset_all(self) -> bool:
         if not self._ensure_connected():
-            return
+            return False
         assert self._conn is not None
         with self._lock:
             with self._conn:
@@ -672,10 +717,11 @@ class HistoryStore:
                 self._conn.execute("DROP TABLE IF EXISTS telemetry")
                 self._conn.execute("DROP TABLE IF EXISTS flights")
             self._ensure_schema(self._conn)
+        return True
 
-    def delete_icao(self, icao: str) -> None:
+    def delete_icao(self, icao: str) -> bool:
         if not self._ensure_connected():
-            return
+            return False
         assert self._conn is not None
         icao = icao.lower()
         with self._lock:
@@ -683,6 +729,7 @@ class HistoryStore:
                 self._conn.execute("DELETE FROM alerts WHERE icao = ?", (icao,))
                 self._conn.execute("DELETE FROM telemetry WHERE icao = ?", (icao,))
                 self._conn.execute("DELETE FROM flights WHERE icao = ?", (icao,))
+        return True
 
     def data_size(self) -> int:
         total = 0

@@ -64,9 +64,10 @@ export function usePortalData({
   const [flightsError, setFlightsError] = useState<string | null>(null);
   const [alertsError, setAlertsError] = useState<string | null>(null);
   const [wsStatus, setWsStatus] = useState<WsStatus>('connecting');
+  const [wsRejectReason, setWsRejectReason] = useState<string | null>(null);
   const [zonesError, setZonesError] = useState<string | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
-  const bootstrapError = zonesError || configError;
+  const bootstrapError = wsRejectReason || zonesError || configError;
 
   const hasMoreAlerts = useRef(true);
   const isFetchingAlerts = useRef(false);
@@ -140,25 +141,25 @@ export function usePortalData({
     const version = ++historyRefreshVersion.current;
     const filter = historyListOpts();
     try {
+      const flightLimit = Math.max(PAGE_LIMIT, flightsFetchedCount.current || PAGE_LIMIT);
+      const alertLimit = Math.max(PAGE_LIMIT, alertsFetchedCount.current || PAGE_LIMIT);
       const [flights, alerts, stats] = await Promise.all([
-        api.fetchFlights('history', filter),
-        api.fetchAlerts('history', filter),
+        api.fetchFlights('history', { ...filter, limit: flightLimit, skip: 0 }),
+        api.fetchAlerts('history', { ...filter, limit: alertLimit, skip: 0 }),
         api.fetchStats(),
       ]);
       if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
         return;
       }
-      // Do not rewind infinite-scroll pagination. Only seed / refresh the
-      // first page when the user has not loaded further pages.
-      if (!isFetchingFlights.current && flightsFetchedCount.current <= PAGE_LIMIT) {
+      if (!isFetchingFlights.current) {
         setFlightsData(sortFlights(flights));
         flightsFetchedCount.current = flights.length;
-        hasMoreFlights.current = flights.length >= PAGE_LIMIT;
+        hasMoreFlights.current = flights.length >= flightLimit;
       }
-      if (!isFetchingAlerts.current && alertsFetchedCount.current <= PAGE_LIMIT) {
+      if (!isFetchingAlerts.current) {
         setAlertsData(dedupeAlerts(alerts));
         alertsFetchedCount.current = alerts.length;
-        hasMoreAlerts.current = alerts.length >= PAGE_LIMIT;
+        hasMoreAlerts.current = alerts.length >= alertLimit;
       }
       if (stats) setServerStats(stats);
       setFlightsError(null);
@@ -371,6 +372,7 @@ export function usePortalData({
     return connectLiveSocket({
       onOpen: () => {
         setWsStatus('connected');
+        setWsRejectReason(null);
         isInitialAlertsLoad.current = true;
         loadZones();
         loadConfig();
@@ -379,8 +381,12 @@ export function usePortalData({
           const flightId = activeFlightIdRef.current;
           if (flightId) {
             api.fetchTelemetry(flightId, 'live').then((points) => {
+              if (activeFlightIdRef.current !== flightId) return;
+              if (points.length) {
+                appendSelectedTelemetryRef.current(points);
+              }
               const valid = points.filter((p) => isValidCoordinate(p.latitude, p.longitude));
-              if (!valid.length || activeFlightIdRef.current !== flightId) return;
+              if (!valid.length) return;
               setPathCoordsRef.current((prev) => ({
                 ...prev,
                 [flightId]: valid.map((p) => [p.latitude!, p.longitude!] as [number, number]),
@@ -393,8 +399,14 @@ export function usePortalData({
           }
         }
       },
-      onClose: () =>
-        setWsStatus((prev) => (prev === 'connecting' ? 'connecting' : 'reconnecting')),
+      onClose: (code, reason) => {
+        if (code === 1008) {
+          setWsStatus('rejected');
+          setWsRejectReason(reason?.trim() || 'Access denied.');
+          return;
+        }
+        setWsStatus((prev) => (prev === 'connecting' ? 'connecting' : 'reconnecting'));
+      },
       onMessage: (message) => {
         if (portalViewRef.current !== 'live') return;
         if (message.type === 'stats') {
@@ -495,14 +507,15 @@ export function usePortalData({
           });
           setAlertsError(null);
         } else if (message.type === 'telemetry') {
-          const validPoints = message.telemetry.filter((point) =>
+          const points = message.telemetry;
+          if (points.length === 0) return;
+          const validPoints = points.filter((point) =>
             isValidCoordinate(point.latitude, point.longitude),
           );
-          if (validPoints.length === 0) return;
 
           setFlightsData((prev) => {
             let next = prev;
-            validPoints.forEach((point) => {
+            points.forEach((point) => {
               next = applyTelemetryPoint(next, point);
             });
             return sortFlights(next);
@@ -510,7 +523,7 @@ export function usePortalData({
 
           const flightId = activeFlightIdRef.current;
           if (flightId) {
-            const selectedPoints = validPoints.filter((p) => p.flight_id === flightId);
+            const selectedPoints = points.filter((p) => p.flight_id === flightId);
             if (selectedPoints.length > 0) {
               appendSelectedTelemetryRef.current(selectedPoints);
             }

@@ -247,12 +247,12 @@ export function usePortalApp() {
       pendingUrlFlight.current = null;
       return;
     }
-    if (
-      portalView === 'live' &&
-      selection.selectionError === 'Flight not found.' &&
-      !selection.isLoading
-    ) {
-      portal.switchPortalView('history');
+    if (selection.selectionError === 'Flight not found.' && !selection.isLoading) {
+      if (portalView === 'live') {
+        portal.switchPortalView('history');
+      } else {
+        pendingUrlFlight.current = null;
+      }
     }
   }, [
     portalView,
@@ -268,21 +268,25 @@ export function usePortalApp() {
     if (portalView === 'history') params.set('view', 'history');
     else params.delete('view');
     if (activeFlightId) params.set('flight', activeFlightId);
-    else if (pendingUrlFlight.current) params.set('flight', pendingUrlFlight.current);
     else params.delete('flight');
     const qs = params.toString();
     const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     window.history.replaceState(null, '', next);
   }, [portalView, activeFlightId]);
 
+  const handleCloseDrawer = useCallback(() => {
+    pendingUrlFlight.current = null;
+    closeDrawer();
+  }, [closeDrawer]);
+
   useEffect(() => {
     if (portalView === 'live' && activeFlightId) {
       const exists = portal.flightsData.some((f) => f.flight_id === activeFlightId);
       if (!exists) {
-        closeDrawer();
+        handleCloseDrawer();
       }
     }
-  }, [portal.flightsData, activeFlightId, portalView, closeDrawer]);
+  }, [portal.flightsData, activeFlightId, portalView, handleCloseDrawer]);
 
   useEffect(() => {
     if (portalView === 'live' && activeFlightId) {
@@ -340,7 +344,7 @@ export function usePortalApp() {
     zonesVisible,
     setZonesVisible,
     mapRef,
-    selection,
+    selection: { ...selection, closeDrawer: handleCloseDrawer },
     portal,
     paths,
     filteredFlights,

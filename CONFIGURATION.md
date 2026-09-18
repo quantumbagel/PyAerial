@@ -172,4 +172,4 @@ Flight IDs use the form `{icao}-{first_packet_timestamp}`, for example `a1b2c3-1
 
 The historical portal pages flights and alerts 50 at a time, searches ICAO / callsign / flight id on the server, and can filter by end date.
 
-In `pyaerial view`, `dump aircraft <icao>` prints the HexDB / Planespotters cache record (`dump opensky` remains an alias).
+In `pyaerial view`, `dump aircraft <icao>` prints the HexDB / Planespotters **cache** record with no network fetch (`dump opensky` remains an alias). ICAO metadata lives in `aircraft.db` (cwd, `PYAERIAL_AIRCRAFT_DB`, or `--aircraft-db`).

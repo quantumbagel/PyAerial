@@ -45,6 +45,7 @@ class KafkaAlerter(Alerter):
         if producer is None:
             return
         data = {
+            STORE_ICAO: meta.get(STORE_ICAO),
             STORE_CALLSIGN: meta.get(STORE_CALLSIGN),
             ALERT_CAT_TYPE: meta[ALERT_CAT_TYPE],
             ALERT_CAT_ZONE: meta[ALERT_CAT_ZONE],
