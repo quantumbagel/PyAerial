@@ -135,7 +135,7 @@ def _read_unescaped(
 
     Returns ``(payload, next_index)`` on success. ``(None, None)`` means the
     buffer is incomplete. ``(None, resync_index)`` means a bare ``0x1a`` starts
-    a new frame at *resync_index* — the caller should consume up to that ESC.
+    a new frame at *resync_index*; the caller should consume up to that ESC.
     """
     out = bytearray()
     index = start

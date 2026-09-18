@@ -1,9 +1,4 @@
-"""
-Plane tracking: deduplication, state updates, and expiry.
-
-Receivers emit raw ``(hex, timestamp)`` pairs; this module deduplicates them,
-classifies new messages, and maintains the in-memory plane store.
-"""
+"""In-memory flight tracker managing deduplication, telemetry buffers, and flight lifecycles."""
 
 from __future__ import annotations
 

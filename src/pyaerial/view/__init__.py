@@ -1,4 +1,4 @@
-"""One-shot history reset."""
+"""Administrative reset and purge utilities for PyAerial datastores."""
 
 from pyaerial.view.reset import run_reset
 

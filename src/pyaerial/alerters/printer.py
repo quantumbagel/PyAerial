@@ -1,4 +1,4 @@
-"""Alerter that logs alerts (the default, dependency-free option)."""
+"""Console logging alerter dispatching triggered rule records to stdout."""
 
 from __future__ import annotations
 

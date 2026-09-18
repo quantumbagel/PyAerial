@@ -58,7 +58,6 @@ def websocket_api_spec() -> dict[str, Any]:
         "aliases": list(WS_ALIASES),
         "auth": {
             "query": "token",
-            "header": "x-pyaerial-token",
             "note": "Required only when web.token is set.",
         },
         "connect": (

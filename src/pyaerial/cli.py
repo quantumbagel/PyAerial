@@ -1,10 +1,10 @@
 """
-PyAerial command-line interface.
+Command-line interface for PyAerial tracking, validation, maintenance, and portal services.
 
-    run        Start the tracking engine (writes Redis and SQLite)
-    validate   Check a configuration file without running
-    reset      Wipe retained history (live Redis only if the engine is stopped)
-    web        Start the web portal (reads Redis and SQLite; does not track)
+    run        Start tracking engine and populate Redis/SQLite
+    validate   Validate configuration syntax, schema, and referenced paths
+    reset      Purge retained flight history (and live Redis if engine is stopped)
+    web        Serve real-time WebSocket feeds and frontend portal
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pyaerial",
-        description="ADS-B / Mode S tracking with zone rules, alerts, Redis live state, and SQLite history",
+        description="ADS-B / Mode S tracking engine with polygon rules, Redis live state, and SQLite history",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -40,62 +40,72 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command")
 
-    run_p = sub.add_parser("run", help="start the tracking engine")
+    run_p = sub.add_parser("run", help="start tracking engine")
     run_p.add_argument(
         "-c",
         "--config",
         default=DEFAULT_CONFIG_FILE,
-        help=f"configuration file (default: {DEFAULT_CONFIG_FILE})",
+        help=f"configuration file path (default: {DEFAULT_CONFIG_FILE})",
     )
     run_p.add_argument(
         "--aircraft-db",
         default=DEFAULT_AIRCRAFT_DB,
-        help=f"SQLite aircraft index (default: {DEFAULT_AIRCRAFT_DB})",
+        help=f"SQLite aircraft metadata cache (default: {DEFAULT_AIRCRAFT_DB})",
     )
     run_p.set_defaults(func=_cmd_run)
 
-    val_p = sub.add_parser("validate", help="validate a configuration file")
-    val_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
+    val_p = sub.add_parser("validate", help="validate configuration file syntax and schema")
+    val_p.add_argument(
+        "-c",
+        "--config",
+        default=DEFAULT_CONFIG_FILE,
+        help=f"configuration file path (default: {DEFAULT_CONFIG_FILE})",
+    )
     val_p.set_defaults(func=_cmd_validate)
 
     reset_p = sub.add_parser(
         "reset",
-        help="wipe retained history (live Redis only if the engine is stopped)",
+        help="purge retained flight history (and live Redis if engine is stopped)",
     )
-    reset_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
+    reset_p.add_argument(
+        "-c",
+        "--config",
+        default=DEFAULT_CONFIG_FILE,
+        help=f"configuration file path (default: {DEFAULT_CONFIG_FILE})",
+    )
     reset_p.add_argument(
         "icao",
         nargs="?",
         default=None,
-        help="delete one ICAO from history instead of wiping everything",
+        help="target single ICAO address for deletion instead of full database",
     )
     reset_p.add_argument(
         "-y",
         "--yes",
         action="store_true",
-        help="do not prompt for confirmation",
+        help="bypass interactive confirmation prompt",
     )
     reset_p.set_defaults(func=_cmd_reset)
 
-    web_p = sub.add_parser("web", help="start the live flight tracker web application")
+    web_p = sub.add_parser("web", help="start web portal and WebSocket API server")
     web_p.add_argument(
         "-c",
         "--config",
         default=DEFAULT_CONFIG_FILE,
-        help=f"configuration file (default: {DEFAULT_CONFIG_FILE})",
+        help=f"configuration file path (default: {DEFAULT_CONFIG_FILE})",
     )
     web_p.add_argument(
         "--aircraft-db",
         default=DEFAULT_AIRCRAFT_DB,
-        help=f"SQLite aircraft index (default: {DEFAULT_AIRCRAFT_DB})",
+        help=f"SQLite aircraft metadata cache (default: {DEFAULT_AIRCRAFT_DB})",
     )
     web_p.add_argument(
         "--host",
         default="127.0.0.1",
-        help="host to bind (default: 127.0.0.1; use 0.0.0.0 for LAN)",
+        help="network interface to bind (default: 127.0.0.1; use 0.0.0.0 for LAN/WAN)",
     )
     web_p.add_argument(
-        "-p", "--port", type=int, default=10090, help="port to bind (default: 10090)"
+        "-p", "--port", type=int, default=10090, help="listening port (default: 10090)"
     )
     web_p.set_defaults(func=_cmd_web)
 

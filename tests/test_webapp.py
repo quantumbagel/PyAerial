@@ -51,6 +51,8 @@ def test_health_and_api(monkeypatch):
         assert "12 MHz" in body["streams"]["raw"]
         assert "/ws/raw" in body["connect"]
         assert "?streams=" in body["connect"]
+        assert body["auth"]["query"] == "token"
+        assert "header" not in body["auth"]
         assert client.get("/api/flights").status_code == 404
         assert client.get("/api/stats").status_code == 404
 

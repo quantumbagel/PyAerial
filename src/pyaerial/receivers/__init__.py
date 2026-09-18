@@ -1,12 +1,4 @@
-"""
-Receiver plugins: sources of raw ADS-B / Mode S messages.
-
-A receiver runs in its own thread, pulls raw hex messages from some transport,
-and emits hex frames via the ``emit`` callback given to it (optional ``rssi``
-and ``clock`` keyword arguments when the transport provides them). New
-receivers register themselves with :func:`register_receiver` and are then
-selectable by name from the configuration.
-"""
+"""Receiver interfaces and registration for Mode S / ADS-B message transports."""
 
 from __future__ import annotations
 

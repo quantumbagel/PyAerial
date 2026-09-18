@@ -1,4 +1,4 @@
-"""Replay a recorded dump1090-style raw hex file."""
+"""Replay receiver streaming recorded Mode S frames from text capture files."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _as_bool(value: object, default: bool = True) -> bool:
 
 @register_receiver("replay")
 class ReplayReceiver(Receiver):
-    """Play hex frames from a text file (optional ``timestamp hex`` per line)."""
+    """Ingest Mode S hex frames from disk with optional timestamp pacing."""
 
     def configure(self, arguments: dict) -> None:
         path = arguments.get("path")

@@ -1,4 +1,4 @@
-"""Decide whether a completed flight is interesting enough to keep in history."""
+"""Evaluate flight retention against active alert episodes and reconstructed trajectory dwell thresholds."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def should_retain(
     config: Config,
     polygons: dict[str, Polygon],
 ) -> bool:
-    """Return True if this flight should be written to historical storage."""
+    """Return True if aircraft meets retention criteria for SQLite archival."""
     rules_by_key: dict[tuple[str, str], Any] = {}
     for zone_name, zone in config.zones.items():
         for rule in zone.rules:

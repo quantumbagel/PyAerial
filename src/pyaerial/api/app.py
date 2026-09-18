@@ -164,9 +164,7 @@ def create_app(
         if not _origin_allowed(origin, host_header, config.web.origins):
             await _reject(websocket, "origin not allowed")
             return
-        token = websocket.query_params.get("token") or websocket.headers.get(
-            "x-pyaerial-token"
-        )
+        token = websocket.query_params.get("token")
         if not _token_ok(config, token):
             await _reject(websocket, "unauthorized")
             return

@@ -1,4 +1,4 @@
-"""One-shot history reset. Live Redis is wiped only when the engine is stopped."""
+"""History and live cache purge operations."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def reset_history(
     icao: str | None = None,
     yes: bool = False,
 ) -> int:
-    """Wipe history (and live Redis when the engine is down). Returns a process exit code."""
+    """Purge retained SQLite flights and stopped-engine Redis keys. Returns process exit code."""
     return _reset(history, live_store, icao=icao, yes=yes)
 
 

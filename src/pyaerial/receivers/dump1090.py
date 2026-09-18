@@ -1,13 +1,4 @@
-"""
-Receiver that streams raw messages from dump1090's TCP output.
-
-Run ``dump1090 --net --raw`` (or broadcast raw messages over TCP) and point this
-receiver at the host/port.
-
-AVR text (default, port 30002) carries hex frames. Beast binary (port 30005,
-``options.format: beast``) also carries per-message RSSI (dBFS) and a
-12 MHz-tick clock.
-"""
+"""Receiver streaming raw Mode S frames from dump1090 TCP sockets (AVR or Beast format)."""
 
 from __future__ import annotations
 

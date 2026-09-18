@@ -1,4 +1,4 @@
-"""Redis-backed live flight, telemetry, and alert buffer."""
+"""Redis storage backend for active flight state, telemetry rings, and alert episodes."""
 
 from __future__ import annotations
 
@@ -149,7 +149,7 @@ class RedisLiveStore:
             return False
         if self.client is None:
             # Reconnect automatically (throttled) so a Redis that comes up after
-            # startup -- or that recovers from an outage -- is picked up without
+            # startup, or that recovers from an outage, is picked up without
             # restarting the process.
             now = time.monotonic()
             if now - self._last_connect_attempt >= _RECONNECT_DELAY:

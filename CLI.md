@@ -1,52 +1,57 @@
 # CLI
 
-`pyaerial` is the only command-line entry point.
+`pyaerial` operates the tracking pipeline, configuration validator, historical database purger, and real-time web portal.
 
-| Subcommand | Role |
-|------------|------|
-| `pyaerial run` | Tracking engine (writes Redis and SQLite) |
-| `pyaerial web` | Portal (reads Redis and SQLite; does not track) |
-| `pyaerial validate` | Config syntax, schema, and cross-references |
-| `pyaerial reset` | Wipe retained history (`--yes`; optional ICAO; live Redis only if the engine is stopped) |
+**Subcommands**
 
-`pyaerial web` serves `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `ws://…/ws/live` (alias `/ws`). Raw receiver frames are only on `/ws/raw` (not on `/ws/live`). Other clients can consume the live socket and request history. Prefer the `x-pyaerial-token` header when `web.token` or `PYAERIAL_WEB_TOKEN` is set (`?token=` also works).
+| Subcommand | Process role |
+|------------|--------------|
+| `pyaerial run` | Tracking engine (ingests frames, writes Redis live state and SQLite history) |
+| `pyaerial web` | Read-only API server and web portal (reads Redis and SQLite; does not track) |
+| `pyaerial validate` | Syntax, schema, and filesystem cross-reference verification |
+| `pyaerial reset` | Retention purger (`--yes`; optional single ICAO; clears Redis only when engine is stopped) |
 
-**Commands**
+The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias), whereas high-volume RF sensor frames stream exclusively over `/ws/raw`. When `web.token` or `PYAERIAL_WEB_TOKEN` is configured, client connections must supply the token through a `?token=` query parameter.
+
+**Command execution**
 
 ```bash
+# Start tracking engine with custom config and aircraft metadata cache
 pyaerial run -c /path/to/config.yaml --aircraft-db /path/to/aircraft.db
 
+# Validate configuration syntax and referenced geometries without starting services
 pyaerial validate -c config.yaml
 
-# Requires `pyaerial run` + Redis
+# Start web portal bound to all network interfaces
 pyaerial web -c config.yaml --host 0.0.0.0 --port 10090
 
+# Purge all retained flights, tracks, and alerts from SQLite
 pyaerial reset --yes
+
+# Purge history for a single ICAO target
 pyaerial reset --yes abc123
 
-# Capture into the YAML directory (paths are resolved relative to the file):
-# mkdir -p src/pyaerial/examples/captures
-# nc localhost 30002 > src/pyaerial/examples/captures/adsb.raw
+# Stream recorded hex capture through engine (paths resolve relative to replay.yaml)
 pyaerial run -c src/pyaerial/examples/replay.yaml
 ```
 
 **Environment overrides**
 
-Environment variables override values in `config.yaml`. The `-c` flag still takes precedence over `PYAERIAL_CONFIG`.
+Runtime settings accept environment variable overrides; explicit `-c` flags take precedence over `PYAERIAL_CONFIG`.
 
-| Variable | Config key | Notes |
-|----------|------------|-------|
-| `PYAERIAL_CONFIG` | Config path | Default file when `-c` is omitted |
-| `PYAERIAL_HISTORY` | `database.path` | SQLite history file |
-| `PYAERIAL_AIRCRAFT_DB` | `--aircraft-db` default | HexDB / Planespotters cache (cwd `aircraft.db`) |
-| `PYAERIAL_REDIS` | `database.redis_uri` | Redis URI |
-| `PYAERIAL_LOG_LEVEL` | `logging.level` | `debug`, `info`, `warning`, `error` |
-| `PYAERIAL_LOG_FILE` | `logging.file` | Log file path |
-| `PYAERIAL_HZ` | `tracking.hz` | Engine tick rate (Hz) |
-| `PYAERIAL_WEB_TOKEN` | `web.token` | Shared secret for `/ws/live` and `/ws/raw` |
-| `PYAERIAL_WEB_ORIGINS` | `web.origins` | Comma-separated origins (`*` = any) |
+| Variable | Target configuration key | Behavior |
+|----------|--------------------------|----------|
+| `PYAERIAL_CONFIG` | Config path | Default path when `-c` is omitted |
+| `PYAERIAL_HISTORY` | `database.path` | SQLite history database file path |
+| `PYAERIAL_AIRCRAFT_DB` | `--aircraft-db` default | HexDB / Planespotters cache path (`aircraft.db`) |
+| `PYAERIAL_REDIS` | `database.redis_uri` | Redis connection URI |
+| `PYAERIAL_LOG_LEVEL` | `logging.level` | Logging severity (`debug`, `info`, `warning`, `error`) |
+| `PYAERIAL_LOG_FILE` | `logging.file` | Destination log file path |
+| `PYAERIAL_HZ` | `tracking.hz` | Engine evaluation frequency in Hz |
+| `PYAERIAL_WEB_TOKEN` | `web.token` | Shared secret token for `/ws/live` and `/ws/raw` |
+| `PYAERIAL_WEB_ORIGINS` | `web.origins` | Allowed browser origins (`*` permits all) |
 
-YAML strings also expand `${VAR}` and `${VAR:-default}`. A referenced variable with no default must be set, or `pyaerial validate` / load fails.
+Configuration strings support `${VAR}` and `${VAR:-default}` environment interpolation, but referenced variables without defaults must be set in the host environment or startup validation fails.
 
 ```yaml
 on_activate:
@@ -56,15 +61,9 @@ on_activate:
       format: discord
 ```
 
-The full YAML schema is in [CONFIGURATION.md](CONFIGURATION.md).
+**WebSocket live interface (`/ws/live`)**
 
-**WebSocket**
-
-Connect to `ws://<host>:<port>/ws/live` (or `/ws`). Native clients with no `Origin` header are accepted. Browser apps on another host need `web.origins: ["*"]` or an explicit list (the default is `*`). If `web.token` is set, pass it as `x-pyaerial-token` (preferred) or `?token=`.
-
-`GET /api` is the discovery document (`websocket`, `raw_websocket`, nested `actions`). It is larger than the per-socket `hello` payload (`type`, `protocol`, `version`, `streams`, `actions`).
-
-On connect `/ws/live` sends `hello` (`protocol: pyaerial.live`), then a snapshot of `flights`, `alerts`, and `stats`. After that it pushes those streams plus `telemetry` and `ping`. Raw frames are not on this socket: connect to `/ws/raw`. The engine publishes frames on Redis `live:raw`. RSSI and `clock` are present when dump1090 is read in Beast format.
+Browser applications on distinct hosts require matching origins in `web.origins` (`*` by default), whereas native non-browser clients connect unrestricted without origin headers. Upon connecting to `/ws/live`, the server sends a `hello` handshake (`protocol: pyaerial.live`) followed immediately by snapshots for `flights`, `alerts`, and `stats`, after which it pushes incremental updates alongside `telemetry` and periodic keepalive `ping` frames. The machine-readable interface schema is queryable via `GET /api`.
 
 ```python
 import asyncio, json, websockets
@@ -90,34 +89,32 @@ async def main():
 asyncio.run(main())
 ```
 
-**Request**
+**RPC request and response format**
 
 ```json
+// Client request
 { "type": "request", "id": "1", "action": "fetchFlights", "params": { "view": "live" } }
-```
 
-**Reply**
-
-```json
+// Server response
 { "type": "response", "id": "1", "success": true, "data": [] }
 ```
 
-| Action | Params | Notes |
-|--------|--------|-------|
-| `subscribe` | `streams` (`flights`, `alerts`, `telemetry`, `stats`) | Omit or pass `[]` for the default set. `raw` is not a live stream; use `/ws/raw`. |
-| `fetchFlights` | `view` (`live` or `history`); history also takes `skip`, `limit`, `q`, `since`, `until` | History `q` matches ICAO, callsign, or flight id. `since` / `until` are unix seconds on `end_time`. History `limit` is capped at 200. |
-| `fetchFlight` | `flightId`, `view` | Single flight. Missing id returns `success: false`. |
-| `fetchTelemetry` | `flightId`, `view`, `since` | Track points after `since` |
-| `fetchAlerts` | `view`; history also takes `skip`, `limit`, `q`, `since`, `until`, `flightId`, `rule` | History `q` matches ICAO, callsign, zone, rule, or flight id |
-| `fetchStats` | none | Live and retained counts, `redis` / `history` booleans, `engine_seen_at` |
-| `fetchZones` | none | Home, polygons, `alert_colors` |
-| `fetchConfig` | none | Portal display config |
+**WebSocket actions**
 
-Pushed `/ws/live` message types are `hello`, `flights`, `alerts`, `telemetry`, `stats`, and `ping`. `/ws/raw` sends `hello` (`protocol: pyaerial.raw`, no live actions), `antenna`, `raw`, and `ping`.
+| Action | Parameters | Semantics |
+|--------|------------|-----------|
+| `subscribe` | `streams` (`flights`, `alerts`, `telemetry`, `stats`) | Filters active push streams on this connection. Default or `[]` enables all four. `raw` is rejected; use `/ws/raw`. |
+| `fetchFlights` | `view` (`live` or `history`), `skip`, `limit`, `q`, `since`, `until` | Historical `q` filters on ICAO, callsign, or flight ID. `since`/`until` filter epoch seconds on `end_time`. Max limit: 200. |
+| `fetchFlight` | `flightId`, `view` | Returns single flight document. Returns `success: false` if missing. |
+| `fetchTelemetry` | `flightId`, `view`, `since` | Returns track coordinate points recorded after `since` epoch seconds. |
+| `fetchAlerts` | `view`, `skip`, `limit`, `q`, `since`, `until`, `flightId`, `rule` | Historical `q` filters across ICAO, callsign, zone, rule, or flight ID. |
+| `fetchStats` | None | Returns active/retained flight counts, store connectivity flags, and engine heartbeat timestamp. |
+| `fetchZones` | None | Returns home coordinates, polygon geometries, and `alert_colors`. |
+| `fetchConfig` | None | Returns active UI display configuration. |
 
-**Raw sensor stream**
+**Raw sensor interface (`/ws/raw`)**
 
-`/ws/raw` speaks `pyaerial.raw` and does not accept live RPCs (`fetchFlights`, `subscribe`, …). It sends `hello`, then `antenna` (home lat/lon and configured receivers), then `raw` batches as the engine sees frames:
+`/ws/raw` isolates raw RF frames using the `pyaerial.raw` subprotocol and rejects live RPC actions. Connecting clients receive a `hello` handshake, an `antenna` message containing receiver coordinates and configurations, followed by continuous `raw` message batches.
 
 ```json
 {
@@ -137,4 +134,6 @@ Pushed `/ws/live` message types are `hello`, `flights`, `alerts`, `telemetry`, `
 }
 ```
 
-`rssi` (dBFS) and `clock` (dump1090 12 MHz ticks: 48-bit integer, 1 tick = 1/12 000 000 s ≈ 83.3 ns; not unix time) appear when the dump1090 receiver uses Beast (`format: beast`, typically port 30005) or timestamped AVR (`@CLOCKHEX;`). Classic AVR `*HEX;` on port 30002 is hex-only. `df` and `icao` are filled for DF17/18 frames. `timestamp` on each message is unix seconds (engine receive time).
+While standard AVR text (`*HEX;` on port 30002) supplies unadorned hex payloads, Beast binary (`format: beast` on port 30005) and timestamped AVR (`@CLOCKHEX;`) populate `rssi` in dBFS and a 12 MHz hardware sample counter (`clock`, where 1 tick ≈ 83.33 ns). Downlink format `df` and transponder `icao` are populated whenever DF17 or DF18 messages are decoded, and `timestamp` reflects engine reception time in unix epoch seconds.
+
+Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).

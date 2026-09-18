@@ -1,8 +1,4 @@
-"""
-Process entry for the FastAPI web portal.
-
-Application factory and routes live in :mod:`pyaerial.api.app`.
-"""
+"""FastAPI portal process hosting WebSocket feeds and browser assets."""
 
 from __future__ import annotations
 

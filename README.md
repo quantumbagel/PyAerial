@@ -1,12 +1,10 @@
 # PyAerial
 
-_Scanning software for ADS-B / Mode S for AERPAW_
-
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://python.org)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Version](https://img.shields.io/badge/version-0.19.0-green.svg)](pyproject.toml)
 
-PyAerial decodes ADS-B / Mode S frames, tracks aircraft, evaluates polygon zone rules, fires alerts, streams live state over WebSocket, and archives retained flights to SQLite.
+PyAerial decodes Mode S / ADS-B transponder messages, computes real-time aircraft kinematics, evaluates polygon geofence rules, broadcasts live state over WebSockets, and archives matching flights into SQLite.
 
 **Architecture**
 
@@ -55,68 +53,69 @@ graph TD
     WEBAPP <--> WEBUI
 ```
 
-**Behavior**
+**System capabilities**
 
-- Decodes position, altitude, horizontal and vertical velocity, direction, callsign, and ICAO category via [`pyModeS`](https://github.com/junzis/pymodes).
-- Can read dump1090 over TCP and a recorded hex file (`replay`) at the same time. USB SDR input is dump1090 (`docker compose --profile sdr`), not an in-process decoder.
-- Zones are named polygons (inline coordinates, or a KML / KMZ / GeoJSON `file`) with independent `when` rules on `altitude`, `speed` / `horizontal_speed`, `heading` / `direction`, `distance`, `proximity`, and `eta`. Lifecycle hooks are `on_activate`, `on_deactivate`, and `while_active`.
-- Alerters include console `print` and HTTP POST (`webhook`).
-- Redis holds live telemetry and active alerts (`live:flight:{id}`, `live:telemetry:{id}`, `live:alerts:{id}`, `live:active_alerts`, `live:alert_episodes`). SQLite at `database.path` (default `pyaerial.db`) stores retained completed flights, track points, and alert episodes.
-- ICAO metadata (model, operator, registration, photos) is cached in `aircraft.db` after HexDB / Planespotters lookups. That file is a local cache, not a fully offline index. It stays in SQLite so restarts do not hit those APIs again.
-- The web portal shows a live radar, an alert feed, a raw frame stream, and historical flight browse with a track and telemetry table.
-- The terminal tool is `pyaerial reset` (wipe retained history).
+- Ingests raw frames from dump1090 TCP sockets (AVR or Beast binary) and recorded capture files simultaneously, delegating radio DSP decoding to external daemons.
+- Decodes position, altitude, ground speed, vertical velocity, heading, callsign, and aircraft category via [`pyModeS`](https://github.com/junzis/pymodes).
+- Evaluates polygon geofences from inline coordinates or `.kml`, `.kmz`, and `.geojson` geometries against altitude, speed, distance, and projected track ETA.
+- Dispatches alert notifications to console logs and authenticated Discord, Slack, or generic JSON webhooks across activation, steady-state, and deactivation lifecycles.
+- Maintains active flight buffers and alert episodes in Redis, while committing qualifying flights and high-resolution tracks to SQLite using Write-Ahead Logging.
+- Caches airframe details, registrations, and photo links in a local `aircraft.db` SQLite file through HexDB and Planespotters APIs.
+- Serves interactive Leaflet radar views, alert streams, raw frame diagnostics, and historical telemetry tables from an integrated FastAPI portal.
 
-**Docker**
+**Docker deployment**
 
 ```bash
 docker compose up --build
 ```
 
-Compose uses a bridge network and publishes the portal on port `10090`. Redis is not bound on the host and requires `REDIS_PASSWORD` (default `pyaerial`). Engine and web share `/data/pyaerial.db` on the `pyaerial_data` volume.
+Compose launches a private bridge network and binds the web portal to port `10090`. Redis requires authentication via `REDIS_PASSWORD` (default `pyaerial`) and remains unexposed to host interfaces, while the engine and web services share database state on the `pyaerial_data` volume (`/data/pyaerial.db`).
 
-The engine connects to dump1090 at `DUMP1090_HOST` (default `dump1090`, the optional compose service). Without the SDR profile that host is not running:
+The engine connects to dump1090 via `DUMP1090_HOST` (defaulting to the internal `dump1090` compose service container), which can be redirected to host hardware or external network feeders:
 
 ```bash
-# USB SDR: start dump1090 in the compose project
+# Ingest from physical USB SDR via compose service
 docker compose --profile sdr up --build
 
-# Existing dump1090 on the host (port 30002)
+# Ingest from existing dump1090 daemon listening on host port 30002
 DUMP1090_HOST=host.docker.internal docker compose up --build
 ```
 
-A standalone `docker run` of the image still supervises dump1090 via `scripts/run-engine.sh`. Bind the portal on all interfaces with `pyaerial web --host 0.0.0.0` (the CLI default is `127.0.0.1`).
+The portal binds `127.0.0.1` by default in local CLI environments; pass `--host 0.0.0.0` when containerizing or exposing to network interfaces.
 
-**Without Docker**
+**Host deployment**
 
-1. Set `home` and storage paths in [`config.yaml`](config.yaml).
-2. Start Redis. SQLite history is a local file (`database.path`); no extra database daemon is required.
-3. Start a feeder, for example `dump1090 --net --raw`.
-4. Start the tracking engine: `pyaerial run -c config.yaml`
-5. Start the portal: `pyaerial web -c config.yaml`. It reads Redis and SQLite and does not track. If `src/pyaerial/static/` is missing, build it first with `scripts/build_web.sh`. Open [http://localhost:10090](http://localhost:10090). If the map is empty, the portal reports whether the engine is down, Redis is unreachable, or there is simply no traffic.
+1. Define `home` coordinates and storage targets in [`config.yaml`](config.yaml).
+2. Start a Redis server instance (`redis-server`).
+3. Start the ADS-B feeder (e.g. `dump1090 --net --raw`).
+4. Launch the tracking engine: `pyaerial run -c config.yaml`
+5. Launch the web portal: `pyaerial web -c config.yaml --port 10090`. The portal is strictly read-only and reads state from Redis and SQLite without running tracking pipelines. If static assets are missing, build them via `scripts/build_web.sh`.
+6. Navigate to `http://localhost:10090`. The portal header displays discrete indicators when the engine heartbeat is lost, Redis is unreachable, or receiver feeds are quiet.
 
-**Install**
+**Installation**
 
-Requires Python 3.11 or newer and Node.js 20+. `dump1090` is recommended.
+Requires Python 3.11+ and Node.js 20+. `dump1090` is required for live radio reception.
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-**Docs**
+**Reference documentation**
 
-| Document | Contents |
-|----------|----------|
-| [CONFIGURATION.md](CONFIGURATION.md) | YAML schema, zone rules, Redis and SQLite |
-| [CLI.md](CLI.md) | Commands, environment variables, WebSocket protocol |
-| [UNITS.md](UNITS.md) | Stored units for telemetry and rule fields |
+| Document | Focus |
+|----------|-------|
+| [CONFIGURATION.md](CONFIGURATION.md) | YAML schema, spatial rule syntax, Redis schema, and SQLite tables |
+| [CLI.md](CLI.md) | Subcommands, environment variable overrides, and service execution |
+| [WEBSOCKET.md](WEBSOCKET.md) | Wire protocol, stream subscriptions, RPC action schemas, and client examples |
+| [UNITS.md](UNITS.md) | SI base units, conversion formulas, and sensor timestamp standards |
 
-| Subcommand | Role |
-|------------|------|
-| `pyaerial run` | Tracking engine (writes Redis and SQLite) |
-| `pyaerial web` | Portal (reads Redis and SQLite; does not track) |
-| `pyaerial validate` | Config syntax, schema, and cross-references |
-| `pyaerial reset` | Wipe retained history (`--yes`; live Redis only if the engine is stopped) |
+**Command-line interfaces**
 
-Flags, environment variables, and the `/ws/live` protocol are documented in [CLI.md](CLI.md).
+| Command | Process role |
+|---------|--------------|
+| `pyaerial run` | Tracking engine (ingests frames, writes Redis live state and SQLite history) |
+| `pyaerial web` | Web portal and API server (reads Redis and SQLite; does not track) |
+| `pyaerial validate` | Syntax, schema, and filesystem cross-reference verification |
+| `pyaerial reset` | Retention purger (`--yes`; clears Redis only when engine is stopped) |
 
-This project is free software under GPL-3.0-or-later. Full terms are in [LICENSE](LICENSE).
+Licensed under GPL-3.0-or-later. See [LICENSE](LICENSE).

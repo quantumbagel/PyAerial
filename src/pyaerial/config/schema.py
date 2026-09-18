@@ -1,10 +1,4 @@
-"""
-Typed configuration schema (pydantic v2).
-
-PyAerial v2 uses a flat, portal-oriented layout::
-
-    database, tracking, logging, home, receivers, zones
-"""
+"""Pydantic v2 configuration models for PyAerial tracking and infrastructure."""
 
 from __future__ import annotations
 

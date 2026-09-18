@@ -1,4 +1,4 @@
-"""Live store protocol shared by the engine, web portal, and terminal viewers."""
+"""Live store interface protocol shared across engine, API, and CLI components."""
 
 from __future__ import annotations
 

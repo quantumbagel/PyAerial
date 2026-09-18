@@ -1,5 +1,5 @@
 """
-PyAerial tracks ADS-B / Mode S aircraft, evaluates polygon zone rules, and persists retained flights.
+ADS-B and Mode S tracking pipeline with polygon rule evaluation, live WebSocket telemetry, and flight archival.
 
 (c) 2024 Julian Reder (quantumbagel)
 """

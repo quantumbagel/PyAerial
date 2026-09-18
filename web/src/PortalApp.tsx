@@ -165,7 +165,7 @@ export function PortalApp() {
         message={
           portal.bootstrapError ||
           (engineIdle
-            ? 'Tracking engine is idle. Start `pyaerial run` — frozen aircraft will expire shortly.'
+            ? 'Tracking engine is idle. Start `pyaerial run`; frozen aircraft will expire shortly.'
             : null)
         }
       />

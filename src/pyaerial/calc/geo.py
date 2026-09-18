@@ -151,7 +151,7 @@ def time_to_enter_geofence_curved(
 
     Constant speed with a constant turn rate produces a perfect circular path, so
     the entry time is solved analytically by intersecting the turn circle with
-    the geofence edges -- no time stepping, hence no discretization error. Falls
+    the geofence edges without time stepping or discretization error. Falls
     back to :func:`time_to_enter_geofence` when the turn rate is negligible.
 
     Returns the *earliest* plausible entry: when the turn circle misses the

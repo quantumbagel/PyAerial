@@ -1,6 +1,4 @@
-"""
-Loading and validation of the PyAerial configuration file.
-"""
+"""Configuration loader with environment interpolation and schema validation."""
 
 from __future__ import annotations
 

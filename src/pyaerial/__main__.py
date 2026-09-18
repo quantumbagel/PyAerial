@@ -1,4 +1,4 @@
-"""Allow ``python -m pyaerial`` to invoke the CLI."""
+"""Command-line entry point for ``python -m pyaerial``."""
 
 from pyaerial.cli import main
 

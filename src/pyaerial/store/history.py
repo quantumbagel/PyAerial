@@ -1,4 +1,4 @@
-"""SQLite persistence for retained historical flights, telemetry, and alerts."""
+"""SQLite persistence engine for retained flights, telemetry tracks, and alert episodes."""
 
 from __future__ import annotations
 

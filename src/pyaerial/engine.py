@@ -1,6 +1,4 @@
-"""
-PyAerial main engine: receiver management, main loop, and graceful shutdown.
-"""
+"""Tracking engine managing receiver threads, frame ingestion, and zone alerting."""
 
 from __future__ import annotations
 
@@ -38,7 +36,7 @@ _RAW_PUBLISH_BATCH = 2_000
 
 
 def _closed_alert(alert: dict) -> dict:
-    """Mark a live episode closed so crash-recovery history is not left active."""
+    """Mark active episode closed with a deactivation timestamp."""
     doc = dict(alert)
     if doc.get("active") and not doc.get("deactivated_at"):
         doc["active"] = False
@@ -459,6 +457,6 @@ class Engine:
 
 
 def run_engine(config: Config, *, aircraft_db_path: str = DEFAULT_AIRCRAFT_DB) -> None:
-    """Configure logging and run the engine until shutdown."""
+    """Initialize logging and execute engine event loop until termination signal."""
     setup_logging(config.logging.level, log_file=config.logging.file)
     Engine(config, aircraft_db_path=aircraft_db_path).run()
