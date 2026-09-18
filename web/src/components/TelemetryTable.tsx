@@ -47,14 +47,18 @@ export function TelemetryTable({
               </td>
             </tr>
           ) : (
-            telemetry.slice(-250).map((point) => {
+            telemetry.slice(-250).map((point, index) => {
               const timeStr = formatDateTime(point.timestamp, { withSeconds: true });
               const latVal = point.latitude != null ? point.latitude.toFixed(4) : 'N/A';
               const lonVal = point.longitude != null ? point.longitude.toFixed(4) : 'N/A';
-              const isSelected = selectedTelemetryPoint?.timestamp === point.timestamp;
+              const isSelected =
+                selectedTelemetryPoint != null &&
+                selectedTelemetryPoint.timestamp === point.timestamp &&
+                selectedTelemetryPoint.latitude === point.latitude &&
+                selectedTelemetryPoint.longitude === point.longitude;
               return (
                 <tr
-                  key={point.timestamp}
+                  key={`${point.timestamp ?? 't'}-${index}`}
                   tabIndex={0}
                   role="button"
                   onClick={() => onSelectTelemetryPoint(point)}

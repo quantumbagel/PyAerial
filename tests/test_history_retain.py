@@ -128,6 +128,47 @@ def test_retain_fallback_uses_matching_seconds_not_sample_count():
     assert should_retain(plane, [], config, polygons) is True
 
 
+def test_retain_does_not_credit_whole_flight_from_one_match():
+    from pyaerial.calc.geo import build_polygons
+
+    config = make_config(
+        zones={
+            "pad": ZoneConfig(
+                coordinates=[
+                    [35.72, -78.70],
+                    [35.73, -78.70],
+                    [35.73, -78.69],
+                    [35.72, -78.69],
+                ],
+                rules=[
+                    make_rule(
+                        name="warn",
+                        retain=True,
+                        dwell_seconds=60,
+                        eta={"max": 0},
+                    )
+                ],
+            )
+        }
+    )
+    polygons = build_polygons(config.zones)
+    plane = _plane()
+    plane[STORE_RECV_DATA][STORE_LAT] = [
+        Datum(35.0, 1.0),
+        Datum(35.725, 70.0),
+    ]
+    plane[STORE_RECV_DATA][STORE_LONG] = [
+        Datum(-78.0, 1.0),
+        Datum(-78.695, 70.0),
+    ]
+    plane[STORE_RECV_DATA][STORE_ALT] = [Datum(300.0, 1.0), Datum(300.0, 70.0)]
+    plane[STORE_CALC_DATA][STORE_HEADING] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
+    plane[STORE_CALC_DATA][STORE_HORIZ_SPEED] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
+    plane[STORE_INTERNAL][STORE_FIRST_PACKET] = 1.0
+    plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] = 70.0
+    assert should_retain(plane, [], config, polygons) is False
+
+
 def test_disabled_store_finalize_succeeds_without_sqlite():
     store = HistoryStore(":memory:", config=make_config(), polygons={}, disabled=True)
     assert store.finalize_plane(_plane(), alerts=[]) is True

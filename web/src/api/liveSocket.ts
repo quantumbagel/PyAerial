@@ -120,11 +120,15 @@ function connect() {
     }
   };
 
-  ws.onclose = () => {
+  ws.onclose = (event) => {
     ws = null;
     handlersSet.forEach((h) => h.onClose?.());
     rejectAllPending('Connection closed');
 
+    if (event.code === 1008) {
+      isClosed = true;
+      return;
+    }
     if (!isClosed) {
       setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, 10000);

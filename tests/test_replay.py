@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from pyaerial.receivers.replay import ReplayReceiver
 
 
@@ -29,3 +31,22 @@ def test_replay_missing_file():
     )
     reason = receiver.run()
     assert reason and "not found" in reason
+
+
+def test_replay_loop_false_waits_until_stop(tmp_path):
+    path = tmp_path / "raw.txt"
+    path.write_text("AABBCC\n")
+    emitted: list[str] = []
+    receiver = ReplayReceiver(
+        "replay",
+        lambda hex_msg, _ts: emitted.append(hex_msg),
+        {"path": str(path), "loop": False, "interval": 0},
+    )
+    thread = threading.Thread(target=receiver.run)
+    thread.start()
+    thread.join(timeout=0.4)
+    assert thread.is_alive()
+    receiver.stop()
+    thread.join(timeout=1.0)
+    assert not thread.is_alive()
+    assert emitted

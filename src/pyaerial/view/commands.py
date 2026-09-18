@@ -6,7 +6,12 @@ import json
 import time
 from typing import Any
 
-from pyaerial.constants import STORE_CALC_DATA, STORE_INFO, STORE_RECV_DATA
+from pyaerial.constants import (
+    LIVE_ENGINE_TTL_SECONDS,
+    STORE_CALC_DATA,
+    STORE_INFO,
+    STORE_RECV_DATA,
+)
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.store.history import HistoryStore
 from pyaerial.view.format import (
@@ -15,6 +20,14 @@ from pyaerial.view.format import (
     format_timestamp,
     packet_field_name,
 )
+
+
+def _engine_is_live(live_store: Any, now: float | None = None) -> bool:
+    getter = getattr(live_store, "engine_seen_at", None)
+    seen = getter() if callable(getter) else None
+    if not isinstance(seen, (int, float)):
+        return False
+    return (now if now is not None else time.time()) - seen < LIVE_ENGINE_TTL_SECONDS
 
 
 def cmd_status(history: HistoryStore | None, live_store: Any = None) -> None:
@@ -140,9 +153,19 @@ def cmd_reset(
             history.reset_all()
 
         if live_store is not None and hasattr(live_store, "clear_all"):
-            live_store.clear_all()
+            if _engine_is_live(live_store):
+                print(
+                    "[warning] Tracking engine is running; live Redis was not "
+                    "cleared (it would be rewritten on the next tick). Stop "
+                    "`pyaerial run` first to drop live tracks. History was reset."
+                )
+                return False, ""
+            else:
+                live_store.clear_all()
+                print("[success] Database reset. Dropped all planes and flights.")
+                return False, ""
 
-        print("[success] Database reset. Dropped all planes and flights.")
+        print("[success] History reset.")
         return False, ""
 
     target = parts[1].lower()
@@ -155,6 +178,12 @@ def cmd_reset(
     if history is not None:
         history.delete_icao(target)
     if live_store is not None:
+        if _engine_is_live(live_store):
+            print(
+                f"[warning] Tracking engine is running; live track {target} "
+                "was not dropped. Stop `pyaerial run` first. History was deleted."
+            )
+            return False, ""
         flight_ids = []
         if hasattr(live_store, "get_flights"):
             for flight in live_store.get_flights() or []:

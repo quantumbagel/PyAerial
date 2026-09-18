@@ -53,7 +53,14 @@ export const FlightSortControls = memo(function FlightSortControls({
           variant="subtle"
           aria-haspopup="listbox"
           aria-expanded={isOpen}
+          aria-controls="flight-sort-menu"
           onClick={() => setIsOpen((prev) => !prev)}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setIsOpen(true);
+            }
+          }}
         >
           <span>{selectedOption?.label ?? 'Last Seen'}</span>
           <span className="ui-chevron">{isOpen ? '▲' : '▼'}</span>
@@ -65,7 +72,6 @@ export const FlightSortControls = memo(function FlightSortControls({
           value={flightSortField}
           onChange={(e) => onFlightSortChange(e.target.value as FlightSortField)}
           tabIndex={-1}
-          aria-hidden="true"
         >
           {FLIGHT_SORT_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
@@ -75,16 +81,30 @@ export const FlightSortControls = memo(function FlightSortControls({
         </select>
 
         {isOpen && (
-          <ul className="ui-menu" role="listbox" aria-label="Sort options">
+          <ul id="flight-sort-menu" className="ui-menu" role="listbox" aria-label="Sort options">
             {FLIGHT_SORT_OPTIONS.map((option) => (
               <li
                 key={option.value}
                 role="option"
+                tabIndex={0}
                 aria-selected={option.value === flightSortField}
                 className={`ui-menu-item${option.value === flightSortField ? ' is-selected' : ''}`}
                 onClick={() => {
                   onFlightSortChange(option.value);
                   setIsOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onFlightSortChange(option.value);
+                    setIsOpen(false);
+                  } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    (e.currentTarget.nextElementSibling as HTMLElement | null)?.focus();
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    (e.currentTarget.previousElementSibling as HTMLElement | null)?.focus();
+                  }
                 }}
               >
                 {option.label}

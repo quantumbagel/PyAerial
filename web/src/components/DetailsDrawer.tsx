@@ -139,6 +139,7 @@ export function DetailsDrawer({
     (a, b) => (a.activated_at || 0) - (b.activated_at || 0),
   );
   const lastPoint = flightTelemetry.length > 0 ? flightTelemetry[flightTelemetry.length - 1] : null;
+  const readingPoint = selectedTelemetryPoint ?? lastPoint;
   const displayFlight = useMemo(() => {
     const base = flightDetail ?? flightSummary;
     if (!base) return null;
@@ -286,7 +287,7 @@ export function DetailsDrawer({
             </div>
 
             <div className="info-section">
-              <h3>Telemetry Readings</h3>
+              <h3>{selectedTelemetryPoint ? 'Selected Fix' : 'Telemetry Readings'}</h3>
               <div className="ui-fields">
                 {renderTelemetrySummary(
                   flightDetail,
@@ -297,26 +298,26 @@ export function DetailsDrawer({
                 )}
                 <span className="ui-field-label">Altitude</span>
                 <span className="ui-field-value" id="detail-altitude">
-                  {formatAltitude(lastPoint?.altitude ?? displayFlight?.altitude)}
+                  {formatAltitude(readingPoint?.altitude ?? displayFlight?.altitude)}
                 </span>
                 <span className="ui-field-label">Speed</span>
                 <span className="ui-field-value" id="detail-speed">
-                  {formatSpeed(lastPoint?.speed ?? displayFlight?.speed)}
+                  {formatSpeed(readingPoint?.speed ?? displayFlight?.speed)}
                 </span>
                 <span className="ui-field-label">Heading</span>
                 <span className="ui-field-value" id="detail-heading">
-                  {formatHeading(lastPoint?.heading ?? displayFlight?.heading)}
+                  {formatHeading(readingPoint?.heading ?? displayFlight?.heading)}
                 </span>
                 <span className="ui-field-label">Latitude</span>
                 <span className="ui-field-value" id="detail-latitude">
-                  {(lastPoint?.latitude ?? displayFlight?.latitude) != null
-                    ? (lastPoint?.latitude ?? displayFlight?.latitude)!.toFixed(5)
+                  {(readingPoint?.latitude ?? displayFlight?.latitude) != null
+                    ? (readingPoint?.latitude ?? displayFlight?.latitude)!.toFixed(5)
                     : 'N/A'}
                 </span>
                 <span className="ui-field-label">Longitude</span>
                 <span className="ui-field-value" id="detail-longitude">
-                  {(lastPoint?.longitude ?? displayFlight?.longitude) != null
-                    ? (lastPoint?.longitude ?? displayFlight?.longitude)!.toFixed(5)
+                  {(readingPoint?.longitude ?? displayFlight?.longitude) != null
+                    ? (readingPoint?.longitude ?? displayFlight?.longitude)!.toFixed(5)
                     : 'N/A'}
                 </span>
               </div>

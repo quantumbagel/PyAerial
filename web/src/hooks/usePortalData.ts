@@ -9,6 +9,11 @@ import { applyTelemetryPoint, mergeLiveFlights, sortFlights } from '../utils/fli
 const PAGE_LIMIT = 50;
 const PATH_POINT_CAP = 400;
 
+function capOverlayPath<T>(items: T[], flightId: string, selectedId: string | null): T[] {
+  if (selectedId && flightId === selectedId) return items;
+  return items.slice(-PATH_POINT_CAP);
+}
+
 function isValidCoordinate(lat?: number | null, lon?: number | null): boolean {
   return (
     typeof lat === 'number' &&
@@ -59,7 +64,9 @@ export function usePortalData({
   const [flightsError, setFlightsError] = useState<string | null>(null);
   const [alertsError, setAlertsError] = useState<string | null>(null);
   const [wsStatus, setWsStatus] = useState<WsStatus>('connecting');
-  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [zonesError, setZonesError] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const bootstrapError = zonesError || configError;
 
   const hasMoreAlerts = useRef(true);
   const isFetchingAlerts = useRef(false);
@@ -103,10 +110,10 @@ export function usePortalData({
     try {
       const data = await api.fetchZones();
       setZonesData(data);
-      setBootstrapError(null);
+      setZonesError(null);
     } catch (err) {
       console.error('Failed to fetch zones', err);
-      setBootstrapError('Could not load zones.');
+      setZonesError('Could not load zones.');
     }
   }, []);
 
@@ -114,10 +121,10 @@ export function usePortalData({
     try {
       const data = await api.fetchConfig();
       setAppConfig(data);
-      setBootstrapError(null);
+      setConfigError(null);
     } catch (err) {
       console.error('Failed to fetch config', err);
-      setBootstrapError('Could not load station config.');
+      setConfigError('Could not load station config.');
     }
   }, []);
 
@@ -376,13 +383,11 @@ export function usePortalData({
               if (!valid.length || activeFlightIdRef.current !== flightId) return;
               setPathCoordsRef.current((prev) => ({
                 ...prev,
-                [flightId]: valid
-                  .map((p) => [p.latitude!, p.longitude!] as [number, number])
-                  .slice(-PATH_POINT_CAP),
+                [flightId]: valid.map((p) => [p.latitude!, p.longitude!] as [number, number]),
               }));
               setPathTelemetryRef.current?.((prev) => ({
                 ...prev,
-                [flightId]: valid.slice(-PATH_POINT_CAP),
+                [flightId]: valid,
               }));
             }).catch(() => {});
           }
@@ -438,8 +443,10 @@ export function usePortalData({
                 next = { ...next };
                 updated = true;
               }
-              next[f.flight_id] = [...(next[f.flight_id] || existing), newCoord].slice(
-                -PATH_POINT_CAP,
+              next[f.flight_id] = capOverlayPath(
+                [...(next[f.flight_id] || existing), newCoord],
+                f.flight_id,
+                activeFlightIdRef.current,
               );
             });
 
@@ -531,7 +538,11 @@ export function usePortalData({
                 next = { ...next };
                 updated = true;
               }
-              next[fId] = [...(next[fId] || existing), newCoord].slice(-PATH_POINT_CAP);
+              next[fId] = capOverlayPath(
+                [...(next[fId] || existing), newCoord],
+                fId,
+                activeFlightIdRef.current,
+              );
             });
 
             return next;
@@ -560,7 +571,11 @@ export function usePortalData({
                   next = { ...next };
                   updated = true;
                 }
-                next[fId] = [...existing, point].slice(-PATH_POINT_CAP);
+                next[fId] = capOverlayPath(
+                  [...existing, point],
+                  fId,
+                  activeFlightIdRef.current,
+                );
               });
 
               return next;

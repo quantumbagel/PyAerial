@@ -37,6 +37,7 @@ class ReplayReceiver(Receiver):
                     return None
                 self.emit(hex_msg, time.time())
             if not self.loop:
+                self._stop.wait()
                 return "replay finished"
         return None
 

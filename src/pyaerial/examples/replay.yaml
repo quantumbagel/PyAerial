@@ -1,5 +1,7 @@
 # Replay a recorded dump1090 raw stream (no SDR required).
-# Capture with: nc localhost 30002 > captures/adsb.raw
+# Capture next to this file (paths are resolved relative to the YAML):
+#   mkdir -p src/pyaerial/examples/captures
+#   nc localhost 30002 > src/pyaerial/examples/captures/adsb.raw
 #
 # Lines may be bare hex (`8DABCDEF...`) or `timestamp hex`.
 # Then: pyaerial run -c src/pyaerial/examples/replay.yaml

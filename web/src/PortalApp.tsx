@@ -31,6 +31,7 @@ export function PortalApp() {
     setAlertSort,
     toggleAlertSortDirection,
     disableFollow,
+    engineIdle,
   } = usePortalApp();
 
   const selectedFlightSummary =
@@ -148,7 +149,15 @@ export function PortalApp() {
           />
         }
       />
-      <DisconnectedBanner status={portal.wsStatus} message={portal.bootstrapError} />
+      <DisconnectedBanner
+        status={portal.wsStatus}
+        message={
+          portal.bootstrapError ||
+          (engineIdle
+            ? 'Tracking engine is idle. Start `pyaerial run` — frozen aircraft will expire shortly.'
+            : null)
+        }
+      />
     </>
   );
 }

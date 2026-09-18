@@ -133,31 +133,14 @@ class Kinematics:
             kf.update(current[0], current[1], dt_kf)
             kf.last_update_time = current_time
 
-        window_dt = max(current_time - previous_time, 0.0)
-        window_start_heading = heading
-        lat_idx = (
-            0 if len(lat_series) < self.backdate else len(lat_series) - self.backdate
+        turn_now, turn_then, turn_dt = self._turn_headings(
+            plane, heading, current_time, lat_series
         )
-        if lat_idx >= 1:
-            lon_at = get_latest(
-                STORE_RECV_DATA, STORE_LONG, plane, lat_series[lat_idx].time
-            )
-            lon_before = get_latest(
-                STORE_RECV_DATA,
-                STORE_LONG,
-                plane,
-                lat_series[lat_idx - 1].time,
-            )
-            if lon_at is not None and lon_before is not None:
-                p0 = (lat_series[lat_idx - 1].value, lon_before.value)
-                p1 = (lat_series[lat_idx].value, lon_at.value)
-                window_start_heading = geo.calculate_heading(p0, p1)
-
         prev_turn = self._smoothed_turn_rates.get(icao)
         smoothed_turn = estimate_turn_rate_deg_s(
-            final_heading,
-            window_start_heading,
-            window_dt,
+            turn_now,
+            turn_then,
+            turn_dt,
             prev_smoothed=prev_turn,
         )
         self._smoothed_turn_rates[icao] = smoothed_turn
@@ -190,6 +173,11 @@ class Kinematics:
                 motion.turn_rate_deg_s,
                 age,
             )
+            motion = ResolvedMotion(
+                heading_deg=(motion.heading_deg + motion.turn_rate_deg_s * age) % 360.0,
+                speed_kph=motion.speed_kph,
+                turn_rate_deg_s=motion.turn_rate_deg_s,
+            )
 
         return KinematicUpdate(
             icao=icao,
@@ -212,6 +200,43 @@ class Kinematics:
             # tracks to a single speed/heading.
             return reported.value, current_time
         return computed, current_time
+
+    def _turn_headings(
+        self,
+        plane: dict,
+        geodesic_heading: float,
+        current_time: float,
+        lat_series: list,
+    ) -> tuple[float, float, float]:
+        """Turn rate from one heading source: successive ADS-B tracks, else last two geodesics."""
+        recv = plane.get(STORE_RECV_DATA, {})
+        adsb = recv.get(STORE_HEADING) or []
+        if (
+            len(adsb) >= 2
+            and current_time - adsb[-1].time < _ADS_B_TRUST_SECONDS
+        ):
+            return (
+                adsb[-1].value,
+                adsb[-2].value,
+                max(adsb[-1].time - adsb[-2].time, 0.0),
+            )
+        if len(lat_series) >= 3:
+            def _point(idx: int) -> tuple[float, float] | None:
+                lon = get_latest(
+                    STORE_RECV_DATA, STORE_LONG, plane, lat_series[idx].time
+                )
+                if lon is None:
+                    return None
+                return (lat_series[idx].value, lon.value)
+
+            p0, p1, p2 = _point(-3), _point(-2), _point(-1)
+            if p0 is not None and p1 is not None and p2 is not None:
+                return (
+                    geo.calculate_heading(p1, p2),
+                    geo.calculate_heading(p0, p1),
+                    max(lat_series[-1].time - lat_series[-2].time, 0.0),
+                )
+        return geodesic_heading, geodesic_heading, 0.0
 
     def _choose_heading(
         self, plane: dict, computed: float, current_time: float

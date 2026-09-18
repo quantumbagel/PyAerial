@@ -284,6 +284,9 @@ class HistoryStore:
         if not self._ensure_connected():
             return False
         flight_id = flight_id_for_plane(plane)
+        if self.has_completed_flight(flight_id):
+            log.debug("Already archived completed flight %s", flight_id)
+            return True
         if self._persist_completed_flight(plane, flight_id, alert_docs):
             log.debug("Retained completed flight %s", flight_id)
             return True
@@ -640,6 +643,20 @@ class HistoryStore:
                 row = self._conn.execute(
                     "SELECT 1 FROM flights WHERE icao = ? AND flight_id = ? LIMIT 1",
                     (icao.lower(), flight_id),
+                ).fetchone()
+            return row is not None
+        except sqlite3.Error:
+            return False
+
+    def has_completed_flight(self, flight_id: str) -> bool:
+        if not self._ensure_connected():
+            return False
+        assert self._conn is not None
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT 1 FROM flights WHERE flight_id = ? AND status = ? LIMIT 1",
+                    (flight_id, _FLIGHT_STATUS_COMPLETED),
                 ).fetchone()
             return row is not None
         except sqlite3.Error:

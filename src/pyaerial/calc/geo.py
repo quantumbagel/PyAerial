@@ -26,6 +26,15 @@ def meters_per_deg_lon(lat: float) -> float:
     return max(METERS_PER_DEG_LAT * math.cos(math.radians(lat)), MIN_METERS_PER_DEG_LON)
 
 
+def wrap_longitude(lon: float) -> float:
+    return ((lon + 180.0) % 360.0) - 180.0
+
+
+def shortest_lon_delta(lon: float, lon0: float) -> float:
+    """Signed longitude difference in (-180, 180]."""
+    return ((lon - lon0 + 180.0) % 360.0) - 180.0
+
+
 def build_polygons(zones: dict) -> dict[str, Polygon]:
     """Build a ``{zone_name: Polygon}`` map from the configured zones."""
     polygons: dict[str, Polygon] = {}
@@ -211,7 +220,7 @@ def time_to_enter_geofence_curved(
     candidates: list[float] = []
     for ring in rings:
         local = [
-            ((lon - lon0) * m_per_deg_lon, (lat - lat0) * m_per_deg_lat)
+            (shortest_lon_delta(lon, lon0) * m_per_deg_lon, (lat - lat0) * m_per_deg_lat)
             for lat, lon in ring
         ]
         for (ax, ay), (bx, by) in zip(local, local[1:]):
@@ -280,4 +289,4 @@ def dead_reckon_curved(
         lat += (dist_m * math.cos(rad_h)) / m_per_deg_lat
         lon += (dist_m * math.sin(rad_h)) / m_per_deg_lon
 
-    return lat, lon
+    return lat, wrap_longitude(lon)

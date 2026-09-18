@@ -67,10 +67,14 @@ class RedisLiveStore:
         *,
         memory_only: bool = False,
         telemetry_keep_seconds: float = 600.0,
+        writer: bool = False,
     ):
         self.uri = redis_uri
         self.memory_only = memory_only
         self.telemetry_keep_seconds = telemetry_keep_seconds
+        # Only the tracking engine owns Redis live keys. Portal/CLI readers
+        # reconnect without deleting flights that are missing from their empty mem.
+        self.writer = writer
         self.client: redis.Redis | None = None
         self._last_telemetry_ts: dict[str, float] = {}
         self._mem = MemoryLiveBuffer()
@@ -1012,7 +1016,7 @@ class RedisLiveStore:
 
     def _backfill_redis_from_mem(self) -> None:
         """Replay in-memory flights/telemetry/alerts after a Redis reconnect."""
-        if self.client is None:
+        if not self.writer or self.client is None:
             return
         try:
             stale_ids = set(self._pending_pops)

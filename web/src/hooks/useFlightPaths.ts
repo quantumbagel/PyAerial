@@ -139,7 +139,7 @@ export function useFlightPaths(
     missing.slice(0, room).forEach((f) => {
       fetchAndSetPath(f.flight_id, portalView);
     });
-  }, [showAllPaths, filteredFlights, portalView, fetchAndSetPath, activeFlightId]);
+  }, [showAllPaths, filteredFlights, portalView, fetchAndSetPath, activeFlightId, pathCoords]);
 
   return {
     showAllPaths,

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import time
 
-from pyaerial.view.commands import cmd_dump
+from pyaerial.view.commands import cmd_dump, cmd_reset
 from pyaerial.view.live_display import format_dump1090_table, live_empty_message
 
 
@@ -35,6 +36,19 @@ def test_live_empty_message_distinguishes_causes():
     assert live_empty_message(redis_ok=True, engine_seen_at=1_700_000_000, now=1_700_000_001) == (
         "No aircraft on the live feed."
     )
+
+
+def test_reset_skips_live_store_while_engine_is_running(capsys):
+    class _Live:
+        def engine_seen_at(self):
+            return time.time()
+
+        def clear_all(self):
+            raise AssertionError("must not clear live Redis while engine is up")
+
+    cmd_reset(None, ["reset"], last_reset=True, live_store=_Live())
+    out = capsys.readouterr().out
+    assert "engine is running" in out.lower()
 
 
 def test_format_dump1090_table_uses_empty_reason():

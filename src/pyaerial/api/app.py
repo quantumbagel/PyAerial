@@ -32,7 +32,7 @@ _LOCAL_ORIGIN = re.compile(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 
 def _origin_allowed(
     origin: str | None,
-    host_header: str | None,
+    _host_header: str | None,
     allowed: list[str] | None = None,
 ) -> bool:
     if not origin:
@@ -48,8 +48,7 @@ def _origin_allowed(
     allowed_norm = {item.rstrip("/") for item in allowed}
     if origin_norm in allowed_norm or origin_host in {item.lower() for item in allowed}:
         return True
-    request_host = (host_header or "").split(":")[0].lower()
-    return bool(origin_host) and origin_host == request_host
+    return False
 
 
 def _token_ok(config: Config, token: str | None) -> bool:
@@ -150,21 +149,21 @@ def create_app(
     def api_index():
         return websocket_api_spec()
 
-    async def _reject(websocket: WebSocket) -> None:
+    async def _reject(websocket: WebSocket, reason: str) -> None:
         await websocket.accept()
-        await websocket.close(code=1008)
+        await websocket.close(code=1008, reason=reason)
 
     async def _ws_handler(websocket: WebSocket, *, raw_only: bool) -> None:
         origin = websocket.headers.get("origin")
         host_header = websocket.headers.get("host")
         if not _origin_allowed(origin, host_header, config.web.origins):
-            await _reject(websocket)
+            await _reject(websocket, "origin not allowed")
             return
         token = websocket.query_params.get("token") or websocket.headers.get(
             "x-pyaerial-token"
         )
         if not _token_ok(config, token):
-            await _reject(websocket)
+            await _reject(websocket, "unauthorized")
             return
         await broadcaster.connect(
             websocket,

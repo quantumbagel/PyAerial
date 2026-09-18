@@ -27,6 +27,9 @@ pyaerial live --once
 
 pyaerial view [-c config.yaml]
 
+# Capture into the YAML directory (paths are resolved relative to the file):
+# mkdir -p src/pyaerial/examples/captures
+# nc localhost 30002 > src/pyaerial/examples/captures/adsb.raw
 pyaerial run -c src/pyaerial/examples/replay.yaml
 ```
 

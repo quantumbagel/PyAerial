@@ -32,6 +32,14 @@ def test_calculate_speed_rejects_microsecond_dt():
     assert speed == 0.0
 
 
+def test_wrap_longitude_and_shortest_delta():
+    assert geo.wrap_longitude(181.0) == -179.0
+    assert abs(geo.shortest_lon_delta(-179.9, 179.9)) < 0.3
+    lat, lon = geo.dead_reckon_curved((0.0, 179.9), 90.0, 400.0, 0.0, 120.0)
+    assert lon <= 180.0
+    assert lat == 0.0 or abs(lat) < 1.0
+
+
 def test_calculate_speed_clamps_unphysical():
     # 1 deg latitude in 0.5s is thousands of m/s.
     speed = geo.calculate_speed((35.0, -78.0), (36.0, -78.0), 0.0, 0.5)

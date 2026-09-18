@@ -18,6 +18,12 @@ def test_get_stats_reports_store_health_and_engine_heartbeat():
     assert get_stats(store, None)["engine_seen_at"] is None
 
 
+def test_reader_skips_redis_backfill():
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=False)
+    store.client = object()
+    store._backfill_redis_from_mem()
+
+
 def test_get_stats_without_store():
     stats = get_stats(None, None)
     assert stats["redis"] is False

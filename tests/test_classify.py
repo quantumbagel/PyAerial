@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from pyaerial.classify import classify
+from pyaerial.classify import _plausible_fix, classify
 from pyaerial.config.schema import HomeConfig
 from pyaerial.constants import STORE_HORIZ_SPEED, STORE_RECV_DATA
 from pyaerial.units import KMH_TO_KT
@@ -37,10 +37,19 @@ def test_non_adsb_typecode_is_ignored():
 
 
 def test_cpr_jump_from_last_fix_is_dropped():
-    home = HomeConfig(latitude=35.7275, longitude=-78.6959)
-    # A far-away last fix should reject a home-relative ghost (jump > 0.5 deg).
-    msg = "8DABC12399000000000000"
-    assert classify(msg, home, last_position=(10.0, 10.0)) is None
+    assert _plausible_fix(35.7, -78.7, (10.0, 10.0)) is False
+    assert _plausible_fix(35.7, -78.7, (35.7, -78.7)) is True
+
+
+def test_cpr_jump_allows_antimeridian_wrap():
+    assert _plausible_fix(1.0, -179.9, (1.0, 179.9)) is True
+    assert _plausible_fix(1.0, -170.0, (1.0, 179.9)) is False
+
+
+def test_cpr_requires_finite_lat_and_lon():
+    assert _plausible_fix(None, -78.7, None) is False
+    assert _plausible_fix(35.7, None, None) is False
+    assert _plausible_fix(float("nan"), -78.7, None) is False
 
 
 def test_groundspeed_stored_as_kmh():

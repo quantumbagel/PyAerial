@@ -214,8 +214,39 @@ def test_isolated_engine_uses_memory_store(tmp_path):
     engine = _engine(tmp_path)
     try:
         assert engine.live_store.memory_only is True
+        assert engine.live_store.writer is True
         assert engine.live_store.ping() is True
         assert engine.history_store.disabled is True
+    finally:
+        engine.shutdown()
+
+
+def test_finalize_closes_active_alerts(tmp_path, monkeypatch):
+    engine = _engine(tmp_path)
+    try:
+        monkeypatch.setattr(engine.calculator, "deactivate_plane", lambda plane: None)
+        monkeypatch.setattr(
+            engine.live_store,
+            "get_alerts",
+            lambda **k: [
+                {
+                    "alert_id": "abc123-1:pad:warn",
+                    "active": True,
+                    "deactivated_at": None,
+                }
+            ],
+        )
+        captured: list[list] = []
+
+        def _finalize(plane, alerts=None):
+            captured.append(list(alerts or []))
+            return True
+
+        monkeypatch.setattr(engine.history_store, "finalize_plane", _finalize)
+        monkeypatch.setattr(engine.live_store, "pop_flight", lambda flight_id: None)
+        engine._finalize_plane(_plane())
+        assert captured[0][0]["active"] is False
+        assert captured[0][0]["deactivated_at"] is not None
     finally:
         engine.shutdown()
 

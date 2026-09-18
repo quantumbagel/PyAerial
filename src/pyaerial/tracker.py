@@ -187,7 +187,7 @@ class Tracker:
                             series.append(Datum(last.value, timestamp))
                     continue
                 if datum.time <= last.time:
-                    datum = Datum(datum.value, last.time + 1e-6)
+                    continue
                 series.append(datum)
 
         internal = plane.internal

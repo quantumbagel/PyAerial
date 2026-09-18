@@ -53,7 +53,14 @@ export function AlertSortControls({
           variant="subtle"
           aria-haspopup="listbox"
           aria-expanded={isOpen}
+          aria-controls="alert-sort-menu"
           onClick={() => setIsOpen((prev) => !prev)}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setIsOpen(true);
+            }
+          }}
         >
           <span key={alertSortField}>{selectedOption?.label ?? 'Activated'}</span>
           <span className="ui-chevron">{isOpen ? '▲' : '▼'}</span>
@@ -65,7 +72,6 @@ export function AlertSortControls({
           value={alertSortField}
           onChange={(e) => onAlertSortChange(e.target.value as AlertSortField)}
           tabIndex={-1}
-          aria-hidden="true"
         >
           {ALERT_SORT_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
@@ -75,16 +81,30 @@ export function AlertSortControls({
         </select>
 
         {isOpen && (
-          <ul className="ui-menu" role="listbox" aria-label="Alert sort options">
+          <ul id="alert-sort-menu" className="ui-menu" role="listbox" aria-label="Alert sort options">
             {ALERT_SORT_OPTIONS.map((option) => (
               <li
                 key={option.value}
                 role="option"
+                tabIndex={0}
                 aria-selected={option.value === alertSortField}
                 className={`ui-menu-item${option.value === alertSortField ? ' is-selected' : ''}`}
                 onClick={() => {
                   onAlertSortChange(option.value);
                   setIsOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onAlertSortChange(option.value);
+                    setIsOpen(false);
+                  } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    (e.currentTarget.nextElementSibling as HTMLElement | null)?.focus();
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    (e.currentTarget.previousElementSibling as HTMLElement | null)?.focus();
+                  }
                 }}
               >
                 {option.label}

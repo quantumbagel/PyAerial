@@ -109,6 +109,10 @@ def test_older_packet_does_not_rewind_last_update():
     )
     tracker._merge(classified, 120.0)
     assert plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] == 150.0
+    series = plane[STORE_RECV_DATA][STORE_LAT]
+    assert len(series) == 1
+    assert series[0].value == 35.7
+    assert series[0].time == 150.0
 
 
 def test_telemetry_series_are_not_clipped_to_live_window():

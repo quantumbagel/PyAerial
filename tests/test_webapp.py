@@ -203,6 +203,53 @@ def test_websocket_live_ignores_raw_stream():
             assert reply["success"] is False
 
 
+def test_websocket_rejects_same_host_not_in_allowlist():
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    config = make_config()
+    config.web.origins = ["https://portal.example"]
+    app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
+    with TestClient(app) as client:
+        try:
+            with client.websocket_connect(
+                "/ws/live",
+                headers={"Origin": "http://testserver", "Host": "testserver"},
+            ) as ws:
+                ws.receive_json()
+            raise AssertionError("expected websocket to close")
+        except WebSocketDisconnect as exc:
+            assert exc.code == 1008
+
+
+def test_websocket_rejects_missing_token():
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    config = make_config()
+    config.web.token = "secret"
+    app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
+    with TestClient(app) as client:
+        try:
+            with client.websocket_connect("/ws/live") as ws:
+                ws.receive_json()
+            raise AssertionError("expected websocket to close")
+        except WebSocketDisconnect as exc:
+            assert exc.code == 1008
+
+
+def test_websocket_accepts_token_query():
+    from fastapi.testclient import TestClient
+
+    config = make_config()
+    config.web.token = "secret"
+    app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/live?token=secret") as ws:
+            hello = ws.receive_json()
+            assert hello["type"] == "hello"
+
+
 def test_websocket_rejects_disallowed_origin():
     from fastapi.testclient import TestClient
     from starlette.websockets import WebSocketDisconnect

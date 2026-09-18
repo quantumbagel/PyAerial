@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import time
 
-from pyaerial.calc.geo import meters_per_deg_lon
+from pyaerial.calc.geo import meters_per_deg_lon, shortest_lon_delta, wrap_longitude
 from pyaerial.constants import (
     MAX_KALMAN_DT,
     MAX_SPEED_MPS,
@@ -58,7 +58,7 @@ class KinematicKalmanFilter:
 
         # Position extrapolation in degrees
         self.lat += (self.vn * dt) / m_per_deg_lat
-        self.lon += (self.ve * dt) / m_per_deg_lon
+        self.lon = wrap_longitude(self.lon + (self.ve * dt) / m_per_deg_lon)
 
         # Covariance growth
         self.p_lat += (dt**2 * self.q) / (m_per_deg_lat**2)
@@ -82,7 +82,7 @@ class KinematicKalmanFilter:
 
         # Innovation (residual in degrees converted to meters)
         res_lat_m = (measured_lat - self.lat) * m_per_deg_lat
-        res_lon_m = (measured_lon - self.lon) * m_per_deg_lon
+        res_lon_m = shortest_lon_delta(measured_lon, self.lon) * m_per_deg_lon
 
         # Kalman gain for position (simple decoupled scalar update for numerical efficiency)
         k_lat = (self.p_lat * m_per_deg_lat**2) / (
@@ -94,7 +94,7 @@ class KinematicKalmanFilter:
 
         # Update position
         self.lat += (k_lat * res_lat_m) / m_per_deg_lat
-        self.lon += (k_lon * res_lon_m) / m_per_deg_lon
+        self.lon = wrap_longitude(self.lon + (k_lon * res_lon_m) / m_per_deg_lon)
 
         if dt >= MIN_VEL_DT:
             self.vn += 0.2 * (res_lat_m / dt)

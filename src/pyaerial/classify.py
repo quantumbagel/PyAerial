@@ -8,6 +8,7 @@ typecode category used for internal bookkeeping.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 import pyModeS as pms
@@ -113,6 +114,7 @@ def classify(
             STORE_RECV_DATA: {
                 STORE_LAT: lat,
                 STORE_LONG: lon,
+                STORE_ALT: 0.0,
                 STORE_HORIZ_SPEED: speed * KT_TO_KMH if speed is not None else None,
                 STORE_HEADING: angle,
             },
@@ -176,20 +178,34 @@ def _valid_icao(icao: object) -> bool:
     return isinstance(icao, str) and len(icao) == 6 and icao != "000000"
 
 
+def _finite_coord(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _lon_delta_deg(a: float, b: float) -> float:
+    delta = abs(a - b) % 360.0
+    return min(delta, 360.0 - delta)
+
+
 def _plausible_fix(
     lat: object,
     lon: object,
     last_position: tuple[float, float] | None,
 ) -> bool:
-    if lat is None or lon is None:
-        return True
-    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+    lat_f = _finite_coord(lat)
+    lon_f = _finite_coord(lon)
+    if lat_f is None or lon_f is None:
         return False
     if last_position is None:
         return True
     return (
-        abs(float(lat) - last_position[0]) <= MAX_CPR_JUMP_DEG
-        and abs(float(lon) - last_position[1]) <= MAX_CPR_JUMP_DEG
+        abs(lat_f - last_position[0]) <= MAX_CPR_JUMP_DEG
+        and _lon_delta_deg(lon_f, last_position[1]) <= MAX_CPR_JUMP_DEG
     )
 
 

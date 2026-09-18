@@ -17,6 +17,7 @@ import {
   type FlightSortField,
   type SortDirection,
 } from '../utils/flightData';
+import { isEngineLive } from '../utils/emptyStates';
 import { localDayEndSeconds, localDayStartSeconds } from '../utils/historyFilters';
 import { useFlightPaths } from './useFlightPaths';
 import { useFlightSelection } from './useFlightSelection';
@@ -232,22 +233,42 @@ export function usePortalApp() {
   const pendingUrlFlight = useRef<string | null>(
     new URLSearchParams(window.location.search).get('flight'),
   );
-  const urlFlightApplied = useRef(false);
 
   useEffect(() => {
     const id = pendingUrlFlight.current;
-    if (!id || urlFlightApplied.current) return;
-    urlFlightApplied.current = true;
-    pendingUrlFlight.current = null;
+    if (!id) return;
     selectFlight(id);
-  }, [selectFlight]);
+  }, [selectFlight, portalView]);
 
   useEffect(() => {
-    if (pendingUrlFlight.current && !urlFlightApplied.current) return;
+    const id = pendingUrlFlight.current;
+    if (!id) return;
+    if (selection.flightDetail && selection.activeFlightId === id) {
+      pendingUrlFlight.current = null;
+      return;
+    }
+    if (
+      portalView === 'live' &&
+      selection.selectionError === 'Flight not found.' &&
+      !selection.isLoading
+    ) {
+      portal.switchPortalView('history');
+    }
+  }, [
+    portalView,
+    portal.switchPortalView,
+    selection.flightDetail,
+    selection.activeFlightId,
+    selection.selectionError,
+    selection.isLoading,
+  ]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (portalView === 'history') params.set('view', 'history');
     else params.delete('view');
     if (activeFlightId) params.set('flight', activeFlightId);
+    else if (pendingUrlFlight.current) params.set('flight', pendingUrlFlight.current);
     else params.delete('flight');
     const qs = params.toString();
     const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
@@ -334,5 +355,10 @@ export function usePortalApp() {
     setAlertSort,
     toggleAlertSortDirection,
     disableFollow,
+    engineIdle:
+      portalView === 'live' &&
+      portal.wsStatus === 'connected' &&
+      portal.serverStats != null &&
+      !isEngineLive(portal.serverStats),
   };
 }

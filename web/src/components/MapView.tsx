@@ -11,7 +11,7 @@ import {
   isFlightLive,
 } from '../utils/format';
 import { createPlaneIcon, pathStyleForFlight } from '../utils/planeIcon';
-import { zoneColorFor } from '../utils/zoneColors';
+import { alertColorFor, zoneColorFor } from '../utils/zoneColors';
 import { COLOR_HEX } from '../utils/colors';
 import { buildAlertPathSegments } from '../utils/alertPathSegments';
 import { MapToolbar } from './MapToolbar';
@@ -194,10 +194,12 @@ export function MapView({
     const map = mapInstance.current;
     if (!map || !appConfig) return;
     if (isFirstViewReset.current && appConfig.home?.latitude != null && appConfig.home?.longitude != null) {
-      map.setView([appConfig.home.latitude, appConfig.home.longitude], 8);
+      if (!activeFlightId) {
+        map.setView([appConfig.home.latitude, appConfig.home.longitude], 8);
+      }
       isFirstViewReset.current = false;
     }
-  }, [appConfig]);
+  }, [appConfig, activeFlightId]);
 
   useEffect(() => {
     const map = mapInstance.current;
@@ -350,12 +352,6 @@ export function MapView({
       }
     });
 
-    const severityColor = (severity: string) => {
-      if (severity === 'alert') return COLOR_HEX.alert;
-      if (severity === 'warn') return COLOR_HEX.warn;
-      return COLOR_HEX.accent;
-    };
-
     visiblePathIds.forEach((flightId) => {
       const latlngs = pathCoords[flightId];
       if (!latlngs?.length) return;
@@ -385,7 +381,12 @@ export function MapView({
       const segments = buildAlertPathSegments(telemetry, alerts, flightEnd);
       const overlayPaths = segments.map((segment) => {
         const overlay = L.polyline(segment.latlngs, {
-          color: severityColor(segment.severity),
+          color: alertColorFor(
+            segment.zone || '',
+            segment.rule,
+            zonesData?.zones,
+            zonesData?.alert_colors,
+          ).stroke,
           weight: isSelected ? 5 : 4,
           opacity: 0.95,
           className: 'flight-path-alert',
@@ -400,7 +401,7 @@ export function MapView({
         delete planeAlertPaths.current[flightId];
       }
     });
-  }, [pathCoords, pathTelemetry, pathAlerts, showAllPaths, filteredFlights, activeFlightId, flights]);
+  }, [pathCoords, pathTelemetry, pathAlerts, showAllPaths, filteredFlights, activeFlightId, flights, zonesData]);
 
   return (
     <div id="map-container">

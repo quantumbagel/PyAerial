@@ -36,21 +36,22 @@ class _Client:
     outbox: asyncio.Queue | None = None
     writer_task: asyncio.Task | None = None
 
-    def enqueue(self, message: dict[str, Any]) -> None:
+    def enqueue(self, message: dict[str, Any]) -> bool:
         queue = self.outbox
         if queue is None:
-            return
+            return False
         if queue.full():
-            if message.get("type") in {"stats", "ping"}:
-                return
+            if message.get("type") in {"stats", "ping", "telemetry"}:
+                return False
             try:
                 queue.get_nowait()
             except asyncio.QueueEmpty:
                 pass
         try:
             queue.put_nowait(message)
+            return True
         except asyncio.QueueFull:
-            pass
+            return False
 
 
 def _flights_sig(flights: list[dict[str, Any]]) -> tuple:
@@ -194,8 +195,6 @@ class LiveBroadcaster:
         now = time.time()
         client = _Client(telemetry_since=now, last_ping=now, raw_only=raw_only)
         client.outbox = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
-        self._clients[websocket] = client
-        client.writer_task = asyncio.create_task(self._writer(websocket, client))
         if raw_only:
             client.streams = set(_RAW_STREAMS)
             client.enqueue(websocket_raw_hello())
@@ -206,10 +205,16 @@ class LiveBroadcaster:
                     "antenna": sanitize_for_json(self.antenna),
                 }
             )
+            self._clients[websocket] = client
+            client.writer_task = asyncio.create_task(self._writer(websocket, client))
             return
         if streams is not None:
-            self.set_streams(websocket, streams)
+            chosen = [name for name in streams if name in _DEFAULT_STREAMS]
+            if chosen:
+                client.streams = set(chosen)
         client.enqueue(websocket_hello())
+        self._clients[websocket] = client
+        client.writer_task = asyncio.create_task(self._writer(websocket, client))
         await self._send_snapshot(websocket)
 
     async def _writer(self, websocket: WebSocket, client: _Client) -> None:
@@ -416,15 +421,18 @@ class LiveBroadcaster:
                     if point.get("timestamp", 0) > client.telemetry_since
                 ]
                 if points:
-                    client.enqueue(
+                    queued = client.enqueue(
                         {
                             "type": "telemetry",
                             "telemetry": sanitize_for_json(points),
                             "timestamp": now,
                         }
                     )
-                    max_ts = max(float(point.get("timestamp") or 0) for point in points)
-                    client.telemetry_since = max(max_ts, client.telemetry_since)
+                    if queued:
+                        max_ts = max(
+                            float(point.get("timestamp") or 0) for point in points
+                        )
+                        client.telemetry_since = max(max_ts, client.telemetry_since)
             if now - client.last_ping >= _PING_INTERVAL:
                 client.enqueue({"type": "ping", "timestamp": now})
                 client.last_ping = now

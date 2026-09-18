@@ -37,6 +37,15 @@ _DROP_LOG_INTERVAL = 10.0
 _RAW_PUBLISH_BATCH = 2_000
 
 
+def _closed_alert(alert: dict) -> dict:
+    """Mark a live episode closed so crash-recovery history is not left active."""
+    doc = dict(alert)
+    if doc.get("active") and not doc.get("deactivated_at"):
+        doc["active"] = False
+        doc["deactivated_at"] = time.time()
+    return doc
+
+
 @dataclass
 class _ReceiverHandle:
     name: str
@@ -68,6 +77,7 @@ class Engine:
             config.database.redis_uri,
             memory_only=isolated,
             telemetry_keep_seconds=config.tracking.telemetry_keep_seconds,
+            writer=True,
         )
         self._last_status_log = 0.0
         self.history_store = HistoryStore(
@@ -364,7 +374,12 @@ class Engine:
         """
         self.calculator.deactivate_plane(plane)
         flight_id = flight_id_for_plane(plane)
-        alerts = self.live_store.get_alerts(flight_id=flight_id, active_only=False)
+        alerts = [
+            _closed_alert(alert)
+            for alert in self.live_store.get_alerts(
+                flight_id=flight_id, active_only=False
+            )
+        ]
         if self.history_store.finalize_plane(plane, alerts=alerts):
             self._pending_finalize.pop(flight_id, None)
             self.live_store.pop_flight(flight_id)
@@ -393,7 +408,12 @@ class Engine:
             return
         still: dict[str, dict] = {}
         for flight_id, plane in self._pending_finalize.items():
-            alerts = self.live_store.get_alerts(flight_id=flight_id, active_only=False)
+            alerts = [
+                _closed_alert(alert)
+                for alert in self.live_store.get_alerts(
+                    flight_id=flight_id, active_only=False
+                )
+            ]
             if self.history_store.finalize_plane(plane, alerts=alerts):
                 self.live_store.pop_flight(flight_id)
             else:
