@@ -17,6 +17,7 @@ from pyaerial.api.payloads import (
 from pyaerial.api.protocol import LiveStore
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.store.history import HistoryStore, HistoryUnavailable
+from pyaerial.store.redis_live import LiveUnavailable
 
 _MAX_Q = 80
 
@@ -310,9 +311,15 @@ def get_stats(
     live_store: LiveStore | None,
     history: HistoryStore | None,
 ) -> dict[str, Any]:
-    live_flights = len(live_store.get_flights()) if live_store else 0
-    active_alerts = len(live_store.get_alerts(active_only=True)) if live_store else 0
+    live_flights = 0
+    active_alerts = 0
     redis_ok = bool(live_store.ping()) if live_store is not None else False
+    if live_store is not None:
+        try:
+            live_flights = len(live_store.get_flights())
+            active_alerts = len(live_store.get_alerts(active_only=True))
+        except LiveUnavailable:
+            redis_ok = False
     engine_seen_at = None
     getter = getattr(live_store, "engine_seen_at", None) if live_store else None
     if callable(getter):

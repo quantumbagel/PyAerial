@@ -3,9 +3,10 @@
 #   mkdir -p src/pyaerial/examples/captures
 #   nc localhost 30002 > src/pyaerial/examples/captures/adsb.raw
 #
-# Lines may be bare hex (`8DABCDEF...`) or `timestamp hex`.
-# Untimestamped lines are emitted as fast as the engine can take (interval: 0).
-# `speed` only scales timestamped captures (realtime multiplier).
+# Lines may be bare hex (`8DABCDEF...`), dump1090 `@CLOCKHEX;`, or `timestamp hex`.
+# `@CLOCKHEX;` lines pace from the 12 MHz dump1090 clock. Untimestamped lines
+# use `interval` (default 0.1s). This example sets 0 for a fast dump.
+# `speed` scales timestamped and clocked delays.
 # Then: pyaerial run -c src/pyaerial/examples/replay.yaml
 #
 # validate requires captures/adsb.raw to exist.

@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from pyaerial.receivers import Receiver, register_receiver
-from pyaerial.receivers.frames import parse_avr_line
+from pyaerial.receivers.frames import BEAST_CLOCK_HZ, BEAST_CLOCK_MOD, parse_avr_line
 
 
 def _as_bool(value: object, default: bool = True) -> bool:
@@ -40,7 +40,7 @@ class ReplayReceiver(Receiver):
             raise ValueError("replay options.speed must be greater than 0")
         self.loop = _as_bool(arguments.get("loop", True), default=True)
         try:
-            self.interval = float(arguments.get("interval", 0.0))
+            self.interval = float(arguments.get("interval", 0.1))
         except (TypeError, ValueError) as exc:
             raise ValueError("replay options.interval must be a number") from exc
         if self.interval < 0:
@@ -68,6 +68,8 @@ class ReplayReceiver(Receiver):
     def _load(self) -> list[tuple[float, str]]:
         frames: list[tuple[float, str]] = []
         sequential = 0.0
+        first_clock: int | None = None
+        clock_origin = 0.0
         for raw in self.path.read_text(errors="ignore").splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
@@ -75,6 +77,7 @@ class ReplayReceiver(Receiver):
             parts = line.split()
             stamp: float | None = None
             hex_msg = ""
+            clock: int | None = None
             if len(parts) >= 2:
                 try:
                     stamp = float(parts[0])
@@ -86,9 +89,21 @@ class ReplayReceiver(Receiver):
                 parsed = parse_avr_line(line)
                 if not parsed:
                     continue
-                hex_msg = parsed[0]
-                stamp = sequential
-                sequential += self.interval
+                hex_msg, clock = parsed
+                if clock is not None:
+                    if first_clock is None:
+                        first_clock = clock
+                        clock_origin = sequential
+                        stamp = sequential
+                    else:
+                        delta = (
+                            (clock - first_clock) % BEAST_CLOCK_MOD
+                        ) / BEAST_CLOCK_HZ
+                        stamp = clock_origin + delta
+                else:
+                    stamp = sequential
+                    sequential += self.interval
+            sequential = max(sequential, stamp)
             hex_msg = "".join(ch for ch in hex_msg.lower() if ch in "0123456789abcdef")
             if hex_msg and len(hex_msg) % 2 == 0:
                 frames.append((stamp, hex_msg))

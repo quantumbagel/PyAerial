@@ -7,11 +7,12 @@ import pytest
 from pyaerial.api.queries import (
     get_alerts,
     get_history_flights,
+    get_live_flights,
     get_stats,
     get_telemetry,
 )
 from pyaerial.store.history import HistoryUnavailable
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.redis_live import LiveUnavailable, RedisLiveStore
 
 
 def test_get_stats_reports_store_health_and_engine_heartbeat():
@@ -138,6 +139,39 @@ def test_history_queries_error_when_archive_down():
         get_alerts("history", live_store=None, history=down)
     with pytest.raises(HistoryUnavailable):
         get_telemetry("x", "history", 0.0, live_store=None, history=down)
+
+
+def test_reader_get_flights_errors_when_redis_down():
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=False)
+    store.memory_only = False
+    store.client = None
+    store._reported_down = True
+    store._last_connect_attempt = time.monotonic()
+    with pytest.raises(LiveUnavailable):
+        store.get_flights()
+    with pytest.raises(LiveUnavailable):
+        get_live_flights(store, None)
+    stats = get_stats(store, None)
+    assert stats["redis"] is False
+    assert stats["live_flights"] == 0
+
+
+def test_memory_writer_get_flights_when_redis_down():
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    assert store.get_flights() == []
+
+
+def test_reader_pop_flight_deletes_redis():
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=False)
+    store.memory_only = False
+    store.client = object()
+    store._reported_down = False
+    store._last_ping_ok = time.time() + 60
+    deleted: list[str] = []
+    store._ensure_connected = lambda: True  # type: ignore[method-assign]
+    store._delete_redis_flight = lambda fid: deleted.append(fid) or {}  # type: ignore[method-assign]
+    store.pop_flight("abc123-1")
+    assert deleted == ["abc123-1"]
 
 
 def test_get_stats_without_store():

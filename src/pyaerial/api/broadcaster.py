@@ -13,6 +13,7 @@ from fastapi import WebSocket
 from pyaerial.api.payloads import sanitize_for_json
 from pyaerial.api.protocol import LiveStore
 from pyaerial.api.queries import get_live_flights, get_stats, get_tracked_live_alerts
+from pyaerial.store.redis_live import LiveUnavailable
 from pyaerial.api.spec import WS_STREAMS, websocket_hello, websocket_raw_hello
 from pyaerial.enrich.aircraft_db import AircraftDB
 
@@ -73,7 +74,13 @@ def _flights_sig(flights: list[dict[str, Any]]) -> tuple:
 def _stats_sig(stats: dict[str, Any] | None) -> tuple:
     if not stats:
         return ()
-    return tuple(sorted((key, stats[key]) for key in stats if isinstance(stats[key], (int, float, str, bool))))
+    return tuple(
+        sorted(
+            (key, stats[key])
+            for key in stats
+            if isinstance(stats[key], (int, float, str, bool))
+        )
+    )
 
 
 def _alerts_sig(alerts: list[dict[str, Any]]) -> tuple:
@@ -139,7 +146,9 @@ class LiveBroadcaster:
         self._raw_task = None
         self._task = None
 
-    def _enqueue_raw(self, loop: asyncio.AbstractEventLoop, payload: dict[str, Any]) -> None:
+    def _enqueue_raw(
+        self, loop: asyncio.AbstractEventLoop, payload: dict[str, Any]
+    ) -> None:
         queue = self._raw_queue
         if queue is None:
             return
@@ -267,7 +276,10 @@ class LiveBroadcaster:
 
     def _cached_stats(self) -> dict[str, Any]:
         now = time.monotonic()
-        if self._last_stats is not None and now - self._last_stats_at < _STATS_CACHE_TTL:
+        if (
+            self._last_stats is not None
+            and now - self._last_stats_at < _STATS_CACHE_TTL
+        ):
             return self._last_stats
         stats = get_stats(self.live_store, self.history)
         self._last_stats = stats
@@ -275,33 +287,26 @@ class LiveBroadcaster:
         return stats
 
     async def _send_snapshot(self, websocket: WebSocket) -> None:
-        flights = (
-            get_live_flights(self.live_store, self.aircraft_db)
-            if self.live_store
-            else []
-        )
-        alerts = (
-            get_tracked_live_alerts(self.live_store, flights, limit=50)
-            if self.live_store
-            else []
-        )
         stats = self._cached_stats()
+        live_ok = True
+        flights: list[dict[str, Any]] = []
+        alerts: list[dict[str, Any]] = []
+        try:
+            if self.live_store:
+                flights = get_live_flights(self.live_store, self.aircraft_db)
+                alerts = get_tracked_live_alerts(self.live_store, flights, limit=50)
+        except LiveUnavailable:
+            live_ok = False
         client = self._clients.get(websocket)
         streams = client.streams if client else _DEFAULT_STREAMS
         if client is None:
             return
-        if "flights" in streams:
-            client.enqueue(
-                {"type": "flights", "flights": sanitize_for_json(flights)}
-            )
-        if "alerts" in streams:
-            client.enqueue(
-                {"type": "alerts", "alerts": sanitize_for_json(alerts)}
-            )
+        if live_ok and "flights" in streams:
+            client.enqueue({"type": "flights", "flights": sanitize_for_json(flights)})
+        if live_ok and "alerts" in streams:
+            client.enqueue({"type": "alerts", "alerts": sanitize_for_json(alerts)})
         if "stats" in streams:
-            client.enqueue(
-                {"type": "stats", "stats": sanitize_for_json(stats)}
-            )
+            client.enqueue({"type": "stats", "stats": sanitize_for_json(stats)})
 
     async def send_antenna(self, websocket: WebSocket) -> None:
         self.send(
@@ -328,7 +333,10 @@ class LiveBroadcaster:
             return
         if not self.live_store:
             return
-        flights = await asyncio.to_thread(self.live_store.get_flights)
+        try:
+            flights = await asyncio.to_thread(self.live_store.get_flights)
+        except LiveUnavailable:
+            return
 
         if self.aircraft_db and self.aircraft_db.available and flights:
             for flight in flights:
@@ -354,28 +362,38 @@ class LiveBroadcaster:
 
     def _collect_live_payload(
         self,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], float]:
+    ) -> tuple[
+        list[dict[str, Any]] | None,
+        list[dict[str, Any]] | None,
+        dict[str, Any],
+        list[dict[str, Any]],
+        float,
+    ]:
         now = time.time()
-        flights = (
-            get_live_flights(self.live_store, self.aircraft_db)
-            if self.live_store
-            else []
-        )
-        alerts = (
-            get_tracked_live_alerts(self.live_store, flights, limit=50)
-            if self.live_store
-            else []
-        )
         stats = self._cached_stats()
+        try:
+            flights = (
+                get_live_flights(self.live_store, self.aircraft_db)
+                if self.live_store
+                else []
+            )
+            alerts = (
+                get_tracked_live_alerts(self.live_store, flights, limit=50)
+                if self.live_store
+                else []
+            )
+        except LiveUnavailable:
+            return None, None, stats, [], now
         telemetry_clients = [
-            client
-            for client in self._clients.values()
-            if "telemetry" in client.streams
+            client for client in self._clients.values() if "telemetry" in client.streams
         ]
         all_points: list[dict[str, Any]] = []
         if telemetry_clients and self.live_store:
-            min_since = min(client.telemetry_since for client in telemetry_clients)
-            all_points = self.live_store.get_live_telemetry(min_since)
+            try:
+                min_since = min(client.telemetry_since for client in telemetry_clients)
+                all_points = self.live_store.get_live_telemetry(min_since)
+            except LiveUnavailable:
+                all_points = []
         return flights, alerts, stats, all_points, now
 
     async def _broadcast_tick(self) -> None:
@@ -393,6 +411,19 @@ class LiveBroadcaster:
         flights, alerts, stats, all_points, now = await asyncio.to_thread(
             self._collect_live_payload
         )
+
+        if flights is None or alerts is None:
+            stats_sig = _stats_sig(stats)
+            if stats_sig != self._last_stats_sig:
+                self._last_stats_sig = stats_sig
+                await self._broadcast(
+                    {"type": "stats", "stats": sanitize_for_json(stats)}
+                )
+            for client in clients:
+                if now - client.last_ping >= _PING_INTERVAL:
+                    client.enqueue({"type": "ping", "timestamp": now})
+                    client.last_ping = now
+            return
 
         flights_sig = _flights_sig(flights)
         if flights_sig != self._last_flights_sig:

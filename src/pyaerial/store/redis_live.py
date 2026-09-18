@@ -41,6 +41,10 @@ from pyaerial.store.present import live_flight_detail, live_flight_summary
 log = logging.getLogger("pyaerial.store.redis")
 
 
+class LiveUnavailable(RuntimeError):
+    """Configured Redis live store cannot be read."""
+
+
 def _safe_json_loads(raw: Any) -> Any | None:
     try:
         return json.loads(raw)
@@ -181,6 +185,13 @@ class RedisLiveStore:
             log.warning("Lost Redis connection; operating with in-memory live buffer.")
             self._mark_disconnected(exc)
             return False
+
+    def _reader_needs_redis(self) -> bool:
+        return not self.writer and not self.memory_only
+
+    def _raise_if_reader_disconnected(self) -> None:
+        if self._reader_needs_redis():
+            raise LiveUnavailable("live store is unavailable")
 
     def ping(self) -> bool:
         """Return True if this store can serve reads.
@@ -538,6 +549,7 @@ class RedisLiveStore:
 
     def get_flights(self) -> list[dict[str, Any]]:
         if not self._ensure_connected():
+            self._raise_if_reader_disconnected()
             results: list[dict[str, Any]] = []
             for doc in self._mem.flights.values():
                 last_tel = (
@@ -564,11 +576,13 @@ class RedisLiveStore:
         except RedisError as exc:
             log.error("Failed to read live flights from Redis: %s", exc)
             self._mark_disconnected(exc)
+            self._raise_if_reader_disconnected()
         results.sort(key=lambda item: item.get("start_time") or 0, reverse=True)
         return results
 
     def get_flight(self, flight_id: str) -> dict[str, Any] | None:
         if not self._ensure_connected():
+            self._raise_if_reader_disconnected()
             doc = self._mem.flights.get(flight_id)
             return live_flight_detail(doc, flight_id) if doc else None
         assert self.client is not None
@@ -582,12 +596,15 @@ class RedisLiveStore:
             return live_flight_detail(doc, flight_id)
         except RedisError as exc:
             log.error("Failed to read live flight %s: %s", flight_id, exc)
+            self._mark_disconnected(exc)
+            self._raise_if_reader_disconnected()
             return None
 
     def get_telemetry(
         self, flight_id: str, *, since: float = 0.0
     ) -> list[dict[str, Any]]:
         if not self._ensure_connected():
+            self._raise_if_reader_disconnected()
             points = self._mem.telemetry.get(flight_id, [])
             if since > 0:
                 points = [p for p in points if p.get("timestamp", 0) > since]
@@ -607,10 +624,13 @@ class RedisLiveStore:
             return points
         except RedisError as exc:
             log.error("Failed to read telemetry for %s: %s", flight_id, exc)
+            self._mark_disconnected(exc)
+            self._raise_if_reader_disconnected()
             return []
 
     def get_live_telemetry(self, since: float = 0.0) -> list[dict[str, Any]]:
         if not self._ensure_connected():
+            self._raise_if_reader_disconnected()
             points: list[dict[str, Any]] = []
             for flight_id in self._mem.flights:
                 for point in self._mem.telemetry.get(flight_id, []):
@@ -649,6 +669,8 @@ class RedisLiveStore:
                     )
         except RedisError as exc:
             log.error("Failed to read live telemetry: %s", exc)
+            self._mark_disconnected(exc)
+            self._raise_if_reader_disconnected()
         points.sort(key=lambda item: item.get("timestamp") or 0)
         return points
 
@@ -662,6 +684,8 @@ class RedisLiveStore:
     ) -> list[dict[str, Any]]:
         mem_has_flight = bool(flight_id) and flight_id in self._mem.alerts
         if not self._ensure_connected() or mem_has_flight:
+            if not self._ensure_connected():
+                self._raise_if_reader_disconnected()
             if active_only and not flight_id:
                 alerts = list(self._mem.active_alerts.values())
             elif flight_id:
@@ -739,6 +763,7 @@ class RedisLiveStore:
         except RedisError as exc:
             log.error("Failed to read live alerts: %s", exc)
             self._mark_disconnected(exc)
+            self._raise_if_reader_disconnected()
             return []
 
     def pop_flight(self, flight_id: str) -> dict[str, Any]:
@@ -754,11 +779,6 @@ class RedisLiveStore:
             if a.get("flight_id") == flight_id:
                 self._mem.active_alerts.pop(a["alert_id"], None)
 
-        if not self.writer:
-            return {
-                "flight": mem_flight,
-                "alerts": mem_alerts,
-            }
         if not self._ensure_connected():
             self._pending_pops.add(flight_id)
             return {

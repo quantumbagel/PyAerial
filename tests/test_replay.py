@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from pyaerial.receivers.replay import ReplayReceiver
 
 
 def test_replay_loads_timestamped_and_bare_hex(tmp_path):
     path = tmp_path / "raw.txt"
     path.write_text("# comment\n1.0 AABBCC\nDDEEFF\n")
-    receiver = ReplayReceiver("replay", lambda *_args: None, {"path": str(path), "loop": False})
+    receiver = ReplayReceiver(
+        "replay", lambda *_args: None, {"path": str(path), "loop": False}
+    )
     frames = receiver._load()
     assert len(frames) == 2
     assert frames[0][1] == "aabbcc"
@@ -18,11 +22,37 @@ def test_replay_loads_timestamped_and_bare_hex(tmp_path):
 def test_replay_loads_avr_star_and_clock_lines(tmp_path):
     path = tmp_path / "avr.txt"
     path.write_text("*8DABCDEF000000;\n@0000000000018DABCDEF000001;\n")
-    receiver = ReplayReceiver("replay", lambda *_args: None, {"path": str(path), "loop": False})
+    receiver = ReplayReceiver(
+        "replay", lambda *_args: None, {"path": str(path), "loop": False}
+    )
     frames = receiver._load()
     assert len(frames) == 2
     assert frames[0][1].startswith("8dabcdef")
     assert frames[1][1].startswith("8dabcdef")
+
+
+def test_replay_paces_avr_clock_ticks(tmp_path):
+    path = tmp_path / "avr.txt"
+    # 12 MHz ticks 0 then 12_000_000 (= 1.0s)
+    path.write_text("@0000000000008DABCDEF000000;\n@000000B71B008DABCDEF000001;\n")
+    receiver = ReplayReceiver(
+        "replay", lambda *_args: None, {"path": str(path), "loop": False}
+    )
+    frames = receiver._load()
+    assert len(frames) == 2
+    assert frames[0][0] == 0.0
+    assert frames[1][0] == pytest.approx(1.0)
+
+
+def test_replay_default_interval_spaces_untimestamped_lines(tmp_path):
+    path = tmp_path / "raw.txt"
+    path.write_text("AABBCC\nDDEEFF\n")
+    receiver = ReplayReceiver(
+        "replay", lambda *_args: None, {"path": str(path), "loop": False}
+    )
+    assert receiver.interval == 0.1
+    frames = receiver._load()
+    assert [stamp for stamp, _hex in frames] == [0.0, 0.1]
 
 
 def test_replay_missing_file():

@@ -75,6 +75,33 @@ def test_reset_icao_skips_live_while_engine_is_running(capsys):
     assert "engine is running" in err.lower()
 
 
+def test_reset_icao_pops_live_when_engine_is_stopped(capsys):
+    class _History:
+        def delete_icao(self, icao):
+            assert icao == "abc123"
+            return True
+
+    class _Live:
+        popped: list[str] = []
+
+        def engine_seen_at(self):
+            return None
+
+        def get_flights(self):
+            return [{"flight_id": "abc123-1", "icao": "abc123"}]
+
+        def pop_flight(self, flight_id):
+            self.popped.append(flight_id)
+
+    live = _Live()
+    live.popped = []
+    code = reset_history(_History(), live_store=live, icao="ABC123", yes=True)
+    out = capsys.readouterr().out
+    assert code == 0
+    assert live.popped == ["abc123-1"]
+    assert "Dropped plane" in out
+
+
 def test_reset_without_yes_refuses_non_tty(capsys, monkeypatch):
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     code = reset_history(None, yes=False)
