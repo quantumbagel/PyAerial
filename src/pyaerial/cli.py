@@ -3,8 +3,7 @@ PyAerial command-line interface.
 
     run        Start the tracking engine (writes Redis and SQLite)
     validate   Check a configuration file without running
-    view       Interactive flight viewer
-    live       ASCII terminal flight display
+    reset      Wipe retained history (live Redis only if the engine is stopped)
     web        Start the web portal (reads Redis and SQLite; does not track)
 """
 
@@ -18,7 +17,7 @@ from pyaerial.config import ConfigError, load_config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB, DEFAULT_CONFIG_FILE
 from pyaerial.engine import run_engine
 from pyaerial.logging_setup import setup_logging
-from pyaerial.view import run_live_cmd, run_view
+from pyaerial.view import run_reset
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -59,25 +58,24 @@ def _build_parser() -> argparse.ArgumentParser:
     val_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
     val_p.set_defaults(func=_cmd_validate)
 
-    view_p = sub.add_parser(
-        "view", help="interactive flight viewer (saved & live data)"
+    reset_p = sub.add_parser(
+        "reset",
+        help="wipe retained history (live Redis only if the engine is stopped)",
     )
-    view_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
-    view_p.add_argument("--aircraft-db", default=DEFAULT_AIRCRAFT_DB)
-    view_p.set_defaults(func=_cmd_view)
-
-    live_p = sub.add_parser("live", help="live flight display")
-    live_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
-    live_p.add_argument(
-        "--interval",
-        type=float,
-        default=1.0,
-        help="display refresh interval in seconds (default: 1.0)",
+    reset_p.add_argument("-c", "--config", default=DEFAULT_CONFIG_FILE)
+    reset_p.add_argument(
+        "icao",
+        nargs="?",
+        default=None,
+        help="delete one ICAO from history instead of wiping everything",
     )
-    live_p.add_argument(
-        "-n", "--once", action="store_true", help="print a single frame and exit"
+    reset_p.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="do not prompt for confirmation",
     )
-    live_p.set_defaults(func=_cmd_live)
+    reset_p.set_defaults(func=_cmd_reset)
 
     web_p = sub.add_parser("web", help="start the live flight tracker web application")
     web_p.add_argument(
@@ -131,26 +129,10 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     print(f"  hz: {config.tracking.hz}")
 
 
-def _cmd_view(args: argparse.Namespace) -> None:
+def _cmd_reset(args: argparse.Namespace) -> None:
     setup_logging("warning")
     try:
-        run_view(args.config, aircraft_db_path=args.aircraft_db)
-    except ConfigError as exc:
-        print(f"Configuration error:\n{exc}", file=sys.stderr)
-        sys.exit(1)
-
-
-def _cmd_live(args: argparse.Namespace) -> None:
-    setup_logging("warning")
-    if args.interval <= 0:
-        print("Configuration error:\n  --interval must be greater than 0", file=sys.stderr)
-        sys.exit(1)
-    try:
-        run_live_cmd(
-            args.config,
-            interval=args.interval,
-            once=args.once,
-        )
+        run_reset(args.config, icao=args.icao, yes=args.yes)
     except ConfigError as exc:
         print(f"Configuration error:\n{exc}", file=sys.stderr)
         sys.exit(1)

@@ -4,7 +4,7 @@ _Scanning software for ADS-B / Mode S for AERPAW_
 
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://python.org)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Version](https://img.shields.io/badge/version-0.17.0-green.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.19.0-green.svg)](pyproject.toml)
 
 PyAerial decodes ADS-B / Mode S frames, tracks aircraft, evaluates polygon zone rules, fires alerts, streams live state over WebSocket, and archives retained flights to SQLite.
 
@@ -14,7 +14,6 @@ PyAerial decodes ADS-B / Mode S frames, tracks aircraft, evaluates polygon zone 
 graph TD
     subgraph Inputs ["ADS-B / Mode S Data Sources"]
         DUMP1090["dump1090 (TCP Raw Stream)"]
-        PY1090["py1090 (RTL-SDR Hardware)"]
         REPLAY["Replay Receiver (Recorded Hex File)"]
     end
 
@@ -25,7 +24,7 @@ graph TD
 
     subgraph Alerts ["Alerting & Geofencing"]
         GEOFENCE["Geofence Engine<br/>(Polygons & Early Warning Rules)"]
-        ALERTERS["Pluggable Alerters<br/>(Console / Webhook / Kafka)"]
+        ALERTERS["Pluggable Alerters<br/>(Console / Webhook)"]
     end
 
     subgraph Storage ["Dual-Tier Data Storage"]
@@ -36,11 +35,10 @@ graph TD
     subgraph Frontend ["Web Portal & Interfaces"]
         WEBAPP["FastAPI Server & WebSocket API<br/>(/ws/live, /ws/raw)"]
         WEBUI["React + Vite Web UI<br/>(Live Radar & History View)"]
-        CLI["Terminal Interfaces<br/>(pyaerial view / live)"]
+        CLI["Terminal Interface<br/>(pyaerial reset)"]
     end
 
     DUMP1090 --> ENGINE
-    PY1090 --> ENGINE
     REPLAY --> ENGINE
 
     ENGINE <--> AIRCRAFT_DB
@@ -60,13 +58,13 @@ graph TD
 **Behavior**
 
 - Decodes position, altitude, horizontal and vertical velocity, direction, callsign, and ICAO category via [`pyModeS`](https://github.com/junzis/pymodes).
-- Can read dump1090 over TCP, an RTL-SDR through `py1090` / `pyrtlsdr`, and a recorded hex file (`replay`) at the same time.
+- Can read dump1090 over TCP and a recorded hex file (`replay`) at the same time. USB SDR input is dump1090 (`docker compose --profile sdr`), not an in-process decoder.
 - Zones are named polygons (inline coordinates, or a KML / KMZ / GeoJSON `file`) with independent `when` rules on `altitude`, `speed` / `horizontal_speed`, `heading` / `direction`, `distance`, `proximity`, and `eta`. Lifecycle hooks are `on_activate`, `on_deactivate`, and `while_active`.
-- Alerters include console `print`, HTTP POST (`webhook`), and Kafka (`kafka`).
+- Alerters include console `print` and HTTP POST (`webhook`).
 - Redis holds live telemetry and active alerts (`live:flight:{id}`, `live:telemetry:{id}`, `live:alerts:{id}`, `live:active_alerts`, `live:alert_episodes`). SQLite at `database.path` (default `pyaerial.db`) stores retained completed flights, track points, and alert episodes.
 - ICAO metadata (model, operator, registration, photos) is cached in `aircraft.db` after HexDB / Planespotters lookups. That file is a local cache, not a fully offline index. It stays in SQLite so restarts do not hit those APIs again.
-- The web portal shows a live radar, an alert feed, and historical flight browse with a track and telemetry table.
-- Terminal tools are `pyaerial view` (interactive) and `pyaerial live` (ASCII table).
+- The web portal shows a live radar, an alert feed, a raw frame stream, and historical flight browse with a track and telemetry table.
+- The terminal tool is `pyaerial reset` (wipe retained history).
 
 **Docker**
 
@@ -100,15 +98,8 @@ A standalone `docker run` of the image still supervises dump1090 via `scripts/ru
 
 Requires Python 3.11 or newer and Node.js 20+. `dump1090` is recommended.
 
-| Extra | Dependencies | Adds |
-|-------|----------------|------|
-| `sdr` | `pyrtlsdr`, `numpy` | `py1090` RTL-SDR receiver |
-| `kafka` | `kafka-python-ng` | Kafka alert publisher |
-| `dev` | `pytest`, `httpx` | Test runner and HTTP client |
-| `all` | all of the above | sdr and kafka extras together |
-
 ```bash
-pip install -e ".[all]"
+pip install -e ".[dev]"
 ```
 
 **Docs**
@@ -124,8 +115,7 @@ pip install -e ".[all]"
 | `pyaerial run` | Tracking engine (writes Redis and SQLite) |
 | `pyaerial web` | Portal (reads Redis and SQLite; does not track) |
 | `pyaerial validate` | Config syntax, schema, and cross-references |
-| `pyaerial view` | Interactive viewer (`list`, `dump aircraft`, `status`, `live`) |
-| `pyaerial live` | ASCII terminal table |
+| `pyaerial reset` | Wipe retained history (`--yes`; live Redis only if the engine is stopped) |
 
 Flags, environment variables, and the `/ws/live` protocol are documented in [CLI.md](CLI.md).
 

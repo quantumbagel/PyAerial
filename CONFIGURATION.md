@@ -10,7 +10,7 @@ Environment variables override selected keys; see [CLI.md](CLI.md). String value
 | `tracking` | Tick rate, plane retention, live telemetry window, ETA options, status lines |
 | `logging` | Log level and optional file |
 | `home` | Receiver lat/lon for ADS-B CPR decode (not the geofence) |
-| `receivers` | Named instances: `dump1090`, `py1090`, `replay` |
+| `receivers` | Named instances: `dump1090`, `replay` |
 | `zones` | Named polygons plus independent rules (not an implicit inside-test) |
 | `alert_colors` | Hex colors keyed by **rule name** |
 | `web` | Optional `token` for `/ws/live` and `/ws/raw`; `origins` (default `*`) |
@@ -53,10 +53,6 @@ receivers:
     host: localhost
     port: 30002          # AVR hex (`*8D...;`). Use 30005 + format: beast for RSSI.
     # format: beast      # dump1090 Beast binary; default port 30005
-  sdr:
-    type: py1090
-    options:
-      rtl_index: "0"
   # recorded:
   #   type: replay
   #   options:
@@ -172,4 +168,4 @@ Flight IDs use the form `{icao}-{first_packet_timestamp}`, for example `a1b2c3-1
 
 The historical portal pages flights and alerts 50 at a time, searches ICAO / callsign / flight id on the server, and can filter by end date.
 
-In `pyaerial view`, `dump aircraft <icao>` prints the HexDB / Planespotters **cache** record with no network fetch (`dump opensky` remains an alias). ICAO metadata lives in `aircraft.db` (cwd, `PYAERIAL_AIRCRAFT_DB`, or `--aircraft-db`).
+ICAO metadata lives in `aircraft.db` (cwd, `PYAERIAL_AIRCRAFT_DB`, or `--aircraft-db`). The portal drawer reads that cache; it is not a fully offline aircraft index.

@@ -104,6 +104,37 @@ export interface ServerStats {
 
 export type WsStatus = 'connecting' | 'connected' | 'reconnecting' | 'rejected';
 
+export interface RawFrame {
+  hex: string;
+  timestamp: number;
+  receiver?: string;
+  rssi?: number;
+  clock?: number;
+  df?: number;
+  icao?: string;
+}
+
+export interface BufferedRawFrame extends RawFrame {
+  id: string;
+}
+
+export interface RawAntenna {
+  home: { latitude: number; longitude: number };
+  receivers: Array<{
+    name: string;
+    type: string;
+    host?: string;
+    port?: number;
+    format?: string;
+  }>;
+}
+
+export type RawWsMessage =
+  | { type: 'hello'; protocol: string; version: number; streams: string[]; actions: string[] }
+  | { type: 'antenna'; antenna: RawAntenna }
+  | { type: 'raw'; timestamp?: number; messages: RawFrame[] }
+  | { type: 'ping'; timestamp?: number };
+
 export type LiveMessage =
   | { type: 'hello'; protocol: string; version: number; streams: string[]; actions: string[] }
   | { type: 'ping'; timestamp?: number }

@@ -31,6 +31,8 @@ export function PortalApp() {
     setAlertSort,
     toggleAlertSortDirection,
     disableFollow,
+    raw,
+    filteredRawFrames,
     engineIdle,
   } = usePortalApp();
 
@@ -78,6 +80,15 @@ export function PortalApp() {
         onFlightsScroll={portal.handleFlightsScroll}
         zones={portal.zonesData?.zones}
         alertColors={portal.zonesData?.alert_colors}
+        rawFrames={filteredRawFrames}
+        rawAntenna={raw.antenna}
+        rawStatus={raw.status}
+        onSelectRawIcao={(icao) => {
+          const match = portal.flightsData.find(
+            (f) => f.icao.toLowerCase() === icao.toLowerCase(),
+          );
+          if (match) selection.selectFlight(match.flight_id);
+        }}
       />
       <MapView
         flights={portal.flightsData}

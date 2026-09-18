@@ -9,6 +9,9 @@ export type HistoryListOpts = {
   until?: number;
 };
 
+/** Keep in sync with pyaerial.api.ws._MAX_LIMIT */
+export const HISTORY_FETCH_CAP = 200;
+
 function historyParams(
   view: PortalView,
   opts: HistoryListOpts = {},

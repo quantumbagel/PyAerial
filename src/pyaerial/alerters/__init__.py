@@ -2,7 +2,7 @@
 Alerter plugins: actions taken when a plane matches a zone rule.
 
 New alerters register with :func:`register_alerter` and are selected by a
-rule action ``method`` (``print``, ``webhook``, ``kafka``).
+rule action ``method`` (``print``, ``webhook``).
 """
 
 from __future__ import annotations
@@ -61,13 +61,6 @@ def register_builtins() -> None:
     """Import built-in alerters so they register themselves."""
     from pyaerial.alerters import printer as _printer  # noqa: F401
     from pyaerial.alerters import webhook as _webhook  # noqa: F401
-
-    try:  # kafka-python-ng may be unavailable if installed without [kafka] extra
-        from pyaerial.alerters import kafka as _kafka  # noqa: F401
-    except Exception as exc:  # pragma: no cover - optional dependency
-        logging.getLogger("pyaerial.alerter").debug(
-            "kafka alerter unavailable: %s", exc
-        )
 
 
 register_builtins()

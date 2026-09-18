@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -48,22 +48,13 @@ def _safe_json_loads(raw: Any) -> Any | None:
         return None
 
 
-def _pid_is_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
-def _engine_heartbeat_payload(seen_at: float | None = None) -> str:
-    return json_dumps({"seen_at": seen_at if seen_at is not None else time.time(), "pid": os.getpid()})
+def _engine_heartbeat_payload(token: str, seen_at: float | None = None) -> str:
+    return json_dumps(
+        {
+            "seen_at": seen_at if seen_at is not None else time.time(),
+            "token": token,
+        }
+    )
 
 _KEY_FLIGHTS = "live:flights"
 _KEY_FLIGHT = "live:flight:{flight_id}"
@@ -106,6 +97,7 @@ class RedisLiveStore:
         self._raw_pubsub: Any = None
         self._raw_callback: Callable[[dict[str, Any]], None] | None = None
         self._pending_pops: set[str] = set()
+        self._engine_token = uuid.uuid4().hex
         if memory_only:
             self._reported_down = True
             log.info("Live store running in memory-only mode (no Redis).")
@@ -191,19 +183,36 @@ class RedisLiveStore:
             return True
         return self._ensure_connected()
 
+    def _owns_heartbeat(self, doc: Any) -> bool:
+        return isinstance(doc, dict) and doc.get("token") == self._engine_token
+
+    def _heartbeat_is_fresh(self, doc: Any, now: float | None = None) -> bool:
+        if not isinstance(doc, dict):
+            return False
+        seen = doc.get("seen_at")
+        if not isinstance(seen, (int, float)):
+            return False
+        stamp = now if now is not None else time.time()
+        return stamp - seen < LIVE_ENGINE_TTL_SECONDS
+
     def touch_engine(self) -> None:
         """Record that the tracking engine is alive.
 
         Written every engine tick, including when no aircraft are tracked, so
-        the portal can tell "engine down" from "no traffic."
+        the portal can tell "engine down" from "no traffic." Refreshes only
+        this process's token; a foreign live heartbeat is left alone.
         """
         now = time.time()
         self._mem.engine_seen_at = now
         if not self._ensure_connected():
             return
         assert self.client is not None
-        payload = _engine_heartbeat_payload(now)
+        payload = _engine_heartbeat_payload(self._engine_token, now)
         try:
+            raw = self.client.get(_KEY_ENGINE)
+            doc = _safe_json_loads(raw) if raw else None
+            if raw and not self._owns_heartbeat(doc) and self._heartbeat_is_fresh(doc, now):
+                return
             self.client.set(_KEY_ENGINE, payload, ex=LIVE_ENGINE_TTL_SECONDS)
         except RedisError as exc:
             log.error("Failed to write engine heartbeat: %s", exc)
@@ -235,30 +244,39 @@ class RedisLiveStore:
             log.debug("Could not read engine heartbeat: %s", exc)
             return False
         doc = _safe_json_loads(raw) if raw else None
-        if not isinstance(doc, dict):
+        if self._owns_heartbeat(doc):
             return False
-        seen = doc.get("seen_at")
-        if not isinstance(seen, (int, float)):
-            return False
-        if time.time() - seen >= LIVE_ENGINE_TTL_SECONDS:
-            return False
-        pid = doc.get("pid")
-        if isinstance(pid, int) and pid == os.getpid():
-            return False
-        if isinstance(pid, int):
-            return _pid_is_alive(pid)
-        # Pre-pid heartbeat from an older engine: treat a fresh key as live.
-        return True
+        return self._heartbeat_is_fresh(doc)
 
     def claim_engine(self) -> bool:
-        """Take ownership of the live writer heartbeat, or refuse if another engine is up."""
+        """Take ownership of the live writer heartbeat, or refuse if another engine is up.
+
+        Uses SET NX plus a per-process token so Docker PID namespaces cannot
+        mistake a still-running peer for a dead local pid.
+        """
         if self.memory_only:
             self.touch_engine()
             return True
-        if self.other_engine_is_live():
-            return False
-        self.touch_engine()
-        return True
+        now = time.time()
+        self._mem.engine_seen_at = now
+        if not self._ensure_connected() or self.client is None:
+            return True
+        payload = _engine_heartbeat_payload(self._engine_token, now)
+        try:
+            if self.client.set(_KEY_ENGINE, payload, ex=LIVE_ENGINE_TTL_SECONDS, nx=True):
+                return True
+            raw = self.client.get(_KEY_ENGINE)
+            doc = _safe_json_loads(raw) if raw else None
+            if self._owns_heartbeat(doc):
+                self.client.set(_KEY_ENGINE, payload, ex=LIVE_ENGINE_TTL_SECONDS)
+                return True
+            if self._heartbeat_is_fresh(doc, now):
+                return False
+            self.client.set(_KEY_ENGINE, payload, ex=LIVE_ENGINE_TTL_SECONDS)
+            return True
+        except RedisError as exc:
+            log.error("Failed to claim engine heartbeat: %s", exc)
+            return True
 
     def clear_engine(self) -> None:
         """Drop the engine heartbeat so readers immediately see it as stopped."""
@@ -1117,12 +1135,7 @@ class RedisLiveStore:
                     pipe.hset(
                         _KEY_ALERTS.format(flight_id=flight_id), alert_id, encoded
                     )
-            if self._mem.engine_seen_at is not None:
-                pipe.set(
-                    _KEY_ENGINE,
-                    _engine_heartbeat_payload(self._mem.engine_seen_at),
-                    ex=LIVE_ENGINE_TTL_SECONDS,
-                )
             pipe.execute()
+            self.touch_engine()
         except RedisError as exc:
             log.error("Failed to backfill Redis from memory: %s", exc)

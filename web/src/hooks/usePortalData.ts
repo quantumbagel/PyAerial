@@ -5,6 +5,7 @@ import type { Alert, AppConfig, FlightSummary, PortalView, ServerStats, Telemetr
 import type { SidebarTab } from '../components/Sidebar';
 import { alertEpisodeIdentity, dedupeAlerts, mergeAlertsByEpisode } from '../utils/alertData';
 import { applyTelemetryPoint, mergeLiveFlights, sortFlights } from '../utils/flightData';
+import { fetchHistoryPages } from '../utils/historyPages';
 
 const PAGE_LIMIT = 50;
 const PATH_POINT_CAP = 400;
@@ -141,25 +142,35 @@ export function usePortalData({
     const version = ++historyRefreshVersion.current;
     const filter = historyListOpts();
     try {
-      const flightLimit = Math.max(PAGE_LIMIT, flightsFetchedCount.current || PAGE_LIMIT);
-      const alertLimit = Math.max(PAGE_LIMIT, alertsFetchedCount.current || PAGE_LIMIT);
-      const [flights, alerts, stats] = await Promise.all([
-        api.fetchFlights('history', { ...filter, limit: flightLimit, skip: 0 }),
-        api.fetchAlerts('history', { ...filter, limit: alertLimit, skip: 0 }),
+      const stillCurrent = () =>
+        version === historyRefreshVersion.current && portalViewRef.current === 'history';
+      const flightWant = Math.max(PAGE_LIMIT, flightsFetchedCount.current || PAGE_LIMIT);
+      const alertWant = Math.max(PAGE_LIMIT, alertsFetchedCount.current || PAGE_LIMIT);
+      const [flightPage, alertPage, stats] = await Promise.all([
+        fetchHistoryPages(
+          flightWant,
+          (skip, limit) => api.fetchFlights('history', { ...filter, limit, skip }),
+          stillCurrent,
+        ),
+        fetchHistoryPages(
+          alertWant,
+          (skip, limit) => api.fetchAlerts('history', { ...filter, limit, skip }),
+          stillCurrent,
+        ),
         api.fetchStats(),
       ]);
-      if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
+      if (!stillCurrent() || !flightPage || !alertPage) {
         return;
       }
       if (!isFetchingFlights.current) {
-        setFlightsData(sortFlights(flights));
-        flightsFetchedCount.current = flights.length;
-        hasMoreFlights.current = flights.length >= flightLimit;
+        setFlightsData(sortFlights(flightPage.items));
+        flightsFetchedCount.current = flightPage.items.length;
+        hasMoreFlights.current = flightPage.hasMore;
       }
       if (!isFetchingAlerts.current) {
-        setAlertsData(dedupeAlerts(alerts));
-        alertsFetchedCount.current = alerts.length;
-        hasMoreAlerts.current = alerts.length >= alertLimit;
+        setAlertsData(dedupeAlerts(alertPage.items));
+        alertsFetchedCount.current = alertPage.items.length;
+        hasMoreAlerts.current = alertPage.hasMore;
       }
       if (stats) setServerStats(stats);
       setFlightsError(null);
@@ -191,20 +202,30 @@ export function usePortalData({
     try {
       // Paginate against the number of alerts actually fetched from the server,
       // not the deduped client-side list (whose length can differ after merging).
-      const skip = append ? alertsFetchedCount.current : 0;
-      const limit = append ? PAGE_LIMIT : Math.max(PAGE_LIMIT, alertsFetchedCount.current);
-      const data = await api.fetchAlerts('history', { ...filter, limit, skip });
-      if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
-        return;
-      }
       if (append) {
+        const data = await api.fetchAlerts('history', {
+          ...filter,
+          limit: PAGE_LIMIT,
+          skip: alertsFetchedCount.current,
+        });
+        if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
+          return;
+        }
         if (data.length < PAGE_LIMIT) hasMoreAlerts.current = false;
         alertsFetchedCount.current += data.length;
         setAlertsData((prev) => dedupeAlerts([...prev, ...data]));
       } else {
-        setAlertsData(dedupeAlerts(data));
-        alertsFetchedCount.current = data.length;
-        hasMoreAlerts.current = data.length >= PAGE_LIMIT;
+        const want = Math.max(PAGE_LIMIT, alertsFetchedCount.current || PAGE_LIMIT);
+        const page = await fetchHistoryPages(
+          want,
+          (skip, limit) => api.fetchAlerts('history', { ...filter, limit, skip }),
+          () =>
+            version === historyRefreshVersion.current && portalViewRef.current === 'history',
+        );
+        if (!page) return;
+        setAlertsData(dedupeAlerts(page.items));
+        alertsFetchedCount.current = page.items.length;
+        hasMoreAlerts.current = page.hasMore;
       }
       setAlertsError(null);
     } catch (err) {
@@ -225,13 +246,15 @@ export function usePortalData({
     const version = historyRefreshVersion.current;
     const filter = historyListOpts();
     try {
-      const skip = append ? flightsFetchedCount.current : 0;
-      const limit = append ? PAGE_LIMIT : Math.max(PAGE_LIMIT, flightsFetchedCount.current);
-      const data = await api.fetchFlights('history', { ...filter, limit, skip });
-      if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
-        return;
-      }
       if (append) {
+        const data = await api.fetchFlights('history', {
+          ...filter,
+          limit: PAGE_LIMIT,
+          skip: flightsFetchedCount.current,
+        });
+        if (version !== historyRefreshVersion.current || portalViewRef.current !== 'history') {
+          return;
+        }
         if (data.length < PAGE_LIMIT) hasMoreFlights.current = false;
         flightsFetchedCount.current += data.length;
         setFlightsData((prev) => {
@@ -240,9 +263,17 @@ export function usePortalData({
           return extra.length ? sortFlights([...prev, ...extra]) : prev;
         });
       } else {
-        setFlightsData(sortFlights(data));
-        flightsFetchedCount.current = data.length;
-        hasMoreFlights.current = data.length >= PAGE_LIMIT;
+        const want = Math.max(PAGE_LIMIT, flightsFetchedCount.current || PAGE_LIMIT);
+        const page = await fetchHistoryPages(
+          want,
+          (skip, limit) => api.fetchFlights('history', { ...filter, limit, skip }),
+          () =>
+            version === historyRefreshVersion.current && portalViewRef.current === 'history',
+        );
+        if (!page) return;
+        setFlightsData(sortFlights(page.items));
+        flightsFetchedCount.current = page.items.length;
+        hasMoreFlights.current = page.hasMore;
       }
       setFlightsError(null);
     } catch (err) {

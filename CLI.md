@@ -7,8 +7,7 @@
 | `pyaerial run` | Tracking engine (writes Redis and SQLite) |
 | `pyaerial web` | Portal (reads Redis and SQLite; does not track) |
 | `pyaerial validate` | Config syntax, schema, and cross-references |
-| `pyaerial view` | Interactive viewer (`list`, `dump`, `reset`, `status`, `live`) |
-| `pyaerial live` | ASCII terminal table |
+| `pyaerial reset` | Wipe retained history (`--yes`; optional ICAO; live Redis only if the engine is stopped) |
 
 `pyaerial web` serves `GET /health`, `GET /ready`, `GET /api` (protocol discovery), and a WebSocket at `ws://…/ws/live` (alias `/ws`). Raw receiver frames are only on `/ws/raw` (not on `/ws/live`). Other clients can consume the live socket and request history. Prefer the `x-pyaerial-token` header when `web.token` or `PYAERIAL_WEB_TOKEN` is set (`?token=` also works).
 
@@ -22,10 +21,8 @@ pyaerial validate -c config.yaml
 # Requires `pyaerial run` + Redis
 pyaerial web -c config.yaml --host 0.0.0.0 --port 10090
 
-pyaerial live --interval 2.0
-pyaerial live --once
-
-pyaerial view [-c config.yaml]
+pyaerial reset --yes
+pyaerial reset --yes abc123
 
 # Capture into the YAML directory (paths are resolved relative to the file):
 # mkdir -p src/pyaerial/examples/captures

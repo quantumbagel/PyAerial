@@ -18,10 +18,12 @@ import {
   type SortDirection,
 } from '../utils/flightData';
 import { isEngineLive } from '../utils/emptyStates';
+import { filterRawFrames } from '../utils/rawFrames';
 import { localDayEndSeconds, localDayStartSeconds } from '../utils/historyFilters';
 import { useFlightPaths } from './useFlightPaths';
 import { useFlightSelection } from './useFlightSelection';
 import { usePortalData } from './usePortalData';
+import { useRawFrames } from './useRawFrames';
 
 export function usePortalApp() {
   const [portalView, setPortalView] = useState<PortalView>(() => {
@@ -181,6 +183,12 @@ export function usePortalApp() {
           });
     return sortFlightsBy(source, flightSortField, flightSortDirection);
   }, [portal.flightsData, portalView, searchQuery, flightSortField, flightSortDirection]);
+
+  const raw = useRawFrames();
+  const filteredRawFrames = useMemo(
+    () => filterRawFrames(raw.frames, searchQuery),
+    [raw.frames, searchQuery],
+  );
 
   const paths = useFlightPaths(portalView, selection.activeFlightId, filteredFlights);
 
@@ -359,6 +367,8 @@ export function usePortalApp() {
     setAlertSort,
     toggleAlertSortDirection,
     disableFollow,
+    raw,
+    filteredRawFrames,
     engineIdle:
       portalView === 'live' &&
       portal.wsStatus === 'connected' &&

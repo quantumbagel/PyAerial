@@ -153,7 +153,7 @@ def _validate_cross_references(config: Config, path: Path) -> None:
         if cfg.type in missing_extras:
             extra_problems.append(
                 f"receivers.{name}: type {cfg.type!r} is not installed "
-                f"({missing_extras[cfg.type]}). For py1090 run: pip install 'pyaerial[sdr]'"
+                f"({missing_extras[cfg.type]})"
             )
             continue
         unknown_receivers.append(f"{name} ({cfg.type})")
@@ -238,8 +238,6 @@ def _validate_cross_references(config: Config, path: Path) -> None:
                             f"{loc}: webhook url must be https "
                             f"(http allowed only for localhost): {url}"
                         )
-                if action.method == "kafka" and "server" not in action.options:
-                    problems.append(f"{loc}: kafka action requires options.server")
     if problems:
         lines = [f"configuration file {path} is invalid:"]
         lines.extend(f"  - {item}" for item in problems)

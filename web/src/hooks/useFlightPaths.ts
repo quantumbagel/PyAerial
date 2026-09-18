@@ -15,6 +15,7 @@ export function useFlightPaths(
   const [pathAlerts, setPathAlerts] = useState<Record<string, Alert[]>>({});
 
   const pendingPathFetches = useRef(new Set<string>());
+  const failedPathFetches = useRef(new Set<string>());
   const showAllPathsRef = useRef(showAllPaths);
   const pathCoordsRef = useRef(pathCoords);
   const filteredFlightsRef = useRef(filteredFlights);
@@ -72,18 +73,34 @@ export function useFlightPaths(
       }
     } catch (err) {
       console.error('Failed to fetch flight path', err);
+      failedPathFetches.current.add(flightId);
     } finally {
       pendingPathFetches.current.delete(flightId);
+      if (showAllPathsRef.current && portalViewRef.current === view) {
+        const missing = filteredFlightsRef.current.filter(
+          (f) =>
+            !pathCoordsRef.current[f.flight_id] &&
+            !pendingPathFetches.current.has(f.flight_id) &&
+            !failedPathFetches.current.has(f.flight_id),
+        );
+        const room = Math.max(0, MAX_PATH_FETCHES - pendingPathFetches.current.size);
+        missing.slice(0, room).forEach((f) => {
+          void fetchAndSetPath(f.flight_id, view);
+        });
+      }
     }
   }, []);
 
   const refreshFlightPaths = useCallback(
     async (flightId: string | null, view: PortalView) => {
       if (showAllPathsRef.current) {
+        failedPathFetches.current.clear();
         const missing = filteredFlightsRef.current.filter(
           (f) => !pathCoordsRef.current[f.flight_id],
         );
-        await Promise.all(missing.map((f) => fetchAndSetPath(f.flight_id, view)));
+        await Promise.all(
+          missing.slice(0, MAX_PATH_FETCHES).map((f) => fetchAndSetPath(f.flight_id, view)),
+        );
       } else if (flightId) {
         setPathCoords({});
         setPathTelemetry({});
@@ -117,6 +134,10 @@ export function useFlightPaths(
   }, [showAllPaths, activeFlightId, portalView, refreshFlightPaths]);
 
   useEffect(() => {
+    failedPathFetches.current.clear();
+  }, [showAllPaths, portalView]);
+
+  useEffect(() => {
     if (!showAllPaths || !portalView) return;
     const keep = new Set(filteredFlights.map((f) => f.flight_id));
     if (activeFlightId) keep.add(activeFlightId);
@@ -135,7 +156,8 @@ export function useFlightPaths(
     const missing = filteredFlights.filter(
       (f) =>
         !pathCoordsRef.current[f.flight_id] &&
-        !pendingPathFetches.current.has(f.flight_id),
+        !pendingPathFetches.current.has(f.flight_id) &&
+        !failedPathFetches.current.has(f.flight_id),
     );
     const room = Math.max(0, MAX_PATH_FETCHES - pendingPathFetches.current.size);
     missing.slice(0, room).forEach((f) => {

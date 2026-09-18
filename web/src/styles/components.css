@@ -102,10 +102,26 @@
 }
 
 #flight-list,
-#alert-list {
+#alert-list,
+#raw-list {
     flex-grow: 1;
     overflow-y: auto;
     list-style: none;
+}
+
+.raw-antenna {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--border);
+    background-color: var(--panel-raised);
+}
+
+.raw-hex {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--font-xs);
+    word-break: break-all;
 }
 
 .drawer-header-label {

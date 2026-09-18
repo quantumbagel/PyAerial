@@ -99,8 +99,7 @@ def create_receiver(method: str, name: str, emit: Emit, arguments: dict) -> Rece
     """Instantiate the receiver registered under ``method``."""
     if method in _UNAVAILABLE:
         raise KeyError(
-            f"receiver {method!r} is unavailable ({_UNAVAILABLE[method]}). "
-            "Install the optional extra, e.g. pip install 'pyaerial[sdr]'."
+            f"receiver {method!r} is unavailable ({_UNAVAILABLE[method]})."
         )
     if method not in _REGISTRY:
         raise KeyError(
@@ -113,15 +112,6 @@ def register_builtins() -> None:
     """Import built-in receivers so they register themselves."""
     from pyaerial.receivers import dump1090 as _dump1090  # noqa: F401
     from pyaerial.receivers import replay as _replay  # noqa: F401
-
-    try:  # pyrtlsdr / librtlsdr may be unavailable on some systems.
-        from pyaerial.receivers import py1090 as _py1090  # noqa: F401
-    except Exception as exc:  # pragma: no cover - optional dependency
-        _UNAVAILABLE["py1090"] = str(exc)
-        logging.getLogger("pyaerial.receiver").warning(
-            "py1090 receiver unavailable (%s). Install with: pip install 'pyaerial[sdr]'",
-            exc,
-        )
 
 
 register_builtins()

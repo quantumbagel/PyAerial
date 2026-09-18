@@ -16,7 +16,7 @@ WORKDIR /opt/PyAerial
 COPY . /opt/PyAerial
 COPY --from=webbuild /opt/PyAerial/src/pyaerial/static /opt/PyAerial/src/pyaerial/static
 
-RUN python3 -m pip install --break-system-packages ".[all]"
+RUN python3 -m pip install --break-system-packages .
 
 # Build dump1090 for the dump1090 receiver
 RUN git clone --depth 1 https://github.com/flightaware/dump1090.git /opt/dump1090 && \
