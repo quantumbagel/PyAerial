@@ -2,8 +2,8 @@
 Domain constants shared across PyAerial modules.
 
 These are stable identifiers for data fields, message categories, and database
-keys. Anything that is user-configurable now lives in the typed configuration
-schema (:mod:`pyaerial.config`) rather than here.
+keys, plus shared kinematics limits. Anything that is user-configurable now
+lives in the typed configuration schema (:mod:`pyaerial.config`) rather than here.
 """
 
 import operator
@@ -63,6 +63,17 @@ LIVE_ENGINE_TTL_SECONDS = 10
 DEFAULT_AIRCRAFT_DB = str(
     (Path(__file__).resolve().parent.parent.parent / "aircraft.db").resolve()
 )
+
+# --- Kinematics ---------------------------------------------------------------
+# Mid-latitude meters per degree of latitude (flat-earth local frame).
+METERS_PER_DEG_LAT = 111_000.0
+MIN_METERS_PER_DEG_LON = 1000.0
+MIN_SPEED_DT = 0.2
+MIN_VEL_DT = 0.05
+MAX_KALMAN_DT = 30.0
+# Unphysical ground-speed cap (~3000 km/h); rejects CPR/decode jumps.
+MAX_SPEED_MPS = 833.0
+MAX_CPR_JUMP_DEG = 0.5
 
 # Names accepted in a zone rule's ``when`` block (canonical + aliases).
 WHEN_FIELDS = frozenset(

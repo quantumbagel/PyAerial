@@ -10,12 +10,13 @@ from __future__ import annotations
 import math
 import time
 
-# Approximate meters per degree latitude at mid-latitudes
-METERS_PER_DEG_LAT = 111_000.0
-
-
-def _meters_per_deg_lon(lat: float) -> float:
-    return 111_000.0 * math.cos(math.radians(lat))
+from pyaerial.calc.geo import meters_per_deg_lon
+from pyaerial.constants import (
+    MAX_KALMAN_DT,
+    MAX_SPEED_MPS,
+    METERS_PER_DEG_LAT,
+    MIN_VEL_DT,
+)
 
 
 class KinematicKalmanFilter:
@@ -53,7 +54,7 @@ class KinematicKalmanFilter:
             return self.lat, self.lon
 
         m_per_deg_lat = METERS_PER_DEG_LAT
-        m_per_deg_lon = max(_meters_per_deg_lon(self.lat), 1000.0)
+        m_per_deg_lon = meters_per_deg_lon(self.lat)
 
         # Position extrapolation in degrees
         self.lat += (self.vn * dt) / m_per_deg_lat
@@ -72,12 +73,12 @@ class KinematicKalmanFilter:
         Incorporate position measurement and update state.
         Returns (filtered_lat, filtered_lon, speed_m_s, heading_deg).
         """
-        dt = min(max(dt, 0.0), 30.0)
+        dt = min(max(dt, 0.0), MAX_KALMAN_DT)
         if dt > 0:
             self.predict(dt)
 
         m_per_deg_lat = METERS_PER_DEG_LAT
-        m_per_deg_lon = max(_meters_per_deg_lon(measured_lat), 1000.0)
+        m_per_deg_lon = meters_per_deg_lon(measured_lat)
 
         # Innovation (residual in degrees converted to meters)
         res_lat_m = (measured_lat - self.lat) * m_per_deg_lat
@@ -95,7 +96,7 @@ class KinematicKalmanFilter:
         self.lat += (k_lat * res_lat_m) / m_per_deg_lat
         self.lon += (k_lon * res_lon_m) / m_per_deg_lon
 
-        if dt >= _MIN_VEL_DT:
+        if dt >= MIN_VEL_DT:
             self.vn += 0.2 * (res_lat_m / dt)
             self.ve += 0.2 * (res_lon_m / dt)
 
@@ -103,11 +104,11 @@ class KinematicKalmanFilter:
         self.p_lon *= 1.0 - k_lon
 
         speed_m_s = math.hypot(self.vn, self.ve)
-        if speed_m_s > _MAX_SPEED_MPS:
-            scale = _MAX_SPEED_MPS / speed_m_s
+        if speed_m_s > MAX_SPEED_MPS:
+            scale = MAX_SPEED_MPS / speed_m_s
             self.vn *= scale
             self.ve *= scale
-            speed_m_s = _MAX_SPEED_MPS
+            speed_m_s = MAX_SPEED_MPS
         heading_deg = (math.degrees(math.atan2(self.ve, self.vn)) + 360.0) % 360.0
 
         return self.lat, self.lon, speed_m_s, heading_deg

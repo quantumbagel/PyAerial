@@ -13,6 +13,18 @@ from geopy.distance import geodesic
 from shapely import LineString, Point, Polygon
 from shapely.ops import nearest_points
 
+from pyaerial.constants import (
+    MAX_SPEED_MPS,
+    METERS_PER_DEG_LAT,
+    MIN_METERS_PER_DEG_LON,
+    MIN_SPEED_DT,
+)
+from pyaerial.units import KMH_TO_MPS, MPS_TO_KMH
+
+
+def meters_per_deg_lon(lat: float) -> float:
+    return max(METERS_PER_DEG_LAT * math.cos(math.radians(lat)), MIN_METERS_PER_DEG_LON)
+
 
 def build_polygons(zones: dict) -> dict[str, Polygon]:
     """Build a ``{zone_name: Polygon}`` map from the configured zones."""
@@ -40,10 +52,6 @@ def calculate_heading(
     return ((math.atan2(y, x) * 180 / math.pi) + 360) % 360
 
 
-_MIN_SPEED_DT = 0.2
-_MAX_SPEED_KMH = 3000.0
-
-
 def calculate_speed(
     previous: tuple[float, float],
     current: tuple[float, float],
@@ -52,9 +60,10 @@ def calculate_speed(
 ) -> float:
     """Average ground speed (km/h) implied by moving between two fixes."""
     elapsed = current_time - previous_time
-    if elapsed < _MIN_SPEED_DT:
+    if elapsed < MIN_SPEED_DT:
         return 0.0
-    return min(geodesic(previous, current).m / elapsed * 3.6, _MAX_SPEED_KMH)
+    speed_mps = geodesic(previous, current).m / elapsed
+    return min(speed_mps, MAX_SPEED_MPS) * MPS_TO_KMH
 
 
 def distance_to_polygon(polygon: Polygon, position: tuple[float, float]) -> float:
@@ -158,17 +167,15 @@ def time_to_enter_geofence_curved(
     # the start of a maneuver) implies a huge circle that may miss a small
     # geofence even though the aircraft could reach it by holding course, so
     # report whichever model predicts the earliest entry.
-    straight_eta = time_to_enter_geofence(
-        position, heading, speed, polygon, max_time
-    )
+    straight_eta = time_to_enter_geofence(position, heading, speed, polygon, max_time)
 
     # --- Analytic turn-circle intersection (flat-earth, accurate <100 km) ---
-    m_per_deg_lat = 111_000.0
-    m_per_deg_lon = max(111_000.0 * math.cos(math.radians(position[0])), 1000.0)
+    m_per_deg_lat = METERS_PER_DEG_LAT
+    m_per_deg_lon = meters_per_deg_lon(position[0])
     lat0, lon0 = position
 
     omega = math.radians(turn_rate)  # signed rad/s; positive = right turn
-    v_ms = speed / 3.6
+    v_ms = speed * KMH_TO_MPS
     radius = v_ms / abs(omega)
     period = 2.0 * math.pi / abs(omega)
     hdg = math.radians(heading)
@@ -262,14 +269,14 @@ def dead_reckon_curved(
     step_dt = dt / sub_steps
     lat, lon = position
     cur_heading = heading
-    speed_m_s = speed_kph / 3.6
-    m_per_deg_lat = 111_000.0
+    speed_m_s = speed_kph * KMH_TO_MPS
+    m_per_deg_lat = METERS_PER_DEG_LAT
 
     for _ in range(sub_steps):
         cur_heading += turn_rate * step_dt
         dist_m = speed_m_s * step_dt
         rad_h = math.radians(cur_heading)
-        m_per_deg_lon = max(111_000.0 * math.cos(math.radians(lat)), 1000.0)
+        m_per_deg_lon = meters_per_deg_lon(lat)
         lat += (dist_m * math.cos(rad_h)) / m_per_deg_lat
         lon += (dist_m * math.sin(rad_h)) / m_per_deg_lon
 

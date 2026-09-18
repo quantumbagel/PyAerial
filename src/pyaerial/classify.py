@@ -15,6 +15,7 @@ from pyModeS.util import typecode as pms_typecode, icao as pms_icao
 
 from pyaerial.config.schema import HomeConfig
 from pyaerial.constants import (
+    MAX_CPR_JUMP_DEG,
     STORE_ALT,
     STORE_CALLSIGN,
     STORE_HEADING,
@@ -28,8 +29,6 @@ from pyaerial.constants import (
     STORE_VERT_SPEED,
 )
 from pyaerial.units import FT_PER_MIN_TO_MPS, FT_TO_M, KT_TO_KMH
-
-_MAX_CPR_JUMP_DEG = 0.5
 
 log = logging.getLogger("pyaerial.classify")
 
@@ -189,8 +188,8 @@ def _plausible_fix(
     if last_position is None:
         return True
     return (
-        abs(float(lat) - last_position[0]) <= _MAX_CPR_JUMP_DEG
-        and abs(float(lon) - last_position[1]) <= _MAX_CPR_JUMP_DEG
+        abs(float(lat) - last_position[0]) <= MAX_CPR_JUMP_DEG
+        and abs(float(lon) - last_position[1]) <= MAX_CPR_JUMP_DEG
     )
 
 

@@ -7,6 +7,9 @@ from dataclasses import dataclass
 
 from pyaerial.calc.kalman import KinematicKalmanFilter
 from pyaerial.config.schema import Config
+from pyaerial.units import MPS_TO_KMH
+
+_MIN_KALMAN_SPEED_MPS = 1.4
 
 
 def heading_delta_deg(from_deg: float, to_deg: float) -> float:
@@ -72,9 +75,8 @@ def resolve_motion(
 
     if config.tracking.use_kalman_eta and kf is not None:
         kalman_speed_mps = math.hypot(kf.vn, kf.ve)
-        kalman_speed_kph = kalman_speed_mps * 3.6
-        if kalman_speed_kph >= 5.0:
-            speed = kalman_speed_kph
+        if kalman_speed_mps >= _MIN_KALMAN_SPEED_MPS:
+            speed = kalman_speed_mps * MPS_TO_KMH
             heading = (math.degrees(math.atan2(kf.ve, kf.vn)) + 360.0) % 360.0
 
     return ResolvedMotion(

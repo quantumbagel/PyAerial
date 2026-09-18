@@ -15,6 +15,7 @@ from pyaerial.calc.motion import (
 )
 from pyaerial.config.schema import Config
 from pyaerial.constants import (
+    MAX_KALMAN_DT,
     STORE_CALC_DATA,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
@@ -128,7 +129,7 @@ class Kinematics:
             self._kalman_filters[icao] = kf
             kf.last_update_time = current_time
         elif current_time > kf.last_update_time:
-            dt_kf = min(max(0.0, current_time - kf.last_update_time), 30.0)
+            dt_kf = min(max(0.0, current_time - kf.last_update_time), MAX_KALMAN_DT)
             kf.update(current[0], current[1], dt_kf)
             kf.last_update_time = current_time
 

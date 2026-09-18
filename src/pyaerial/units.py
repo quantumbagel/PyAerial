@@ -20,3 +20,7 @@ FT_PER_MIN_TO_MPS = 0.00508
 M_TO_FT = 3.28084
 KMH_TO_KT = 0.539957
 MPS_TO_FT_PER_MIN = 196.8504
+
+# stored km/h ↔ SI m/s (kinematics and Kalman use m/s)
+MPS_TO_KMH = 3.6
+KMH_TO_MPS = 1.0 / 3.6

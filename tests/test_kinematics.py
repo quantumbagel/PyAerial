@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pyaerial.calc.kalman import KinematicKalmanFilter
 from pyaerial.calc.kinematics import Kinematics
 from pyaerial.constants import (
+    MAX_SPEED_MPS,
+    MIN_VEL_DT,
     STORE_CALC_DATA,
     STORE_FIRST_PACKET,
     STORE_HEADING,
@@ -53,3 +56,17 @@ def test_trusted_adsb_speed_is_stamped_per_fix():
     assert samples[1][4] is not None
     assert samples[0][0] == t
     assert samples[1][0] == t + 1.0
+
+
+def test_kalman_skips_velocity_nudge_on_tiny_dt():
+    kf = KinematicKalmanFilter(35.72, -78.70)
+    _, _, speed, _ = kf.update(35.73, -78.69, MIN_VEL_DT / 2)
+    assert kf.vn == 0.0
+    assert kf.ve == 0.0
+    assert speed == 0.0
+
+
+def test_kalman_clamps_unphysical_speed():
+    kf = KinematicKalmanFilter(35.0, -78.0)
+    _, _, speed, _ = kf.update(36.0, -78.0, 0.5)
+    assert speed == MAX_SPEED_MPS

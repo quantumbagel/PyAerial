@@ -5,6 +5,8 @@ import math
 from shapely import Polygon
 
 from pyaerial.calc import geo
+from pyaerial.constants import MAX_SPEED_MPS
+from pyaerial.units import MPS_TO_KMH
 
 
 def test_inside_polygon_eta_is_zero():
@@ -28,6 +30,12 @@ def test_calculate_speed_is_kmh():
 def test_calculate_speed_rejects_microsecond_dt():
     speed = geo.calculate_speed((35.7, -78.7), (35.7005, -78.7), 1.0, 1.0 + 1e-6)
     assert speed == 0.0
+
+
+def test_calculate_speed_clamps_unphysical():
+    # 1 deg latitude in 0.5s is thousands of m/s.
+    speed = geo.calculate_speed((35.0, -78.0), (36.0, -78.0), 0.0, 0.5)
+    assert speed == MAX_SPEED_MPS * MPS_TO_KMH
 
 
 def test_predict_seconds_straight_when_curved_disabled():
