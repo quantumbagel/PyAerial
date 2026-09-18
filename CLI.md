@@ -11,7 +11,7 @@
 | `pyaerial validate` | Syntax, schema, and filesystem cross-reference verification |
 | `pyaerial reset` | Retention purger (`--yes`; optional single ICAO; clears Redis only when engine is stopped) |
 
-The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias), whereas high-volume RF sensor frames stream exclusively over `/ws/raw`. When `web.token` or `PYAERIAL_WEB_TOKEN` is configured, client connections must supply the token through a `?token=` query parameter.
+The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias), whereas high-volume RF sensor frames stream exclusively over `/ws/raw`. When `web.token` or `PYAERIAL_WEB_TOKEN` is configured, client connections must supply the token through a `?token=` query parameter. Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).
 
 **Command execution**
 
@@ -61,79 +61,4 @@ on_activate:
       format: discord
 ```
 
-**WebSocket live interface (`/ws/live`)**
-
-Browser applications on distinct hosts require matching origins in `web.origins` (`*` by default), whereas native non-browser clients connect unrestricted without origin headers. Upon connecting to `/ws/live`, the server sends a `hello` handshake (`protocol: pyaerial.live`) followed immediately by snapshots for `flights`, `alerts`, and `stats`, after which it pushes incremental updates alongside `telemetry` and periodic keepalive `ping` frames. The machine-readable interface schema is queryable via `GET /api`.
-
-```python
-import asyncio, json, websockets
-
-async def main():
-    async with websockets.connect("ws://127.0.0.1:10090/ws/live") as ws:
-        hello = json.loads(await ws.recv())
-        assert hello["type"] == "hello"
-        await ws.send(json.dumps({
-            "type": "request", "id": "1",
-            "action": "subscribe",
-            "params": {"streams": ["flights", "alerts"]},
-        }))
-        await ws.send(json.dumps({
-            "type": "request", "id": "2",
-            "action": "fetchFlights",
-            "params": {"view": "live"},
-        }))
-        while True:
-            msg = json.loads(await ws.recv())
-            print(msg["type"], msg.get("id") or msg.get("stats") or "")
-
-asyncio.run(main())
-```
-
-**RPC request and response format**
-
-```json
-// Client request
-{ "type": "request", "id": "1", "action": "fetchFlights", "params": { "view": "live" } }
-
-// Server response
-{ "type": "response", "id": "1", "success": true, "data": [] }
-```
-
-**WebSocket actions**
-
-| Action | Parameters | Semantics |
-|--------|------------|-----------|
-| `subscribe` | `streams` (`flights`, `alerts`, `telemetry`, `stats`) | Filters active push streams on this connection. Default or `[]` enables all four. `raw` is rejected; use `/ws/raw`. |
-| `fetchFlights` | `view` (`live` or `history`), `skip`, `limit`, `q`, `since`, `until` | Historical `q` filters on ICAO, callsign, or flight ID. `since`/`until` filter epoch seconds on `end_time`. Max limit: 200. |
-| `fetchFlight` | `flightId`, `view` | Returns single flight document. Returns `success: false` if missing. |
-| `fetchTelemetry` | `flightId`, `view`, `since` | Returns track coordinate points recorded after `since` epoch seconds. |
-| `fetchAlerts` | `view`, `skip`, `limit`, `q`, `since`, `until`, `flightId`, `rule` | Historical `q` filters across ICAO, callsign, zone, rule, or flight ID. |
-| `fetchStats` | None | Returns active/retained flight counts, store connectivity flags, and engine heartbeat timestamp. |
-| `fetchZones` | None | Returns home coordinates, polygon geometries, and `alert_colors`. |
-| `fetchConfig` | None | Returns active UI display configuration. |
-
-**Raw sensor interface (`/ws/raw`)**
-
-`/ws/raw` isolates raw RF frames using the `pyaerial.raw` subprotocol and rejects live RPC actions. Connecting clients receive a `hello` handshake, an `antenna` message containing receiver coordinates and configurations, followed by continuous `raw` message batches.
-
-```json
-{
-  "type": "raw",
-  "timestamp": 1721832000.5,
-  "messages": [
-    {
-      "hex": "8d406b902015a678d4d220aa4bda",
-      "timestamp": 1721832000.412,
-      "receiver": "main",
-      "df": 17,
-      "icao": "406b90",
-      "rssi": -18.5,
-      "clock": 123456
-    }
-  ]
-}
-```
-
-While standard AVR text (`*HEX;` on port 30002) supplies unadorned hex payloads, Beast binary (`format: beast` on port 30005) and timestamped AVR (`@CLOCKHEX;`) populate `rssi` in dBFS and a 12 MHz hardware sample counter (`clock`, where 1 tick ≈ 83.33 ns). Downlink format `df` and transponder `icao` are populated whenever DF17 or DF18 messages are decoded, and `timestamp` reflects engine reception time in unix epoch seconds.
-
-Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).
+The full YAML schema is in [CONFIGURATION.md](CONFIGURATION.md).
