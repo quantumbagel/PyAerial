@@ -53,6 +53,24 @@ def test_iter_telemetry_samples_pairs_lat_lon():
     assert heading is None
 
 
+def test_iter_telemetry_samples_includes_lon_only_timestamps():
+    plane = {
+        STORE_INFO: {STORE_ICAO: "abc123"},
+        STORE_INTERNAL: {
+            STORE_FIRST_PACKET: 1.0,
+            STORE_MOST_RECENT_PACKET: 3.0,
+        },
+        STORE_RECV_DATA: {
+            STORE_LAT: [Datum(35.72, 1.0), Datum(35.72, 3.0)],
+            STORE_LONG: [Datum(-78.70, 1.0), Datum(-78.69, 2.0), Datum(-78.68, 3.0)],
+        },
+    }
+    samples = list(iter_telemetry_samples(plane))
+    assert [item[0] for item in samples] == [1.0, 2.0, 3.0]
+    assert samples[1][1] == 35.72
+    assert samples[1][2] == -78.69
+
+
 def test_plane_wraps_mapping_without_copying_buckets():
     raw = _plane()
     plane = Plane.from_mapping(raw)

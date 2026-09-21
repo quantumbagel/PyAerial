@@ -4,4 +4,4 @@ ADS-B and Mode S tracking pipeline with polygon rule evaluation, live WebSocket 
 (c) 2024 Julian Reder (quantumbagel)
 """
 
-__version__ = "0.20.1"
+__version__ = "0.20.2"

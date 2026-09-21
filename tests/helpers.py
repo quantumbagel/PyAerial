@@ -23,7 +23,10 @@ def make_rule(
         key: FieldConstraint.model_validate(spec) for key, spec in when_fields.items()
     }
     if not when:
-        when = {"altitude": FieldConstraint(maximum=2000)}
+        when = {
+            "altitude": FieldConstraint(maximum=2000),
+            "eta": FieldConstraint(maximum=120),
+        }
     return RuleConfig(
         name=name,
         when=when,

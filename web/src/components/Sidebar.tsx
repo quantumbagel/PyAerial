@@ -122,19 +122,27 @@ export function Sidebar({
     return allAlerts.filter(isAlertActive).length;
   }, [allAlerts]);
 
+  const historyUnfiltered = !searchQuery.trim() && !historySinceDate && !historyUntilDate;
+
   const displayFlightCount = useMemo(() => {
     if (portalView === 'live') {
       return serverStats?.live_flights ?? flightCount;
     }
+    if (historyUnfiltered) {
+      return serverStats?.retained_flights ?? flightCount;
+    }
     return flightCount;
-  }, [serverStats, portalView, flightCount]);
+  }, [serverStats, portalView, flightCount, historyUnfiltered]);
 
   const displayAlertCount = useMemo(() => {
     if (portalView === 'live') {
       return serverStats?.active_alerts ?? activeAlertsCount;
     }
+    if (historyUnfiltered) {
+      return serverStats?.historical_alerts ?? alerts.length;
+    }
     return alerts.length;
-  }, [serverStats, portalView, activeAlertsCount, alerts.length]);
+  }, [serverStats, portalView, activeAlertsCount, alerts.length, historyUnfiltered]);
 
   const alertCountByFlight = useMemo(() => {
     const map = new Map<string, number>();

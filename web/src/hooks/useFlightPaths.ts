@@ -10,12 +10,13 @@ export function pathNeedsFetch(
   pathCoords: Record<string, [number, number][]>,
   pending: Set<string>,
   failed: Set<string>,
-  fetched: Set<string>,
+  _fetched: Set<string>,
 ): boolean {
-  if (pending.has(flightId) || failed.has(flightId) || fetched.has(flightId)) {
+  if (pending.has(flightId) || failed.has(flightId)) {
     return false;
   }
   // Empty [] is a successful fetch with no lat/lon and must stay terminal.
+  // Missing key after prune should refetch even if we fetched earlier.
   return !Object.prototype.hasOwnProperty.call(pathCoords, flightId);
 }
 
@@ -165,6 +166,9 @@ export function useFlightPaths(
     setPathCoords(pruneIfNeeded);
     setPathTelemetry(pruneIfNeeded);
     setPathAlerts(pruneIfNeeded);
+    for (const id of [...fetchedPathFetches.current]) {
+      if (!keep.has(id)) fetchedPathFetches.current.delete(id);
+    }
     const missing = filteredFlights.filter((f) =>
       pathNeedsFetch(
         f.flight_id,

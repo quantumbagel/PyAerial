@@ -97,6 +97,13 @@ def _reset(
 
 
 def _reset_all(history: HistoryStore | None, live_store: Any) -> int:
+    if live_store is not None and engine_is_live(live_store):
+        print(
+            "Tracking engine is running; refusing to delete history that would "
+            "be rewritten on the next expire. Stop `pyaerial run` first.",
+            file=sys.stderr,
+        )
+        return 1
     if history is not None:
         if not history.reset_all():
             print(
@@ -105,14 +112,6 @@ def _reset_all(history: HistoryStore | None, live_store: Any) -> int:
             )
             return 1
     if live_store is not None and hasattr(live_store, "clear_all"):
-        if engine_is_live(live_store):
-            print(
-                "Tracking engine is running; live Redis was not cleared "
-                "(it would be rewritten on the next tick). Stop `pyaerial run` "
-                "first to drop live tracks. History was reset.",
-                file=sys.stderr,
-            )
-            return 0
         live_store.clear_all()
         print("Database reset. Dropped all planes and flights.")
         return 0
@@ -123,6 +122,20 @@ def _reset_all(history: HistoryStore | None, live_store: Any) -> int:
 def _reset_icao(
     history: HistoryStore | None, live_store: Any, target: str
 ) -> int:
+    if live_store is not None and engine_is_live(live_store):
+        live_ids = [
+            flight.get("flight_id")
+            for flight in (getattr(live_store, "get_flights", lambda: [])() or [])
+            if str(flight.get("icao", "")).lower() == target
+        ]
+        if any(live_ids):
+            print(
+                f"Tracking engine is running and {target} is still live; "
+                "refusing to delete history that would be rewritten. "
+                "Stop `pyaerial run` first.",
+                file=sys.stderr,
+            )
+            return 1
     if history is not None:
         if not history.delete_icao(target):
             print(
@@ -131,13 +144,6 @@ def _reset_icao(
             )
             return 1
     if live_store is not None:
-        if engine_is_live(live_store):
-            print(
-                f"Tracking engine is running; live track {target} was not dropped. "
-                "Stop `pyaerial run` first. History was deleted.",
-                file=sys.stderr,
-            )
-            return 0
         _drop_live_icao(live_store, target)
     print(f"Dropped plane {target}.")
     return 0

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import * as api from '../api/client';
 import type { Alert, FlightDetail, PortalView, TelemetryPoint } from '../api/types';
 import { mergeAlertsByEpisode } from '../utils/alertData';
@@ -35,13 +35,8 @@ export function useFlightSelection({
   const activeFlightIdRef = useRef<string | null>(null);
   const selectionTokenRef = useRef(0);
   const portalViewRef = useRef(portalView);
-
-  useEffect(() => {
-    activeFlightIdRef.current = activeFlightId;
-  }, [activeFlightId]);
-  useEffect(() => {
-    portalViewRef.current = portalView;
-  }, [portalView]);
+  activeFlightIdRef.current = activeFlightId;
+  portalViewRef.current = portalView;
 
   const loadFlightAlerts = useCallback(async (flightId: string, view: PortalView) => {
     const token = selectionTokenRef.current;
@@ -73,16 +68,20 @@ export function useFlightSelection({
   );
 
   const appendSelectedTelemetry = useCallback((points: TelemetryPoint[]) => {
+    const flightId = activeFlightIdRef.current;
+    const forFlight = points.filter((p) => !p.flight_id || p.flight_id === flightId);
+    if (!forFlight.length) return;
     setFlightTelemetry((prev) => {
       const ts = new Set(prev.map((t) => t.timestamp));
-      return [...prev, ...points.filter((p) => !ts.has(p.timestamp))].sort(
+      return [...prev, ...forFlight.filter((p) => !ts.has(p.timestamp))].sort(
         (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
       );
     });
-    const latestPoint = points[points.length - 1];
+    const latestPoint = forFlight[forFlight.length - 1];
     if (latestPoint) {
       setFlightDetail((prev) => {
         if (!prev) return prev;
+        if (flightId && prev.flight_id && prev.flight_id !== flightId) return prev;
         const newTs = Math.max(prev.timestamp ?? 0, prev.end_time ?? 0, latestPoint.timestamp);
         return {
           ...prev,
@@ -174,6 +173,10 @@ export function useFlightSelection({
         mapRef.current?.panToAlert(alert.latitude, alert.longitude);
       }
       if (alert.flight_id) {
+        if (alert.flight_id === activeFlightIdRef.current) {
+          setDrawerTab('alerts');
+          return;
+        }
         await selectFlight(alert.flight_id, 'alerts', {
           follow: false,
           panToLatest: false,

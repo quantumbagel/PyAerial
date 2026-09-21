@@ -99,6 +99,11 @@ class Engine:
         self._last_drop_log = 0.0
         self._yielded_writer = False
         if not isolated:
+            if not self.live_store.ping():
+                raise RuntimeError(
+                    "Redis live store is unreachable. Start Redis and check "
+                    "database.redis_uri before running `pyaerial run`."
+                )
             if not self.live_store.claim_engine():
                 raise RuntimeError(
                     "Another tracking engine is already running (fresh live Redis "

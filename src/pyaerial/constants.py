@@ -102,3 +102,12 @@ WHEN_FIELDS = frozenset(
         ALERT_CAT_ETA,
     }
 )
+# At least one of these is required; there is no implicit inside-polygon test.
+WHEN_SPATIAL_FIELDS = frozenset(
+    {
+        STORE_DISTANCE,
+        "dist",
+        "proximity",
+        ALERT_CAT_ETA,
+    }
+)

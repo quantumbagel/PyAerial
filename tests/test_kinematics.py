@@ -81,6 +81,33 @@ def test_turn_rate_keeps_previous_on_microsecond_dt():
     assert abs(rate) > 0.28
 
 
+def test_microsecond_position_pair_does_not_seed_zero():
+    config = make_config()
+    kin = Kinematics(config)
+    t = 1_700_000_000.0
+    plane = {
+        STORE_INFO: {STORE_ICAO: "abc123"},
+        STORE_RECV_DATA: {
+            STORE_LAT: [Datum(35.72, t), Datum(35.721, t + 1e-6)],
+            STORE_LONG: [Datum(-78.70, t), Datum(-78.699, t + 1e-6)],
+        },
+        STORE_CALC_DATA: {},
+        STORE_INTERNAL: {
+            STORE_FIRST_PACKET: t,
+            STORE_MOST_RECENT_PACKET: t + 1e-6,
+        },
+    }
+    kin.update(plane)
+    assert STORE_HORIZ_SPEED not in plane.get(STORE_CALC_DATA, {})
+    assert STORE_HEADING not in plane.get(STORE_CALC_DATA, {})
+
+    plane[STORE_RECV_DATA][STORE_LAT].append(Datum(35.73, t + 1.0))
+    plane[STORE_RECV_DATA][STORE_LONG].append(Datum(-78.69, t + 1.0))
+    kin.update(plane)
+    speeds = plane[STORE_CALC_DATA][STORE_HORIZ_SPEED]
+    assert speeds[-1].value > 1.0
+
+
 def test_stale_position_is_not_coasted():
     import time
 

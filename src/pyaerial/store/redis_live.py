@@ -256,6 +256,13 @@ class RedisLiveStore:
                 log.debug("Could not read engine heartbeat: %s", exc)
         return self._mem.engine_seen_at
 
+    def engine_is_live(self) -> bool:
+        """True when a fresh ``live:engine`` heartbeat exists."""
+        seen = self.engine_seen_at()
+        if not isinstance(seen, (int, float)):
+            return False
+        return time.time() - seen < LIVE_ENGINE_TTL_SECONDS
+
     def other_engine_is_live(self) -> bool:
         """True when another process holds a fresh live:engine heartbeat."""
         if self.memory_only:
@@ -305,7 +312,7 @@ class RedisLiveStore:
         now = time.time()
         self._mem.engine_seen_at = now
         if not self._ensure_connected() or self.client is None:
-            return True
+            return False
         payload = _engine_heartbeat_payload(self._engine_token, now)
         try:
             if self.client.set(
@@ -323,7 +330,7 @@ class RedisLiveStore:
             return True
         except RedisError as exc:
             log.error("Failed to claim engine heartbeat: %s", exc)
-            return True
+            return False
 
     def clear_engine(self) -> None:
         """Drop this process's engine heartbeat so readers see it as stopped.

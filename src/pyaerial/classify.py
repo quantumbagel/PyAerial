@@ -114,7 +114,6 @@ def classify(
             STORE_RECV_DATA: {
                 STORE_LAT: lat,
                 STORE_LONG: lon,
-                STORE_ALT: 0.0,
                 STORE_HORIZ_SPEED: speed * KT_TO_KMH if speed is not None else None,
                 STORE_HEADING: angle,
             },

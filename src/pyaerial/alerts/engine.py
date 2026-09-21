@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import math
 import time
+import uuid
 
 from shapely import Polygon
 
@@ -145,7 +146,7 @@ class AlertEngine:
                 if now - first_match < rule.activation_hold_seconds():
                     continue
                 self._pending_match.pop(key, None)
-                alert_id = f"{flight_id}:{zone_name}:{rule.name}:{int(now)}"
+                alert_id = f"{flight_id}:{zone_name}:{rule.name}:{uuid.uuid4().hex}"
                 state = {
                     "activated_at": now,
                     "last_periodic": now,

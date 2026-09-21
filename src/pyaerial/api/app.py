@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
@@ -20,6 +21,7 @@ from pyaerial.api.spec import WS_STREAMS, websocket_api_spec
 from pyaerial.api.static import mount_spa
 from pyaerial.api.ws import handle_ws_request
 from pyaerial.config.schema import Config
+from pyaerial.constants import LIVE_ENGINE_TTL_SECONDS
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.store.history import HistoryStore
 from pyaerial.store.live import LiveStore
@@ -31,7 +33,6 @@ _LOCAL_ORIGIN = re.compile(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 
 def _origin_allowed(
     origin: str | None,
-    host_header: str | None,
     allowed: list[str] | None = None,
 ) -> bool:
     if not origin:
@@ -47,11 +48,6 @@ def _origin_allowed(
     allowed_norm = {item.rstrip("/") for item in allowed}
     if origin_norm in allowed_norm or origin_host in {item.lower() for item in allowed}:
         return True
-    if host_header:
-        origin_netloc = (parsed.netloc or "").lower()
-        host_norm = host_header.split(",")[0].strip().lower()
-        if origin_netloc and origin_netloc == host_norm:
-            return True
     return False
 
 
@@ -130,14 +126,33 @@ def create_app(
     def ready():
         redis_ok = True
         history_ok = True
+        engine_ok = True
         if live_store is not None:
             redis_ok = bool(live_store.ping())
+            live_fn = getattr(live_store, "engine_is_live", None)
+            if callable(live_fn):
+                try:
+                    engine_ok = bool(live_fn())
+                except Exception:
+                    engine_ok = False
+            else:
+                getter = getattr(live_store, "engine_seen_at", None)
+                seen = getter() if callable(getter) else None
+                engine_ok = (
+                    isinstance(seen, (int, float))
+                    and (time.time() - seen) < LIVE_ENGINE_TTL_SECONDS
+                )
         if history is not None:
             history_ok = bool(history.ping())
-        status = "ok" if redis_ok and history_ok else "degraded"
+        status = "ok" if redis_ok and history_ok and engine_ok else "degraded"
         code = 200 if redis_ok else 503
         return JSONResponse(
-            {"status": status, "redis": redis_ok, "history": history_ok},
+            {
+                "status": status,
+                "redis": redis_ok,
+                "history": history_ok,
+                "engine": engine_ok,
+            },
             status_code=code,
         )
 
@@ -151,8 +166,7 @@ def create_app(
 
     async def _ws_handler(websocket: WebSocket, *, raw_only: bool) -> None:
         origin = websocket.headers.get("origin")
-        host_header = websocket.headers.get("host")
-        if not _origin_allowed(origin, host_header, config.web.origins):
+        if not _origin_allowed(origin, config.web.origins):
             await _reject(websocket, "origin not allowed")
             return
         await broadcaster.connect(

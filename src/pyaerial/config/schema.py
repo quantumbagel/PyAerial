@@ -6,7 +6,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from pyaerial.constants import LOGGING_LEVELS, WHEN_FIELDS
+from pyaerial.constants import LOGGING_LEVELS, WHEN_FIELDS, WHEN_SPATIAL_FIELDS
 
 _HEX_COLOR_RE = r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
 
@@ -177,6 +177,11 @@ class RuleConfig(_Strict):
             raise ValueError(
                 f"unknown when field(s): {', '.join(unknown)}; "
                 f"valid: {', '.join(sorted(WHEN_FIELDS))}"
+            )
+        if not any(name in WHEN_SPATIAL_FIELDS for name in value):
+            raise ValueError(
+                "when must include eta, distance, dist, or proximity "
+                "(there is no implicit inside-polygon test)"
             )
         return value
 

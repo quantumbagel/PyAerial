@@ -9,6 +9,7 @@ from pyaerial.constants import (
     STORE_INFO,
     STORE_INTERNAL,
     STORE_LAT,
+    STORE_LONG,
     STORE_MOST_RECENT_PACKET,
     STORE_PACKET_TYPE,
     STORE_RECV_DATA,
@@ -54,6 +55,35 @@ def test_unchanged_value_refreshes_timestamp():
     assert series[0].time == 100.0
     assert series[1].time == 150.0
     assert series[0].value == series[1].value == 35.7
+
+
+def test_surface_without_altitude_does_not_clobber_baro():
+    tracker = Tracker(make_config())
+    plane = {
+        STORE_INFO: {STORE_ICAO: "abc123"},
+        STORE_RECV_DATA: {STORE_LAT: [Datum(35.7, 100.0)], "altitude": [Datum(400.0, 100.0)]},
+        STORE_INTERNAL: {
+            STORE_FIRST_PACKET: 100.0,
+            STORE_MOST_RECENT_PACKET: 100.0,
+            STORE_TOTAL_PACKETS: 1,
+            STORE_PACKET_TYPE: {},
+        },
+    }
+    tracker.planes["abc123"] = plane
+
+    from pyaerial.classify import ClassifiedMessage
+    from pyaerial.constants import STORE_ALT
+
+    classified = ClassifiedMessage(
+        data={
+            STORE_INFO: {STORE_ICAO: "abc123"},
+            STORE_RECV_DATA: {STORE_LAT: 35.7, STORE_LONG: -78.7},
+        },
+        typecode_category=2,
+    )
+    tracker._merge(classified, 150.0)
+    alt_series = plane[STORE_RECV_DATA][STORE_ALT]
+    assert alt_series[-1].value == 400.0
 
 
 def test_value_change_appends():

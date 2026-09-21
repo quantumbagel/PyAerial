@@ -197,21 +197,29 @@ def flight_id_for_plane(plane: Plane | PlaneState | dict) -> str:
 def iter_telemetry_samples(
     plane: Plane | PlaneState | dict,
 ) -> Iterator[tuple[float, float, float, float | None, float | None, float | None]]:
-    """Yield ``(timestamp, lat, lon, alt, speed, heading)`` for each position sample."""
-    lat_series = plane.get(STORE_RECV_DATA, {}).get(STORE_LAT, [])
-    for lat_datum in lat_series:
-        lon_datum = get_latest(STORE_RECV_DATA, STORE_LONG, plane, lat_datum.time)
-        if lon_datum is None:
+    """Yield ``(timestamp, lat, lon, alt, speed, heading)`` for each position sample.
+
+    Walks the union of latitude and longitude timestamps so a constant-latitude
+    (east/west) track still emits a point for every longitude sample.
+    """
+    recv = plane.get(STORE_RECV_DATA, {}) or {}
+    lat_series = recv.get(STORE_LAT, [])
+    lon_series = recv.get(STORE_LONG, [])
+    times = sorted({datum.time for datum in lat_series} | {datum.time for datum in lon_series})
+    for stamp in times:
+        lat_datum = get_latest(STORE_RECV_DATA, STORE_LAT, plane, stamp)
+        lon_datum = get_latest(STORE_RECV_DATA, STORE_LONG, plane, stamp)
+        if lat_datum is None or lon_datum is None:
             continue
-        alt_datum = get_latest(STORE_RECV_DATA, STORE_ALT, plane, lat_datum.time)
+        alt_datum = get_latest(STORE_RECV_DATA, STORE_ALT, plane, stamp)
         speed_datum = get_latest(
-            STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time
-        ) or get_latest(STORE_RECV_DATA, STORE_HORIZ_SPEED, plane, lat_datum.time)
+            STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, stamp
+        ) or get_latest(STORE_RECV_DATA, STORE_HORIZ_SPEED, plane, stamp)
         heading_datum = get_latest(
-            STORE_CALC_DATA, STORE_HEADING, plane, lat_datum.time
-        ) or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, lat_datum.time)
+            STORE_CALC_DATA, STORE_HEADING, plane, stamp
+        ) or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, stamp)
         yield (
-            lat_datum.time,
+            stamp,
             lat_datum.value,
             lon_datum.value,
             alt_datum.value if alt_datum is not None else None,

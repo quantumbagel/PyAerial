@@ -83,11 +83,13 @@ class Kinematics:
 
         prev_speed_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HORIZ_SPEED, [])
         prev_heading_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HEADING, [])
-        previous_calc_speed = prev_speed_series[-1].value if prev_speed_series else 0.0
+        previous_calc_speed = prev_speed_series[-1].value if prev_speed_series else None
         previous_calc_heading = (
-            prev_heading_series[-1].value if prev_heading_series else 0.0
+            prev_heading_series[-1].value if prev_heading_series else None
         )
 
+        speed: float | None
+        heading: float | None
         if len(lat_series) < 2:
             speed = previous_calc_speed
             heading = previous_calc_heading
@@ -108,7 +110,7 @@ class Kinematics:
             computed = geo.calculate_speed(
                 previous, current, previous_time, current_time
             )
-            speed = previous_calc_speed if computed is None else computed
+            speed = computed if computed is not None else previous_calc_speed
             if current_time - previous_time < MIN_SPEED_DT:
                 heading = previous_calc_heading
             else:
@@ -117,13 +119,13 @@ class Kinematics:
         final_speed, speed_time = self._choose_speed(plane, speed, current_time)
         final_heading = self._choose_heading(plane, heading, current_time)
 
-        if prev_speed_series:
+        if prev_speed_series and final_speed is not None:
             final_speed = (
                 _SPEED_SMOOTH_ALPHA * final_speed
                 + (1.0 - _SPEED_SMOOTH_ALPHA) * prev_speed_series[-1].value
             )
 
-        if prev_heading_series:
+        if prev_heading_series and final_heading is not None:
             prev_heading = prev_heading_series[-1].value
             rad_current = math.radians(final_heading)
             rad_prev = math.radians(prev_heading)
@@ -148,8 +150,9 @@ class Kinematics:
             kf.update(current[0], current[1], dt_kf)
             kf.last_update_time = current_time
 
+        turn_ref = heading if heading is not None else (final_heading or 0.0)
         turn_now, turn_then, turn_dt = self._turn_headings(
-            plane, heading, current_time, lat_series
+            plane, turn_ref, current_time, lat_series
         )
         prev_turn = self._smoothed_turn_rates.get(icao)
         smoothed_turn = estimate_turn_rate_deg_s(
@@ -160,19 +163,21 @@ class Kinematics:
         )
         self._smoothed_turn_rates[icao] = smoothed_turn
 
+        motion_speed = final_speed if final_speed is not None else 0.0
+        motion_heading = final_heading if final_heading is not None else 0.0
         motion = resolve_motion(
             self.config,
-            track_heading=final_heading,
-            track_speed_kph=final_speed,
+            track_heading=motion_heading,
+            track_speed_kph=motion_speed,
             turn_rate_deg_s=smoothed_turn,
             kf=kf,
         )
 
-        has_adsb_velocity = STORE_HORIZ_SPEED in recv or STORE_HEADING in recv
-        if len(lat_series) >= 2 or has_adsb_velocity:
+        if final_speed is not None:
             patch_append(
                 plane, STORE_CALC_DATA, STORE_HORIZ_SPEED, Datum(final_speed, speed_time)
             )
+        if final_heading is not None:
             patch_append(
                 plane, STORE_CALC_DATA, STORE_HEADING, Datum(final_heading, speed_time)
             )
@@ -202,8 +207,8 @@ class Kinematics:
         )
 
     def _choose_speed(
-        self, plane: dict, computed: float, current_time: float
-    ) -> tuple[float, float]:
+        self, plane: dict, computed: float | None, current_time: float
+    ) -> tuple[float | None, float]:
         recv = plane.get(STORE_RECV_DATA, {})
         if STORE_HORIZ_SPEED not in recv:
             return computed, current_time
@@ -254,8 +259,8 @@ class Kinematics:
         return geodesic_heading, geodesic_heading, 0.0
 
     def _choose_heading(
-        self, plane: dict, computed: float, current_time: float
-    ) -> float:
+        self, plane: dict, computed: float | None, current_time: float
+    ) -> float | None:
         recv = plane.get(STORE_RECV_DATA, {})
         if STORE_HEADING not in recv:
             return computed

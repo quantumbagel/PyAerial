@@ -10,9 +10,14 @@ import { fetchHistoryPages } from '../utils/historyPages';
 const PAGE_LIMIT = 50;
 const PATH_POINT_CAP = 400;
 
-function capOverlayPath<T>(items: T[], flightId: string, selectedId: string | null): T[] {
-  if (selectedId && flightId === selectedId) return items;
-  return items.slice(-PATH_POINT_CAP);
+function appendOverlayPoint<T>(
+  existing: T[],
+  point: T,
+  cap: boolean,
+): T[] {
+  const next = [...existing, point];
+  if (!cap || existing.length > PATH_POINT_CAP) return next;
+  return next.length > PATH_POINT_CAP ? next.slice(-PATH_POINT_CAP) : next;
 }
 
 function isValidCoordinate(lat?: number | null, lon?: number | null): boolean {
@@ -139,6 +144,9 @@ export function usePortalData({
   }, [historyQ, historySince, historyUntil]);
 
   const fetchHistoryData = useCallback(async () => {
+    if (isFetchingFlights.current || isFetchingAlerts.current) return;
+    isFetchingFlights.current = true;
+    isFetchingAlerts.current = true;
     const version = ++historyRefreshVersion.current;
     const filter = historyListOpts();
     try {
@@ -162,16 +170,12 @@ export function usePortalData({
       if (!stillCurrent() || !flightPage || !alertPage) {
         return;
       }
-      if (!isFetchingFlights.current) {
-        setFlightsData(sortFlights(flightPage.items));
-        flightsFetchedCount.current = flightPage.items.length;
-        hasMoreFlights.current = flightPage.hasMore;
-      }
-      if (!isFetchingAlerts.current) {
-        setAlertsData(dedupeAlerts(alertPage.items));
-        alertsFetchedCount.current = alertPage.items.length;
-        hasMoreAlerts.current = alertPage.hasMore;
-      }
+      setFlightsData(sortFlights(flightPage.items));
+      flightsFetchedCount.current = flightPage.items.length;
+      hasMoreFlights.current = flightPage.hasMore;
+      setAlertsData(dedupeAlerts(alertPage.items));
+      alertsFetchedCount.current = alertPage.items.length;
+      hasMoreAlerts.current = alertPage.hasMore;
       if (stats) setServerStats(stats);
       setFlightsError(null);
       setAlertsError(null);
@@ -184,6 +188,8 @@ export function usePortalData({
       setFlightsError(message);
       setAlertsError(message);
     } finally {
+      isFetchingFlights.current = false;
+      isFetchingAlerts.current = false;
       if (
         version === historyRefreshVersion.current &&
         portalViewRef.current === 'history'
@@ -348,8 +354,15 @@ export function usePortalData({
       if (version !== liveRefreshVersion.current || portalViewRef.current !== 'live') {
         return;
       }
-      setFlightsData(sortFlights(flights));
-      setAlertsData(dedupeAlerts(alerts));
+      setFlightsData((prev) => sortFlights(mergeLiveFlights(prev, flights)));
+      setAlertsData((prev) => {
+        const incoming = dedupeAlerts(alerts);
+        if (flights.length === 0) return incoming;
+        const tracked = new Set(flights.map((flight) => flight.flight_id));
+        return mergeAlertsByEpisode(prev, incoming).filter(
+          (alert) => !alert.flight_id || tracked.has(alert.flight_id),
+        );
+      });
       if (stats) setServerStats(stats);
       setFlightsError(null);
       setAlertsError(null);
@@ -486,10 +499,11 @@ export function usePortalData({
                 next = { ...next };
                 updated = true;
               }
-              next[f.flight_id] = capOverlayPath(
-                [...(next[f.flight_id] || existing), newCoord],
-                f.flight_id,
-                activeFlightIdRef.current,
+              const cap = f.flight_id !== activeFlightIdRef.current;
+              next[f.flight_id] = appendOverlayPoint(
+                next[f.flight_id] || existing,
+                newCoord,
+                cap,
               );
             });
 
@@ -582,10 +596,10 @@ export function usePortalData({
                 next = { ...next };
                 updated = true;
               }
-              next[fId] = capOverlayPath(
-                [...(next[fId] || existing), newCoord],
-                fId,
-                activeFlightIdRef.current,
+              next[fId] = appendOverlayPoint(
+                next[fId] || existing,
+                newCoord,
+                fId !== activeFlightIdRef.current,
               );
             });
 
@@ -603,9 +617,7 @@ export function usePortalData({
                 const isTracked = showAllPathsRef.current || fId === activeFlightIdRef.current;
                 if (!isTracked) return;
 
-                const existing = next[fId];
-                if (!existing) return;
-
+                const existing = next[fId] || [];
                 const last = existing[existing.length - 1];
                 if (last && last.timestamp === point.timestamp) {
                   return;
@@ -615,10 +627,10 @@ export function usePortalData({
                   next = { ...next };
                   updated = true;
                 }
-                next[fId] = capOverlayPath(
-                  [...existing, point],
-                  fId,
-                  activeFlightIdRef.current,
+                next[fId] = appendOverlayPoint(
+                  existing,
+                  point,
+                  fId !== activeFlightIdRef.current,
                 );
               });
 

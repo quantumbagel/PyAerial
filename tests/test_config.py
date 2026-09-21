@@ -15,6 +15,11 @@ from helpers import make_config, make_rule
 from pyaerial.config.schema import ZoneConfig
 
 
+def test_when_requires_a_spatial_field():
+    with pytest.raises(ValidationError, match="eta, distance, dist, or proximity"):
+        make_rule(altitude={"max": 2000})
+
+
 def test_activation_hold_uses_dwell_when_hysteresis_is_zero():
     rule = make_rule(dwell_seconds=60, hysteresis_seconds=0)
     assert rule.activation_hold_seconds() == 60
@@ -164,6 +169,7 @@ zones:
       - name: warn
         when:
           altitude: { max: 2000 }
+          eta: { max: 120 }
         dwell_seconds: 1
         on_activate:
           - method: webhook

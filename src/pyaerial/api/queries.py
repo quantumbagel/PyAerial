@@ -33,6 +33,22 @@ def _history_available(history: HistoryStore | None) -> bool:
     return bool(history is not None and history.ping())
 
 
+def _engine_is_live(live_store: LiveStore | None) -> bool:
+    """True when the tracking engine heartbeat is fresh.
+
+    Leftover Redis flight keys after a crash must not look like live traffic.
+    """
+    if live_store is None:
+        return False
+    getter = getattr(live_store, "engine_is_live", None)
+    if callable(getter):
+        try:
+            return bool(getter())
+        except Exception:
+            return False
+    return False
+
+
 def _require_history(history: HistoryStore | None) -> HistoryStore | None:
     """Return the archive, or raise if it is configured but unreadable.
 
@@ -49,7 +65,7 @@ def _require_history(history: HistoryStore | None) -> HistoryStore | None:
 def get_live_flights(
     live_store: LiveStore | None, aircraft_db: AircraftDB | None
 ) -> list[dict[str, Any]]:
-    if live_store is None:
+    if live_store is None or not _engine_is_live(live_store):
         return []
     return [
         enrich_flight_summary(summary, aircraft_db)
@@ -114,7 +130,7 @@ def get_live_alerts(
     skip: int = 0,
     active_only: bool = True,
 ) -> list[dict[str, Any]]:
-    if live_store is None:
+    if live_store is None or not _engine_is_live(live_store):
         return []
     alerts = live_store.get_alerts(
         since=since,
@@ -164,7 +180,7 @@ def get_flight_detail(
     aircraft_db: AircraftDB | None,
 ) -> dict[str, Any] | None:
     if view == "live":
-        if live_store is None:
+        if live_store is None or not _engine_is_live(live_store):
             return None
         flight_data = live_store.get_flight(flight_id)
         if not flight_data:
@@ -248,7 +264,7 @@ def get_telemetry(
     history: HistoryStore | None,
 ) -> list[dict[str, Any]]:
     if view == "live":
-        if live_store is None:
+        if live_store is None or not _engine_is_live(live_store):
             return []
         return [
             {**telemetry_point(doc), "flight_id": flight_id}
@@ -278,7 +294,7 @@ def get_alerts(
     active_only: bool | None = None,
 ) -> list[dict[str, Any]]:
     if view == "live":
-        if live_store is None:
+        if live_store is None or not _engine_is_live(live_store):
             return []
         resolved_active_only = active_only if active_only is not None else not flight_id
         return get_live_alerts(
@@ -316,8 +332,9 @@ def get_stats(
     redis_ok = bool(live_store.ping()) if live_store is not None else False
     if live_store is not None:
         try:
-            live_flights = len(live_store.get_flights())
-            active_alerts = len(live_store.get_alerts(active_only=True))
+            if _engine_is_live(live_store):
+                live_flights = len(live_store.get_flights())
+                active_alerts = len(live_store.get_alerts(active_only=True))
         except LiveUnavailable:
             redis_ok = False
     engine_seen_at = None

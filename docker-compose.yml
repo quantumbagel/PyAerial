@@ -33,9 +33,9 @@ services:
       PYAERIAL_HISTORY: /data/pyaerial.db
       PYAERIAL_AIRCRAFT_DB: /data/aircraft.db
       PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:-pyaerial}@redis:6379/0
-      # With --profile sdr this is the dump1090 service. Without SDR, set
-      # DUMP1090_HOST to an existing receiver (e.g. host.docker.internal).
-      DUMP1090_HOST: ${DUMP1090_HOST:-dump1090}
+      # Without --profile sdr there is no dump1090 container; default to a host feeder.
+      # With --profile sdr, set DUMP1090_HOST=dump1090.
+      DUMP1090_HOST: ${DUMP1090_HOST:-host.docker.internal}
     command: ["pyaerial", "run", "-c", "/opt/PyAerial/config.yaml"]
   web:
     image: pyaerial:latest
@@ -67,7 +67,7 @@ services:
         "10090",
       ]
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:10090/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:10090/ready')"]
       interval: 15s
       timeout: 3s
       retries: 5

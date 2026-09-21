@@ -93,6 +93,8 @@ def handle_ws_request(
         rule = params.get("rule")
         q = str(params["q"]) if params.get("q") else None
         limit = _clamp_int(params.get("limit"), 0, 0, _MAX_LIMIT)
+        if view != "live" and limit == 0:
+            limit = _MAX_LIMIT
         skip = _clamp_int(params.get("skip"), 0, 0, _MAX_SKIP)
         active_only_val = params.get("active_only")
         if active_only_val is None:

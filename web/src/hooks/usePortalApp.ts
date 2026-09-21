@@ -288,13 +288,13 @@ export function usePortalApp() {
   }, [closeDrawer]);
 
   useEffect(() => {
-    if (portalView === 'live' && activeFlightId) {
-      const exists = portal.flightsData.some((f) => f.flight_id === activeFlightId);
-      if (!exists) {
-        handleCloseDrawer();
-      }
-    }
-  }, [portal.flightsData, activeFlightId, portalView, handleCloseDrawer]);
+    if (portalView !== 'live' || !activeFlightId) return;
+    if (portal.isLoadingFlights) return;
+    const exists = portal.flightsData.some((f) => f.flight_id === activeFlightId);
+    if (exists) return;
+    if (pendingUrlFlight.current === activeFlightId) return;
+    closeDrawer();
+  }, [portal.flightsData, activeFlightId, portalView, portal.isLoadingFlights, closeDrawer]);
 
   useEffect(() => {
     if (portalView === 'live' && activeFlightId) {

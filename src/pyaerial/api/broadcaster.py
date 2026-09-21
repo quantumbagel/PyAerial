@@ -388,7 +388,15 @@ class LiveBroadcaster:
             client for client in self._clients.values() if "telemetry" in client.streams
         ]
         all_points: list[dict[str, Any]] = []
-        if telemetry_clients and self.live_store:
+        engine_live = False
+        if self.live_store is not None:
+            live_fn = getattr(self.live_store, "engine_is_live", None)
+            if callable(live_fn):
+                try:
+                    engine_live = bool(live_fn())
+                except Exception:
+                    engine_live = False
+        if telemetry_clients and self.live_store and engine_live:
             try:
                 min_since = min(client.telemetry_since for client in telemetry_clients)
                 all_points = self.live_store.get_live_telemetry(min_since)

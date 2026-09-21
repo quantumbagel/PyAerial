@@ -105,6 +105,7 @@ zones:
       - name: warn
         when:
           altitude: {{ max: 2000 }}
+          eta: {{ max: 120 }}
         dwell_seconds: 1
 """
     )
@@ -128,6 +129,7 @@ zones:
       - name: warn
         when:
           altitude: {{ max: 2000 }}
+          eta: {{ max: 120 }}
         dwell_seconds: 1
 """
     )
@@ -147,6 +149,7 @@ zones:
       - name: warn
         when:
           altitude: { max: 2000 }
+          eta: { max: 120 }
         dwell_seconds: 1
 """
     )

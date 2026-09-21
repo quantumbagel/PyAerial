@@ -35,6 +35,49 @@ def test_reader_skips_redis_backfill():
     store._backfill_redis_from_mem()
 
 
+def test_claim_engine_fails_when_redis_down():
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    store.memory_only = False
+    store.client = None
+    store._reported_down = True
+    store._last_connect_attempt = time.monotonic()
+    assert store.claim_engine() is False
+
+
+def test_live_queries_hide_flights_when_engine_heartbeat_is_stale():
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    from pyaerial.constants import (
+        STORE_FIRST_PACKET,
+        STORE_ICAO,
+        STORE_INFO,
+        STORE_INTERNAL,
+        STORE_LAT,
+        STORE_LONG,
+        STORE_MOST_RECENT_PACKET,
+        STORE_RECV_DATA,
+    )
+    from pyaerial.models import Datum
+
+    plane = {
+        STORE_INFO: {STORE_ICAO: "abc123"},
+        STORE_RECV_DATA: {
+            STORE_LAT: [Datum(35.72, 1.0)],
+            STORE_LONG: [Datum(-78.70, 1.0)],
+        },
+        STORE_INTERNAL: {
+            STORE_FIRST_PACKET: 1.0,
+            STORE_MOST_RECENT_PACKET: 1.0,
+        },
+    }
+    store.write_live_planes({"abc123": plane})
+    store.clear_engine()
+    assert get_live_flights(store, None) == []
+    store.touch_engine()
+    flights = get_live_flights(store, None)
+    assert len(flights) == 1
+    assert flights[0]["icao"] == "abc123"
+
+
 def test_memory_store_claim_engine_succeeds():
     store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
     assert store.claim_engine() is True
@@ -149,8 +192,7 @@ def test_reader_get_flights_errors_when_redis_down():
     store._last_connect_attempt = time.monotonic()
     with pytest.raises(LiveUnavailable):
         store.get_flights()
-    with pytest.raises(LiveUnavailable):
-        get_live_flights(store, None)
+    assert get_live_flights(store, None) == []
     stats = get_stats(store, None)
     assert stats["redis"] is False
     assert stats["live_flights"] == 0

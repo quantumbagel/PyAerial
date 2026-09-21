@@ -12,8 +12,8 @@ describe('pathNeedsFetch', () => {
     expect(pathNeedsFetch('a', { a: [] }, empty, empty, empty)).toBe(false);
   });
 
-  it('treats fetched ids as terminal even if coords were dropped', () => {
-    expect(pathNeedsFetch('a', {}, empty, empty, new Set(['a']))).toBe(false);
+  it('refetches when coords were pruned after a successful fetch', () => {
+    expect(pathNeedsFetch('a', {}, empty, empty, new Set(['a']))).toBe(true);
   });
 
   it('does not re-queue pending or failed ids', () => {

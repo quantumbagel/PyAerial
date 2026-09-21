@@ -204,19 +204,23 @@ def test_websocket_live_ignores_raw_stream():
             assert reply["success"] is False
 
 
-def test_websocket_allows_same_host_even_if_not_in_allowlist():
+def test_websocket_rejects_same_host_when_not_in_allowlist():
     from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
 
     config = make_config()
     config.web.origins = ["https://portal.example"]
     app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
     with TestClient(app) as client:
-        with client.websocket_connect(
-            "/ws/live",
-            headers={"Origin": "http://testserver", "Host": "testserver"},
-        ) as ws:
-            hello = ws.receive_json()
-            assert hello["type"] == "hello"
+        try:
+            with client.websocket_connect(
+                "/ws/live",
+                headers={"Origin": "http://testserver", "Host": "testserver"},
+            ) as ws:
+                ws.receive_json()
+            raise AssertionError("expected websocket to close")
+        except WebSocketDisconnect as exc:
+            assert exc.code == 1008
 
 
 def test_websocket_rejects_disallowed_origin():
@@ -250,4 +254,11 @@ def test_ready_uses_live_store_ping():
         assert ready.status_code == 200
         body = ready.json()
         assert body["redis"] is True
+        assert body["engine"] is False
+        assert body["status"] == "degraded"
+        store.touch_engine()
+        ready = client.get("/ready")
+        assert ready.status_code == 200
+        body = ready.json()
+        assert body["engine"] is True
         assert body["status"] == "ok"

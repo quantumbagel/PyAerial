@@ -19,7 +19,7 @@ def test_reset_reports_history_disconnect(capsys):
 def test_reset_skips_live_store_while_engine_is_running(capsys):
     class _History:
         def reset_all(self):
-            return True
+            raise AssertionError("must not delete history while engine is up")
 
     class _Live:
         def engine_seen_at(self):
@@ -30,7 +30,7 @@ def test_reset_skips_live_store_while_engine_is_running(capsys):
 
     code = reset_history(_History(), live_store=_Live(), yes=True)
     err = capsys.readouterr().err
-    assert code == 0
+    assert code == 1
     assert "engine is running" in err.lower()
 
 
@@ -59,7 +59,30 @@ def test_reset_clears_live_when_engine_is_stopped(capsys):
 def test_reset_icao_skips_live_while_engine_is_running(capsys):
     class _History:
         def delete_icao(self, icao):
-            assert icao == "abc123"
+            raise AssertionError("must not delete history for a live icao")
+
+    class _Live:
+        def engine_seen_at(self):
+            return time.time()
+
+        def get_flights(self):
+            return [{"flight_id": "abc123-1", "icao": "abc123"}]
+
+        def pop_flight(self, flight_id):
+            raise AssertionError("must not drop live tracks while engine is up")
+
+    code = reset_history(_History(), live_store=_Live(), icao="ABC123", yes=True)
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "engine is running" in err.lower()
+
+
+def test_reset_icao_history_when_engine_running_but_icao_not_live(capsys):
+    class _History:
+        deleted: list[str] = []
+
+        def delete_icao(self, icao):
+            self.deleted.append(icao)
             return True
 
     class _Live:
@@ -67,12 +90,16 @@ def test_reset_icao_skips_live_while_engine_is_running(capsys):
             return time.time()
 
         def get_flights(self):
-            raise AssertionError("must not drop live tracks while engine is up")
+            return [{"flight_id": "ffffee-1", "icao": "ffffee"}]
 
-    code = reset_history(_History(), live_store=_Live(), icao="ABC123", yes=True)
-    err = capsys.readouterr().err
+        def pop_flight(self, flight_id):
+            return None
+
+    history = _History()
+    history.deleted = []
+    code = reset_history(history, live_store=_Live(), icao="ABC123", yes=True)
     assert code == 0
-    assert "engine is running" in err.lower()
+    assert history.deleted == ["abc123"]
 
 
 def test_reset_icao_pops_live_when_engine_is_stopped(capsys):
