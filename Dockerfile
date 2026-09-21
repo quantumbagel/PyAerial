@@ -1,4 +1,6 @@
-FROM node:22-bookworm-slim AS webbuild
+# node:22 currently resolves to 22.23, which throws SyntaxError while loading tsc.
+FROM node:22.16-bookworm-slim AS webbuild
+ENV NODE_DISABLE_COMPILE_CACHE=1
 WORKDIR /opt/PyAerial
 COPY web/package.json web/package-lock.json ./web/
 RUN cd web && npm ci
