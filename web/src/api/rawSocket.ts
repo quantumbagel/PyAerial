@@ -12,17 +12,19 @@ let isClosed = false;
 let policyRejected = false;
 let backoff = 1000;
 const handlersSet = new Set<BeastSocketHandlers>();
-const parser = new BeastParser();
+let parser = new BeastParser();
 
 function connect() {
   if (policyRejected) return;
   isClosed = false;
   if (ws) return;
+  parser = new BeastParser();
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${protocol}//${window.location.host}/ws/beast`);
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
+    parser.reset();
     backoff = 1000;
     handlersSet.forEach((h) => h.onOpen?.());
   };
@@ -44,6 +46,7 @@ function connect() {
   };
 
   ws.onclose = (event) => {
+    parser.reset();
     ws = null;
     handlersSet.forEach((h) => h.onClose?.(event.code, event.reason));
     if (event.code === 1008) {

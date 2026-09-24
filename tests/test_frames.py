@@ -204,6 +204,17 @@ def test_encode_beast_messages_skips_unknown_length():
     )
     frames = BeastParser().feed(data)
     assert [frame[0] for frame in frames] == ["8d406b902015a678d4d220aa4bda"]
+    assert frames[0][2] == 12_000_000
+
+
+def test_encode_beast_messages_uses_receive_time_clock():
+    hex_msg = "8d406b902015a678d4d220aa4bda"
+    data = encode_beast_messages(
+        [{"hex": hex_msg, "timestamp": 2.0, "clock": 99, "rssi": -12.0}]
+    )
+    frames = BeastParser().feed(data)
+    assert frames[0][0] == hex_msg
+    assert frames[0][2] == 24_000_000
 
 
 def test_correct_receiver_frames_keeps_stronger_rssi():
@@ -242,3 +253,20 @@ def test_correct_receiver_frames_leaves_same_receiver_alone():
     )
     merged = correct_receiver_frames([a, b])
     assert len(merged) == 2
+
+
+def test_correct_receiver_frames_skips_different_icao():
+    a = RawFrame(
+        hex="8d406b902015a678d4d220aa4bda",
+        timestamp=1.0,
+        receiver="a",
+        rssi=-10.0,
+    )
+    b = RawFrame(
+        hex="8d406b912015a678d4d220aa4bda",
+        timestamp=1.01,
+        receiver="b",
+        rssi=-11.0,
+    )
+    merged = correct_receiver_frames([a, b])
+    assert {frame.hex for frame in merged} == {a.hex, b.hex}

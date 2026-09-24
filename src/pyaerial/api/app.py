@@ -106,6 +106,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         await broadcaster.start()
         await beast_hub.start()
+        config.web.beast_port = beast_hub.port
         yield
         await beast_hub.stop()
         await broadcaster.stop()

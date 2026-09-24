@@ -76,8 +76,9 @@ def websocket_api_spec(
             "tcp_port": beast_port,
             "format": "dump1090 Beast binary (0x1a type + 6-byte 12 MHz clock + "
             "signal byte + Mode S payload, 0x1a escaped). Frames are merged "
-            "across receivers (stronger RSSI, Hamming vote on near-copies) "
-            "before encoding.",
+            "across receivers (stronger RSSI; Hamming vote only for the same "
+            "DF/ICAO). Outbound clock is engine receive time so receivers share "
+            "one time base.",
         },
         "client_request": {
             "type": "request",
