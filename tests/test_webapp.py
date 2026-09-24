@@ -134,7 +134,7 @@ def test_websocket_beast_endpoint_and_publish():
             frames = BeastParser().feed(raw)
             assert len(frames) == 1
             assert frames[0][0] == hex_msg
-            assert frames[0][2] == 12
+            assert frames[0][2] == 12_000_000
 
 
 def test_websocket_live_ignores_beast_stream():
@@ -206,7 +206,7 @@ def test_beast_tcp_streams_frames():
         raw = asyncio.run(_recv())
         frames = BeastParser().feed(raw)
         assert frames[0][0] == hex_msg
-        assert frames[0][2] == 4
+        assert frames[0][2] == 12_000_000
 
 
 def test_websocket_rejects_same_host_when_not_in_allowlist():

@@ -86,6 +86,16 @@ def _hamming_bits(left: bytes, right: bytes) -> int:
     return sum((a ^ b).bit_count() for a, b in zip(left, right))
 
 
+def _frame_identity(hex_msg: str) -> tuple[object, str | None]:
+    """DF and ICAO used to decide whether two frames are the same aircraft."""
+    fields = frame_fields(hex_msg)
+    df = fields.get("df")
+    icao = fields.get("icao")
+    if not isinstance(icao, str) and len(hex_msg) >= 8:
+        icao = hex_msg[2:8]
+    return df, icao if isinstance(icao, str) else None
+
+
 def correct_receiver_frames(
     frames: list[RawFrame],
     *,
@@ -97,7 +107,8 @@ def correct_receiver_frames(
     dump1090 CRC-corrects each radio independently, but two receivers can still
     disagree on a bit or two. Exact hex duplicates keep the stronger RSSI.
     Near-identical payloads from *different* receivers within *window* seconds
-    (Hamming distance ``<= max_hamming``) collapse to the stronger copy.
+    (same DF/ICAO, Hamming distance ``<= max_hamming``) collapse to the
+    stronger copy.
     """
     if not frames:
         return []
@@ -113,13 +124,16 @@ def correct_receiver_frames(
     unique = [by_hex[hex_msg] for hex_msg in order]
     kept: list[RawFrame] = []
     payloads: list[bytes] = []
+    identities: list[tuple[object, str | None]] = []
     for frame in unique:
         try:
             payload = bytes.fromhex(frame.hex)
         except ValueError:
             kept.append(frame)
             payloads.append(b"")
+            identities.append(_frame_identity(frame.hex))
             continue
+        identity = _frame_identity(frame.hex)
         merged = False
         for index, other in enumerate(kept):
             other_payload = payloads[index]
@@ -129,16 +143,20 @@ def correct_receiver_frames(
                 continue
             if frame.receiver and other.receiver and frame.receiver == other.receiver:
                 continue
+            if identity != identities[index]:
+                continue
             if _hamming_bits(payload, other_payload) > max_hamming:
                 continue
             if _better_copy(frame, other):
                 kept[index] = frame
                 payloads[index] = payload
+                identities[index] = identity
             merged = True
             break
         if not merged:
             kept.append(frame)
             payloads.append(payload)
+            identities.append(identity)
     return kept
 
 
@@ -187,19 +205,23 @@ def encode_beast(
 
 
 def encode_beast_messages(messages: list[dict[str, object]]) -> bytes:
-    """Encode a Redis ``live:raw`` batch as concatenated Beast frames."""
+    """Encode a Redis ``live:raw`` batch as concatenated Beast frames.
+
+    Hardware 12 MHz clocks are receiver-local. Dual-receiver merge would mix
+    two oscillators on one dump1090-compatible feed, so the outbound clock is
+    always derived from engine receive time (one wall-clock domain).
+    """
     out = bytearray()
     for item in messages:
         hex_msg = item.get("hex")
         if not isinstance(hex_msg, str) or not hex_msg:
             continue
-        clock = item.get("clock")
         rssi = item.get("rssi")
         timestamp = item.get("timestamp")
         out.extend(
             encode_beast(
                 hex_msg,
-                clock=clock if isinstance(clock, int) else None,
+                clock=None,
                 rssi=rssi if isinstance(rssi, (int, float)) else None,
                 timestamp=timestamp if isinstance(timestamp, (int, float)) else None,
             )

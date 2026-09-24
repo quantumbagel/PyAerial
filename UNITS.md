@@ -19,7 +19,7 @@ Telemetry buffers, SQLite records, and rule evaluations operate strictly in SI a
 
 | Field | Unit | Derivation |
 |-------|------|------------|
-| clock | 12 MHz ticks (48-bit) | dump1090 Beast / `@` AVR sample clock (1 tick ≈ 83.33 ns). AVR without `@` synthesizes from engine receive time. |
+| clock | 12 MHz ticks (48-bit) | Synthesized from engine receive time so dual-receiver output is one clock domain (`int(timestamp * 12e6) mod 2^48`). Hardware dump1090 clocks are not mixed on `/ws/beast` or Beast TCP. |
 | signal | 0–255 | dump1090-fa `sqrt(signalLevel)*255`; JSON/UI RSSI is `20 * log10(byte / 255)` dBFS |
 
 Geofence polygons are defined using `[latitude, longitude]` coordinates in decimal degrees, and rules referencing a zone must include at least one spatial parameter (`distance`, `proximity`, or `eta`) to calculate geometric boundaries as documented in [CONFIGURATION.md](CONFIGURATION.md).

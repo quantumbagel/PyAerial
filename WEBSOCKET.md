@@ -222,7 +222,7 @@ PyAerial does not forward dump1090's Beast socket verbatim. Frames from every co
 <0x1a> <type> <6-byte 12 MHz clock> <1-byte signal> <Mode S payload>
 ```
 
-`type` is `0x31` (Mode A/C, 2 bytes), `0x32` (Mode S short, 7 bytes), or `0x33` (Mode S long, 14 bytes). Any `0x1a` byte in the timestamp, signal, or payload is doubled. `rssi` is packed as dump1090-fa's `sqrt(signalLevel)*255` byte. AVR inputs without a hardware clock synthesize the 48-bit timestamp from the engine receive time.
+`type` is `0x31` (Mode A/C, 2 bytes), `0x32` (Mode S short, 7 bytes), or `0x33` (Mode S long, 14 bytes). Any `0x1a` byte in the timestamp, signal, or payload is doubled. `rssi` is packed as dump1090-fa's `sqrt(signalLevel)*255` byte. The 48-bit Beast clock is always derived from engine receive time so two receivers share one time base (hardware 12 MHz counters are not mixed on the wire).
 
 `/ws/beast` is a binary WebSocket: no JSON `hello`, no RPC, no ping. Connect and read Beast frames. Browser origins still pass `web.origins`; native clients that omit `Origin` are accepted.
 
