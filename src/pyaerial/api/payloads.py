@@ -19,7 +19,7 @@ FLIGHT_STATUS_LIVE = "live"
 
 
 def antenna_payload(config: Config) -> dict[str, Any]:
-    """Station location and configured receivers for the raw sensor stream."""
+    """Station location and configured receivers for the Beast/config payload."""
     receivers: list[dict[str, Any]] = []
     for name, receiver in config.receivers.items():
         item: dict[str, Any] = {"name": name, "type": receiver.type}
@@ -347,10 +347,14 @@ def enrich_flight_detail(
 
 
 def app_config_payload(config: Config) -> dict[str, Any]:
-    return {
-        "home": {
-            "latitude": config.home.latitude,
-            "longitude": config.home.longitude,
-        },
+    antenna = antenna_payload(config)
+    payload: dict[str, Any] = {
+        "home": antenna["home"],
         "remember_planes": config.tracking.remember_planes,
+        "receivers": antenna["receivers"],
+        "beast_websocket": "/ws/beast",
     }
+    if config.web.beast_port is not None:
+        payload["beast_host"] = config.web.beast_host
+        payload["beast_port"] = config.web.beast_port
+    return payload

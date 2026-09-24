@@ -15,7 +15,7 @@ String values support environment variable interpolation via `${VAR}` and `${VAR
 | `receivers` | Named transport inputs (`dump1090`, `replay`) |
 | `zones` | Named polygonal geofences and associated rule arrays |
 | `alert_colors` | Hex color overrides mapped to rule names for map rendering |
-| `web` | Allowed browser origins (documented in [WEBSOCKET.md](WEBSOCKET.md)) |
+| `web` | Allowed browser origins, Beast TCP bind (`beast_host` / `beast_port`) |
 
 **Annotated configuration**
 
@@ -50,6 +50,8 @@ alert_colors:
 
 # web:
 #   origins: ["*"]
+#   beast_host: "0.0.0.0"
+#   beast_port: 30005        # dump1090-compatible Beast TCP (OpenSky). null disables.
 
 receivers:
   main:
@@ -124,7 +126,7 @@ Polygon boundaries are declared as closed `[latitude, longitude]` coordinate rin
 
 **Receiver configurations**
 
-TCP receivers connect to dump1090 using either `avr` (port 30002) or `beast` binary encoding (port 30005), with Beast streams forwarding `rssi` levels and 12 MHz hardware sample clocks to `/ws/raw`. Configuring port 30005 selects Beast format automatically unless overridden by explicit `format: avr` settings.
+TCP receivers connect to dump1090 using either `avr` (port 30002) or `beast` binary encoding (port 30005). Beast input populates `rssi` and the 12 MHz sample clock used when PyAerial re-encodes corrected frames for `/ws/beast` and the optional Beast TCP output. Configuring port 30005 selects Beast format automatically unless overridden by explicit `format: avr` settings.
 
 Replay receivers simulate live traffic from recorded capture files using configurable timing parameters:
 
@@ -148,7 +150,7 @@ Redis maintains active flight buffers, live telemetry trails, and active alert e
 | `live:active_alerts` | Set | Global set of active alert episode IDs |
 | `live:alert_episodes` | Hash | Global episode index mapping episode ID to state JSON |
 | `live:engine` | String | Engine heartbeat timestamp; expires via TTL if engine halts |
-| `live:raw` | Pub/Sub channel | Stream of parsed raw receiver frames forwarded to `/ws/raw` |
+| `live:raw` | Pub/Sub channel | Corrected receiver frames; the web process re-encodes them as Beast for `/ws/beast` and optional TCP |
 
 **Historical flight storage (SQLite)**
 

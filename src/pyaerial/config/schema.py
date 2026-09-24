@@ -228,6 +228,8 @@ class ZoneConfig(_Strict):
 
 class WebConfig(_Strict):
     origins: list[str] = Field(default_factory=lambda: ["*"])
+    beast_host: str = "0.0.0.0"
+    beast_port: int | None = Field(default=30005, ge=0, le=65535)
 
 
 class Config(_Strict):

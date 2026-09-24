@@ -15,8 +15,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from pyaerial.api.beast import BeastHub
 from pyaerial.api.broadcaster import LiveBroadcaster
-from pyaerial.api.payloads import antenna_payload, sanitize_for_json
+from pyaerial.api.payloads import sanitize_for_json
 from pyaerial.api.spec import WS_STREAMS, websocket_api_spec
 from pyaerial.api.static import mount_spa
 from pyaerial.api.ws import handle_ws_request
@@ -94,18 +95,25 @@ def create_app(
         live_store,
         aircraft_db,
         history=history,
-        antenna=antenna_payload(config),
+    )
+    beast_hub = BeastHub(
+        live_store,
+        host=config.web.beast_host,
+        port=config.web.beast_port,
     )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await broadcaster.start()
+        await beast_hub.start()
         yield
+        await beast_hub.stop()
         await broadcaster.stop()
 
     app = FastAPI(title="PyAerial Web Portal", lifespan=lifespan)
     app.state.history = history
     app.state.live_store = live_store
+    app.state.beast_hub = beast_hub
     app.add_middleware(CORSMiddleware, **_cors_kwargs(config))
 
     def ws_request_handler(action: str, params: dict[str, Any]) -> Any:
@@ -158,21 +166,23 @@ def create_app(
 
     @app.get("/api")
     def api_index():
-        return websocket_api_spec()
+        return websocket_api_spec(
+            beast_host=config.web.beast_host,
+            beast_port=beast_hub.port,
+        )
 
     async def _reject(websocket: WebSocket, reason: str) -> None:
         await websocket.accept()
         await websocket.close(code=1008, reason=reason)
 
-    async def _ws_handler(websocket: WebSocket, *, raw_only: bool) -> None:
+    async def _ws_handler(websocket: WebSocket) -> None:
         origin = websocket.headers.get("origin")
         if not _origin_allowed(origin, config.web.origins):
             await _reject(websocket, "origin not allowed")
             return
         await broadcaster.connect(
             websocket,
-            streams=None if raw_only else _requested_streams(websocket),
-            raw_only=raw_only,
+            streams=_requested_streams(websocket),
         )
         try:
             while True:
@@ -198,17 +208,6 @@ def create_app(
                 params = req.get("params") or {}
                 if not isinstance(params, dict):
                     params = {}
-                if raw_only:
-                    broadcaster.send(
-                        websocket,
-                        {
-                            "type": "response",
-                            "id": req_id,
-                            "success": False,
-                            "error": "Live actions are not available on /ws/raw",
-                        },
-                    )
-                    continue
                 if action == "subscribe":
                     requested = params.get("streams")
                     selected = broadcaster.set_streams(websocket, requested)
@@ -280,14 +279,18 @@ def create_app(
                 pass
 
     async def ws_live(websocket: WebSocket):
-        await _ws_handler(websocket, raw_only=False)
+        await _ws_handler(websocket)
 
-    async def ws_raw(websocket: WebSocket):
-        await _ws_handler(websocket, raw_only=True)
+    async def ws_beast(websocket: WebSocket):
+        origin = websocket.headers.get("origin")
+        if not _origin_allowed(origin, config.web.origins):
+            await _reject(websocket, "origin not allowed")
+            return
+        await beast_hub.run_websocket(websocket)
 
     app.add_api_websocket_route("/ws/live", ws_live)
     app.add_api_websocket_route("/ws", ws_live)
-    app.add_api_websocket_route("/ws/raw", ws_raw)
+    app.add_api_websocket_route("/ws/beast", ws_beast)
 
     mount_spa(app)
     return app

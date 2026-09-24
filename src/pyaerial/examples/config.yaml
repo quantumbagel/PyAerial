@@ -23,13 +23,14 @@ home:
 
 # web:
 #   origins: ["*"]           # default; restrict to a host list if the portal is public
+#   beast_port: 30005        # dump1090-compatible Beast TCP (OpenSky feeder)
 
 receivers:
   main:
     type: dump1090
     host: localhost
     port: 30002
-    # format: beast   # and port: 30005 for RSSI on the /ws/raw stream
+    # format: beast   # and port: 30005 for RSSI/clock on the Beast output stream
   # recorded:
   #   type: replay
   #   options:

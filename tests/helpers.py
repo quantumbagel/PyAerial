@@ -7,6 +7,7 @@ from pyaerial.config.schema import (
     ReceiverConfig,
     RuleConfig,
     TrackingConfig,
+    WebConfig,
     ZoneConfig,
 )
 
@@ -60,4 +61,5 @@ def make_config(
         receivers=receivers or {"main": ReceiverConfig(type="dump1090")},
         zones=zones,
         tracking=tracking or TrackingConfig(),
+        web=WebConfig(beast_port=None),
     )

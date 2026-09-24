@@ -5,13 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 WS_PROTOCOL = "pyaerial.live"
-WS_RAW_PROTOCOL = "pyaerial.raw"
 WS_VERSION = 1
 WS_PATH = "/ws/live"
-WS_RAW_PATH = "/ws/raw"
+WS_BEAST_PATH = "/ws/beast"
 WS_ALIASES = ("/ws",)
 WS_STREAMS = ("flights", "alerts", "telemetry", "stats")
-WS_RAW_STREAMS = ("raw",)
 WS_ACTIONS = (
     "subscribe",
     "fetchFlights",
@@ -38,30 +36,26 @@ def websocket_hello() -> dict[str, Any]:
     }
 
 
-def websocket_raw_hello() -> dict[str, Any]:
-    return {
-        "type": "hello",
-        "protocol": WS_RAW_PROTOCOL,
-        "version": WS_VERSION,
-        "streams": list(WS_RAW_STREAMS),
-        "actions": [],
-    }
-
-
-def websocket_api_spec() -> dict[str, Any]:
-    return {
+def websocket_api_spec(
+    *,
+    beast_host: str | None = None,
+    beast_port: int | None = None,
+) -> dict[str, Any]:
+    spec: dict[str, Any] = {
         "protocol": WS_PROTOCOL,
-        "raw_protocol": WS_RAW_PROTOCOL,
         "version": WS_VERSION,
         "websocket": WS_PATH,
-        "raw_websocket": WS_RAW_PATH,
+        "beast_websocket": WS_BEAST_PATH,
         "aliases": list(WS_ALIASES),
         "connect": (
             "Open /ws/live, read the hello + snapshot (flights, alerts, stats), "
             "then either listen for pushed streams or send type=request messages. "
-            "Raw dump1090 frames are a separate socket at /ws/raw only (not on "
-            "/ws/live, and not via subscribe or ?streams=). /ws/raw speaks "
-            "pyaerial.raw and does not accept live RPC actions."
+            "Optional /ws/live?streams=flights,alerts limits the initial set. "
+            "Corrected Mode S frames are re-encoded as dump1090 Beast binary on "
+            "/ws/beast (binary WebSocket, no JSON handshake) and, when "
+            "web.beast_port is set, a TCP listener compatible with OpenSky "
+            "Network's feeder (BEASTHOST/BEASTPORT, default dump1090 port 30005). "
+            "Beast is not a /ws/live subscribe stream."
         ),
         "streams": {
             "flights": "Full live flight list whenever positions or alerts change.",
@@ -75,15 +69,15 @@ def websocket_api_spec() -> dict[str, Any]:
                 "plus redis / history booleans and engine_seen_at (unix seconds, or null "
                 "if the tracking engine is not writing a heartbeat)."
             ),
-            "raw": (
-                "dump1090 / receiver frames as they arrive. Only on /ws/raw, never on "
-                "/ws/live. Each batch is type=raw with messages[]. hex, timestamp "
-                "(unix seconds, engine receive time), receiver; df / icao when "
-                "decodable; rssi (dBFS) and clock (12 MHz ticks, 48-bit integer; "
-                "1 tick = 1/12 000 000 s) when the receiver uses Beast (dump1090 "
-                "port 30005) or timestamped AVR (@CLOCKHEX). On connect the server "
-                "sends type=antenna with home lat/lon and configured receivers."
-            ),
+        },
+        "beast": {
+            "websocket": WS_BEAST_PATH,
+            "tcp_host": beast_host,
+            "tcp_port": beast_port,
+            "format": "dump1090 Beast binary (0x1a type + 6-byte 12 MHz clock + "
+            "signal byte + Mode S payload, 0x1a escaped). Frames are merged "
+            "across receivers (stronger RSSI, Hamming vote on near-copies) "
+            "before encoding.",
         },
         "client_request": {
             "type": "request",
@@ -97,7 +91,8 @@ def websocket_api_spec() -> dict[str, Any]:
                 "notes": (
                     "Limit which /ws/live streams this connection receives. Omit or "
                     "pass [] for the default set (flights, alerts, telemetry, stats). "
-                    "'raw' is not a live stream; connect to /ws/raw instead."
+                    "Beast frames are not a live stream; connect to /ws/beast or the "
+                    "Beast TCP port instead."
                 ),
             },
             "fetchFlights": {
@@ -141,9 +136,8 @@ def websocket_api_spec() -> dict[str, Any]:
             "alerts",
             "telemetry",
             "stats",
-            "raw",
-            "antenna",
             "ping",
             "response",
         ],
     }
+    return spec

@@ -44,12 +44,12 @@ def test_health_and_api(monkeypatch):
         assert spec.status_code == 200
         body = spec.json()
         assert body["websocket"] == "/ws/live"
-        assert body["raw_websocket"] == "/ws/raw"
-        assert "raw" in body["streams"]
+        assert body["beast_websocket"] == "/ws/beast"
+        assert "raw" not in body["streams"]
         assert "flights" in body["streams"]
         assert "fetchFlights" in body["actions"]
-        assert "12 MHz" in body["streams"]["raw"]
-        assert "/ws/raw" in body["connect"]
+        assert "Beast" in body["beast"]["format"]
+        assert "/ws/beast" in body["connect"]
         assert "?streams=" in body["connect"]
         assert "auth" not in body
         assert client.get("/api/flights").status_code == 404
@@ -70,6 +70,7 @@ def test_websocket_hello_snapshot_and_subscribe():
             assert hello["protocol"] == "pyaerial.live"
             assert "fetchFlights" in hello["actions"]
             assert "raw" not in hello["streams"]
+            assert "beast" not in hello["streams"]
             assert "flights" in hello["streams"]
             assert ws.receive_json()["type"] == "flights"
             assert ws.receive_json()["type"] == "alerts"
@@ -107,69 +108,36 @@ def test_websocket_hello_snapshot_and_subscribe():
             assert ws.receive_json()["type"] == "hello"
 
 
-def test_websocket_raw_endpoint_and_publish():
+def test_websocket_beast_endpoint_and_publish():
     from fastapi.testclient import TestClient
+    from pyaerial.receivers.frames import BeastParser
 
     store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
+    hex_msg = "8d406b902015a678d4d220aa4bda"
     with TestClient(app) as client:
-        with client.websocket_connect("/ws/raw") as ws:
-            hello = ws.receive_json()
-            assert hello["type"] == "hello"
-            assert hello["protocol"] == "pyaerial.raw"
-            assert hello["streams"] == ["raw"]
-            assert hello["actions"] == []
-            antenna = ws.receive_json()
-            assert antenna["type"] == "antenna"
-            assert "home" in antenna["antenna"]
-            assert antenna["antenna"]["receivers"][0]["name"] == "main"
+        with client.websocket_connect("/ws/beast") as ws:
             store.publish_raw(
                 [
                     {
-                        "hex": "8d406b902015a678d4d220aa4bda",
+                        "hex": hex_msg,
                         "timestamp": 1.0,
                         "receiver": "main",
                         "rssi": -18.5,
-                        "df": 17,
-                        "icao": "406b90",
+                        "clock": 12,
                     }
                 ]
             )
-            raw = ws.receive_json()
-            assert raw["type"] == "raw"
-            assert raw["messages"][0]["hex"] == "8d406b902015a678d4d220aa4bda"
-            assert raw["messages"][0]["rssi"] == -18.5
-            ws.send_json(
-                {
-                    "type": "request",
-                    "id": "sub",
-                    "action": "subscribe",
-                    "params": {"streams": ["flights"]},
-                }
-            )
-            while True:
-                reply = ws.receive_json()
-                if reply.get("type") == "response" and reply.get("id") == "sub":
-                    break
-            assert reply["success"] is False
-            ws.send_json(
-                {
-                    "type": "request",
-                    "id": "flights",
-                    "action": "fetchFlights",
-                    "params": {},
-                }
-            )
-            while True:
-                denied = ws.receive_json()
-                if denied.get("type") == "response" and denied.get("id") == "flights":
-                    break
-            assert denied["success"] is False
+            raw = ws.receive_bytes()
+            frames = BeastParser().feed(raw)
+            assert len(frames) == 1
+            assert frames[0][0] == hex_msg
+            assert frames[0][2] == 12
 
 
-def test_websocket_live_ignores_raw_stream():
+def test_websocket_live_ignores_beast_stream():
     from fastapi.testclient import TestClient
 
     store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
@@ -181,11 +149,12 @@ def test_websocket_live_ignores_raw_stream():
             hello = ws.receive_json()
             assert hello["type"] == "hello"
             assert "raw" not in hello["streams"]
+            assert "beast" not in hello["streams"]
             assert ws.receive_json()["type"] == "flights"
             assert ws.receive_json()["type"] == "alerts"
             assert ws.receive_json()["type"] == "stats"
             store.publish_raw(
-                [{"hex": "8d406b902015a678d4d220aa4bda", "timestamp": 1.0}]
+                [{"hex": "8d406b902015a678d4d220aa4bda", "timestamp": 1.0, "clock": 1}]
             )
             ws.send_json(
                 {
@@ -202,6 +171,42 @@ def test_websocket_live_ignores_raw_stream():
                 if reply.get("type") == "response" and reply.get("id") == "raw":
                     break
             assert reply["success"] is False
+
+
+def test_beast_tcp_streams_frames():
+    import asyncio
+
+    from fastapi.testclient import TestClient
+    from pyaerial.receivers.frames import BeastParser
+
+    config = make_config()
+    config.web.beast_host = "127.0.0.1"
+    config.web.beast_port = 0
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    app = create_app(
+        config=config, history=None, live_store=store, aircraft_db=None
+    )
+    hex_msg = "8d406b902015a678d4d220aa4bda"
+    with TestClient(app) as client:
+        spec = client.get("/api").json()
+        port = spec["beast"]["tcp_port"]
+        assert port and port > 0
+
+        async def _recv() -> bytes:
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            await asyncio.sleep(0.05)
+            store.publish_raw(
+                [{"hex": hex_msg, "timestamp": 1.0, "clock": 4, "rssi": -12.0}]
+            )
+            data = await asyncio.wait_for(reader.read(4096), timeout=3)
+            writer.close()
+            await writer.wait_closed()
+            return data
+
+        raw = asyncio.run(_recv())
+        frames = BeastParser().feed(raw)
+        assert frames[0][0] == hex_msg
+        assert frames[0][2] == 4
 
 
 def test_websocket_rejects_same_host_when_not_in_allowlist():

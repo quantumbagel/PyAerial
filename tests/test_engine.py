@@ -299,3 +299,32 @@ def test_engine_publishes_raw_frames(tmp_path):
         assert message["timestamp"] == 1.5
     finally:
         engine.shutdown()
+
+
+def test_engine_outgoing_frames_prefer_stronger_receiver(tmp_path):
+    from pyaerial.receivers.frames import RawFrame
+
+    engine = _engine(tmp_path)
+    try:
+        hex_msg = "8d406b902015a678d4d220aa4bda"
+        now = time.time()
+        outgoing, new_messages = engine._outgoing_frames(
+            [
+                RawFrame(
+                    hex=hex_msg, timestamp=now, receiver="weak", rssi=-30.0, clock=1
+                ),
+                RawFrame(
+                    hex=hex_msg, timestamp=now, receiver="strong", rssi=-8.0, clock=2
+                ),
+            ]
+        )
+        assert len(outgoing) == 1
+        assert outgoing[0].receiver == "strong"
+        assert outgoing[0].clock == 2
+        assert new_messages == [(hex_msg, now)]
+        again, _ = engine._outgoing_frames(
+            [RawFrame(hex=hex_msg, timestamp=now + 0.1, receiver="weak", rssi=-4.0)]
+        )
+        assert again == []
+    finally:
+        engine.shutdown()

@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { connectRawSocket } from '../api/rawSocket';
-import type { BufferedRawFrame, RawAntenna, RawFrame, WsStatus } from '../api/types';
+import type { BufferedRawFrame, WsStatus } from '../api/types';
 import { prependRawFrames } from '../utils/rawFrames';
 
 export function useRawFrames() {
   const [frames, setFrames] = useState<BufferedRawFrame[]>([]);
-  const [antenna, setAntenna] = useState<RawAntenna | null>(null);
   const [status, setStatus] = useState<WsStatus>('connecting');
   const seq = useRef(0);
 
@@ -15,13 +14,8 @@ export function useRawFrames() {
       onClose: (code) => {
         setStatus(code === 1008 ? 'rejected' : 'reconnecting');
       },
-      onMessage: (message) => {
-        if (message.type === 'antenna') {
-          setAntenna(message.antenna);
-          return;
-        }
-        if (message.type !== 'raw' || !Array.isArray(message.messages)) return;
-        const tagged: BufferedRawFrame[] = message.messages.map((row: RawFrame) => ({
+      onFrames: (incoming) => {
+        const tagged: BufferedRawFrame[] = incoming.map((row) => ({
           ...row,
           id: String(++seq.current),
         }));
@@ -32,5 +26,5 @@ export function useRawFrames() {
     return disconnect;
   }, []);
 
-  return { frames, antenna, status };
+  return { frames, status };
 }

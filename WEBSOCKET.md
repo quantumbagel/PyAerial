@@ -1,13 +1,14 @@
 # WebSocket API
 
-PyAerial exposes real-time aircraft tracking, spatial alert notifications, historical telemetry queries, and raw Mode S receiver streams through two dedicated WebSocket interfaces.
+PyAerial exposes real-time aircraft tracking, spatial alert notifications, historical telemetry queries, and dump1090-compatible Beast Mode S frames through the live portal process.
 
 **Endpoints and subprotocols**
 
 | Endpoint | Subprotocol | Push streams | RPC actions | Description |
 |----------|-------------|--------------|-------------|-------------|
 | `ws://<host>:<port>/ws/live` | `pyaerial.live` | `flights`, `alerts`, `telemetry`, `stats`, `ping` | Supported | Main real-time application feed (alias `/ws`) |
-| `ws://<host>:<port>/ws/raw` | `pyaerial.raw` | `antenna`, `raw`, `ping` | Not supported | Low-level RF frame stream directly from receivers |
+| `ws://<host>:<port>/ws/beast` | binary Beast | Mode S frames | Not supported | dump1090 Beast binary (no JSON handshake) |
+| `tcp://<host>:<beast_port>` | Beast TCP | Mode S frames | Not supported | Same bytes as `/ws/beast`; default port `30005` for OpenSky Network |
 | `http://<host>:<port>/api` | HTTP (JSON) | None | None | Machine-readable API discovery specification |
 
 **Origin validation**
@@ -204,62 +205,42 @@ Failed server reply:
 
 | Action | Parameters | Return payload | Errors and edge cases |
 |--------|------------|----------------|-----------------------|
-| `subscribe` | `streams`: Array of stream names (`["flights", "alerts"]`) | `{"streams": [...]}` containing accepted stream names | Invalid streams return `success: false, error: "Unknown streams"`. `raw` is rejected. |
+| `subscribe` | `streams`: Array of stream names (`["flights", "alerts"]`) | `{"streams": [...]}` containing accepted stream names | Invalid streams return `success: false, error: "Unknown streams"`. Beast is not a live stream. |
 | `fetchFlights` | `view`: `"live"` or `"history"`<br/>`skip`: Integer offset (0 to 100000)<br/>`limit`: Page size (1 to 200, default 50)<br/>`q`: Search substring for ICAO, callsign, or flight ID<br/>`since`: Minimum unix epoch seconds on flight end time<br/>`until`: Maximum unix epoch seconds on flight end time | Array of flight summary objects matching the filter | Clamped to max 200 items per call. Live view ignores `skip` and pagination. |
 | `fetchFlight` | `flightId`: Flight ID string (required)<br/>`view`: `"live"` or `"history"` (default `"live"`) | Flight detail document enriched with airframe metadata and photo links | Missing `flightId` returns error; non-existent flight returns `success: false, error: "not found"`. |
 | `fetchTelemetry` | `flightId`: Flight ID string (required)<br/>`view`: `"live"` or `"history"`<br/>`since`: Unix epoch seconds (default 0.0) | Array of chronological telemetry sample points | Live view pulls from Redis sorted set within TTL; history view reads SQLite. |
 | `fetchAlerts` | `view`: `"live"` or `"history"`<br/>`flightId`: Filter by flight ID<br/>`rule`: Filter by rule name<br/>`q`: Search query<br/>`active_only`: Boolean filter<br/>`since` / `until`: Epoch bounds | Array of alert episode records | History search indexes zone names, rules, callsigns, and ICAO codes. |
 | `fetchStats` | None | Object containing flight and alert counts, storage health, and engine heartbeat | Returns `engine_seen_at: null` if the tracking engine process is not actively running. |
 | `fetchZones` | None | Object containing station `home` coordinates, polygon geometries, and `alert_colors` | Returns empty arrays if no geofence zones are configured in YAML. |
-| `fetchConfig` | None | Object containing station coordinates and RAM timeout (`remember_planes`) | Exposes non-sensitive runtime parameters needed for frontend coordinate rendering. |
+| `fetchConfig` | None | Object containing station coordinates, `remember_planes`, configured `receivers`, and Beast bind details | Exposes non-sensitive runtime parameters needed for frontend coordinate rendering. |
 
-**Raw sensor stream (`/ws/raw`)**
+**Beast sensor stream (`/ws/beast` and TCP)**
 
-The `/ws/raw` endpoint forwards low-level Mode S / ADS-B message frames without performing state tracking or spatial rule evaluations. Connecting clients immediately receive a `hello` handshake (`protocol: pyaerial.raw`), followed by an `antenna` message containing configured station coordinates and receiver ports:
+PyAerial does not forward dump1090's Beast socket verbatim. Frames from every configured receiver are merged first (exact hex keeps the stronger RSSI; near-identical payloads from different receivers within 100 ms collapse by Hamming distance ≤ 2 bits), then re-encoded as dump1090 Beast binary:
 
-```json
-{
-  "type": "antenna",
-  "timestamp": 1721832000.0,
-  "antenna": {
-    "home": {
-      "latitude": 35.727488,
-      "longitude": -78.695942
-    },
-    "receivers": [
-      {
-        "name": "main",
-        "type": "dump1090",
-        "host": "localhost",
-        "port": 30005,
-        "format": "beast"
-      }
-    ]
-  }
-}
+```
+<0x1a> <type> <6-byte 12 MHz clock> <1-byte signal> <Mode S payload>
 ```
 
-The server subsequently flushes frame batches as raw messages arrive from receiver threads:
+`type` is `0x31` (Mode A/C, 2 bytes), `0x32` (Mode S short, 7 bytes), or `0x33` (Mode S long, 14 bytes). Any `0x1a` byte in the timestamp, signal, or payload is doubled. `rssi` is packed as dump1090-fa's `sqrt(signalLevel)*255` byte. AVR inputs without a hardware clock synthesize the 48-bit timestamp from the engine receive time.
 
-```json
-{
-  "type": "raw",
-  "timestamp": 1721832000.5,
-  "messages": [
-    {
-      "hex": "8d406b902015a678d4d220aa4bda",
-      "timestamp": 1721832000.412,
-      "receiver": "main",
-      "df": 17,
-      "icao": "406b90",
-      "rssi": -18.5,
-      "clock": 123456789
-    }
-  ]
-}
+`/ws/beast` is a binary WebSocket: no JSON `hello`, no RPC, no ping. Connect and read Beast frames. Browser origins still pass `web.origins`; native clients that omit `Origin` are accepted.
+
+The same bytes are offered on TCP when `web.beast_port` is set (default `30005`, bind `web.beast_host`, default `0.0.0.0`). That listener is what OpenSky Network's feeder expects (`BEASTHOST` / `BEASTPORT`). Set `web.beast_port: null` or `PYAERIAL_BEAST_PORT=off` if port 30005 is already taken by dump1090 on the same host; `/ws/beast` still serves.
+
+OpenSky docker feeder example, pointing at this process instead of dump1090:
+
+```yaml
+opensky:
+  image: ghcr.io/sdr-enthusiasts/docker-opensky-network:latest
+  environment:
+    - BEASTHOST=pyaerial_web   # or the host running `pyaerial web`
+    - BEASTPORT=30005
+    - LAT=35.727488
+    - LONG=-78.695942
+    - ALT=120
+    - OPENSKY_USERNAME=youruser
 ```
-
-`rssi` represents signal power in dBFS and `clock` contains the 12 MHz free-running receiver tick counter (where 1 tick ≈ 83.33 ns), both populated when dump1090 uses Beast binary on port 30005. Standard AVR text (`*HEX;` on port 30002) populates only `hex`, `timestamp`, and `receiver`.
 
 **Client implementation (Python)**
 

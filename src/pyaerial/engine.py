@@ -20,7 +20,7 @@ from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 from pyaerial.logging_setup import setup_logging
 from pyaerial.models import flight_id_for_plane
 from pyaerial.receivers import RawFrame, Receiver, available_receivers, create_receiver
-from pyaerial.receivers.frames import raw_payload
+from pyaerial.receivers.frames import correct_receiver_frames, raw_payload
 from pyaerial.store import HistoryStore, RedisLiveStore
 from pyaerial.tracker import Tracker
 
@@ -261,6 +261,17 @@ class Engine:
                 break
         return batch
 
+    def _outgoing_frames(
+        self, frames: list[RawFrame]
+    ) -> tuple[list[RawFrame], list[tuple[str, float]]]:
+        """Merge dual-receiver copies, then drop recently seen exact frames."""
+        merged = correct_receiver_frames(frames)
+        pairs = [(frame.hex, frame.timestamp) for frame in merged]
+        new_messages = self.tracker.collect_new_messages(pairs)
+        outgoing_hex = {hex_msg for hex_msg, _ts in new_messages}
+        outgoing = [frame for frame in merged if frame.hex in outgoing_hex]
+        return outgoing, new_messages
+
     def _publish_raw(self, frames: list[RawFrame]) -> None:
         """Fan raw sensor frames out to the live store (Redis pub/sub)."""
         if not frames:
@@ -300,12 +311,13 @@ class Engine:
                 self._restart_dead_receivers()
 
                 raw = self._drain_messages()
-                self._publish_raw(raw)
-                pairs = [(frame.hex, frame.timestamp) for frame in raw]
+                outgoing, new_messages = self._outgoing_frames(raw)
+                self._publish_raw(outgoing)
                 receivers = {
-                    frame.hex: frame.receiver for frame in raw if frame.receiver
+                    frame.hex: frame.receiver
+                    for frame in outgoing
+                    if frame.receiver
                 }
-                new_messages = self.tracker.collect_new_messages(pairs)
                 processed = self.tracker.ingest(new_messages, receivers=receivers)
 
                 self.calculator.calculate_all(self.tracker.planes)

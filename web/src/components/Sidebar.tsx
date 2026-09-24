@@ -243,7 +243,7 @@ export function Sidebar({
           id="search-input"
           placeholder={
             sidebarTab === 'raw'
-              ? 'Search hex, ICAO, or receiver…'
+              ? 'Search hex or ICAO…'
               : portalView === 'history'
                 ? 'Search callsign, ICAO, or flight id…'
                 : 'Search by callsign, ICAO, model, or alert…'
@@ -422,7 +422,7 @@ export function Sidebar({
         <ul id="raw-list">
           {rawFrames.length === 0 && (rawStatus === 'connecting' || rawStatus === 'reconnecting') ? (
             <StatusMessage variant="loading">
-              {rawStatus === 'reconnecting' ? 'Reconnecting to raw stream…' : 'Connecting to raw stream…'}
+              {rawStatus === 'reconnecting' ? 'Reconnecting to Beast stream…' : 'Connecting to Beast stream…'}
             </StatusMessage>
           ) : rawFrames.length === 0 ? (
             <StatusMessage>

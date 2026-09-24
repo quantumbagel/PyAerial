@@ -11,7 +11,7 @@
 | `pyaerial validate` | Syntax, schema, and filesystem cross-reference verification |
 | `pyaerial reset` | Retention purger (`--yes`; optional single ICAO; clears Redis only when engine is stopped) |
 
-The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias), whereas high-volume RF sensor frames stream exclusively over `/ws/raw`. Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).
+The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias). Corrected Mode S frames are re-encoded as dump1090 Beast binary on `/ws/beast` and, when `web.beast_port` is set, on a TCP listener for OpenSky Network. Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).
 
 **Command execution**
 
@@ -49,6 +49,8 @@ Runtime settings accept environment variable overrides; explicit `-c` flags take
 | `PYAERIAL_LOG_FILE` | `logging.file` | Destination log file path |
 | `PYAERIAL_HZ` | `tracking.hz` | Engine evaluation frequency in Hz |
 | `PYAERIAL_WEB_ORIGINS` | `web.origins` | Allowed browser origins (`*` permits all) |
+| `PYAERIAL_BEAST_HOST` | `web.beast_host` | Bind address for dump1090-compatible Beast TCP (`0.0.0.0`) |
+| `PYAERIAL_BEAST_PORT` | `web.beast_port` | Beast TCP port (`30005`; `off` disables TCP; `/ws/beast` still serves) |
 
 Configuration strings support `${VAR}` and `${VAR:-default}` environment interpolation, but referenced variables without defaults must be set in the host environment or startup validation fails.
 

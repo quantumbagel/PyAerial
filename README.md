@@ -31,7 +31,7 @@ graph TD
     end
 
     subgraph Frontend ["Web Portal & Interfaces"]
-        WEBAPP["FastAPI Server & WebSocket API<br/>(/ws/live, /ws/raw)"]
+        WEBAPP["FastAPI Server & WebSocket API<br/>(/ws/live, /ws/beast + Beast TCP)"]
         WEBUI["React + Vite Web UI<br/>(Live Radar & History View)"]
         CLI["Terminal Interface<br/>(pyaerial reset)"]
     end
@@ -69,7 +69,7 @@ graph TD
 docker compose up --build
 ```
 
-Compose launches a private bridge network and binds the web portal to port `10090`. Redis requires authentication via `REDIS_PASSWORD` (default `pyaerial`) and remains unexposed to host interfaces, while the engine and web services share database state on the `pyaerial_data` volume (`/data/pyaerial.db`).
+Compose launches a private bridge network and binds the web portal to port `10090` and a dump1090-compatible Beast TCP feed on port `30005` (for OpenSky Network and similar feeders). Redis requires authentication via `REDIS_PASSWORD` (default `pyaerial`) and remains unexposed to host interfaces, while the engine and web services share database state on the `pyaerial_data` volume (`/data/pyaerial.db`).
 
 The engine connects to dump1090 via `DUMP1090_HOST` (defaulting to the internal `dump1090` compose service container), which can be redirected to host hardware or external network feeders:
 

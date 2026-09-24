@@ -49,12 +49,14 @@ services:
       - ./config.yaml:/opt/PyAerial/config.yaml:ro
     ports:
       - "10090:10090"
+      - "30005:30005"
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
       PYAERIAL_START_DUMP1090: "0"
       PYAERIAL_HISTORY: /data/pyaerial.db
       PYAERIAL_AIRCRAFT_DB: /data/aircraft.db
       PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:-pyaerial}@redis:6379/0
+      PYAERIAL_BEAST_PORT: "30005"
     command:
       [
         "pyaerial",

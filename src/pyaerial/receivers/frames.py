@@ -9,9 +9,13 @@ _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 BEAST_ESC = 0x1A
 BEAST_MSG_LEN = {0x31: 2, 0x32: 7, 0x33: 14}
+BEAST_TYPE_FOR_LEN = {2: 0x31, 7: 0x32, 14: 0x33}
 BEAST_CLOCK_HZ = 12_000_000
 BEAST_CLOCK_MOD = 1 << 48
 _BEAST_BUF_MAX = 65_536
+_CORRECT_WINDOW = 0.1
+_CORRECT_HAMMING = 2
+_MISSING_RSSI = -1_000.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +51,7 @@ def frame_fields(hex_msg: str) -> dict[str, object]:
 
 
 def raw_payload(frame: RawFrame) -> dict[str, object]:
-    """JSON object for one raw frame on the ``/ws/raw`` websocket."""
+    """JSON object for one raw frame on the live Redis ``live:raw`` channel."""
     item = frame_fields(frame.hex)
     item["timestamp"] = frame.timestamp
     if frame.receiver:
@@ -57,6 +61,150 @@ def raw_payload(frame: RawFrame) -> dict[str, object]:
     if frame.clock is not None:
         item["clock"] = frame.clock
     return item
+
+
+def _rssi_rank(frame: RawFrame) -> float:
+    if frame.rssi is not None and math.isfinite(frame.rssi):
+        return frame.rssi
+    return _MISSING_RSSI
+
+
+def _better_copy(candidate: RawFrame, current: RawFrame) -> bool:
+    """Prefer stronger RSSI; break ties with a hardware clock."""
+    cand_rssi = _rssi_rank(candidate)
+    cur_rssi = _rssi_rank(current)
+    if cand_rssi != cur_rssi:
+        return cand_rssi > cur_rssi
+    if candidate.clock is not None and current.clock is None:
+        return True
+    return False
+
+
+def _hamming_bits(left: bytes, right: bytes) -> int:
+    if len(left) != len(right):
+        return 1 << 30
+    return sum((a ^ b).bit_count() for a, b in zip(left, right))
+
+
+def correct_receiver_frames(
+    frames: list[RawFrame],
+    *,
+    window: float = _CORRECT_WINDOW,
+    max_hamming: int = _CORRECT_HAMMING,
+) -> list[RawFrame]:
+    """Merge copies of the same transmission from multiple receivers.
+
+    dump1090 CRC-corrects each radio independently, but two receivers can still
+    disagree on a bit or two. Exact hex duplicates keep the stronger RSSI.
+    Near-identical payloads from *different* receivers within *window* seconds
+    (Hamming distance ``<= max_hamming``) collapse to the stronger copy.
+    """
+    if not frames:
+        return []
+    by_hex: dict[str, RawFrame] = {}
+    order: list[str] = []
+    for frame in frames:
+        prev = by_hex.get(frame.hex)
+        if prev is None:
+            by_hex[frame.hex] = frame
+            order.append(frame.hex)
+        elif _better_copy(frame, prev):
+            by_hex[frame.hex] = frame
+    unique = [by_hex[hex_msg] for hex_msg in order]
+    kept: list[RawFrame] = []
+    payloads: list[bytes] = []
+    for frame in unique:
+        try:
+            payload = bytes.fromhex(frame.hex)
+        except ValueError:
+            kept.append(frame)
+            payloads.append(b"")
+            continue
+        merged = False
+        for index, other in enumerate(kept):
+            other_payload = payloads[index]
+            if not other_payload or len(other_payload) != len(payload):
+                continue
+            if abs(frame.timestamp - other.timestamp) > window:
+                continue
+            if frame.receiver and other.receiver and frame.receiver == other.receiver:
+                continue
+            if _hamming_bits(payload, other_payload) > max_hamming:
+                continue
+            if _better_copy(frame, other):
+                kept[index] = frame
+                payloads[index] = payload
+            merged = True
+            break
+        if not merged:
+            kept.append(frame)
+            payloads.append(payload)
+    return kept
+
+
+def beast_level_from_dbfs(rssi: float | None) -> int:
+    """Inverse of :func:`beast_rssi_dbfs` (dump1090-fa ``sqrt(signal)*255``)."""
+    if rssi is None or not math.isfinite(rssi):
+        return 0
+    level = round(255.0 * (10.0 ** (rssi / 20.0)))
+    return max(0, min(255, int(level)))
+
+
+def _escape_beast(data: bytes) -> bytes:
+    out = bytearray()
+    for byte in data:
+        out.append(byte)
+        if byte == BEAST_ESC:
+            out.append(BEAST_ESC)
+    return bytes(out)
+
+
+def encode_beast(
+    hex_msg: str,
+    *,
+    clock: int | None = None,
+    rssi: float | None = None,
+    timestamp: float | None = None,
+) -> bytes:
+    """Encode one Mode S / ADS-B frame as dump1090 Beast binary.
+
+    Returns empty bytes when the payload length is not a Beast Mode A/C (2),
+    Mode S short (7), or Mode S long (14) message.
+    """
+    try:
+        payload = bytes.fromhex(hex_msg)
+    except ValueError:
+        return b""
+    kind = BEAST_TYPE_FOR_LEN.get(len(payload))
+    if kind is None:
+        return b""
+    if clock is None:
+        wall = timestamp if timestamp is not None else 0.0
+        clock = int(wall * BEAST_CLOCK_HZ) % BEAST_CLOCK_MOD
+    clock = int(clock) % BEAST_CLOCK_MOD
+    body = clock.to_bytes(6, "big") + bytes([beast_level_from_dbfs(rssi)]) + payload
+    return bytes([BEAST_ESC, kind]) + _escape_beast(body)
+
+
+def encode_beast_messages(messages: list[dict[str, object]]) -> bytes:
+    """Encode a Redis ``live:raw`` batch as concatenated Beast frames."""
+    out = bytearray()
+    for item in messages:
+        hex_msg = item.get("hex")
+        if not isinstance(hex_msg, str) or not hex_msg:
+            continue
+        clock = item.get("clock")
+        rssi = item.get("rssi")
+        timestamp = item.get("timestamp")
+        out.extend(
+            encode_beast(
+                hex_msg,
+                clock=clock if isinstance(clock, int) else None,
+                rssi=rssi if isinstance(rssi, (int, float)) else None,
+                timestamp=timestamp if isinstance(timestamp, (int, float)) else None,
+            )
+        )
+    return bytes(out)
 
 
 def parse_avr_line(line: str) -> tuple[str, int | None] | None:

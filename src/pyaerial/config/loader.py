@@ -33,6 +33,8 @@ _ENV_OVERRIDES = {
     "PYAERIAL_LOG_FILE": ("logging", "file"),
     "PYAERIAL_HZ": ("tracking", "hz"),
     "PYAERIAL_WEB_ORIGINS": ("web", "origins"),
+    "PYAERIAL_BEAST_PORT": ("web", "beast_port"),
+    "PYAERIAL_BEAST_HOST": ("web", "beast_host"),
 }
 
 
@@ -43,6 +45,15 @@ def _apply_env_overrides(data: dict) -> dict:
         value: object = os.environ[env_var]
         if env_var == "PYAERIAL_WEB_ORIGINS":
             value = [part.strip() for part in str(value).split(",") if part.strip()]
+        elif env_var == "PYAERIAL_BEAST_PORT":
+            raw = str(value).strip().lower()
+            if raw in {"", "none", "off", "disable", "disabled"}:
+                value = None
+            else:
+                try:
+                    value = int(raw)
+                except ValueError:
+                    continue
         data.setdefault(section, {})[key] = value
     return data
 

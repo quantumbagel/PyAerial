@@ -81,7 +81,14 @@ export function PortalApp() {
         zones={portal.zonesData?.zones}
         alertColors={portal.zonesData?.alert_colors}
         rawFrames={filteredRawFrames}
-        rawAntenna={raw.antenna}
+        rawAntenna={
+          portal.appConfig
+            ? {
+                home: portal.appConfig.home,
+                receivers: portal.appConfig.receivers ?? [],
+              }
+            : null
+        }
         rawStatus={raw.status}
         onSelectRawIcao={(icao) => {
           const match = portal.flightsData.find(

@@ -15,12 +15,11 @@ Telemetry buffers, SQLite records, and rule evaluations operate strictly in SI a
 | ETA | s | Kinematic travel time to polygon boundary along projected track (`0` if inside) |
 | Position | degrees (WGS84) | Compact Position Reporting (CPR) latitude and longitude |
 
-**Raw sensor frames (`/ws/raw`)**
+**Raw sensor frames (Beast `/ws/beast` and TCP)**
 
 | Field | Unit | Derivation |
 |-------|------|------------|
-| `timestamp` | unix epoch seconds (float) | Engine reception timestamp |
-| `rssi` | dBFS | dump1090 Beast signal level |
-| `clock` | 12 MHz ticks (48-bit integer) | dump1090 Beast / `@` AVR sample clock (1 tick ≈ 83.33 ns; free-running hardware counter, not wall clock) |
+| clock | 12 MHz ticks (48-bit) | dump1090 Beast / `@` AVR sample clock (1 tick ≈ 83.33 ns). AVR without `@` synthesizes from engine receive time. |
+| signal | 0–255 | dump1090-fa `sqrt(signalLevel)*255`; JSON/UI RSSI is `20 * log10(byte / 255)` dBFS |
 
 Geofence polygons are defined using `[latitude, longitude]` coordinates in decimal degrees, and rules referencing a zone must include at least one spatial parameter (`distance`, `proximity`, or `eta`) to calculate geometric boundaries as documented in [CONFIGURATION.md](CONFIGURATION.md).

@@ -15,7 +15,7 @@ export function RawListItem({ frame, selectable, onSelectIcao }: RawListItemProp
   const title = [
     icao || 'No ICAO',
     formatRawDf(frame.df),
-    frame.receiver || 'receiver',
+    frame.receiver || (frame.clock != null ? `clock ${frame.clock}` : ''),
     rssi,
     frame.hex,
     frame.clock != null ? `clock ${frame.clock}` : '',
@@ -39,7 +39,7 @@ export function RawListItem({ frame, selectable, onSelectIcao }: RawListItemProp
           {frame.hex}
         </span>
         <span className="ui-row__trailing">
-          {frame.receiver || '—'}
+          {frame.receiver || (frame.clock != null ? `clk ${frame.clock}` : '—')}
           {rssi ? ` · ${formatTime(frame.timestamp, { withSeconds: true })}` : ''}
         </span>
       </div>

@@ -7,6 +7,9 @@ from pyaerial.receivers.frames import (
     RawFrame,
     _read_unescaped,
     beast_rssi_dbfs,
+    correct_receiver_frames,
+    encode_beast,
+    encode_beast_messages,
     parse_avr_line,
     raw_payload,
     receive_times,
@@ -165,3 +168,77 @@ def test_dump1090_explicit_avr_on_beast_port():
     )
     assert receiver.format == "avr"
     assert receiver.port == 30005
+
+
+def test_encode_beast_roundtrips_long_frame():
+    hex_msg = "8d406b902015a678d4d220aa4bda"
+    raw = encode_beast(hex_msg, clock=12, rssi=beast_rssi_dbfs(128))
+    frames = BeastParser().feed(raw)
+    assert len(frames) == 1
+    got_hex, rssi, clock = frames[0]
+    assert got_hex == hex_msg
+    assert clock == 12
+    assert rssi is not None
+    assert abs(rssi - beast_rssi_dbfs(128)) < 0.15
+
+
+def test_encode_beast_escapes_0x1a():
+    hex_msg = "8d1a6b902015a678d4d220aa4bda"
+    raw = encode_beast(hex_msg, clock=1, rssi=beast_rssi_dbfs(0x1A))
+    frames = BeastParser().feed(raw)
+    assert frames[0][0] == hex_msg
+    assert frames[0][2] == 1
+
+
+def test_encode_beast_messages_skips_unknown_length():
+    data = encode_beast_messages(
+        [
+            {"hex": "8d406b90", "timestamp": 1.0},
+            {
+                "hex": "8d406b902015a678d4d220aa4bda",
+                "timestamp": 1.0,
+                "clock": 9,
+                "rssi": -12.3,
+            },
+        ]
+    )
+    frames = BeastParser().feed(data)
+    assert [frame[0] for frame in frames] == ["8d406b902015a678d4d220aa4bda"]
+
+
+def test_correct_receiver_frames_keeps_stronger_rssi():
+    hex_msg = "8d406b902015a678d4d220aa4bda"
+    weak = RawFrame(hex=hex_msg, timestamp=1.0, receiver="a", rssi=-30.0, clock=1)
+    strong = RawFrame(hex=hex_msg, timestamp=1.01, receiver="b", rssi=-12.0, clock=2)
+    merged = correct_receiver_frames([weak, strong])
+    assert len(merged) == 1
+    assert merged[0].receiver == "b"
+    assert merged[0].clock == 2
+
+
+def test_correct_receiver_frames_hamming_vote():
+    good = "8d406b902015a678d4d220aa4bda"
+    flipped = "8d406b902015a678d4d220aa4bdb"
+    weak = RawFrame(hex=flipped, timestamp=1.0, receiver="a", rssi=-28.0, clock=1)
+    strong = RawFrame(hex=good, timestamp=1.02, receiver="b", rssi=-10.0, clock=2)
+    merged = correct_receiver_frames([weak, strong])
+    assert len(merged) == 1
+    assert merged[0].hex == good
+    assert merged[0].receiver == "b"
+
+
+def test_correct_receiver_frames_leaves_same_receiver_alone():
+    a = RawFrame(
+        hex="8d406b902015a678d4d220aa4bda",
+        timestamp=1.0,
+        receiver="main",
+        rssi=-10.0,
+    )
+    b = RawFrame(
+        hex="8d406b902015a678d4d220aa4bdb",
+        timestamp=1.01,
+        receiver="main",
+        rssi=-11.0,
+    )
+    merged = correct_receiver_frames([a, b])
+    assert len(merged) == 2

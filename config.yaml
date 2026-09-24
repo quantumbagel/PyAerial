@@ -17,6 +17,7 @@ logging:
 
 web:
   origins: ["*"]
+  # beast_port: 30005   # dump1090-compatible Beast TCP for OpenSky (default)
 
 # CPR decode reference for ADS-B positions, not the geofence and not the ETA target.
 home:
@@ -33,7 +34,7 @@ receivers:
     type: dump1090
     host: "${DUMP1090_HOST:-localhost}"
     port: 30002
-    # format: beast   # and port: 30005 for RSSI on /ws/raw
+    # format: beast   # and port: 30005 for RSSI/clock on the Beast output stream
 
 # Zones are named polygons plus independent rules. A rule fires when EVERY
 # `when` constraint holds. There is no implicit "inside the polygon" test.

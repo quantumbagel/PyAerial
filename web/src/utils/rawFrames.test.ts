@@ -105,6 +105,6 @@ describe('emptyRawMessage', () => {
     ).toMatch(/pyaerial run/);
     expect(
       emptyRawMessage({ hasFilters: false, stats: stats(), rawStatus: 'connected' }),
-    ).toMatch(/No raw frames yet/);
+    ).toMatch(/No Beast frames yet/);
   });
 });

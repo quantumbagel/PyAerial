@@ -56,7 +56,7 @@ export function emptyRawMessage({
 }): string {
   if (hasFilters) return 'No frames match your filters.';
   if (rawStatus === 'rejected') {
-    return 'Raw stream access denied. Check web.origins.';
+    return 'Beast stream access denied. Check web.origins.';
   }
   if (stats?.redis === false) {
     return 'Live store (Redis) is unreachable. The portal cannot see receiver frames.';
@@ -64,5 +64,5 @@ export function emptyRawMessage({
   if (stats != null && !isEngineLive(stats)) {
     return 'Tracking engine is not running. Start `pyaerial run`.';
   }
-  return 'No raw frames yet. Frames appear when dump1090 is feeding `pyaerial run`.';
+  return 'No Beast frames yet. Frames appear when dump1090 is feeding `pyaerial run`.';
 }

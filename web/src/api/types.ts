@@ -129,12 +129,6 @@ export interface RawAntenna {
   }>;
 }
 
-export type RawWsMessage =
-  | { type: 'hello'; protocol: string; version: number; streams: string[]; actions: string[] }
-  | { type: 'antenna'; antenna: RawAntenna }
-  | { type: 'raw'; timestamp?: number; messages: RawFrame[] }
-  | { type: 'ping'; timestamp?: number };
-
 export type LiveMessage =
   | { type: 'hello'; protocol: string; version: number; streams: string[]; actions: string[] }
   | { type: 'ping'; timestamp?: number }
@@ -146,4 +140,8 @@ export type LiveMessage =
 export interface AppConfig {
   home: { latitude: number; longitude: number };
   remember_planes: number;
+  receivers?: RawAntenna['receivers'];
+  beast_websocket?: string;
+  beast_host?: string;
+  beast_port?: number;
 }
