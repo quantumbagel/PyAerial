@@ -1113,11 +1113,7 @@ class RedisLiveStore:
 
     def _write_telemetry_points(self, plane: dict, flight_id: str, icao: str) -> None:
         last_written = self._last_telemetry_ts.get(flight_id, 0.0)
-        samples = [
-            sample
-            for sample in iter_telemetry_samples(plane)
-            if sample[0] > last_written
-        ]
+        samples = list(iter_telemetry_samples(plane, since=last_written))
         if not samples:
             return
 

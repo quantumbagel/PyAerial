@@ -9,8 +9,8 @@ supported so existing call sites keep working.
 
 from __future__ import annotations
 
-import math
-from collections.abc import Iterator
+from bisect import bisect_right
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypedDict
 
@@ -30,17 +30,16 @@ from pyaerial.constants import (
 )
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, eq=True)
 class Datum:
-    """A single value observed (or calculated) at a point in time."""
+    """A single value observed (or calculated) at a point in time.
+
+    Equality is the dataclass-generated field comparison. Datum is mutable, so
+    (like any ``eq=True`` dataclass) it is deliberately unhashable.
+    """
 
     value: float
     time: float
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Datum):
-            return False
-        return self.value == other.value and self.time == other.time
 
     def __repr__(self) -> str:  # pragma: no cover - debug convenience
         return f"Datum({self.value}, {self.time})"
@@ -143,18 +142,33 @@ def get_latest(
 
     if after_time is None:
         return series[-1]
+    return nearest_datum(series, after_time)
 
-    best = None
-    best_delta = math.inf
-    for item in reversed(series):
-        delta = abs(item.time - after_time)
-        if delta < best_delta:
-            best = item
-            best_delta = delta
-        else:
-            # Series is ordered, so once we start getting further away we stop.
-            break
-    return best
+
+def _datum_time(datum: Datum) -> float:
+    return datum.time
+
+
+def nearest_datum(series: Sequence[Datum], at_time: float) -> Datum | None:
+    """Return the datum in time-ordered ``series`` closest to ``at_time``.
+
+    Ties go to the later sample. O(log n) via bisection.
+    """
+    if not series:
+        return None
+    idx = bisect_right(series, at_time, key=_datum_time)
+    if idx == len(series):
+        return series[-1]
+    after = series[idx]
+    # Among equal-time samples after ``at_time`` prefer the last one.
+    if idx + 1 < len(series) and series[idx + 1].time == after.time:
+        after = series[bisect_right(series, after.time, key=_datum_time) - 1]
+    if idx == 0:
+        return after
+    before = series[idx - 1]
+    if after.time - at_time <= at_time - before.time:
+        return after
+    return before
 
 
 def patch_append(
@@ -194,30 +208,44 @@ def flight_id_for_plane(plane: Plane | PlaneState | dict) -> str:
     return f"{icao_of(plane)}-{int(first_packet_time(plane))}"
 
 
+def _tail_after(series: Sequence[Datum], since: float | None) -> Sequence[Datum]:
+    if since is None:
+        return series
+    return series[bisect_right(series, since, key=_datum_time):]
+
+
 def iter_telemetry_samples(
     plane: Plane | PlaneState | dict,
+    since: float | None = None,
 ) -> Iterator[tuple[float, float, float, float | None, float | None, float | None]]:
     """Yield ``(timestamp, lat, lon, alt, speed, heading)`` for each position sample.
 
     Walks the union of latitude and longitude timestamps so a constant-latitude
-    (east/west) track still emits a point for every longitude sample.
+    (east/west) track still emits a point for every longitude sample. When
+    ``since`` is given only samples strictly newer than it are produced, and
+    only those are visited, so per-tick incremental callers stay O(new · log n).
     """
     recv = plane.get(STORE_RECV_DATA, {}) or {}
-    lat_series = recv.get(STORE_LAT, [])
-    lon_series = recv.get(STORE_LONG, [])
-    times = sorted({datum.time for datum in lat_series} | {datum.time for datum in lon_series})
+    calc = plane.get(STORE_CALC_DATA, {}) or {}
+    lat_series = recv.get(STORE_LAT) or []
+    lon_series = recv.get(STORE_LONG) or []
+    if not lat_series or not lon_series:
+        return
+    alt_series = recv.get(STORE_ALT) or []
+    speed_series = calc.get(STORE_HORIZ_SPEED) or recv.get(STORE_HORIZ_SPEED) or []
+    heading_series = calc.get(STORE_HEADING) or recv.get(STORE_HEADING) or []
+    times = sorted(
+        {datum.time for datum in _tail_after(lat_series, since)}
+        | {datum.time for datum in _tail_after(lon_series, since)}
+    )
     for stamp in times:
-        lat_datum = get_latest(STORE_RECV_DATA, STORE_LAT, plane, stamp)
-        lon_datum = get_latest(STORE_RECV_DATA, STORE_LONG, plane, stamp)
+        lat_datum = nearest_datum(lat_series, stamp)
+        lon_datum = nearest_datum(lon_series, stamp)
         if lat_datum is None or lon_datum is None:
             continue
-        alt_datum = get_latest(STORE_RECV_DATA, STORE_ALT, plane, stamp)
-        speed_datum = get_latest(
-            STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, stamp
-        ) or get_latest(STORE_RECV_DATA, STORE_HORIZ_SPEED, plane, stamp)
-        heading_datum = get_latest(
-            STORE_CALC_DATA, STORE_HEADING, plane, stamp
-        ) or get_latest(STORE_RECV_DATA, STORE_HEADING, plane, stamp)
+        alt_datum = nearest_datum(alt_series, stamp)
+        speed_datum = nearest_datum(speed_series, stamp)
+        heading_datum = nearest_datum(heading_series, stamp)
         yield (
             stamp,
             lat_datum.value,
