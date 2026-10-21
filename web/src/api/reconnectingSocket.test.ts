@@ -1,5 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { IDLE_TIMEOUT_CODE, ReconnectingSocket, backoffDelay } from './reconnectingSocket';
+import {
+  IDLE_TIMEOUT_CODE,
+  POLICY_VIOLATION,
+  TRY_AGAIN_LATER,
+  ReconnectingSocket,
+  backoffDelay,
+} from './reconnectingSocket';
+
+function openOnHello(event: MessageEvent): boolean {
+  try {
+    return (JSON.parse(event.data as string) as { type?: string }).type === 'hello';
+  } catch {
+    return false;
+  }
+}
 
 class FakeSocket {
   static instances: FakeSocket[] = [];
@@ -153,5 +167,59 @@ describe('ReconnectingSocket', () => {
     second.serverOpen();
     second.serverMessage('x');
     expect(onMessage).toHaveBeenCalledTimes(1);
+  });
+
+  describe('openOn (deferred establishment)', () => {
+    it('does not treat raw open as established until openOn matches', () => {
+      const { sock, onOpen } = makeSocket({ openOn: openOnHello });
+      sock.start();
+      const ws = FakeSocket.instances[0];
+      ws.serverOpen();
+      expect(onOpen).not.toHaveBeenCalled();
+      expect(sock.isOpen).toBe(false);
+      expect(sock.send('x')).toBe(false);
+
+      ws.serverClose(POLICY_VIOLATION, 'Origin not allowed');
+      expect(sock.isRejected).toBe(true);
+      expect(onOpen).not.toHaveBeenCalled();
+    });
+
+    it('does not reset backoff on raw open when the server closes with 1013 before hello', () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+      const { sock } = makeSocket({
+        openOn: openOnHello,
+        maxDelayMs: 100_000,
+        random: () => 0,
+      });
+      sock.start();
+      const first = FakeSocket.instances[0];
+      first.serverOpen();
+      first.serverClose(TRY_AGAIN_LATER, 'At capacity');
+      vi.advanceTimersByTime(backoffDelay(3, 1000, 100_000, () => 0));
+      const second = FakeSocket.instances[1];
+      second.serverOpen();
+      second.serverClose(TRY_AGAIN_LATER, 'At capacity');
+
+      const reconnectCalls = setTimeoutSpy.mock.calls.filter((args) => typeof args[1] === 'number');
+      const lastDelay = reconnectCalls[reconnectCalls.length - 1]?.[1];
+      expect(lastDelay).toBe(backoffDelay(4, 1000, 100_000, () => 0));
+      setTimeoutSpy.mockRestore();
+    });
+
+    it('establishes on hello, fires onOpen, and allows sends', () => {
+      const { sock, onOpen } = makeSocket({ openOn: openOnHello });
+      sock.start();
+      const ws = FakeSocket.instances[0];
+      ws.serverOpen();
+      expect(sock.isOpen).toBe(false);
+
+      ws.serverMessage(
+        JSON.stringify({ type: 'hello', protocol: 'pyaerial', version: 1, streams: [], actions: [] }),
+      );
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      expect(sock.isOpen).toBe(true);
+      expect(sock.send('queued')).toBe(true);
+      expect(ws.sent).toEqual(['queued']);
+    });
   });
 });

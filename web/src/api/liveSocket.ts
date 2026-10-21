@@ -8,6 +8,15 @@ export type LiveSocketHandlers = {
   onClose?: (code?: number, reason?: string) => void;
 };
 
+function isHelloMessage(event: MessageEvent): boolean {
+  try {
+    const data = JSON.parse(event.data as string) as { type?: string };
+    return data?.type === 'hello';
+  } catch {
+    return false;
+  }
+}
+
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_QUEUE_SIZE = 64;
 /** The server pings every 15 s (pyaerial.api.broadcaster._PING_INTERVAL); three missed pings = dead. */
@@ -27,6 +36,7 @@ let nextId = 0;
 const socket = new ReconnectingSocket({
   url: () => socketUrl('/ws/live'),
   idleTimeoutMs: LIVE_IDLE_TIMEOUT_MS,
+  openOn: isHelloMessage,
   onOpen: () => {
     handlersSet.forEach((h) => h.onOpen?.());
     flushQueue();
@@ -44,18 +54,18 @@ function generateId(): string {
 }
 
 function rejectAllPending() {
+  const rejected = socket.isRejected;
+  const code = rejected ? 'rejected' : 'disconnected';
+  const message = rejected ? 'Connection rejected' : 'Connection closed';
   pendingRequests.forEach((req) => {
     clearTimeout(req.timer);
-    req.reject(new ApiError('disconnected', 'Connection closed'));
+    req.reject(new ApiError(code, message));
   });
   pendingRequests.clear();
-  // Queued requests were never sent; a rejected socket will never send them.
-  if (socket.isRejected) {
-    while (requestQueue.length > 0) {
-      const req = requestQueue.shift()!;
-      clearTimeout(req.timer);
-      req.reject(new ApiError('rejected', 'Connection rejected'));
-    }
+  while (requestQueue.length > 0) {
+    const req = requestQueue.shift()!;
+    clearTimeout(req.timer);
+    req.reject(new ApiError(code, message));
   }
 }
 

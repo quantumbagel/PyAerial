@@ -24,6 +24,11 @@ export interface ReconnectingSocketOptions {
   onOpen?: () => void;
   onMessage?: (event: MessageEvent) => void;
   onClose?: (code: number, reason: string) => void;
+  /**
+   * When set, the socket is not considered open until this returns true for an
+   * incoming message (raw WebSocket `onopen` alone does not establish).
+   */
+  openOn?: (event: MessageEvent) => boolean;
   /** Injectable for tests. */
   random?: () => number;
   createSocket?: (url: string) => WebSocket;
@@ -49,6 +54,7 @@ export class ReconnectingSocket {
   private ws: WebSocket | null = null;
   private running = false;
   private rejected = false;
+  private established = false;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -68,7 +74,11 @@ export class ReconnectingSocket {
   }
 
   get isOpen(): boolean {
-    return this.ws != null && this.ws.readyState === WebSocket.OPEN;
+    return (
+      this.ws != null &&
+      this.ws.readyState === WebSocket.OPEN &&
+      (!this.opts.openOn || this.established)
+    );
   }
 
   get isRejected(): boolean {
@@ -125,13 +135,14 @@ export class ReconnectingSocket {
 
     ws.onopen = () => {
       if (this.ws !== ws) return;
-      this.attempt = 0;
-      this.touch();
-      this.opts.onOpen?.();
+      if (!this.opts.openOn) this.markEstablished();
     };
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
       this.touch();
+      if (this.opts.openOn && !this.established && this.opts.openOn(event)) {
+        this.markEstablished();
+      }
       this.opts.onMessage?.(event);
     };
     ws.onerror = () => {
@@ -148,8 +159,17 @@ export class ReconnectingSocket {
     };
   }
 
+  private markEstablished(): void {
+    if (this.established) return;
+    this.established = true;
+    this.attempt = 0;
+    this.touch();
+    this.opts.onOpen?.();
+  }
+
   private handleClosed(code: number, reason: string): void {
     this.ws = null;
+    this.established = false;
     this.clearIdle();
     if (code === POLICY_VIOLATION) {
       this.rejected = true;
