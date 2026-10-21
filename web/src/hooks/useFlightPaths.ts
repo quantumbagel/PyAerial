@@ -10,7 +10,6 @@ export function pathNeedsFetch(
   pathCoords: Record<string, [number, number][]>,
   pending: Set<string>,
   failed: Set<string>,
-  _fetched: Set<string>,
 ): boolean {
   if (pending.has(flightId) || failed.has(flightId)) {
     return false;
@@ -32,7 +31,6 @@ export function useFlightPaths(
 
   const pendingPathFetches = useRef(new Set<string>());
   const failedPathFetches = useRef(new Set<string>());
-  const fetchedPathFetches = useRef(new Set<string>());
   const showAllPathsRef = useRef(showAllPaths);
   const pathCoordsRef = useRef(pathCoords);
   const filteredFlightsRef = useRef(filteredFlights);
@@ -67,7 +65,6 @@ export function useFlightPaths(
       if (!showAllPathsRef.current && activeFlightIdRef.current !== flightId) return;
       const validTelemetry = telemetry.filter((p) => p.latitude != null && p.longitude != null);
       const latlngs = validTelemetry.map((p) => [p.latitude!, p.longitude!] as [number, number]);
-      fetchedPathFetches.current.add(flightId);
       setPathCoords((prev) => ({ ...prev, [flightId]: latlngs }));
       setPathTelemetry((prev) => ({ ...prev, [flightId]: validTelemetry }));
       setPathAlerts((prev) => ({ ...prev, [flightId]: alerts }));
@@ -83,7 +80,6 @@ export function useFlightPaths(
             pathCoordsRef.current,
             pendingPathFetches.current,
             failedPathFetches.current,
-            fetchedPathFetches.current,
           ),
         );
         const room = Math.max(0, MAX_PATH_FETCHES - pendingPathFetches.current.size);
@@ -104,7 +100,6 @@ export function useFlightPaths(
             pathCoordsRef.current,
             pendingPathFetches.current,
             failedPathFetches.current,
-            fetchedPathFetches.current,
           ),
         );
         await Promise.all(
@@ -133,7 +128,6 @@ export function useFlightPaths(
   }, [showAllPaths]);
 
   const resetPaths = useCallback(() => {
-    fetchedPathFetches.current.clear();
     failedPathFetches.current.clear();
     pendingPathFetches.current.clear();
     setPathCoords({});
@@ -147,7 +141,6 @@ export function useFlightPaths(
 
   useEffect(() => {
     failedPathFetches.current.clear();
-    fetchedPathFetches.current.clear();
   }, [showAllPaths, portalView]);
 
   useEffect(() => {
@@ -166,16 +159,12 @@ export function useFlightPaths(
     setPathCoords(pruneIfNeeded);
     setPathTelemetry(pruneIfNeeded);
     setPathAlerts(pruneIfNeeded);
-    for (const id of [...fetchedPathFetches.current]) {
-      if (!keep.has(id)) fetchedPathFetches.current.delete(id);
-    }
     const missing = filteredFlights.filter((f) =>
       pathNeedsFetch(
         f.flight_id,
         pathCoordsRef.current,
         pendingPathFetches.current,
         failedPathFetches.current,
-        fetchedPathFetches.current,
       ),
     );
     const room = Math.max(0, MAX_PATH_FETCHES - pendingPathFetches.current.size);
