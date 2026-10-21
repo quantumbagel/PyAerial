@@ -47,7 +47,10 @@ class PlaneCalculator:
             max_workers=4, thread_name_prefix="callsign-lookup"
         )
         self._pending_lookups: set[str] = set()
+        # In-flight lookups whose plane expired; their result is discarded.
+        self._cancelled_lookups: set[str] = set()
         self._pending_results: dict[str, dict] = {}
+        # time.monotonic() deadlines
         self._lookup_backoff_until: dict[str, float] = {}
         self._lookup_failures: dict[str, int] = {}
         self._lock = threading.Lock()
@@ -97,6 +100,13 @@ class PlaneCalculator:
         self.alerts.deactivate(plane)
         if icao:
             self.kinematics.forget(icao.lower())
+            # Per-ICAO lookup state would otherwise grow with every plane ever seen.
+            with self._lock:
+                self._pending_results.pop(icao, None)
+                self._lookup_backoff_until.pop(icao, None)
+                self._lookup_failures.pop(icao, None)
+                if icao in self._pending_lookups:
+                    self._cancelled_lookups.add(icao)
 
     def _apply_lookup_result(self, plane: dict) -> None:
         info = plane.get(STORE_INFO) or {}
@@ -122,13 +132,14 @@ class PlaneCalculator:
             return info.get(STORE_CALLSIGN) or ""
 
         icao = info[STORE_ICAO]
-        now = time.time()
+        now = time.monotonic()
         with self._lock:
             if icao in self._pending_lookups or now < self._lookup_backoff_until.get(
                 icao, 0.0
             ):
                 return info.get(STORE_CALLSIGN) or ""
             self._pending_lookups.add(icao)
+            self._cancelled_lookups.discard(icao)
 
         self._executor.submit(
             self._bg_lookup_metadata, icao, info.get(STORE_CALLSIGN) or ""
@@ -158,6 +169,10 @@ class PlaneCalculator:
             log.debug("Background metadata lookup failed for %s: %s", icao, exc)
             resolved = False
         with self._lock:
+            self._pending_lookups.discard(icao)
+            if icao in self._cancelled_lookups:
+                self._cancelled_lookups.discard(icao)
+                return
             self._pending_results[icao] = {
                 "callsign": callsign or "",
                 "model": model,
@@ -172,7 +187,6 @@ class PlaneCalculator:
             else:
                 failures = self._lookup_failures.get(icao, 0) + 1
                 self._lookup_failures[icao] = failures
-                self._lookup_backoff_until[icao] = time.time() + min(
+                self._lookup_backoff_until[icao] = time.monotonic() + min(
                     60.0, 2.0 ** failures
                 )
-            self._pending_lookups.discard(icao)

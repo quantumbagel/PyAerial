@@ -114,6 +114,41 @@ def test_metadata_lookup_failure_is_retried():
         calc.close()
 
 
+def test_deactivate_clears_lookup_state_and_discards_inflight_result():
+    class _FailingDb:
+        available = True
+
+        def lookup_cached(self, icao: str):
+            raise RuntimeError("hexdb down")
+
+        def is_cached(self, icao: str) -> bool:
+            return False
+
+    config = make_config()
+    calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=_FailingDb())
+    try:
+        plane = _plane()
+        icao = plane[STORE_INFO][STORE_ICAO]
+        calc._bg_lookup_metadata(icao)
+        assert icao in calc._pending_results
+        assert icao in calc._lookup_failures
+        assert calc._lookup_backoff_until[icao] > time.monotonic()
+        calc.deactivate_plane(plane)
+        assert icao not in calc._pending_results
+        assert icao not in calc._lookup_failures
+        assert icao not in calc._lookup_backoff_until
+
+        # A lookup still running when the plane expires must not leak a result.
+        calc._pending_lookups.add(icao)
+        calc.deactivate_plane(plane)
+        calc._bg_lookup_metadata(icao)
+        assert icao not in calc._pending_results
+        assert icao not in calc._pending_lookups
+        assert icao not in calc._cancelled_lookups
+    finally:
+        calc.close()
+
+
 def test_hysteresis_delays_activation():
     from pyaerial.config.schema import ZoneConfig
     from helpers import make_rule
