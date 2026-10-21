@@ -157,11 +157,23 @@
     color: var(--text-secondary);
 }
 
-.map-controls {
+.map-overlay {
     position: absolute;
     top: var(--space-2);
     left: var(--space-2);
+    right: var(--space-2);
     z-index: var(--z-map-controls);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    /* Let map drags through the empty part of the strip. */
+    pointer-events: none;
+}
+
+.map-controls {
+    flex-wrap: wrap;
+    pointer-events: auto;
 }
 
 .map-controls__sidebar {
@@ -377,36 +389,66 @@
     text-align: left;
 }
 
-/* ── Banner ──────────────────────────────────────────────── */
+/* ── Status banner (stacked under the map toolbar, never over it) ── */
 
-.disconnected-banner {
-    position: fixed;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%) translateY(-110%);
-    z-index: var(--z-banner);
-    display: flex;
+.status-banner {
+    display: none;
     align-items: center;
     gap: var(--space-2);
-    max-width: calc(100vw - var(--space-8));
-    padding: var(--space-2) var(--space-5);
-    background: var(--panel-raised);
-    border: 1px solid var(--border);
-    border-top: none;
-    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    max-width: min(560px, 100%);
+    padding: var(--space-2) var(--space-4);
+    background: var(--surface-toolbar);
+    border: 1px solid var(--surface-toolbar-border);
+    border-radius: var(--radius-md);
     color: var(--text-secondary);
     font-size: var(--font-body);
     font-weight: 500;
-    pointer-events: none;
-    opacity: 0;
-    transition: transform var(--duration-slow) ease, opacity var(--duration-base) ease;
+    line-height: 1.4;
     box-shadow: var(--shadow-toolbar);
+    backdrop-filter: blur(8px);
+    pointer-events: auto;
 }
 
-.disconnected-banner--visible {
-    transform: translateX(-50%) translateY(0);
-    opacity: 1;
-    animation: banner-slide-down var(--duration-slow) ease forwards;
+.status-banner--visible {
+    display: flex;
+    animation: banner-in var(--duration-slow) var(--ease-standard);
+}
+
+/* ── Leaflet tooltips (zone labels, path and marker hovers) ── */
+
+.leaflet-tooltip {
+    background: var(--surface-overlay);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-toolbar);
+    font-family: var(--font-sans);
+    font-size: var(--font-meta);
+    padding: var(--space-1) var(--space-2);
+}
+
+.leaflet-tooltip-top::before {
+    border-top-color: var(--border);
+}
+
+.leaflet-tooltip-bottom::before {
+    border-bottom-color: var(--border);
+}
+
+.leaflet-tooltip-left::before {
+    border-left-color: var(--border);
+}
+
+.leaflet-tooltip-right::before {
+    border-right-color: var(--border);
+}
+
+.leaflet-tooltip.zone-label {
+    background: color-mix(in srgb, var(--panel) 80%, transparent);
+    color: var(--text-secondary);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    box-shadow: none;
 }
 
 /* ── Responsive ──────────────────────────────────────────── */

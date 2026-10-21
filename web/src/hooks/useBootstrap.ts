@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import * as api from '../api/client';
 import { ORIGIN_REJECTED_MESSAGE, describeError } from '../api/errors';
 import { connectLiveSocket } from '../api/liveSocket';
-import { POLICY_VIOLATION } from '../api/reconnectingSocket';
+import { POLICY_VIOLATION, TRY_AGAIN_LATER } from '../api/reconnectingSocket';
 import type { AppConfig, WsStatus, ZonesData } from '../api/types';
 
 /** Socket status plus the station config and zones, (re)loaded on every connect. */
@@ -54,6 +54,10 @@ export function useBootstrap() {
           setWsRejectReason(ORIGIN_REJECTED_MESSAGE);
           return;
         }
+        if (code === TRY_AGAIN_LATER) {
+          setWsStatus('busy');
+          return;
+        }
         setWsStatus((prev) => (prev === 'connecting' ? 'connecting' : 'reconnecting'));
       },
     });
@@ -67,6 +71,8 @@ export function useBootstrap() {
     zonesData,
     appConfig,
     wsStatus,
-    bootstrapError: wsRejectReason || zonesError || configError,
+    /** Set when the server refused this origin (1008); nothing will load. */
+    rejectedMessage: wsRejectReason,
+    bootstrapError: zonesError || configError,
   };
 }

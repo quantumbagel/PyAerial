@@ -21,6 +21,16 @@ export interface ReconnectingSocketOptions {
   idleTimeoutMs?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
+  /**
+   * When set, the connection only counts as established (onOpen fires and
+   * backoff resets) once a message satisfying this arrives. Servers that
+   * accept and then immediately close a socket (origin rejected, connection
+   * cap) never send it, so they can't reset the backoff or receive requests.
+   */
+  isReadyMessage?: (event: MessageEvent) => boolean;
+  /** Without isReadyMessage: backoff resets once a socket has stayed open this long. */
+  stableMs?: number;
+  /** The connection is established (see isReadyMessage). */
   onOpen?: () => void;
   onMessage?: (event: MessageEvent) => void;
   onClose?: (code: number, reason: string) => void;
@@ -52,8 +62,13 @@ export class ReconnectingSocket {
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private stableTimer: ReturnType<typeof setTimeout> | null = null;
+  private ready = false;
   private readonly opts: Required<
-    Pick<ReconnectingSocketOptions, 'baseDelayMs' | 'maxDelayMs' | 'idleTimeoutMs' | 'random'>
+    Pick<
+      ReconnectingSocketOptions,
+      'baseDelayMs' | 'maxDelayMs' | 'idleTimeoutMs' | 'random' | 'stableMs'
+    >
   > &
     ReconnectingSocketOptions;
 
@@ -62,6 +77,7 @@ export class ReconnectingSocket {
       baseDelayMs: 1000,
       maxDelayMs: 15_000,
       idleTimeoutMs: 0,
+      stableMs: 5000,
       random: Math.random,
       ...options,
     };
@@ -69,6 +85,11 @@ export class ReconnectingSocket {
 
   get isOpen(): boolean {
     return this.ws != null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  /** Open and established (after the ready message, when one is required). */
+  get isReady(): boolean {
+    return this.isOpen && this.ready;
   }
 
   get isRejected(): boolean {
@@ -89,8 +110,10 @@ export class ReconnectingSocket {
 
   stop(): void {
     this.running = false;
+    this.ready = false;
     this.clearReconnect();
     this.clearIdle();
+    this.clearStable();
     const ws = this.ws;
     this.ws = null;
     if (ws) {
@@ -125,13 +148,26 @@ export class ReconnectingSocket {
 
     ws.onopen = () => {
       if (this.ws !== ws) return;
-      this.attempt = 0;
       this.touch();
+      if (this.opts.isReadyMessage) return;
+      // No handshake to wait for: report open now, but only forgive past
+      // failures once the socket has proven it stays up.
+      this.ready = true;
+      this.stableTimer = setTimeout(() => {
+        this.stableTimer = null;
+        this.attempt = 0;
+      }, this.opts.stableMs);
       this.opts.onOpen?.();
     };
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
       this.touch();
+      if (!this.ready && this.opts.isReadyMessage?.(event)) {
+        this.ready = true;
+        this.attempt = 0;
+        this.opts.onOpen?.();
+        if (this.ws !== ws) return;
+      }
       this.opts.onMessage?.(event);
     };
     ws.onerror = () => {
@@ -150,7 +186,9 @@ export class ReconnectingSocket {
 
   private handleClosed(code: number, reason: string): void {
     this.ws = null;
+    this.ready = false;
     this.clearIdle();
+    this.clearStable();
     if (code === POLICY_VIOLATION) {
       this.rejected = true;
       this.running = false;
@@ -198,6 +236,13 @@ export class ReconnectingSocket {
     if (this.reconnectTimer != null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  private clearStable(): void {
+    if (this.stableTimer != null) {
+      clearTimeout(this.stableTimer);
+      this.stableTimer = null;
     }
   }
 

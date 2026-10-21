@@ -1,4 +1,4 @@
-import type { PortalView, ServerStats } from '../api/types';
+import type { PortalView, ServerStats, WsStatus } from '../api/types';
 
 /** Keep in sync with pyaerial.constants.LIVE_ENGINE_TTL_SECONDS */
 export const ENGINE_STALE_SECONDS = 10;
@@ -25,6 +25,20 @@ export function isEngineLive(
   return nowSeconds - seen < ENGINE_STALE_SECONDS;
 }
 
+export type LiveIssue = 'live_unavailable' | 'engine_down';
+
+/**
+ * The one verdict on the live pipeline, shared by the banner and every empty
+ * state so they can never disagree. An unreachable live store wins: with
+ * Redis down the engine heartbeat can't be read either.
+ */
+export function liveIssue(stats: ServerStats | null | undefined): LiveIssue | null {
+  if (stats == null) return null;
+  if (stats.redis === false) return 'live_unavailable';
+  if (!isEngineLive(stats)) return 'engine_down';
+  return null;
+}
+
 export function emptyFlightsMessage({
   view,
   hasFilters,
@@ -41,12 +55,9 @@ export function emptyFlightsMessage({
     }
     return 'No archived flights yet. A flight is archived only when a retain rule holds for its dwell time.';
   }
-  if (stats?.redis === false) {
-    return REDIS_DOWN;
-  }
-  if (stats != null && !isEngineLive(stats)) {
-    return `${ENGINE_DOWN} Make sure dump1090 is feeding it.`;
-  }
+  const issue = liveIssue(stats);
+  if (issue === 'live_unavailable') return REDIS_DOWN;
+  if (issue === 'engine_down') return `${ENGINE_DOWN} Make sure dump1090 is feeding it.`;
   return 'No aircraft in range right now.';
 }
 
@@ -66,11 +77,46 @@ export function emptyAlertsMessage({
     }
     return 'No archived alerts yet.';
   }
-  if (stats?.redis === false) {
-    return REDIS_DOWN;
-  }
-  if (stats != null && !isEngineLive(stats)) {
-    return ENGINE_DOWN;
-  }
+  const issue = liveIssue(stats);
+  if (issue === 'live_unavailable') return REDIS_DOWN;
+  if (issue === 'engine_down') return ENGINE_DOWN;
   return 'No alerts yet.';
+}
+
+export const BUSY_BANNER = 'The server is at its connection limit. Reconnecting…';
+
+export interface StatusBanner {
+  text: string;
+  /** Show a spinner: the portal is retrying on its own. */
+  pending: boolean;
+}
+
+/**
+ * The top-of-map status line. Uses the same liveIssue verdict as the empty
+ * states, in one precedence order: origin rejected > connection state >
+ * live store down > engine down > config/zones errors.
+ */
+export function statusBanner({
+  wsStatus,
+  view,
+  stats,
+  rejectedMessage,
+  bootstrapError,
+}: {
+  wsStatus: WsStatus;
+  view: PortalView;
+  stats: ServerStats | null;
+  rejectedMessage?: string | null;
+  bootstrapError?: string | null;
+}): StatusBanner | null {
+  if (wsStatus === 'rejected') return { text: rejectedMessage || 'Access denied.', pending: false };
+  if (wsStatus === 'busy') return { text: BUSY_BANNER, pending: true };
+  if (wsStatus === 'connecting') return { text: 'Connecting…', pending: true };
+  if (wsStatus === 'reconnecting') return { text: 'Reconnecting…', pending: true };
+  if (view === 'live') {
+    const issue = liveIssue(stats);
+    if (issue === 'live_unavailable') return { text: REDIS_DOWN, pending: false };
+    if (issue === 'engine_down') return { text: ENGINE_IDLE_BANNER, pending: false };
+  }
+  return bootstrapError ? { text: bootstrapError, pending: false } : null;
 }

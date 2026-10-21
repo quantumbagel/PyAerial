@@ -1,5 +1,5 @@
 import { ApiError, apiErrorFromResponse } from './errors';
-import { ReconnectingSocket, socketUrl } from './reconnectingSocket';
+import { POLICY_VIOLATION, ReconnectingSocket, TRY_AGAIN_LATER, socketUrl } from './reconnectingSocket';
 import type { LiveMessage } from './types';
 
 export type LiveSocketHandlers = {
@@ -24,16 +24,29 @@ const pendingRequests = new Map<string, Settle>();
 const requestQueue: (Settle & { id: string; action: string; params: Record<string, unknown> })[] = [];
 let nextId = 0;
 
+/** The server's first message on an admitted socket (never sent before a 1008/1013 close). */
+export function isHelloMessage(event: MessageEvent): boolean {
+  if (typeof event.data !== 'string' || !event.data.includes('hello')) return false;
+  try {
+    return (JSON.parse(event.data) as { type?: string })?.type === 'hello';
+  } catch {
+    return false;
+  }
+}
+
 const socket = new ReconnectingSocket({
   url: () => socketUrl('/ws/live'),
   idleTimeoutMs: LIVE_IDLE_TIMEOUT_MS,
+  // Rejected sockets are accepted and then closed, so "open" proves nothing:
+  // only the hello means we were admitted.
+  isReadyMessage: isHelloMessage,
   onOpen: () => {
     handlersSet.forEach((h) => h.onOpen?.());
     flushQueue();
   },
   onMessage: (event) => handleMessage(event),
   onClose: (code, reason) => {
-    rejectAllPending();
+    rejectAllPending(code);
     handlersSet.forEach((h) => h.onClose?.(code, reason));
   },
 });
@@ -43,18 +56,26 @@ function generateId(): string {
   return `${Date.now().toString(36)}-${nextId}`;
 }
 
-function rejectAllPending() {
+function closeError(code: number): ApiError {
+  if (code === POLICY_VIOLATION) return new ApiError('rejected', 'Connection rejected');
+  if (code === TRY_AGAIN_LATER) return new ApiError('busy', 'Server at its connection limit');
+  return new ApiError('disconnected', 'Connection closed');
+}
+
+function rejectAllPending(code: number) {
+  const error = closeError(code);
   pendingRequests.forEach((req) => {
     clearTimeout(req.timer);
-    req.reject(new ApiError('disconnected', 'Connection closed'));
+    req.reject(error);
   });
   pendingRequests.clear();
-  // Queued requests were never sent; a rejected socket will never send them.
-  if (socket.isRejected) {
+  // Queued requests were never sent. A rejected socket will never send them;
+  // at the connection cap, fail fast so the UI can say why (it retries).
+  if (code === POLICY_VIOLATION || code === TRY_AGAIN_LATER) {
     while (requestQueue.length > 0) {
       const req = requestQueue.shift()!;
       clearTimeout(req.timer);
-      req.reject(new ApiError('rejected', 'Connection rejected'));
+      req.reject(error);
     }
   }
 }
@@ -79,7 +100,7 @@ function sendRequest(id: string, action: string, params: Record<string, unknown>
 }
 
 function flushQueue() {
-  while (requestQueue.length > 0 && socket.isOpen) {
+  while (requestQueue.length > 0 && socket.isReady) {
     const req = requestQueue.shift()!;
     pendingRequests.set(req.id, req);
     if (!sendRequest(req.id, req.action, req.params)) {
@@ -129,7 +150,7 @@ function handleMessage(event: MessageEvent) {
 
 export function connectLiveSocket(handlers: LiveSocketHandlers): () => void {
   handlersSet.add(handlers);
-  if (socket.isOpen) {
+  if (socket.isReady) {
     handlers.onOpen?.();
   } else if (!socket.isRunning && !socket.isRejected) {
     socket.start();
@@ -140,7 +161,7 @@ export function connectLiveSocket(handlers: LiveSocketHandlers): () => void {
 }
 
 export function isLiveSocketOpen(): boolean {
-  return socket.isOpen;
+  return socket.isReady;
 }
 
 export function sendWsRequest<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {
@@ -158,7 +179,7 @@ export function sendWsRequest<T>(action: string, params: Record<string, unknown>
       return;
     }
 
-    if (socket.isOpen) {
+    if (socket.isReady) {
       pendingRequests.set(id, settle);
       if (sendRequest(id, action, params)) return;
       pendingRequests.delete(id);

@@ -3,7 +3,7 @@ import type { PortalView } from '../api/types';
 import type { MapViewHandle } from '../components/MapView';
 import type { SidebarTab } from '../components/Sidebar';
 import { ALERT_SORT_STORE } from '../utils/alertData';
-import { isEngineLive } from '../utils/emptyStates';
+import { statusBanner } from '../utils/emptyStates';
 import { FLIGHT_SORT_STORE, sortFlightsBy } from '../utils/flightData';
 import { localDayEndSeconds, localDayStartSeconds } from '../utils/historyFilters';
 import { readStored, writeStored } from '../utils/storage';
@@ -97,7 +97,22 @@ export function usePortalApp() {
     [debouncedSearch, historySinceDate, historyUntilDate],
   );
   const history = useHistoryFeed(portalView === 'history', historyFilter);
-  const feed = portalView === 'live' ? live : history;
+  const activeFeed = portalView === 'live' ? live : history;
+  // A refused origin (1008) never loads anything: say so everywhere, once.
+  const rejected = bootstrap.rejectedMessage;
+  const feed = useMemo(
+    () =>
+      rejected
+        ? {
+            ...activeFeed,
+            isLoadingFlights: false,
+            isLoadingAlerts: false,
+            flightsError: rejected,
+            alertsError: rejected,
+          }
+        : activeFeed,
+    [activeFeed, rejected],
+  );
 
   const filteredFlights = useMemo(() => {
     const q = searchQuery.toLowerCase();
@@ -268,14 +283,16 @@ export function usePortalApp() {
     flightSort,
     alertSort,
     disableFollow,
-    retryFlights,
-    retryAlerts,
+    retryFlights: rejected ? undefined : retryFlights,
+    retryAlerts: rejected ? undefined : retryAlerts,
     loadMoreFlights,
     loadMoreAlerts,
-    engineIdle:
-      portalView === 'live' &&
-      bootstrap.wsStatus === 'connected' &&
-      feed.stats != null &&
-      !isEngineLive(feed.stats),
+    banner: statusBanner({
+      wsStatus: bootstrap.wsStatus,
+      view: portalView,
+      stats: feed.stats,
+      rejectedMessage: bootstrap.rejectedMessage,
+      bootstrapError: bootstrap.bootstrapError,
+    }),
   };
 }

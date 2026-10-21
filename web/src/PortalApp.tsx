@@ -1,11 +1,10 @@
 import { useCallback, useMemo, useState } from 'react';
 import { DetailsDrawer } from './components/DetailsDrawer';
-import { DisconnectedBanner } from './components/DisconnectedBanner';
 import { MapView } from './components/MapView';
+import { StatusBanner } from './components/StatusBanner';
 import { Sidebar } from './components/Sidebar';
 import { usePortalApp } from './hooks/usePortalApp';
 import type { Alert, TelemetryPoint } from './api/types';
-import { ENGINE_IDLE_BANNER } from './utils/emptyStates';
 
 export function PortalApp() {
   const app = usePortalApp();
@@ -20,6 +19,7 @@ export function PortalApp() {
     setZonesVisible,
   } = app;
   const { zonesData, appConfig } = bootstrap;
+  const rejected = bootstrap.rejectedMessage;
   const {
     activeFlightId,
     followSelectedPlane,
@@ -163,6 +163,7 @@ export function PortalApp() {
         onToggleZones={() => setZonesVisible((v) => !v)}
         onTogglePaths={() => paths.setShowAllPaths((v) => !v)}
         drawerOpen={selection.drawerOpen}
+        banner={<StatusBanner banner={app.banner} />}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         sidebarOpen={sidebarOpen}
         sidebarId="portal-sidebar"
@@ -172,7 +173,7 @@ export function PortalApp() {
             open={selection.drawerOpen}
             flightDetail={selection.flightDetail}
             flightSummary={selectedFlightSummary}
-            isLoading={selection.isLoading}
+            isLoading={rejected ? false : selection.isLoading}
             activeAlertId={selection.activeAlertId}
             flightAlerts={selection.flightAlerts}
             flightTelemetry={selection.flightTelemetry}
@@ -181,20 +182,13 @@ export function PortalApp() {
             appConfig={appConfig}
             zones={zonesData?.zones}
             alertColors={zonesData?.alert_colors}
-            selectionError={selection.selectionError}
-            onRetry={handleRetrySelection}
+            selectionError={rejected ?? selection.selectionError}
+            onRetry={rejected ? undefined : handleRetrySelection}
             onSelectTelemetryPoint={handleSelectTelemetryPoint}
             onClose={selection.closeDrawer}
             onSwitchTab={selection.setDrawerTab}
             onSelectAlert={selectAlert}
           />
-        }
-      />
-      <DisconnectedBanner
-        status={bootstrap.wsStatus}
-        message={
-          bootstrap.bootstrapError ||
-          (app.engineIdle ? ENGINE_IDLE_BANNER : null)
         }
       />
     </>

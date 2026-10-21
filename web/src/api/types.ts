@@ -104,7 +104,8 @@ export interface ServerStats {
   engine_live?: boolean;
 }
 
-export type WsStatus = 'connecting' | 'connected' | 'reconnecting' | 'rejected';
+/** `busy`: the server closed us at its connection cap (1013); we keep retrying. */
+export type WsStatus = 'connecting' | 'connected' | 'reconnecting' | 'busy' | 'rejected';
 
 export interface RawFrame {
   hex: string;

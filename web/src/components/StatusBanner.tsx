@@ -1,33 +1,17 @@
-import type { WsStatus } from '../api/types';
+import type { StatusBanner as StatusBannerData } from '../utils/emptyStates';
 import { Spinner } from './ui';
 
-export function DisconnectedBanner({
-  status,
-  message,
-}: {
-  status: WsStatus;
-  message?: string | null;
-}) {
-  const visible = status !== 'connected' || Boolean(message);
-  const text =
-    status === 'rejected'
-      ? message || 'Access denied.'
-      : status !== 'connected'
-        ? status === 'reconnecting'
-          ? 'Reconnecting…'
-          : 'Connecting…'
-        : message || '';
+/** Connection / pipeline status shown over the top of the map, below its toolbar. */
+export function StatusBanner({ banner }: { banner: StatusBannerData | null }) {
   return (
     <div
-      className={`disconnected-banner${visible ? ' disconnected-banner--visible' : ''}`}
-      role="alert"
-      aria-live="assertive"
-      aria-hidden={!visible}
+      className={`status-banner${banner ? ' status-banner--visible' : ''}`}
+      role="status"
+      aria-live="polite"
+      aria-hidden={!banner}
     >
-      {status !== 'connected' && status !== 'rejected' ? (
-        <Spinner className="disconnected-banner__spinner" />
-      ) : null}
-      <span className="disconnected-banner__text">{text}</span>
+      {banner?.pending ? <Spinner className="status-banner__spinner" /> : null}
+      <span className="status-banner__text">{banner?.text ?? ''}</span>
     </div>
   );
 }
