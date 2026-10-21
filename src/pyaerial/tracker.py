@@ -8,7 +8,7 @@ from collections import defaultdict
 
 from pyModeS.util import icao as pms_icao
 
-from pyaerial.classify import ClassifiedMessage, classify
+from pyaerial.classify import ClassifiedMessage, classify, max_jump_deg
 from pyaerial.config.schema import Config
 from pyaerial.constants import (
     STORE_FIRST_PACKET,
@@ -26,6 +26,10 @@ from pyaerial.models import Datum, Plane
 
 log = logging.getLogger("pyaerial.tracker")
 
+# After this many consecutive position fixes fail the jump gate, the last
+# accepted fix is presumed bad and the gate is reset (decode from home).
+_GATE_RESET_AFTER = 5
+
 
 class Tracker:
     """In-memory plane store with message deduplication."""
@@ -35,6 +39,8 @@ class Tracker:
         self.planes: dict[str, Plane] = {}
         # full frame hex -> most recent timestamp we have seen for that exact frame
         self._recent: dict[str, float] = {}
+        # icao -> consecutive position fixes rejected by the CPR jump gate
+        self._gate_rejects: dict[str, int] = {}
 
     def ingest(
         self,
@@ -45,15 +51,40 @@ class Tracker:
         """Classify and merge ``messages`` into the plane store. Returns count processed."""
         processed = 0
         for msg_hex, timestamp in messages:
+            icao, last_fix = self._last_fix(msg_hex)
+            last_position: tuple[float, float] | None = None
+            jump = max_jump_deg(None)
+            if last_fix is not None and icao is not None:
+                if self._gate_rejects.get(icao, 0) >= _GATE_RESET_AFTER:
+                    log.info(
+                        "Resetting position gate for %s after %d rejected fixes",
+                        icao,
+                        self._gate_rejects[icao],
+                    )
+                    self._gate_rejects.pop(icao, None)
+                else:
+                    last_position = (last_fix[0], last_fix[1])
+                    jump = max_jump_deg(timestamp - last_fix[2])
+
+            def _rejected(icao: str | None = icao) -> None:
+                if icao is not None:
+                    self._gate_rejects[icao] = self._gate_rejects.get(icao, 0) + 1
+
             try:
                 classified = classify(
-                    msg_hex, self.config.home, last_position=self._last_position(msg_hex)
+                    msg_hex,
+                    self.config.home,
+                    last_position=last_position,
+                    jump_deg=jump,
+                    on_implausible=_rejected,
                 )
             except (ValueError, KeyError, IndexError, TypeError) as exc:
                 log.debug("Could not classify message %s: %s", msg_hex, exc)
                 continue
             if classified is None:
                 continue
+            if icao is not None and STORE_LAT in classified.data.get(STORE_RECV_DATA, {}):
+                self._gate_rejects.pop(icao, None)
             receiver = (receivers or {}).get(msg_hex)
             self._merge(classified, timestamp, receiver=receiver)
             processed += 1
@@ -101,6 +132,7 @@ class Tracker:
         """Remove and return plane dicts for the given ICAO ids."""
         removed = []
         for icao in icaos:
+            self._gate_rejects.pop(icao, None)
             plane = self.planes.pop(icao, None)
             if plane is not None:
                 removed.append(plane)
@@ -210,18 +242,26 @@ class Tracker:
         # the archive source for SQLite on expire, so it is not clipped here.
 
     def _last_position(self, msg_hex: str) -> tuple[float, float] | None:
+        _icao, fix = self._last_fix(msg_hex)
+        return (fix[0], fix[1]) if fix is not None else None
+
+    def _last_fix(
+        self, msg_hex: str
+    ) -> tuple[str | None, tuple[float, float, float] | None]:
+        """``(icao, (lat, lon, time))`` of the aircraft's newest position, if any."""
         try:
             icao = pms_icao(msg_hex)
         except Exception:
-            return None
+            return None, None
         if not isinstance(icao, str):
-            return None
+            return None, None
         plane = self.planes.get(icao) or self.planes.get(icao.lower())
         if plane is None:
-            return None
+            return icao, None
         recv = plane.get(STORE_RECV_DATA) or {}
         lat_series = recv.get(STORE_LAT) or []
         lon_series = recv.get(STORE_LONG) or []
         if not lat_series or not lon_series:
-            return None
-        return (lat_series[-1].value, lon_series[-1].value)
+            return icao, None
+        lat = lat_series[-1]
+        return icao, (lat.value, lon_series[-1].value, lat.time)

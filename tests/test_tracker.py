@@ -199,3 +199,34 @@ def test_blank_callsign_does_not_clobber_existing():
     )
     tracker._merge(classified, 110.0)
     assert plane[STORE_INFO][STORE_CALLSIGN] == "SWA123"
+
+
+def test_one_bad_fix_does_not_freeze_the_plane_forever():
+    """Regression: a single bad accepted fix made the 0.5 deg gate reject every
+    later (correct) position for the rest of the flight."""
+    config = make_config()
+    config.home.latitude = 52.25
+    config.home.longitude = 3.9
+    tracker = Tracker(config)
+    bad = (52.2572 + 0.6, 3.9194)
+    tracker.planes["40621D"] = {
+        STORE_INFO: {STORE_ICAO: "40621D"},
+        STORE_RECV_DATA: {
+            STORE_LAT: [Datum(bad[0], 100.0)],
+            STORE_LONG: [Datum(bad[1], 100.0)],
+        },
+        STORE_INTERNAL: {
+            STORE_FIRST_PACKET: 100.0,
+            STORE_MOST_RECENT_PACKET: 100.0,
+            STORE_TOTAL_PACKETS: 1,
+            STORE_PACKET_TYPE: {},
+        },
+    }
+    msg = "8D40621D58C382D690C8AC2863A7"  # true fix ~ (52.2572, 3.9194)
+    for n in range(5):
+        assert tracker.ingest([(msg, 101.0 + n * 0.1)]) == 0
+    assert tracker._gate_rejects["40621D"] == 5
+    assert tracker.ingest([(msg, 102.0)]) == 1
+    lat = tracker.planes["40621D"][STORE_RECV_DATA][STORE_LAT][-1].value
+    assert abs(lat - 52.2572) < 0.01
+    assert "40621D" not in tracker._gate_rejects
