@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import contextlib
+import time
+
 from pyaerial.api.queries import (
     get_alerts,
     get_flight_detail,
@@ -283,4 +286,79 @@ def test_list_flights_errors_when_disconnected(tmp_path):
         store.get_alerts()
     with pytest.raises(HistoryUnavailable):
         store.get_telemetry("abc123-1")
+    store.close()
+
+
+def test_get_telemetry_limit_pages_forward(tmp_path):
+    store = _store(tmp_path)
+    plane = _plane()
+    plane[STORE_RECV_DATA][STORE_LAT] = [Datum(35.725, float(t)) for t in range(1, 11)]
+    plane[STORE_RECV_DATA][STORE_LONG] = [Datum(-78.695, float(t)) for t in range(1, 11)]
+    alerts = [{"zone": "pad", "rule": "warn", "activated_at": 1.0}]
+    assert store.finalize_plane(plane, alerts=alerts)
+    fid = "abc123-1"
+    assert len(store.get_telemetry(fid)) == 10
+    limited = store.get_telemetry(fid, limit=3)
+    assert [p["timestamp"] for p in limited] == [1.0, 2.0, 3.0]
+    page = store.get_telemetry(fid, since=limited[-1]["timestamp"], limit=3)
+    assert [p["timestamp"] for p in page] == [4.0, 5.0, 6.0]
+    assert [p["timestamp"] for p in store.get_telemetry(fid, since=2.0, limit=0)] == [
+        float(t) for t in range(3, 11)
+    ]
+    newest = store.get_telemetry(fid, limit=3, newest=True)
+    assert [p["timestamp"] for p in newest] == [8.0, 9.0, 10.0]
+    store.close()
+
+
+def test_reset_and_delete_raise_cleanly_when_database_locked(tmp_path):
+    import sqlite3
+
+    store = _store(tmp_path)
+    store.finalize_plane(
+        _plane(), alerts=[{"zone": "pad", "rule": "warn", "activated_at": 1.0}]
+    )
+    with store._lock:
+        assert store._conn is not None
+        store._conn.execute("PRAGMA busy_timeout=0")
+    blocker = sqlite3.connect(store.path)
+    blocker.execute("BEGIN EXCLUSIVE")
+    try:
+        with pytest.raises(HistoryUnavailable, match="locked"):
+            store.delete_icao("abc123")
+        with pytest.raises(HistoryUnavailable, match="locked"):
+            store.reset_all()
+    finally:
+        blocker.rollback()
+        blocker.close()
+    assert store.delete_icao("abc123") is True
+    store.close()
+
+
+def test_queries_survive_close_between_check_and_use(tmp_path):
+    """Regression: readers checked _conn, released the lock, then asserted it,
+    so a close() from another thread in between raised AssertionError."""
+    store = _store(tmp_path)
+    alerts = [{"zone": "pad", "rule": "warn", "activated_at": 1.0}]
+    store.finalize_plane(_plane(), alerts=alerts)
+    original = store._ensure_connected
+
+    def close_after_check() -> bool:
+        ok = original()
+        store.close()  # another thread wins the race here
+        return ok
+
+    store._ensure_connected = close_after_check  # type: ignore[method-assign]
+    for call in (
+        store.list_flights,
+        lambda: store.get_flight("abc123-1"),
+        lambda: store.get_telemetry("abc123-1"),
+        store.get_alerts,
+        store.count_flights,
+        store.distinct_icaos,
+    ):
+        store._last_connect_attempt = time.monotonic()  # no instant reconnect
+        with contextlib.suppress(HistoryUnavailable):
+            call()
+    store._last_connect_attempt = 0.0
+    assert store.finalize_plane(_plane(), alerts=alerts) is True
     store.close()

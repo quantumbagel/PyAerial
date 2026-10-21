@@ -226,10 +226,48 @@ class ZoneConfig(_Strict):
         return self
 
 
+_ORIGIN_RE = re.compile(r"^https?://[^/?#@\s]+$", re.IGNORECASE)
+
+
 class WebConfig(_Strict):
-    origins: list[str] = Field(default_factory=lambda: ["*"])
-    beast_host: str = "0.0.0.0"
+    # Browser origins allowed to open /ws/live and /ws/beast in addition to the
+    # portal's own origin (Origin matching the Host header). Entries are exact
+    # ``scheme://host[:port]`` strings; ``"*"`` allows any origin.
+    origins: list[str] = Field(default_factory=list)
+    # Also allow any http(s)://localhost / 127.0.0.1 / [::1] origin (dev servers).
+    allow_localhost_origins: bool = False
+    # Host header allowlist (DNS-rebinding guard). Empty accepts any Host, but
+    # same-origin WebSockets then only trust IP-literal and loopback hosts.
+    allowed_hosts: list[str] = Field(default_factory=list)
+    # Serve FastAPI's /docs, /redoc and /openapi.json.
+    enable_docs: bool = False
+    beast_host: str = "127.0.0.1"
     beast_port: int | None = Field(default=30005, ge=0, le=65535)
+    beast_max_clients: int = Field(default=16, ge=1)
+    # /ws/live + /ws/beast connection caps and per-connection request limits.
+    ws_max_connections: int = Field(default=256, ge=1)
+    ws_max_connections_per_ip: int = Field(default=32, ge=1)
+    # Reverse proxies whose X-Forwarded-For is trusted for the client IP
+    # (uvicorn forwarded_allow_ips). Empty trusts only 127.0.0.1.
+    trusted_proxies: list[str] = Field(default_factory=list)
+    ws_max_inflight: int = Field(default=2, ge=1, le=16)
+    ws_rate_limit: float = Field(default=50.0, gt=0)
+    ws_rate_burst: int = Field(default=100, ge=1)
+    ws_request_workers: int = Field(default=4, ge=1, le=64)
+
+    @field_validator("origins")
+    @classmethod
+    def _validate_origins(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for item in value:
+            text = str(item).strip().rstrip("/")
+            if text != "*" and not _ORIGIN_RE.match(text):
+                raise ValueError(
+                    f"origin {item!r} must be '*' or scheme://host[:port] "
+                    "(for example https://portal.example.com)"
+                )
+            cleaned.append(text)
+        return cleaned
 
 
 class Config(_Strict):

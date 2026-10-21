@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyaerial"
-version = "0.20.2"
+version = "0.21.0"
 description = "ADS-B / Mode S tracking with polygon zone rules, alerts, Redis live state, and SQLite history."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,11 +23,15 @@ classifiers = [
 ]
 dependencies = [
     "shapely>=2.0",
-    "geopy>=2.4",
+    "geopy>=2.5.0",
     "pyModeS>=3.0.0",
-    "requests>=2.31",
+    "requests>=2.33.0",
+    # Transitive (via requests); floors keep resolvers past known CVEs.
+    "urllib3>=2.8.0",
+    "idna>=3.15",
     "redis>=5.0",
     "ruamel.yaml>=0.18",
+    "defusedxml>=0.7.1",
     "pydantic>=2.5",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
@@ -59,5 +63,5 @@ target-version = "py311"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
+select = ["E", "F", "W", "B", "ASYNC", "RUF006", "SIM105", "UP035", "UP041", "PLW2901"]
 ignore = ["E501"]

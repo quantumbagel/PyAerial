@@ -33,6 +33,7 @@ _ENV_OVERRIDES = {
     "PYAERIAL_LOG_FILE": ("logging", "file"),
     "PYAERIAL_HZ": ("tracking", "hz"),
     "PYAERIAL_WEB_ORIGINS": ("web", "origins"),
+    "PYAERIAL_WEB_ALLOWED_HOSTS": ("web", "allowed_hosts"),
     "PYAERIAL_BEAST_PORT": ("web", "beast_port"),
     "PYAERIAL_BEAST_HOST": ("web", "beast_host"),
 }
@@ -43,7 +44,7 @@ def _apply_env_overrides(data: dict) -> dict:
         if env_var not in os.environ:
             continue
         value: object = os.environ[env_var]
-        if env_var == "PYAERIAL_WEB_ORIGINS":
+        if env_var in ("PYAERIAL_WEB_ORIGINS", "PYAERIAL_WEB_ALLOWED_HOSTS"):
             value = [part.strip() for part in str(value).split(",") if part.strip()]
         elif env_var == "PYAERIAL_BEAST_PORT":
             raw = str(value).strip().lower()
@@ -244,8 +245,14 @@ def _validate_cross_references(config: Config, path: Path) -> None:
                     elif not webhook_url_allowed(str(url)):
                         problems.append(
                             f"{loc}: webhook url must be https "
-                            f"(http allowed only for localhost): {url}"
+                            f"(http allowed only for localhost): {redact_url(str(url))}"
                         )
+                    method = action.options.get("method")
+                    if method is not None and str(method).strip().upper() not in {
+                        "POST",
+                        "PUT",
+                    }:
+                        problems.append(f"{loc}: webhook method must be POST or PUT")
     if problems:
         lines = [f"configuration file {path} is invalid:"]
         lines.extend(f"  - {item}" for item in problems)
@@ -287,6 +294,21 @@ def _expand_env_string(value: str, path: Path) -> str:
             f"  - unset environment variable(s): {names}"
         )
     return expanded
+
+
+def redact_url(url: str) -> str:
+    """Return ``scheme://host`` for logs; webhook paths and queries are secrets."""
+    try:
+        parsed = urlparse(str(url).strip())
+        host = parsed.hostname or ""
+    except ValueError:
+        return "<invalid url>"
+    scheme = parsed.scheme or "?"
+    if not host:
+        return f"{scheme}://<no host>"
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{scheme}://{host}"
 
 
 def webhook_url_allowed(url: str) -> bool:

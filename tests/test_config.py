@@ -207,3 +207,74 @@ database:
     )
     with pytest.raises(ConfigError, match="no longer used"):
         load_config(cfg_path)
+
+
+def test_web_defaults_are_locked_down():
+    from pyaerial.config.schema import WebConfig
+
+    web = WebConfig()
+    assert web.origins == []
+    assert web.allow_localhost_origins is False
+    assert web.enable_docs is False
+    assert web.beast_host == "127.0.0.1"
+    assert web.beast_max_clients == 16
+    assert web.ws_max_inflight <= 2
+
+
+def test_web_origins_must_be_scheme_host_port():
+    from pyaerial.config.schema import WebConfig
+
+    assert WebConfig(origins=["https://portal.example/", "*"]).origins == [
+        "https://portal.example",
+        "*",
+    ]
+    with pytest.raises(ValidationError, match="scheme://host"):
+        WebConfig(origins=["portal.example"])
+    with pytest.raises(ValidationError, match="scheme://host"):
+        WebConfig(origins=["https://portal.example/path"])
+
+
+def test_beast_host_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYAERIAL_BEAST_HOST", "0.0.0.0")
+    monkeypatch.setenv("PYAERIAL_BEAST_PORT", "off")
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(_MINIMAL_YAML)
+    config = load_config(cfg_path)
+    assert config.web.beast_host == "0.0.0.0"
+    assert config.web.beast_port is None
+
+
+def test_allowed_hosts_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYAERIAL_WEB_ALLOWED_HOSTS", "pi.local, tracker.example")
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(_MINIMAL_YAML)
+    config = load_config(cfg_path)
+    assert config.web.allowed_hosts == ["pi.local", "tracker.example"]
+
+
+def test_bad_webhook_url_error_does_not_leak_secret_path(tmp_path):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        _MINIMAL_YAML
+        + """
+zones:
+  pad:
+    coordinates: [[35.72, -78.70], [35.73, -78.70], [35.73, -78.69], [35.72, -78.70]]
+    rules:
+      - name: warn
+        when:
+          altitude: { max: 2000 }
+          eta: { max: 120 }
+        dwell_seconds: 1
+        on_activate:
+          - method: webhook
+            options:
+              url: "http://hooks.example/api/webhooks/123/SECRET-TOKEN"
+"""
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(cfg_path)
+    message = str(excinfo.value)
+    assert "http://hooks.example" in message
+    assert "SECRET-TOKEN" not in message
+    assert "/api/webhooks" not in message

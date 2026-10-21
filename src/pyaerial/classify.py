@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pyModeS as pms
@@ -17,6 +18,7 @@ from pyModeS.util import typecode as pms_typecode, icao as pms_icao
 from pyaerial.config.schema import HomeConfig
 from pyaerial.constants import (
     MAX_CPR_JUMP_DEG,
+    MAX_SPEED_MPS,
     STORE_ALT,
     STORE_CALLSIGN,
     STORE_HEADING,
@@ -40,6 +42,8 @@ CAT_AIRBORNE_BARO = 3
 CAT_AIRBORNE_GNSS = 4
 CAT_VELOCITY = 5
 
+_M_PER_DEG_LAT = 111_320.0
+
 
 @dataclass(frozen=True, slots=True)
 class ClassifiedMessage:
@@ -47,16 +51,33 @@ class ClassifiedMessage:
     typecode_category: int
 
 
+def max_jump_deg(elapsed_s: float | None) -> float:
+    """Largest believable move (degrees of latitude) since the last fix.
+
+    Never below :data:`MAX_CPR_JUMP_DEG`; grows with the time since the last
+    fix at :data:`MAX_SPEED_MPS`, so a plane that drops out of coverage and
+    reappears further on is not rejected forever.
+    """
+    if elapsed_s is None or not math.isfinite(elapsed_s) or elapsed_s <= 0:
+        return MAX_CPR_JUMP_DEG
+    return max(MAX_CPR_JUMP_DEG, elapsed_s * MAX_SPEED_MPS / _M_PER_DEG_LAT)
+
+
 def classify(
     msg: str,
     home: HomeConfig,
     last_position: tuple[float, float] | None = None,
+    *,
+    jump_deg: float = MAX_CPR_JUMP_DEG,
+    on_implausible: Callable[[], None] | None = None,
 ) -> ClassifiedMessage | None:
     """
     Classify a single ADS-B message.
 
     Assumes downlink format 17 or 18. Returns ``None`` for messages that should
-    be ignored (invalid ICAO, unsupported typecode, etc.).
+    be ignored (invalid ICAO, unsupported typecode, etc.). A position further
+    than ``jump_deg`` from ``last_position`` is dropped and ``on_implausible``
+    is called so the caller can count consecutive rejections.
     """
     try:
         typecode = pms_typecode(msg)
@@ -105,7 +126,9 @@ def classify(
             return None
         lat = decoded.get("latitude")
         lon = decoded.get("longitude")
-        if not _plausible_fix(lat, lon, last_position):
+        if not _plausible_fix(lat, lon, last_position, jump_deg):
+            if on_implausible is not None:
+                on_implausible()
             return None
         speed = decoded.get("groundspeed")
         angle = decoded.get("track")
@@ -128,7 +151,9 @@ def classify(
             return None
         lat = decoded.get("latitude")
         lon = decoded.get("longitude")
-        if not _plausible_fix(lat, lon, last_position):
+        if not _plausible_fix(lat, lon, last_position, jump_deg):
+            if on_implausible is not None:
+                on_implausible()
             return None
         alt = decoded.get("altitude")
         data = {
@@ -195,6 +220,7 @@ def _plausible_fix(
     lat: object,
     lon: object,
     last_position: tuple[float, float] | None,
+    jump_deg: float = MAX_CPR_JUMP_DEG,
 ) -> bool:
     lat_f = _finite_coord(lat)
     lon_f = _finite_coord(lon)
@@ -202,9 +228,13 @@ def _plausible_fix(
         return False
     if last_position is None:
         return True
+    # A degree of longitude shrinks with cos(latitude); never gate tighter
+    # than jump_deg itself.
+    cos_lat = math.cos(math.radians(max(-89.0, min(89.0, last_position[0]))))
+    lon_jump = jump_deg / max(cos_lat, 1e-3)
     return (
-        abs(lat_f - last_position[0]) <= MAX_CPR_JUMP_DEG
-        and _lon_delta_deg(lon_f, last_position[1]) <= MAX_CPR_JUMP_DEG
+        abs(lat_f - last_position[0]) <= jump_deg
+        and _lon_delta_deg(lon_f, last_position[1]) <= max(jump_deg, lon_jump)
     )
 
 

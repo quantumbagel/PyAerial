@@ -61,3 +61,21 @@ def test_groundspeed_stored_as_kmh():
     speed = result.data[STORE_RECV_DATA].get(STORE_HORIZ_SPEED)
     assert speed is not None
     assert 180.0 < speed < 190.0
+
+
+def test_jump_gate_scales_with_elapsed_time():
+    from pyaerial.classify import max_jump_deg
+    from pyaerial.constants import MAX_CPR_JUMP_DEG
+
+    assert max_jump_deg(None) == MAX_CPR_JUMP_DEG
+    assert max_jump_deg(1.0) == MAX_CPR_JUMP_DEG
+    assert max_jump_deg(600.0) > 4.0
+    # 0.8 deg in 5 min is plausible; in 1 s it is not.
+    assert _plausible_fix(36.5, -78.7, (35.7, -78.7), max_jump_deg(300.0)) is True
+    assert _plausible_fix(36.5, -78.7, (35.7, -78.7), max_jump_deg(1.0)) is False
+
+
+def test_lon_gate_widens_with_latitude():
+    # 0.7 deg of longitude at 70N is ~27 km, well within a 0.5-deg-of-lat move.
+    assert _plausible_fix(70.0, 10.7, (70.0, 10.0)) is True
+    assert _plausible_fix(0.0, 10.7, (0.0, 10.0)) is False

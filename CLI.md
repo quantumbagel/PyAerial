@@ -48,8 +48,9 @@ Runtime settings accept environment variable overrides; explicit `-c` flags take
 | `PYAERIAL_LOG_LEVEL` | `logging.level` | Logging severity (`debug`, `info`, `warning`, `error`) |
 | `PYAERIAL_LOG_FILE` | `logging.file` | Destination log file path |
 | `PYAERIAL_HZ` | `tracking.hz` | Engine evaluation frequency in Hz |
-| `PYAERIAL_WEB_ORIGINS` | `web.origins` | Allowed browser origins (`*` permits all) |
-| `PYAERIAL_BEAST_HOST` | `web.beast_host` | Bind address for dump1090-compatible Beast TCP (`0.0.0.0`) |
+| `PYAERIAL_WEB_ORIGINS` | `web.origins` | Extra allowed browser origins, comma-separated exact `scheme://host[:port]` entries (default none; `*` permits all) |
+| `PYAERIAL_WEB_ALLOWED_HOSTS` | `web.allowed_hosts` | Comma-separated hostnames the portal is served on (DNS-rebinding guard; loopback always allowed) |
+| `PYAERIAL_BEAST_HOST` | `web.beast_host` | Bind address for dump1090-compatible Beast TCP (`127.0.0.1`; Compose sets `0.0.0.0` inside the container and publishes it on host loopback) |
 | `PYAERIAL_BEAST_PORT` | `web.beast_port` | Beast TCP port (`30005`; `off` disables TCP; `/ws/beast` still serves) |
 
 Configuration strings support `${VAR}` and `${VAR:-default}` environment interpolation, but referenced variables without defaults must be set in the host environment or startup validation fails.

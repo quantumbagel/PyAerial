@@ -1,15 +1,8 @@
+import { memo } from 'react';
 import type { Alert, Zone } from '../api/types';
-import { alertSortValueLabel, type AlertSortField } from '../utils/alertData';
-import {
-  formatActiveSince,
-  formatAlertAltitude,
-  formatAlertEta,
-  formatDateTime,
-  formatEpisodeDuration,
-  formatZoneRule,
-  isAlertActive,
-} from '../utils/format';
-import { ZoneBadge } from './LevelBadge';
+import { alertSortValueLabel, alertTooltip, isAlertActive, type AlertSortField } from '../utils/alertData';
+import { cleanField, displayCallsign, displayIcao } from '../utils/format';
+import { ZoneBadge } from './AlertBadges';
 import { Chip } from './ui';
 
 interface AlertListItemProps {
@@ -22,7 +15,7 @@ interface AlertListItemProps {
   onSelect: (alert: Alert, episodeKey: string) => void;
 }
 
-export function AlertListItem({
+export const AlertListItem = memo(function AlertListItem({
   alert,
   episodeKey,
   active,
@@ -32,46 +25,32 @@ export function AlertListItem({
   onSelect,
 }: AlertListItemProps) {
   const isEpisodeActive = isAlertActive(alert);
-  const deactivatedStr = alert.deactivated_at ? formatActiveSince(alert.deactivated_at) : null;
-  const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
-  const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-  const durationStr = formatEpisodeDuration(alert.activated_at, alert.deactivated_at);
-
-  const statusTitle = isEpisodeActive
-    ? `Active episode · ${durationStr}`
-    : `Ended episode · ${durationStr}${deactivatedStr ? ` (ended ${deactivatedStr})` : ''}`;
-  const title = `${statusTitle}\nActivated: ${formatDateTime(alert.activated_at) || 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}${isEpisodeActive ? `\nETA: ${formatAlertEta(alert.eta)}` : ''}`;
-
-  const rawCallsign = alert.callsign?.trim();
-  const displayCallsign =
-    rawCallsign && rawCallsign.toUpperCase() !== 'UNKNOWN'
-      ? rawCallsign
-      : (alert.icao || '').toUpperCase() || 'Loading plane details…';
-
   return (
     <li>
       <button
         type="button"
         className={`ui-row${!isEpisodeActive ? ' ui-row--muted' : ''}${active ? ' is-active' : ''}`}
-        title={title}
+        title={alertTooltip(alert)}
         onClick={() => onSelect(alert, episodeKey)}
-        aria-pressed={active}
+        aria-current={active ? 'true' : undefined}
       >
         <div className="ui-row__line">
-          <span className="ui-row__title">{displayCallsign}</span>
-          {alert.icao && <Chip>{alert.icao.toUpperCase()}</Chip>}
+          <span className="ui-row__title">{displayCallsign(alert)}</span>
+          {cleanField(alert.callsign) && cleanField(alert.icao) ? (
+            <Chip>{displayIcao(alert.icao)}</Chip>
+          ) : null}
         </div>
         <div className="ui-row__line">
           <ZoneBadge
-            zone={alert.zone || 'zone'}
+            zone={alert.zone}
             rule={alert.rule}
+            active={isEpisodeActive}
             zones={zones}
             alertColors={alertColors}
-            label={formatZoneRule(alert.zone || 'zone', alert.rule, { live: isEpisodeActive })}
           />
           <span className="ui-row__trailing">{alertSortValueLabel(alert, sortField)}</span>
         </div>
       </button>
     </li>
   );
-}
+});

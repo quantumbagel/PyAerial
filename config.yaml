@@ -16,8 +16,13 @@ logging:
   level: info
 
 web:
-  origins: ["*"]
-  # beast_port: 30005   # dump1090-compatible Beast TCP for OpenSky (default)
+  # The portal's own origin is always allowed. List other browser origins as
+  # exact scheme://host[:port] entries; ["*"] allows any origin.
+  origins: []
+  # allow_localhost_origins: true   # Vite dev server on another port
+  # allowed_hosts: ["tracker.example"]  # DNS-rebinding guard for exposed portals
+  # beast_host: "0.0.0.0"   # default 127.0.0.1; 0.0.0.0 for remote Beast feeders
+  # beast_port: 30005       # dump1090-compatible Beast TCP for OpenSky (default)
 
 # CPR decode reference for ADS-B positions, not the geofence and not the ETA target.
 home:

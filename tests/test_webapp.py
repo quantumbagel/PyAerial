@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from pyaerial.api.queries import (
     get_alerts,
     get_flight_detail,
@@ -209,23 +211,38 @@ def test_beast_tcp_streams_frames():
         assert frames[0][2] == 12_000_000
 
 
-def test_websocket_rejects_same_host_when_not_in_allowlist():
+def test_websocket_accepts_same_origin_with_explicit_allowlist():
+    """The portal's own origin (Origin == Host) works with any web.origins."""
     from fastapi.testclient import TestClient
-    from starlette.websockets import WebSocketDisconnect
 
     config = make_config()
     config.web.origins = ["https://portal.example"]
+    config.web.allowed_hosts = ["testserver"]
     app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
     with TestClient(app) as client:
-        try:
+        with client.websocket_connect(
+            "/ws/live",
+            headers={"Origin": "http://testserver", "Host": "testserver"},
+        ) as ws:
+            assert ws.receive_json()["type"] == "hello"
+
+
+def test_websocket_rejects_untrusted_host_when_allowed_hosts_set():
+    """web.allowed_hosts blocks DNS-rebinding (attacker origin == attacker Host)."""
+    from fastapi.testclient import TestClient
+    from starlette.testclient import WebSocketDenialResponse
+
+    config = make_config()
+    config.web.allowed_hosts = ["portal.example"]
+    app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
+    with TestClient(app, base_url="http://rebind.attacker.example") as client:
+        with pytest.raises(WebSocketDenialResponse):
             with client.websocket_connect(
                 "/ws/live",
-                headers={"Origin": "http://testserver", "Host": "testserver"},
+                headers={"Origin": "http://rebind.attacker.example"},
             ) as ws:
                 ws.receive_json()
-            raise AssertionError("expected websocket to close")
-        except WebSocketDisconnect as exc:
-            assert exc.code == 1008
+        assert client.get("/health").status_code == 400
 
 
 def test_websocket_rejects_disallowed_origin():
@@ -267,3 +284,15 @@ def test_ready_uses_live_store_ping():
         body = ready.json()
         assert body["engine"] is True
         assert body["status"] == "ok"
+
+
+def test_allowed_hosts_keeps_loopback_reachable():
+    """Setting web.allowed_hosts must not break the 127.0.0.1 container healthcheck."""
+    from fastapi.testclient import TestClient
+
+    config = make_config()
+    config.web.allowed_hosts = ["portal.example"]
+    app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
+    for base in ("http://127.0.0.1:10090", "http://localhost:5173", "http://portal.example"):
+        with TestClient(app, base_url=base) as client:
+            assert client.get("/health").status_code == 200, base

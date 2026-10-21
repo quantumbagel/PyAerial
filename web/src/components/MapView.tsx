@@ -1,27 +1,33 @@
 import { useEffect, useRef } from 'react';
 import * as L from 'leaflet';
-import { maplibreGL } from '@maplibre/maplibre-gl-leaflet';
-import type { Alert, FlightSummary, ZonesData, TelemetryPoint, AppConfig } from '../api/types';
-import {
-  flightAlertSeverity,
-  formatAltitudeCell,
-  formatDateTime,
-  formatSpeedCell,
-  formatZoneRule,
-  isFlightLive,
-} from '../utils/format';
-import { createPlaneIcon, pathStyleForFlight } from '../utils/planeIcon';
-import { alertColorFor, zoneColorFor } from '../utils/zoneColors';
-import { COLOR_HEX } from '../utils/colors';
+import type { Alert, AppConfig, FlightSummary, TelemetryPoint, ZonesData } from '../api/types';
+import { alertVisual, primaryAlert } from '../utils/alertData';
 import { buildAlertPathSegments } from '../utils/alertPathSegments';
+import { PALETTE } from '../utils/colors';
+import {
+  LIST_SEP,
+  displayCallsign,
+  formatAltitudeCompact,
+  formatDateTime,
+  formatSpeedCompact,
+  formatZoneRule,
+} from '../utils/format';
+import {
+  createPlaneIcon,
+  pathStyleForFlight,
+  planeStyle,
+  planeStyleKey,
+  setPlaneHeading,
+} from '../utils/planeIcon';
+import { zoneColorFor } from '../utils/zoneColors';
 import { MapToolbar } from './MapToolbar';
 import '@luomus/leaflet-smooth-wheel-zoom';
-
-const OPENFREEMAP_DARK = 'https://tiles.openfreemap.org/styles/dark';
 
 export interface MapViewHandle {
   map: L.Map | null;
   panToAlert: (lat: number, lon: number) => void;
+  /** Center on a point (clear of the details drawer), zooming in to at least `minZoom`. */
+  focusOn: (lat: number, lon: number, minZoom: number) => void;
 }
 
 interface MapViewProps {
@@ -37,56 +43,83 @@ interface MapViewProps {
   pathCoords: Record<string, [number, number][]>;
   pathTelemetry: Record<string, TelemetryPoint[]>;
   pathAlerts: Record<string, Alert[]>;
+  drawerOpen: boolean;
   onSelectFlight: (flightId: string) => void;
   onFollowDisabled: () => void;
   onToggleFollow: () => void;
   onToggleZones: () => void;
   onTogglePaths: () => void;
-  followLabel: string;
-  zonesLabel: string;
-  pathsLabel: string;
-  followVisible: boolean;
-  followActive: boolean;
-  zonesActive: boolean;
-  pathsActive: boolean;
-  mapRef: React.MutableRefObject<MapViewHandle>;
+  onToggleSidebar?: () => void;
+  sidebarOpen?: boolean;
+  sidebarId?: string;
+  mapRef: React.RefObject<MapViewHandle>;
   drawer?: React.ReactNode;
+  /** Status line placed under the toolbar so it never covers the controls. */
+  banner?: React.ReactNode;
 }
 
-type MarkerState = {
+/** Below this width the drawer is a bottom sheet (keep in sync with components.css). */
+export const BOTTOM_SHEET_QUERY = '(max-width: 767px)';
+
+type MarkerEntry = {
+  marker: L.Marker;
   lat: number;
   lon: number;
   heading: number | null | undefined;
-  selected: boolean;
-  live: boolean;
-  activeAlertCount: number;
-  alertSeverity: string | null;
+  styleKey: string;
+  label: string;
 };
 
-function markerNeedsUpdate(existing: MarkerState | undefined, flight: FlightSummary, isSelected: boolean): boolean {
-  if (!existing) return true;
-  const isLive = isFlightLive(flight);
-  const alertCount = flight.active_alerts?.length ?? 0;
-  const alertSeverity = flightAlertSeverity(flight.active_alerts);
-  return (
-    existing.lat !== flight.latitude ||
-    existing.lon !== flight.longitude ||
-    existing.heading !== flight.heading ||
-    existing.selected !== isSelected ||
-    existing.live !== isLive ||
-    existing.activeAlertCount !== alertCount ||
-    existing.alertSeverity !== alertSeverity
-  );
+type OverlayInputs = {
+  telemetry?: TelemetryPoint[];
+  alerts?: Alert[];
+  selected: boolean;
+  zones: ZonesData | null;
+};
+
+type PathEntry = {
+  line: L.Polyline;
+  coords: [number, number][];
+  styleKey: string;
+  overlays: L.Polyline[];
+  overlayInputs: OverlayInputs | null;
+};
+
+/** Tooltip content as DOM text nodes: names come from config and must never be parsed as HTML. */
+function tooltipContent(lines: string[]): HTMLElement {
+  const el = document.createElement('div');
+  lines.forEach((line, i) => {
+    if (i > 0) el.appendChild(document.createElement('br'));
+    el.appendChild(document.createTextNode(line));
+  });
+  return el;
 }
 
-/** Pan only when the plane is off-center (avoids snap on every lat/lon tick). */
-function panMapToFollowPlane(map: L.Map, lat: number, lon: number, animate: boolean) {
-  const target = L.latLng(lat, lon);
-  const offset = map
-    .latLngToContainerPoint(target)
-    .subtract(map.latLngToContainerPoint(map.getCenter()));
-  if (offset.distanceTo(L.point(0, 0)) < 1.5) return;
-  map.panBy(offset, { animate, duration: animate ? 0.35 : 0 });
+function markerLabel(flight: FlightSummary): string {
+  const primary = primaryAlert(flight.active_alerts);
+  const status = primary
+    ? `alert: ${formatZoneRule(primary.zone, primary.rule)}`
+    : flight.is_live
+      ? 'live'
+      : 'archived';
+  return `${displayCallsign(flight)}${LIST_SEP}${status}`;
+}
+
+function applyMarkerLabel(marker: L.Marker, label: string) {
+  const el = marker.getElement();
+  if (!el) return;
+  el.setAttribute('title', label);
+  el.setAttribute('aria-label', label);
+}
+
+function sameInputs(a: OverlayInputs | null, b: OverlayInputs): boolean {
+  return (
+    !!a &&
+    a.telemetry === b.telemetry &&
+    a.alerts === b.alerts &&
+    a.selected === b.selected &&
+    a.zones === b.zones
+  );
 }
 
 export function MapView({
@@ -102,45 +135,76 @@ export function MapView({
   pathTelemetry,
   pathAlerts,
   flights,
+  drawerOpen,
   onSelectFlight,
   onFollowDisabled,
   onToggleFollow,
   onToggleZones,
   onTogglePaths,
-  followLabel,
-  zonesLabel,
-  pathsLabel,
-  followVisible,
-  followActive,
-  zonesActive,
-  pathsActive,
+  onToggleSidebar,
+  sidebarOpen,
+  sidebarId,
   mapRef,
   drawer,
+  banner,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
-  const planeMarkers = useRef<Record<string, L.Marker>>({});
-  const markerState = useRef<Record<string, MarkerState>>({});
-  const planePaths = useRef<Record<string, L.Polyline>>({});
-  const planeAlertPaths = useRef<Record<string, L.Polyline[]>>({});
+  const markers = useRef(new Map<string, MarkerEntry>());
+  const paths = useRef(new Map<string, PathEntry>());
   const zoneLayers = useRef<L.Layer[]>([]);
   const selectedTelemetryMarker = useRef<L.CircleMarker | null>(null);
-  const onFollowDisabledRef = useRef(onFollowDisabled);
-  const onSelectFlightRef = useRef(onSelectFlight);
-  const followSelectedPlaneRef = useRef(followSelectedPlane);
-  const activeFlightIdRef = useRef(activeFlightId);
-  const flightsRef = useRef(flights);
-  const filteredFlightsRef = useRef(filteredFlights);
-
-  onFollowDisabledRef.current = onFollowDisabled;
-  onSelectFlightRef.current = onSelectFlight;
-  followSelectedPlaneRef.current = followSelectedPlane;
-  activeFlightIdRef.current = activeFlightId;
-  flightsRef.current = flights;
-  filteredFlightsRef.current = filteredFlights;
+  const latest = useRef({
+    onFollowDisabled,
+    onSelectFlight,
+    followSelectedPlane,
+    activeFlightId,
+    flights,
+    drawerOpen,
+  });
 
   useEffect(() => {
-    if (!containerRef.current || mapInstance.current) return;
+    latest.current = {
+      onFollowDisabled,
+      onSelectFlight,
+      followSelectedPlane,
+      activeFlightId,
+      flights,
+      drawerOpen,
+    };
+  });
+
+  /** Pixels of the map hidden behind the open drawer (right side, or bottom sheet). */
+  const drawerInset = (): { right: number; bottom: number } => {
+    const drawerEl = rootRef.current?.querySelector<HTMLElement>('.details-drawer');
+    if (!latest.current.drawerOpen || !drawerEl) return { right: 0, bottom: 0 };
+    if (window.matchMedia?.(BOTTOM_SHEET_QUERY).matches) {
+      return { right: 0, bottom: drawerEl.offsetHeight };
+    }
+    return { right: drawerEl.offsetWidth, bottom: 0 };
+  };
+
+  /** The map center that puts `latlng` in the middle of the unobstructed area. */
+  const centerClearOfDrawer = (map: L.Map, latlng: L.LatLng, zoom: number): L.LatLng => {
+    const inset = drawerInset();
+    if (!inset.right && !inset.bottom) return latlng;
+    return map.unproject(map.project(latlng, zoom).add([inset.right / 2, inset.bottom / 2]), zoom);
+  };
+
+  /** Pan only when the plane drifted off its spot (avoids a snap on every tick). */
+  const followPlane = (map: L.Map, lat: number, lon: number, animate: boolean) => {
+    const target = centerClearOfDrawer(map, L.latLng(lat, lon), map.getZoom());
+    const offset = map
+      .latLngToContainerPoint(target)
+      .subtract(map.latLngToContainerPoint(map.getCenter()));
+    if (offset.distanceTo(L.point(0, 0)) < 1.5) return;
+    map.panBy(offset, { animate, duration: animate ? 0.35 : 0 });
+  };
+
+  // Map lifecycle (once).
+  useEffect(() => {
+    if (!containerRef.current || mapInstance.current) return undefined;
     const map = L.map(containerRef.current, {
       zoomControl: false,
       zoomSnap: 0,
@@ -150,92 +214,102 @@ export function MapView({
       smoothWheelZoom: true,
       smoothSensitivity: 1,
     }).setView([35.727, -78.696], 8);
-
-    maplibreGL({
-      style: OPENFREEMAP_DARK,
-    }).addTo(map);
-    map.on('dragstart', () => onFollowDisabledRef.current());
-    const recenterOnFollowedPlane = () => {
-      if (!followSelectedPlaneRef.current) return;
-      const flightId = activeFlightIdRef.current;
-      if (!flightId) return;
-      const flight =
-        filteredFlightsRef.current.find((f) => f.flight_id === flightId) ??
-        flightsRef.current.find((f) => f.flight_id === flightId);
-      if (flight?.latitude == null || flight?.longitude == null) return;
-      panMapToFollowPlane(map, flight.latitude, flight.longitude, false);
-    };
-    map.on('zoomend', recenterOnFollowedPlane);
     mapInstance.current = map;
+
+    let disposed = false;
+    import('./mapLibreLayer')
+      .then(({ addBasemap }) => {
+        if (!disposed) addBasemap(map);
+      })
+      .catch((err) => console.error('Failed to load the basemap', err));
+
+    map.on('dragstart', () => latest.current.onFollowDisabled());
+    map.on('zoomend', () => {
+      const { followSelectedPlane: follow, activeFlightId: id, flights: all } = latest.current;
+      if (!follow || !id) return;
+      const flight = all.find((f) => f.flight_id === id);
+      if (flight?.latitude == null || flight?.longitude == null) return;
+      followPlane(map, flight.latitude, flight.longitude, false);
+    });
+
     mapRef.current = {
       map,
-      panToAlert: (lat: number, lon: number) => {
-        map.setView([lat, lon], Math.max(map.getZoom(), 14));
+      panToAlert: (lat, lon) => {
+        const zoom = Math.max(map.getZoom(), 14);
+        map.setView(centerClearOfDrawer(map, L.latLng(lat, lon), zoom), zoom);
+      },
+      focusOn: (lat, lon, minZoom) => {
+        const zoom = Math.max(map.getZoom(), minZoom);
+        map.setView(centerClearOfDrawer(map, L.latLng(lat, lon), zoom), zoom);
       },
     };
     const resizeObserver = new ResizeObserver(() => map.invalidateSize());
     resizeObserver.observe(containerRef.current);
+    const markerMap = markers.current;
+    const pathMap = paths.current;
     return () => {
+      disposed = true;
       resizeObserver.disconnect();
       map.remove();
       mapInstance.current = null;
-      planeMarkers.current = {};
-      markerState.current = {};
-      planePaths.current = {};
-      planeAlertPaths.current = {};
+      markerMap.clear();
+      pathMap.clear();
       zoneLayers.current = [];
       selectedTelemetryMarker.current = null;
-      mapRef.current = { map: null, panToAlert: () => {} };
+      mapRef.current = { map: null, panToAlert: () => {}, focusOn: () => {} };
     };
+    // centerClearOfDrawer/followPlane only read refs and the DOM.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapRef]);
 
   const isFirstViewReset = useRef(true);
   useEffect(() => {
     const map = mapInstance.current;
-    if (!map || !appConfig) return;
-    if (isFirstViewReset.current && appConfig.home?.latitude != null && appConfig.home?.longitude != null) {
-      if (!activeFlightId) {
+    if (!map || !appConfig || !isFirstViewReset.current) return;
+    if (appConfig.home?.latitude != null && appConfig.home?.longitude != null) {
+      if (!latest.current.activeFlightId) {
         map.setView([appConfig.home.latitude, appConfig.home.longitude], 8);
       }
       isFirstViewReset.current = false;
     }
-  }, [appConfig, activeFlightId]);
+  }, [appConfig]);
 
+  // Selected telemetry fix.
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
-    if (selectedTelemetryMarker.current) {
-      map.removeLayer(selectedTelemetryMarker.current);
-      selectedTelemetryMarker.current = null;
-    }
-    if (
-      selectedTelemetryPoint &&
-      selectedTelemetryPoint.latitude != null &&
-      selectedTelemetryPoint.longitude != null
-    ) {
-      const pos: L.LatLngExpression = [
-        selectedTelemetryPoint.latitude,
-        selectedTelemetryPoint.longitude,
-      ];
-      const marker = L.circleMarker(pos, {
-        radius: 7,
-        color: '#ffffff',
-        weight: 2,
-        fillColor: COLOR_HEX.accent,
-        fillOpacity: 1.0,
-      }).addTo(map);
-      marker.bindTooltip(
-        `Time: ${formatDateTime(selectedTelemetryPoint.timestamp)}<br/>Alt: ${formatAltitudeCell(selectedTelemetryPoint.altitude)}<br/>Speed: ${formatSpeedCell(selectedTelemetryPoint.speed)}`,
-      );
-      selectedTelemetryMarker.current = marker;
-      map.panTo(pos);
-    }
+    selectedTelemetryMarker.current?.remove();
+    selectedTelemetryMarker.current = null;
+    const point = selectedTelemetryPoint;
+    if (point?.latitude == null || point.longitude == null) return;
+    const pos = L.latLng(point.latitude, point.longitude);
+    const marker = L.circleMarker(pos, {
+      radius: 7,
+      color: PALETTE.white,
+      weight: 2,
+      fillColor: PALETTE.accent,
+      fillOpacity: 1.0,
+    }).addTo(map);
+    marker.bindTooltip(
+      tooltipContent([
+        formatDateTime(point.timestamp, { withSeconds: true }),
+        `Altitude: ${formatAltitudeCompact(point.altitude)}`,
+        `Speed: ${formatSpeedCompact(point.speed)}`,
+      ]),
+    );
+    selectedTelemetryMarker.current = marker;
+    const inset = drawerInset();
+    map.panInside(pos, {
+      paddingTopLeft: [24, 24],
+      paddingBottomRight: [inset.right + 24, inset.bottom + 24],
+    });
   }, [selectedTelemetryPoint]);
 
+  // Zones and home.
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
-    zoneLayers.current.forEach((layer) => map.removeLayer(layer));
+    zoneLayers.current.forEach((layer) => layer.remove());
     zoneLayers.current = [];
     if (!zonesVisible || !zonesData) return;
 
@@ -243,12 +317,12 @@ export function MapView({
     if (home?.latitude != null && home?.longitude != null) {
       const homeMarker = L.circleMarker([home.latitude, home.longitude], {
         radius: 6,
-        color: '#38bdf8',
-        fillColor: '#38bdf8',
+        color: PALETTE.home,
+        fillColor: PALETTE.home,
         fillOpacity: 0.95,
         weight: 2,
       }).addTo(map);
-      homeMarker.bindTooltip('Home · Receiver / reference location');
+      homeMarker.bindTooltip(tooltipContent(['Home (receiver location)']));
       zoneLayers.current.push(homeMarker);
     }
 
@@ -261,165 +335,187 @@ export function MapView({
         weight: 2,
         opacity: 0.9,
       }).addTo(map);
-      polygon.bindTooltip(zone.name.toUpperCase(), {
-        sticky: false,
+      polygon.bindTooltip(tooltipContent([zone.name.toUpperCase()]), {
         permanent: true,
         direction: 'center',
+        className: 'zone-label',
       });
       zoneLayers.current.push(polygon);
     });
   }, [zonesVisible, zonesData]);
 
+  // Plane markers: diffed per flight; heading-only changes rotate in place.
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
-    const filteredIds = new Set(filteredFlights.map((f) => f.flight_id));
-    Object.keys(planeMarkers.current).forEach((flightId) => {
-      if (!filteredIds.has(flightId) && flightId !== activeFlightId) {
-        map.removeLayer(planeMarkers.current[flightId]);
-        delete planeMarkers.current[flightId];
-        delete markerState.current[flightId];
-      }
-    });
+    const zones = zonesData?.zones;
+    const alertColors = zonesData?.alert_colors;
+    const visible = new Map(filteredFlights.map((f) => [f.flight_id, f]));
+    if (activeFlightId && !visible.has(activeFlightId)) {
+      const selected = flights.find((f) => f.flight_id === activeFlightId);
+      if (selected) visible.set(activeFlightId, selected);
+    }
 
-    const selected =
-      activeFlightId && !filteredIds.has(activeFlightId)
-        ? flights.find((flight) => flight.flight_id === activeFlightId)
-        : undefined;
-    const visibleFlights = selected ? [...filteredFlights, selected] : filteredFlights;
-
-    visibleFlights.forEach((flight) => {
-      if (flight.latitude == null || flight.longitude == null) return;
-      const isSelected = flight.flight_id === activeFlightId;
-      const isLive = isFlightLive(flight);
-      const existingState = markerState.current[flight.flight_id];
-      if (!markerNeedsUpdate(existingState, flight, isSelected)) {
-        return;
-      }
-
-      const pos: L.LatLngExpression = [flight.latitude, flight.longitude];
-      const existing = planeMarkers.current[flight.flight_id];
-      if (existing) {
-        existing.setLatLng(pos);
-        existing.setIcon(createPlaneIcon(flight.heading, isSelected, isLive, flight.active_alerts));
-      } else {
-        const marker = L.marker(pos, {
-          icon: createPlaneIcon(flight.heading, isSelected, isLive, flight.active_alerts),
-        }).addTo(map);
-        marker.on('click', () => onSelectFlightRef.current(flight.flight_id));
-        planeMarkers.current[flight.flight_id] = marker;
-      }
-      markerState.current[flight.flight_id] = {
-        lat: flight.latitude,
-        lon: flight.longitude,
-        heading: flight.heading,
-        selected: isSelected,
-        live: isLive,
-        activeAlertCount: flight.active_alerts?.length ?? 0,
-        alertSeverity: flightAlertSeverity(flight.active_alerts),
-      };
-
-    });
-
-    if (followSelectedPlane && activeFlightId) {
-      const followed =
-        filteredFlights.find((f) => f.flight_id === activeFlightId) ??
-        flights.find((f) => f.flight_id === activeFlightId);
-      if (followed?.latitude != null && followed?.longitude != null) {
-        panMapToFollowPlane(map, followed.latitude, followed.longitude, true);
+    for (const [id, entry] of markers.current) {
+      const flight = visible.get(id);
+      if (!flight || flight.latitude == null || flight.longitude == null) {
+        entry.marker.remove();
+        markers.current.delete(id);
       }
     }
-  }, [filteredFlights, flights, activeFlightId, followSelectedPlane]);
 
+    for (const [id, flight] of visible) {
+      if (flight.latitude == null || flight.longitude == null) continue;
+      const selected = id === activeFlightId;
+      const style = planeStyle(flight, selected, zones, alertColors);
+      const styleKey = planeStyleKey(style);
+      const label = markerLabel(flight);
+      const entry = markers.current.get(id);
+      if (!entry) {
+        const marker = L.marker([flight.latitude, flight.longitude], {
+          icon: createPlaneIcon(style, flight.heading),
+          title: label,
+          zIndexOffset: selected ? 1000 : 0,
+        }).addTo(map);
+        marker.on('click', () => latest.current.onSelectFlight(id));
+        applyMarkerLabel(marker, label);
+        markers.current.set(id, {
+          marker,
+          lat: flight.latitude,
+          lon: flight.longitude,
+          heading: flight.heading,
+          styleKey,
+          label,
+        });
+        continue;
+      }
+      if (entry.lat !== flight.latitude || entry.lon !== flight.longitude) {
+        entry.marker.setLatLng([flight.latitude, flight.longitude]);
+        entry.lat = flight.latitude;
+        entry.lon = flight.longitude;
+      }
+      if (entry.styleKey !== styleKey) {
+        entry.marker.setIcon(createPlaneIcon(style, flight.heading));
+        entry.marker.setZIndexOffset(selected ? 1000 : 0);
+        applyMarkerLabel(entry.marker, label);
+        entry.styleKey = styleKey;
+        entry.heading = flight.heading;
+        entry.label = label;
+      } else if (entry.heading !== flight.heading) {
+        setPlaneHeading(entry.marker, flight.heading);
+        entry.heading = flight.heading;
+      }
+      if (entry.label !== label) {
+        applyMarkerLabel(entry.marker, label);
+        entry.label = label;
+      }
+    }
+
+    if (followSelectedPlane && activeFlightId) {
+      const followed = visible.get(activeFlightId);
+      if (followed?.latitude != null && followed?.longitude != null) {
+        followPlane(map, followed.latitude, followed.longitude, true);
+      }
+    }
+    // followPlane only reads refs and the DOM.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredFlights, flights, activeFlightId, followSelectedPlane, zonesData]);
+
+  // Paths and alert overlays: only flights whose inputs changed are touched.
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
+    const zones = zonesData?.zones;
+    const alertColors = zonesData?.alert_colors;
+    const flightById = new Map(flights.map((f) => [f.flight_id, f]));
+    const visibleIds = new Set<string>(showAllPaths ? filteredFlights.map((f) => f.flight_id) : []);
+    if (activeFlightId) visibleIds.add(activeFlightId);
 
-    const visiblePathIds = showAllPaths
-      ? new Set(filteredFlights.map((f) => f.flight_id))
-      : activeFlightId
-        ? new Set([activeFlightId])
-        : new Set<string>();
+    for (const [id, entry] of paths.current) {
+      if (visibleIds.has(id) && pathCoords[id]?.length) continue;
+      entry.line.remove();
+      entry.overlays.forEach((o) => o.remove());
+      paths.current.delete(id);
+    }
 
-    Object.keys(planePaths.current).forEach((flightId) => {
-      if (!visiblePathIds.has(flightId)) {
-        map.removeLayer(planePaths.current[flightId]);
-        delete planePaths.current[flightId];
-        if (planeAlertPaths.current[flightId]) {
-          planeAlertPaths.current[flightId].forEach((segment) => map.removeLayer(segment));
-          delete planeAlertPaths.current[flightId];
+    for (const id of visibleIds) {
+      const coords = pathCoords[id];
+      if (!coords?.length) continue;
+      const flight = flightById.get(id);
+      const selected = id === activeFlightId;
+      const style = {
+        ...pathStyleForFlight(flight, selected, zones, alertColors),
+        className: 'flight-path',
+      };
+      const styleKey = `${style.color}|${style.weight}|${style.opacity}`;
+      let entry = paths.current.get(id);
+      if (!entry) {
+        const line = L.polyline(coords, style).addTo(map);
+        line.on('click', () => latest.current.onSelectFlight(id));
+        entry = { line, coords, styleKey, overlays: [], overlayInputs: null };
+        paths.current.set(id, entry);
+      } else {
+        if (entry.coords !== coords) {
+          entry.line.setLatLngs(coords);
+          entry.coords = coords;
+        }
+        if (entry.styleKey !== styleKey) {
+          entry.line.setStyle(style);
+          entry.styleKey = styleKey;
         }
       }
-    });
 
-    visiblePathIds.forEach((flightId) => {
-      const latlngs = pathCoords[flightId];
-      if (!latlngs?.length) return;
-      const flight = flights.find((f) => f.flight_id === flightId);
-      const isSelected = flightId === activeFlightId;
-      const style = { ...pathStyleForFlight(flight, isSelected), className: 'flight-path' };
-      if (planePaths.current[flightId]) {
-        planePaths.current[flightId].setLatLngs(latlngs);
-        planePaths.current[flightId].setStyle(style);
-      } else {
-        const path = L.polyline(latlngs, style).addTo(map);
-        path.on('click', () => onSelectFlightRef.current(flightId));
-        planePaths.current[flightId] = path;
-      }
-
-      if (planeAlertPaths.current[flightId]) {
-        planeAlertPaths.current[flightId].forEach((segment) => map.removeLayer(segment));
-      }
-
-      const telemetry = pathTelemetry[flightId] || [];
-      const alerts = pathAlerts[flightId] || [];
+      const inputs: OverlayInputs = {
+        telemetry: pathTelemetry[id],
+        alerts: pathAlerts[id],
+        selected,
+        zones: zonesData,
+      };
+      if (sameInputs(entry.overlayInputs, inputs)) continue;
+      entry.overlays.forEach((o) => o.remove());
+      const telemetry = inputs.telemetry ?? [];
       const flightEnd =
         flight?.end_time ??
         flight?.timestamp ??
         telemetry[telemetry.length - 1]?.timestamp ??
         Date.now() / 1000;
-      const segments = buildAlertPathSegments(telemetry, alerts, flightEnd);
-      const overlayPaths = segments.map((segment) => {
-        const overlay = L.polyline(segment.latlngs, {
-          color: alertColorFor(
-            segment.zone || '',
-            segment.rule,
-            zonesData?.zones,
-            zonesData?.alert_colors,
-          ).stroke,
-          weight: isSelected ? 5 : 4,
-          opacity: 0.95,
-          className: 'flight-path-alert',
-        }).addTo(map);
-        overlay.bindTooltip(formatZoneRule(segment.zone, segment.rule));
-        overlay.on('click', () => onSelectFlightRef.current(flightId));
-        return overlay;
-      });
-      if (overlayPaths.length) {
-        planeAlertPaths.current[flightId] = overlayPaths;
-      } else {
-        delete planeAlertPaths.current[flightId];
-      }
-    });
+      entry.overlays = buildAlertPathSegments(telemetry, inputs.alerts ?? [], flightEnd).map(
+        (segment) => {
+          const overlay = L.polyline(segment.latlngs, {
+            color: alertVisual(segment, zones, alertColors).color,
+            weight: selected ? 5 : 4,
+            opacity: 0.95,
+            className: 'flight-path-alert',
+          }).addTo(map);
+          overlay.bindTooltip(tooltipContent([formatZoneRule(segment.zone, segment.rule)]));
+          overlay.on('click', () => latest.current.onSelectFlight(id));
+          return overlay;
+        },
+      );
+      entry.overlayInputs = inputs;
+    }
   }, [pathCoords, pathTelemetry, pathAlerts, showAllPaths, filteredFlights, activeFlightId, flights, zonesData]);
 
   return (
-    <div id="map-container">
-      <MapToolbar
-        followVisible={followVisible}
-        followActive={followActive}
-        zonesActive={zonesActive}
-        pathsActive={pathsActive}
-        followLabel={followLabel}
-        zonesLabel={zonesLabel}
-        pathsLabel={pathsLabel}
+    <div className="map-container" ref={rootRef}>
+      <div className="map-overlay">
+        <MapToolbar
+        followVisible={!!activeFlightId}
+        followActive={followSelectedPlane}
+        zonesActive={zonesVisible}
+        pathsActive={showAllPaths}
         onToggleFollow={onToggleFollow}
         onToggleZones={onToggleZones}
         onTogglePaths={onTogglePaths}
         onZoomIn={() => mapInstance.current?.zoomIn()}
         onZoomOut={() => mapInstance.current?.zoomOut()}
-      />
-      <div id="map" ref={containerRef} />
+        onToggleSidebar={onToggleSidebar}
+        sidebarOpen={sidebarOpen}
+        sidebarId={sidebarId}
+        />
+        {banner}
+      </div>
+      <div className="map" ref={containerRef} />
       {drawer}
     </div>
   );

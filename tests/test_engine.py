@@ -163,7 +163,7 @@ def test_message_queue_drops_oldest(tmp_path):
         engine.shutdown()
 
 
-def test_pending_finalize_is_capped(tmp_path, monkeypatch):
+def test_pending_finalize_is_capped(tmp_path, monkeypatch, caplog):
     engine = _engine(tmp_path)
     try:
         monkeypatch.setattr(
@@ -177,16 +177,42 @@ def test_pending_finalize_is_capped(tmp_path, monkeypatch):
         monkeypatch.setattr(engine.calculator, "deactivate_plane", lambda plane: None)
         monkeypatch.setattr("pyaerial.engine._PENDING_FINALIZE_MAX", 2)
 
-        engine._finalize_plane(_plane("aaa", 1.0))
-        engine._finalize_plane(_plane("bbb", 1.0))
-        engine._finalize_plane(_plane("ccc", 1.0))
+        with caplog.at_level("ERROR", logger="pyaerial.engine"):
+            for icao in ("aaa", "bbb", "ccc", "ddd"):
+                engine._finalize_plane(_plane(icao, 1.0))
 
-        assert len(engine._pending_finalize) == 3
-        assert "aaa-1" in engine._pending_finalize
-        assert "bbb-1" in engine._pending_finalize
-        assert "ccc-1" in engine._pending_finalize
+        # Regression: the "cap" only logged and kept growing.
+        assert list(engine._pending_finalize) == ["ccc-1", "ddd-1"]
+        assert engine._pending_evicted == 2
+        assert caplog.text.count("Pending finalize cap") == 1
+        # Evicted flights keep their live copy for the orphan sweep.
         assert popped == []
+        # Re-enqueueing a pending flight updates it in place (no eviction).
+        engine._enqueue_pending_finalize("ddd-1", _plane("ddd", 1.0))
+        assert list(engine._pending_finalize) == ["ccc-1", "ddd-1"]
     finally:
+        engine.shutdown()
+
+
+def test_retries_wait_while_history_is_down(tmp_path, monkeypatch):
+    engine = _engine(tmp_path)
+    try:
+        monkeypatch.setattr(engine.history_store, "disabled", False)
+        monkeypatch.setattr(engine.history_store, "ping", lambda: False)
+        monkeypatch.setattr(engine.live_store, "flight_ids", lambda: {"zzz-1"})
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("must not retry archive while history is down")
+
+        monkeypatch.setattr(engine.live_store, "plane_for_finalize", _boom)
+        monkeypatch.setattr(engine.history_store, "finalize_plane", _boom)
+        engine._pending_finalize["aaa-1"] = _plane("aaa", 1.0)
+        engine._retry_pending_finalizes()
+        engine._retry_orphan_live_flights()
+        assert list(engine._pending_finalize) == ["aaa-1"]
+        engine._pending_finalize.clear()
+    finally:
+        monkeypatch.undo()
         engine.shutdown()
 
 

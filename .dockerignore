@@ -1,25 +1,40 @@
+# VCS / CI / tooling
 .git
 .github
-.venv
-venv
-__pycache__
-*.pyc
-*.egg-info
-web/node_modules
-src/pyaerial/static
-data
-tests
-*.sqlite
-*.sqlite3
-*.db
-*.db-wal
-*.db-shm
-aircraft.db
-live_telemetry.db
-pyaerial.db
-historical-view.yml
+.claude
+.cursor
 .idea
 .vscode
 .DS_Store
+
+# Secrets
+.env
+.env.*
+
+# Python
+.venv
+venv
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+build
+dist
+.pytest_cache
+.ruff_cache
+tests
+
+# Frontend (rebuilt inside the image)
+node_modules
+web/node_modules
+src/pyaerial/static
+
+# Runtime data
+data
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.sqlite
+**/*.sqlite3
+historical-view.yml
 *.log
 hs_err_pid*.log

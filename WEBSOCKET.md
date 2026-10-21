@@ -13,7 +13,26 @@ PyAerial exposes real-time aircraft tracking, spatial alert notifications, histo
 
 **Origin validation**
 
-Browser-based connections validate the HTTP `Origin` header against entries declared in `web.origins`. Setting `web.origins: ["*"]` accepts any browser origin, while native TCP and backend clients omitting the `Origin` header connect unconditionally. Unauthorized origins are rejected with closure code `1008` (`origin not allowed`).
+Browser connections to `/ws/live` and `/ws/beast` must present an allowed `Origin`:
+
+- **Same origin** (the portal's own page): the `Origin` host and port equal the request `Host` header. Always allowed.
+- **`web.origins`**: exact `scheme://host[:port]` matches (`https://portal.example` does not match `http://portal.example` or `https://portal.example:8443`). Default `[]`; `["*"]` accepts any origin.
+- **`web.allow_localhost_origins: true`**: any `http(s)://localhost`, `127.0.0.1` or `[::1]` origin on any port (Vite dev servers). Off by default.
+
+Native clients that omit `Origin` connect unconditionally. Unauthorized origins are rejected with close code `1008` (`origin not allowed`). Same-origin (Origin matching the `Host` header) is accepted automatically when the portal is reached by IP address or `localhost`. If you serve it under a hostname (`pi.local`, a reverse-proxy domain), list that name in `web.allowed_hosts`; unlisted hostnames are refused so DNS-rebinding pages cannot pose as same-origin.
+
+**Connection and request limits**
+
+| Limit | Default | Config key | Behaviour when exceeded |
+|-------|---------|------------|-------------------------|
+| WebSocket connections (`/ws/live` + `/ws/beast`) | 256 | `web.ws_max_connections` | Close `1013` (`server connection limit reached`) |
+| Connections per client IP | 32 | `web.ws_max_connections_per_ip` | Close `1013` (`per-client connection limit reached`) |
+| In-flight RPC requests per connection | 2 | `web.ws_max_inflight` | Server stops reading the socket until one finishes (back-pressure, no error) |
+| Request rate per connection | 50/s, burst 100 | `web.ws_rate_limit`, `web.ws_rate_burst` | Requests are delayed to the rate; one that would wait over 1 s gets `code: "rate_limited"` |
+| Inbound frame size | 64 KiB | fixed | Close `1009` (message too big) |
+| Beast TCP feeders | 16 | `web.beast_max_clients` | Extra connections are closed immediately |
+
+`skip` is capped at 10000 and history `fetchTelemetry` at 20000 points. A client that stops reading its socket until its outbox fills with unread RPC responses is disconnected with close code `1013`. RPC handlers run on a dedicated pool of `web.ws_request_workers` threads (default 4). The active values are listed under `limits` in `GET /api`.
 
 **Live stream interface (`/ws/live`)**
 
@@ -49,7 +68,7 @@ Server handshake message:
 }
 ```
 
-Aircraft flight list broadcast (`type: "flights"`), pushed whenever positions, velocities, or alert states update:
+Aircraft flight list broadcast (`type: "flights"`), pushed whenever positions, velocities, or alert states update. Live and history summaries share the metadata fields `callsign`, `model`, `owner`, `country`, `aircraft_type` and `registration`; unknown values are `null` (placeholders such as `"Unknown Model"`, `"UNKNOWN"` or `""` are never sent). Every `active_alerts[].alert_id` is non-empty (`<flight_id>:<zone>:<rule>` when the store has no id):
 
 ```json
 {
@@ -63,6 +82,7 @@ Aircraft flight list broadcast (`type: "flights"`), pushed whenever positions, v
       "owner": "American Airlines",
       "country": "United States",
       "aircraft_type": "L2J",
+      "registration": "N123AA",
       "latitude": 35.7288,
       "longitude": -78.6954,
       "altitude": 1250.0,
@@ -91,7 +111,7 @@ Aircraft flight list broadcast (`type: "flights"`), pushed whenever positions, v
 }
 ```
 
-Active alerts broadcast (`type: "alerts"`), delivering the 50 most recent alert episodes:
+Active alerts broadcast (`type: "alerts"`) for currently tracked flights: every active episode plus the newest inactive ones, `max(50, active count)` episodes in total when that many exist, newest first. Use `fetchAlerts` for the full list:
 
 ```json
 {
@@ -116,7 +136,7 @@ Active alerts broadcast (`type: "alerts"`), delivering the 50 most recent alert 
 }
 ```
 
-Incremental telemetry points (`type: "telemetry"`), delivering only points recorded since the client's last update:
+Incremental telemetry points (`type: "telemetry"`), delivering only points newer than the last one this client received for the same flight (a late write for one flight is not hidden by another flight's newer point):
 
 ```json
 {
@@ -125,6 +145,7 @@ Incremental telemetry points (`type: "telemetry"`), delivering only points recor
   "telemetry": [
     {
       "flight_id": "a1b2c3-1721832000",
+      "icao": "a1b2c3",
       "latitude": 35.7288,
       "longitude": -78.6954,
       "altitude": 1250.0,
@@ -148,10 +169,13 @@ System statistics broadcast (`type: "stats"`):
     "historical_alerts": 412,
     "redis": true,
     "history": true,
-    "engine_seen_at": 1721832015.0
+    "engine_seen_at": 1721832015.0,
+    "engine_live": true
   }
 }
 ```
+
+`engine_live` is computed on the server from the engine heartbeat (fresh within 10 s). Prefer it over comparing `engine_seen_at` with the browser clock.
 
 **RPC request and response protocol**
 
@@ -197,20 +221,32 @@ Failed server reply:
   "type": "response",
   "id": "req-42",
   "success": false,
-  "error": "not found"
+  "error": "not found",
+  "code": "not_found"
 }
 ```
+
+`id` is echoed when it is a string of at most 128 characters or an integer; otherwise it is `null`. `error` is human-readable; branch on `code`:
+
+| `code` | Meaning |
+|--------|---------|
+| `bad_request` | Malformed JSON, binary frame, unknown action, missing `flightId`, or a non-numeric / non-finite `since` / `until` |
+| `not_found` | `fetchFlight` found no such flight |
+| `rate_limited` | Per-connection rate limit exceeded by more than the server will delay; retry later |
+| `history_unavailable` | The SQLite archive is configured but cannot be read |
+| `live_unavailable` | The Redis live store is unreachable |
+| `internal_error` | Unexpected server error (logged with a traceback) |
 
 **RPC action reference**
 
 | Action | Parameters | Return payload | Errors and edge cases |
 |--------|------------|----------------|-----------------------|
 | `subscribe` | `streams`: Array of stream names (`["flights", "alerts"]`) | `{"streams": [...]}` containing accepted stream names | Invalid streams return `success: false, error: "Unknown streams"`. Beast is not a live stream. |
-| `fetchFlights` | `view`: `"live"` or `"history"`<br/>`skip`: Integer offset (0 to 100000)<br/>`limit`: Page size (1 to 200, default 50)<br/>`q`: Search substring for ICAO, callsign, or flight ID<br/>`since`: Minimum unix epoch seconds on flight end time<br/>`until`: Maximum unix epoch seconds on flight end time | Array of flight summary objects matching the filter | Clamped to max 200 items per call. Live view ignores `skip` and pagination. |
+| `fetchFlights` | `view`: `"live"` or `"history"`<br/>`skip`: Integer offset (0 to 10000)<br/>`limit`: Page size (1 to 200, default 50)<br/>`q`: Search substring for ICAO, callsign, or flight ID<br/>`since`: Minimum unix epoch seconds on flight end time<br/>`until`: Maximum unix epoch seconds on flight end time | Array of flight summary objects matching the filter | Clamped to max 200 items per call. Live view ignores `skip` and pagination. |
 | `fetchFlight` | `flightId`: Flight ID string (required)<br/>`view`: `"live"` or `"history"` (default `"live"`) | Flight detail document enriched with airframe metadata and photo links | Missing `flightId` returns error; non-existent flight returns `success: false, error: "not found"`. |
-| `fetchTelemetry` | `flightId`: Flight ID string (required)<br/>`view`: `"live"` or `"history"`<br/>`since`: Unix epoch seconds (default 0.0) | Array of chronological telemetry sample points | Live view pulls from Redis sorted set within TTL; history view reads SQLite. |
-| `fetchAlerts` | `view`: `"live"` or `"history"`<br/>`flightId`: Filter by flight ID<br/>`rule`: Filter by rule name<br/>`q`: Search query<br/>`active_only`: Boolean filter<br/>`since` / `until`: Epoch bounds | Array of alert episode records | History search indexes zone names, rules, callsigns, and ICAO codes. |
-| `fetchStats` | None | Object containing flight and alert counts, storage health, and engine heartbeat | Returns `engine_seen_at: null` if the tracking engine process is not actively running. |
+| `fetchTelemetry` | `flightId`: Flight ID string (required)<br/>`view`: `"live"` or `"history"`<br/>`since`: Unix epoch seconds (default 0.0)<br/>`limit`: Max points (history, 1 to 20000) | Array of chronological telemetry sample points | Live view pulls from Redis sorted set within TTL; history view reads SQLite and returns at most 20000 points. |
+| `fetchAlerts` | `view`: `"live"` or `"history"`<br/>`flightId`: Filter by flight ID<br/>`rule`: Filter by rule name<br/>`q`: Search query<br/>`active_only`: Boolean filter<br/>`since` / `until`: Epoch bounds<br/>`skip` (0 to 10000) / `limit` (0 to 200) | Array of alert episode records | History search indexes zone names, rules, callsigns, and ICAO codes. |
+| `fetchStats` | None | Object containing flight and alert counts, storage health, and engine heartbeat | `engine_live` is `false` and live counts are 0 when the engine heartbeat is stale; `engine_seen_at` is `null` if no heartbeat was ever written. |
 | `fetchZones` | None | Object containing station `home` coordinates, polygon geometries, and `alert_colors` | Returns empty arrays if no geofence zones are configured in YAML. |
 | `fetchConfig` | None | Object containing station coordinates, `remember_planes`, configured `receivers`, and Beast bind details | Exposes non-sensitive runtime parameters needed for frontend coordinate rendering. |
 
@@ -224,9 +260,9 @@ PyAerial does not forward dump1090's Beast socket verbatim. Frames from every co
 
 `type` is `0x31` (Mode A/C, 2 bytes), `0x32` (Mode S short, 7 bytes), or `0x33` (Mode S long, 14 bytes). Any `0x1a` byte in the timestamp, signal, or payload is doubled. `rssi` is packed as dump1090-fa's `sqrt(signalLevel)*255` byte. The 48-bit Beast clock is always derived from engine receive time so two receivers share one time base (hardware 12 MHz counters are not mixed on the wire).
 
-`/ws/beast` is a binary WebSocket: no JSON `hello`, no RPC, no ping. Connect and read Beast frames. Browser origins still pass `web.origins`; native clients that omit `Origin` are accepted.
+`/ws/beast` is a binary WebSocket: no JSON `hello`, no RPC, no ping. Connect and read Beast frames. Browser origins follow the same origin policy as `/ws/live`; native clients that omit `Origin` are accepted. `/ws/beast` connections count toward the WebSocket connection caps.
 
-The same bytes are offered on TCP when `web.beast_port` is set (default `30005`, bind `web.beast_host`, default `0.0.0.0`). That listener is what OpenSky Network's feeder expects (`BEASTHOST` / `BEASTPORT`). Set `web.beast_port: null` or `PYAERIAL_BEAST_PORT=off` if port 30005 is already taken by dump1090 on the same host; `/ws/beast` still serves.
+The same bytes are offered on TCP when `web.beast_port` is set (default `30005`, bind `web.beast_host`, default `127.0.0.1`; set `0.0.0.0` or `PYAERIAL_BEAST_HOST=0.0.0.0` to accept feeders from other hosts or containers). At most `web.beast_max_clients` (default 16) feeders may be connected at once. That listener is what OpenSky Network's feeder expects (`BEASTHOST` / `BEASTPORT`). Set `web.beast_port: null` or `PYAERIAL_BEAST_PORT=off` if port 30005 is already taken by dump1090 on the same host; `/ws/beast` still serves.
 
 OpenSky docker feeder example, pointing at this process instead of dump1090:
 

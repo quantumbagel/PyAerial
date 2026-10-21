@@ -1,13 +1,17 @@
 import type { FlightSummary, TelemetryPoint } from '../api/types';
+import { readStoredJson, writeStored } from './storage';
+import { flightAlertLabel } from './alertData';
 import {
-  formatDate,
+  cleanField,
+  displayCallsign,
+  displayField,
+  displayIcao,
+  formatAltitudeCompact,
   formatDateTime,
   formatDuration,
-  formatFlightAlertSummary,
-  formatTime,
-  isFiniteNumber,
+  formatSpeedCompact,
+  formatTimeRange,
   isFlightLive,
-  isSameLocalDay,
 } from './format';
 
 export type FlightSortField =
@@ -55,7 +59,7 @@ function getFlightDuration(flight: FlightSummary): number {
 }
 
 function getFlightAircraftType(flight: FlightSummary): string {
-  return (flight.aircraft_type || '').toLowerCase();
+  return (cleanField(flight.aircraft_type) || '').toLowerCase();
 }
 
 function isFiniteSortNumber(value: unknown): value is number {
@@ -82,11 +86,11 @@ function isFlightSortValueMissing(flight: FlightSummary, field: FlightSortField)
     case 'first_seen':
       return (flight.start_time ?? 0) === 0;
     case 'callsign':
-      return !flight.callsign?.trim();
+      return !cleanField(flight.callsign);
     case 'icao':
-      return !flight.icao?.trim();
+      return !cleanField(flight.icao);
     case 'model':
-      return !flight.model?.trim();
+      return !cleanField(flight.model);
     case 'type':
       return !getFlightAircraftType(flight);
     case 'alerts':
@@ -95,6 +99,9 @@ function isFlightSortValueMissing(flight: FlightSummary, field: FlightSortField)
       return false;
   }
 }
+
+const textCompare = (a?: string | null, b?: string | null) =>
+  (a || '').localeCompare(b || '', undefined, { sensitivity: 'base' });
 
 function compareFlightsByField(
   a: FlightSummary,
@@ -114,13 +121,13 @@ function compareFlightsByField(
     case 'duration':
       return getFlightDuration(a) - getFlightDuration(b);
     case 'callsign':
-      return (a.callsign || '').localeCompare(b.callsign || '', undefined, { sensitivity: 'base' });
+      return textCompare(cleanField(a.callsign), cleanField(b.callsign));
     case 'icao':
-      return (a.icao || '').localeCompare(b.icao || '', undefined, { sensitivity: 'base' });
+      return textCompare(a.icao, b.icao);
     case 'model':
-      return (a.model || '').localeCompare(b.model || '', undefined, { sensitivity: 'base' });
+      return textCompare(cleanField(a.model), cleanField(b.model));
     case 'type':
-      return getFlightAircraftType(a).localeCompare(getFlightAircraftType(b), undefined, { sensitivity: 'base' });
+      return textCompare(getFlightAircraftType(a), getFlightAircraftType(b));
     case 'altitude':
       return (a.altitude as number) - (b.altitude as number);
     case 'speed':
@@ -157,20 +164,17 @@ export function loadFlightSort(view: 'live' | 'history'): {
   field: FlightSortField;
   direction: SortDirection;
 } {
-  try {
-    const raw = localStorage.getItem(`flightSort:${view}`);
-    if (!raw) return { field: 'last_seen', direction: 'desc' };
-    const parsed = JSON.parse(raw) as { field?: FlightSortField; direction?: SortDirection };
-    const field = FLIGHT_SORT_OPTIONS.some((o) => o.value === parsed.field)
-      ? parsed.field!
-      : 'last_seen';
-    const direction = parsed.direction === 'asc' || parsed.direction === 'desc'
+  const parsed = readStoredJson<{ field?: FlightSortField; direction?: SortDirection }>(
+    `flightSort:${view}`,
+  );
+  const field = FLIGHT_SORT_OPTIONS.some((o) => o.value === parsed?.field)
+    ? parsed!.field!
+    : 'last_seen';
+  const direction =
+    parsed?.direction === 'asc' || parsed?.direction === 'desc'
       ? parsed.direction
       : defaultSortDirection(field);
-    return { field, direction };
-  } catch {
-    return { field: 'last_seen', direction: 'desc' };
-  }
+  return { field, direction };
 }
 
 export function saveFlightSort(
@@ -178,7 +182,7 @@ export function saveFlightSort(
   field: FlightSortField,
   direction: SortDirection,
 ): void {
-  localStorage.setItem(`flightSort:${view}`, JSON.stringify({ field, direction }));
+  writeStored(`flightSort:${view}`, JSON.stringify({ field, direction }));
 }
 
 function flightKinematicTime(flight: FlightSummary): number {
@@ -186,58 +190,42 @@ function flightKinematicTime(flight: FlightSummary): number {
 }
 
 export function mergeLiveFlights(existing: FlightSummary[], incoming: FlightSummary[]): FlightSummary[] {
-  const next = [...existing];
-  incoming.forEach((newFlight) => {
-    const idx = next.findIndex((f) => f.flight_id === newFlight.flight_id);
-    if (idx !== -1) {
-      if (isFlightLive(next[idx])) {
-        const current = next[idx];
-        const useIncomingKinematics =
-          flightKinematicTime(newFlight) >= flightKinematicTime(current);
-        next[idx] = {
-          ...current,
-          callsign: newFlight.callsign || current.callsign,
-          model: newFlight.model || current.model,
-          aircraft_type: newFlight.aircraft_type || current.aircraft_type,
-          owner: newFlight.owner || current.owner,
-          country: newFlight.country || current.country,
-          active_alerts: newFlight.active_alerts,
-          alert_stats: newFlight.alert_stats,
-          ...(useIncomingKinematics
-            ? {
-                latitude: newFlight.latitude ?? current.latitude,
-                longitude: newFlight.longitude ?? current.longitude,
-                altitude: newFlight.altitude ?? current.altitude,
-                speed: newFlight.speed ?? current.speed,
-                heading: newFlight.heading ?? current.heading,
-                timestamp: newFlight.timestamp ?? current.timestamp,
-                end_time: newFlight.end_time ?? current.end_time,
-              }
-            : {}),
-        };
-      } else {
-        next[idx] = newFlight;
-      }
-    } else {
-      next.push(newFlight);
-    }
+  const byId = new Map(existing.map((flight) => [flight.flight_id, flight]));
+  // The live snapshot is authoritative for membership: flights it omits are gone.
+  return incoming.map((newFlight) => {
+    const current = byId.get(newFlight.flight_id);
+    if (!current || !isFlightLive(current)) return newFlight;
+    const useIncomingKinematics = flightKinematicTime(newFlight) >= flightKinematicTime(current);
+    return {
+      ...current,
+      callsign: newFlight.callsign || current.callsign,
+      model: newFlight.model || current.model,
+      aircraft_type: newFlight.aircraft_type || current.aircraft_type,
+      owner: newFlight.owner || current.owner,
+      country: newFlight.country || current.country,
+      active_alerts: newFlight.active_alerts,
+      alert_stats: newFlight.alert_stats,
+      is_live: newFlight.is_live ?? current.is_live,
+      ...(useIncomingKinematics
+        ? {
+            latitude: newFlight.latitude ?? current.latitude,
+            longitude: newFlight.longitude ?? current.longitude,
+            altitude: newFlight.altitude ?? current.altitude,
+            speed: newFlight.speed ?? current.speed,
+            heading: newFlight.heading ?? current.heading,
+            timestamp: newFlight.timestamp ?? current.timestamp,
+            end_time: newFlight.end_time ?? current.end_time,
+          }
+        : {}),
+    };
   });
-  const remoteIds = new Set(incoming.map((f) => f.flight_id));
-  return next.filter((f) => remoteIds.has(f.flight_id));
 }
 
-export function applyTelemetryPoint(
-  flights: FlightSummary[],
-  point: TelemetryPoint,
-): FlightSummary[] {
-  const flightId = point.flight_id;
-  if (!flightId) return flights;
-  const next = [...flights];
-  let flight = next.find((f) => f.flight_id === flightId);
+function withTelemetryPoint(flight: FlightSummary | undefined, point: TelemetryPoint): FlightSummary | null {
   if (!flight) {
-    if (point.latitude == null || point.longitude == null) return flights;
-    flight = {
-      flight_id: flightId,
+    if (point.latitude == null || point.longitude == null) return null;
+    return {
+      flight_id: point.flight_id!,
       icao: point.icao || '',
       callsign: null,
       model: null,
@@ -255,98 +243,93 @@ export function applyTelemetryPoint(
       speed: point.speed,
       is_live: true,
     };
-    next.push(flight);
-  } else {
-    const idx = next.indexOf(flight);
-    const pointTime = point.timestamp ?? 0;
-    const currentTime = flightKinematicTime(flight);
-    if (pointTime < currentTime) return flights;
-    next[idx] = {
-      ...flight,
-      latitude: point.latitude ?? flight.latitude,
-      longitude: point.longitude ?? flight.longitude,
-      altitude: point.altitude ?? flight.altitude,
-      speed: point.speed ?? flight.speed,
-      heading: point.heading ?? flight.heading,
-      timestamp: point.timestamp ?? flight.timestamp,
-      end_time: point.timestamp ?? flight.end_time,
-      active_alerts: point.active_alerts ?? flight.active_alerts,
-      is_live: true,
-    };
   }
-  return next;
+  const pointTime = point.timestamp ?? 0;
+  if (pointTime < flightKinematicTime(flight)) return null;
+  return {
+    ...flight,
+    latitude: point.latitude ?? flight.latitude,
+    longitude: point.longitude ?? flight.longitude,
+    altitude: point.altitude ?? flight.altitude,
+    speed: point.speed ?? flight.speed,
+    heading: point.heading ?? flight.heading,
+    timestamp: point.timestamp ?? flight.timestamp,
+    end_time: point.timestamp ?? flight.end_time,
+    active_alerts: point.active_alerts ?? flight.active_alerts,
+    is_live: true,
+  };
 }
 
-export function sortFlights(flights: FlightSummary[]): FlightSummary[] {
-  return [...flights].sort((a, b) => {
-    const aLive = isFlightLive(a);
-    const bLive = isFlightLive(b);
-    if (aLive && !bLive) return -1;
-    if (!aLive && bLive) return 1;
-    return (b.start_time || 0) - (a.start_time || 0);
-  });
+/** Apply a batch of live telemetry points; copies the list at most once. */
+export function applyTelemetryBatch(
+  flights: FlightSummary[],
+  points: TelemetryPoint[],
+): FlightSummary[] {
+  let next: FlightSummary[] | null = null;
+  let index: Map<string, number> | null = null;
+  for (const point of points) {
+    const flightId = point.flight_id;
+    if (!flightId) continue;
+    const list: FlightSummary[] = next ?? flights;
+    index = index ?? new Map(list.map((f, i) => [f.flight_id, i]));
+    const idx = index.get(flightId);
+    const updated = withTelemetryPoint(idx != null ? list[idx] : undefined, point);
+    if (!updated) continue;
+    next = next ?? flights.slice();
+    if (idx != null) {
+      next[idx] = updated;
+    } else {
+      index.set(flightId, next.length);
+      next.push(updated);
+    }
+  }
+  return next ?? flights;
 }
 
-export function flightSortValueLabel(
-  flight: FlightSummary,
-  sortField: FlightSortField,
-  alertCount?: number,
-): string {
+export function applyTelemetryPoint(
+  flights: FlightSummary[],
+  point: TelemetryPoint,
+): FlightSummary[] {
+  return applyTelemetryBatch(flights, [point]);
+}
+
+/** Trailing text in a flight row for the active sort field. */
+export function flightSortValueLabel(flight: FlightSummary, sortField: FlightSortField): string {
   switch (sortField) {
-    case 'alerts': {
-      if ((flight.alert_stats?.episode_count ?? 0) > 0 || (flight.active_alerts?.length ?? 0) > 0) {
-        return formatFlightAlertSummary(flight);
-      }
-      const count = alertCount ?? 0;
-      return count === 1 ? '1 active' : `${count} active`;
-    }
+    case 'alerts':
+      return flightAlertLabel(flight);
     case 'altitude':
-      return isFiniteNumber(flight.altitude)
-        ? `${Math.round(Number(flight.altitude)).toLocaleString('en-US')} m`
-        : 'N/A';
+      return formatAltitudeCompact(flight.altitude);
     case 'speed':
-      return isFiniteNumber(flight.speed)
-        ? `${Math.round(Number(flight.speed)).toLocaleString('en-US')} km/h`
-        : 'N/A';
+      return formatSpeedCompact(flight.speed);
     case 'callsign':
-      return flight.callsign?.trim() || 'N/A';
+      return displayCallsign(flight);
     case 'icao':
-      return flight.icao?.toUpperCase().trim() || 'N/A';
+      return displayIcao(flight.icao);
     case 'model':
-      return flight.model?.trim() || 'N/A';
+      return displayField(flight.model);
     case 'type':
-      return flight.aircraft_type?.trim() || 'N/A';
-    case 'duration': {
-      const start = flight.start_time ?? 0;
-      const end = flight.end_time ?? flight.timestamp ?? start;
-      const secs = Math.max(0, end - start);
-      return formatDuration(secs);
-    }
+      return displayField(flight.aircraft_type);
+    case 'duration':
+      return formatDuration(getFlightDuration(flight));
     default:
       return flightTimeLabel(flight, sortField);
   }
 }
 
+/** When the flight was seen: last fix for live flights, the full span otherwise. */
 export function flightTimeLabel(flight: FlightSummary, sortField?: FlightSortField): string {
-  const isLive = isFlightLive(flight);
-  const formatTs = (ts?: number) => (ts ? formatDateTime(ts) : '');
-
   if (sortField === 'first_seen') {
-    return formatTs(flight.start_time) || formatTs(flight.timestamp ?? flight.end_time);
+    return formatDateTime(flight.start_time ?? flight.timestamp ?? flight.end_time);
   }
-
-  if (isLive) {
-    const liveTime = flight.timestamp ?? flight.end_time ?? flight.start_time;
-    return formatTs(liveTime);
+  if (isFlightLive(flight)) {
+    return formatDateTime(flight.timestamp ?? flight.end_time ?? flight.start_time);
   }
-
-  const start = flight.start_time;
-  const end = flight.end_time;
-  if (start && end) {
-    if (isSameLocalDay(start, end)) {
-      return `${formatDate(start)} · ${formatTime(start)} – ${formatTime(end)}`;
-    }
-    return `${formatDateTime(start)} : ${formatDateTime(end)}`;
-  }
-  return formatTs(start ?? end);
+  return formatTimeRange(flight.start_time, flight.end_time);
 }
+
+export const FLIGHT_SORT_STORE = {
+  load: loadFlightSort,
+  save: saveFlightSort,
+  defaultDirection: defaultSortDirection,
+};

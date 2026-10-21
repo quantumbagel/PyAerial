@@ -5,7 +5,7 @@ export interface AlertStats {
 }
 
 export interface ActiveAlert {
-  alert_id?: string;
+  alert_id?: string | null;
   zone: string;
   rule: string;
   activated_at?: number;
@@ -56,9 +56,9 @@ export interface TelemetryPoint {
 
 export interface Alert {
   alert_id: string;
-  flight_id?: string;
-  icao?: string;
-  callsign?: string;
+  flight_id?: string | null;
+  icao?: string | null;
+  callsign?: string | null;
   zone?: string;
   rule?: string;
   active?: boolean;
@@ -100,9 +100,12 @@ export interface ServerStats {
   redis?: boolean;
   history?: boolean;
   engine_seen_at?: number | null;
+  /** Server-computed engine heartbeat freshness (newer servers). */
+  engine_live?: boolean;
 }
 
-export type WsStatus = 'connecting' | 'connected' | 'reconnecting' | 'rejected';
+/** `busy`: the server closed us at its connection cap (1013); we keep retrying. */
+export type WsStatus = 'connecting' | 'connected' | 'reconnecting' | 'busy' | 'rejected';
 
 export interface RawFrame {
   hex: string;

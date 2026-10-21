@@ -1,16 +1,15 @@
+import type { CSSProperties } from 'react';
 import type { Alert, Zone } from '../api/types';
-import { alertEpisodeKey } from '../utils/alertData';
 import {
-  formatActiveSince,
-  formatAlertAltitude,
-  formatAlertEta,
-  formatDateTime,
-  formatEpisodeDuration,
-  formatZoneRule,
+  alertEpisodeKey,
+  alertTooltip,
+  alertVisual,
+  formatEpisodeSpan,
   isAlertActive,
-  normalizeAlertRule,
-} from '../utils/format';
-import { ZoneBadge } from './LevelBadge';
+} from '../utils/alertData';
+import { formatAltitude, formatEta } from '../utils/format';
+import { ZoneBadge } from './AlertBadges';
+import { StateView } from './ui';
 
 interface AlertTimelineProps {
   alerts: Alert[];
@@ -22,53 +21,45 @@ interface AlertTimelineProps {
 
 export function AlertTimeline({ alerts, activeAlertId, zones, alertColors, onSelectAlert }: AlertTimelineProps) {
   if (alerts.length === 0) {
-    return <div className="ui-empty ui-empty--inline">No alert episodes for this flight.</div>;
+    return <StateView layout="inline">No alert episodes for this flight.</StateView>;
   }
 
   return (
-    <div id="alert-timeline-list" className="ui-display-list">
-      {alerts.map((alert, index) => {
-        const episodeKey = alertEpisodeKey(alert, index);
-        const normLevel = normalizeAlertRule(alert.rule);
+    <div className="ui-display-list alert-timeline">
+      {alerts.map((alert) => {
+        const episodeKey = alertEpisodeKey(alert);
         const isEpisodeActive = isAlertActive(alert);
-        const activatedStr = formatActiveSince(alert.activated_at);
-        const deactivatedStr = alert.deactivated_at
-          ? formatActiveSince(alert.deactivated_at)
-          : null;
-        const durationStr = formatEpisodeDuration(alert.activated_at, alert.deactivated_at);
-        const timeLabel = isEpisodeActive
-          ? `${activatedStr} (${durationStr})`
-          : deactivatedStr
-            ? `${activatedStr} – ${deactivatedStr} (${durationStr})`
-            : `${activatedStr} (${durationStr})`;
-        const latVal = alert.latitude != null ? alert.latitude.toFixed(5) : 'N/A';
-        const lonVal = alert.longitude != null ? alert.longitude.toFixed(5) : 'N/A';
-        const title = `${isEpisodeActive ? 'Active' : 'Ended'} episode · ${durationStr}\nActivated: ${formatDateTime(alert.activated_at) || 'N/A'}\nPosition: ${latVal}, ${lonVal}\nAltitude: ${formatAlertAltitude(alert.altitude)}${isEpisodeActive ? `\nETA: ${formatAlertEta(alert.eta)}` : ''}`;
-
+        const selected = episodeKey === activeAlertId;
+        const { color } = alertVisual(alert, zones, alertColors);
         return (
           <button
             type="button"
-            key={`${episodeKey}:${index}`}
+            key={episodeKey}
             data-alert-episode-key={episodeKey}
-            className={`ui-display ui-display--${normLevel}${!isEpisodeActive ? ' ui-display--muted' : ''}${episodeKey === activeAlertId ? ' is-active' : ''}`}
-            title={title}
+            className={`ui-display${!isEpisodeActive ? ' ui-display--muted' : ''}${selected ? ' is-active' : ''}`}
+            style={{ '--tone': color } as CSSProperties}
+            title={alertTooltip(alert)}
             onClick={() => onSelectAlert(alert, episodeKey)}
-            aria-pressed={episodeKey === activeAlertId}
+            aria-current={selected ? 'true' : undefined}
           >
             <div className="ui-row__line">
               <ZoneBadge
-                zone={alert.zone || 'zone'}
+                zone={alert.zone}
                 rule={alert.rule}
+                active={isEpisodeActive}
                 zones={zones}
                 alertColors={alertColors}
-                label={formatZoneRule(alert.zone || 'zone', alert.rule, { live: isEpisodeActive })}
               />
-              <span className="ui-row__trailing">{timeLabel}</span>
+              <span className="ui-row__trailing">{formatEpisodeSpan(alert)}</span>
             </div>
             <div className="ui-display__meta">
-              <span><strong>Alt:</strong> {formatAlertAltitude(alert.altitude)}</span>
+              <span>
+                <strong>Altitude:</strong> {formatAltitude(alert.altitude)}
+              </span>
               {isEpisodeActive && (
-                <span><strong>ETA:</strong> {formatAlertEta(alert.eta)}</span>
+                <span>
+                  <strong>ETA:</strong> {formatEta(alert.eta)}
+                </span>
               )}
             </div>
           </button>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import queue
 import signal
@@ -94,7 +95,9 @@ class Engine:
         self._running = False
         self._shutdown = threading.Event()
         self._shutdown_done = False
+        # Insertion-ordered: the first key is the oldest deferred flight.
         self._pending_finalize: dict[str, dict] = {}
+        self._pending_evicted = 0
         self._dropped_messages = 0
         self._last_drop_log = 0.0
         self._yielded_writer = False
@@ -301,7 +304,7 @@ class Engine:
 
         try:
             while self._running and not self._shutdown.is_set():
-                start = time.time()
+                start = time.monotonic()
                 if not self._isolated and not self.live_store.ensure_writer():
                     log.error(
                         "Another tracking engine holds live Redis; yielding writer"
@@ -350,7 +353,7 @@ class Engine:
                 else:
                     log.debug("%s", status_line)
 
-                elapsed = time.time() - start
+                elapsed = time.monotonic() - start
                 sleep_for = tick_budget - elapsed
                 if sleep_for > 0:
                     if self._shutdown.wait(sleep_for):
@@ -430,20 +433,35 @@ class Engine:
             self._enqueue_pending_finalize(flight_id, plane)
 
     def _enqueue_pending_finalize(self, flight_id: str, plane: dict) -> None:
+        """Keep a flight for archive retry, holding at most _PENDING_FINALIZE_MAX.
+
+        Over the cap the oldest in-memory plane is dropped. Its live copy is
+        not popped, so the orphan sweep still archives it (from the clipped
+        live snapshot) once history is writable again.
+        """
         if flight_id in self._pending_finalize:
             self._pending_finalize[flight_id] = plane
             return
-        if len(self._pending_finalize) >= _PENDING_FINALIZE_MAX:
-            log.error(
-                "Pending finalize cap (%d) reached (%d waiting); "
-                "keeping live copies until history is writable",
-                _PENDING_FINALIZE_MAX,
-                len(self._pending_finalize) + 1,
-            )
+        while len(self._pending_finalize) >= _PENDING_FINALIZE_MAX:
+            oldest = next(iter(self._pending_finalize))
+            del self._pending_finalize[oldest]
+            if self._pending_evicted == 0:
+                log.error(
+                    "Pending finalize cap (%d) reached; dropping the oldest "
+                    "in-memory copies (live copies are kept for later archive)",
+                    _PENDING_FINALIZE_MAX,
+                )
+            self._pending_evicted += 1
         self._pending_finalize[flight_id] = plane
+
+    def _history_writable(self) -> bool:
+        store = self.history_store
+        return store.disabled or store.ping()
 
     def _retry_pending_finalizes(self) -> None:
         if not self._pending_finalize:
+            return
+        if not self._history_writable():
             return
         still: dict[str, dict] = {}
         tracked = {flight_id_for_plane(plane) for plane in self.tracker.planes.values()}
@@ -462,6 +480,13 @@ class Engine:
             else:
                 still[flight_id] = plane
         self._pending_finalize = still
+        if not still and self._pending_evicted:
+            log.warning(
+                "History writable again; %d deferred flight(s) were dropped from "
+                "memory while it was down and will be archived from live copies",
+                self._pending_evicted,
+            )
+            self._pending_evicted = 0
 
     def _archive_startup_live_flights(self) -> None:
         """Persist leftover Redis live copies from a previous engine process."""
@@ -472,6 +497,8 @@ class Engine:
         tracked = {flight_id_for_plane(plane) for plane in self.tracker.planes.values()}
         tracked |= set(self._pending_finalize)
         leftover = self.live_store.flight_ids() - tracked
+        if leftover and not self._history_writable():
+            return
         for flight_id in leftover:
             plane = self.live_store.plane_for_finalize(flight_id)
             if plane is not None:
@@ -484,10 +511,9 @@ class Engine:
             self._shutdown.set()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
+            # Not the main thread (tests, embedding): keep default handling.
+            with contextlib.suppress(ValueError, OSError):
                 signal.signal(sig, _handler)
-            except (ValueError, OSError):
-                pass
 
 
 def run_engine(config: Config, *, aircraft_db_path: str = DEFAULT_AIRCRAFT_DB) -> None:

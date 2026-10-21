@@ -4,7 +4,7 @@ Requirement / field-constraint evaluation shared by live alerting and persistenc
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from shapely import Polygon
 

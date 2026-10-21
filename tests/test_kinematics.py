@@ -134,3 +134,47 @@ def test_stale_position_is_not_coasted():
     update = kin.update(plane)
     assert update is not None
     assert update.alert_position == update.fix
+
+
+def test_repeated_ticks_on_same_fix_do_not_advance_smoothing():
+    """Regression: the speed/heading EMA advanced on every engine tick, so a
+    single fix re-processed five times ratcheted speed 520 -> 733."""
+    import time
+
+    import pytest
+
+    config = make_config()
+    kin = Kinematics(config)
+    t0 = time.time() - 1.0
+    plane = {
+        STORE_INFO: {STORE_ICAO: "abc123"},
+        STORE_INTERNAL: {},
+        STORE_RECV_DATA: {
+            STORE_LAT: [Datum(35.0, t0 - 10), Datum(35.01, t0)],
+            STORE_LONG: [Datum(-78.0, t0 - 10), Datum(-78.0, t0)],
+            STORE_HORIZ_SPEED: [Datum(800.0, t0)],
+            STORE_HEADING: [Datum(0.0, t0)],
+        },
+        STORE_CALC_DATA: {
+            STORE_HORIZ_SPEED: [Datum(400.0, t0 - 10)],
+            STORE_HEADING: [Datum(90.0, t0 - 10)],
+        },
+    }
+    first = kin.update(plane)
+    assert first is not None
+    speeds = list(plane[STORE_CALC_DATA][STORE_HORIZ_SPEED])
+    headings = list(plane[STORE_CALC_DATA][STORE_HEADING])
+    assert speeds[-1].value == pytest.approx(520.0)
+    for _ in range(4):
+        again = kin.update(plane)
+        assert again is not None
+        assert again.fix == first.fix
+    assert plane[STORE_CALC_DATA][STORE_HORIZ_SPEED] == speeds
+    assert plane[STORE_CALC_DATA][STORE_HEADING] == headings
+
+    # A genuinely new fix is smoothed again.
+    plane[STORE_RECV_DATA][STORE_LAT].append(Datum(35.02, t0 + 1))
+    plane[STORE_RECV_DATA][STORE_LONG].append(Datum(-78.0, t0 + 1))
+    plane[STORE_RECV_DATA][STORE_HORIZ_SPEED].append(Datum(800.0, t0 + 1))
+    kin.update(plane)
+    assert plane[STORE_CALC_DATA][STORE_HORIZ_SPEED][-1].value == pytest.approx(604.0)

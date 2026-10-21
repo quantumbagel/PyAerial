@@ -35,6 +35,8 @@ def test_reset_accepts_icao():
     assert args.command == "reset"
     assert args.icao == "abc123"
     assert args.yes is True
+    assert args.force is False
+    assert parser.parse_args(["reset", "--yes", "--force"]).force is True
 
 
 def test_view_and_live_subcommands_are_gone():
