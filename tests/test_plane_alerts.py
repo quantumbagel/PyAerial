@@ -44,17 +44,20 @@ def test_while_active_starts_at_activation_time(monkeypatch):
     calc = PlaneCalculator(config, build_polygons(config.zones))
     try:
         t0 = time.time()
+        m0 = time.monotonic()
         monkeypatch.setattr(time, "time", lambda: t0)
+        monkeypatch.setattr(time, "monotonic", lambda: m0)
         plane = _plane(t=t0)
         calc.calculate_plane(plane)
         assert calc._alert_state == {}
         monkeypatch.setattr(time, "time", lambda: t0 + 1.5)
+        monkeypatch.setattr(time, "monotonic", lambda: m0 + 1.5)
         calc.calculate_plane(plane)
         keys = [k for k in calc._alert_state if k[0] == "abc123"]
         assert keys, "expected an active alert after dwell"
         state = calc._alert_state[keys[0]]
-        assert state["last_periodic"] == state["activated_at"]
-        assert state["last_periodic"] > 0
+        assert state["activated_at"] == t0 + 1.5
+        assert state["last_periodic"] == m0 + 1.5
     finally:
         calc.close()
 
@@ -107,6 +110,41 @@ def test_metadata_lookup_failure_is_retried():
         result = calc._pending_results.get(icao)
         assert result is not None
         assert result["resolved"] is False
+    finally:
+        calc.close()
+
+
+def test_deactivate_clears_lookup_state_and_discards_inflight_result():
+    class _FailingDb:
+        available = True
+
+        def lookup_cached(self, icao: str):
+            raise RuntimeError("hexdb down")
+
+        def is_cached(self, icao: str) -> bool:
+            return False
+
+    config = make_config()
+    calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=_FailingDb())
+    try:
+        plane = _plane()
+        icao = plane[STORE_INFO][STORE_ICAO]
+        calc._bg_lookup_metadata(icao)
+        assert icao in calc._pending_results
+        assert icao in calc._lookup_failures
+        assert calc._lookup_backoff_until[icao] > time.monotonic()
+        calc.deactivate_plane(plane)
+        assert icao not in calc._pending_results
+        assert icao not in calc._lookup_failures
+        assert icao not in calc._lookup_backoff_until
+
+        # A lookup still running when the plane expires must not leak a result.
+        calc._pending_lookups.add(icao)
+        calc.deactivate_plane(plane)
+        calc._bg_lookup_metadata(icao)
+        assert icao not in calc._pending_results
+        assert icao not in calc._pending_lookups
+        assert icao not in calc._cancelled_lookups
     finally:
         calc.close()
 

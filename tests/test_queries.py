@@ -211,7 +211,7 @@ def test_reader_pop_flight_deletes_redis():
     store._last_ping_ok = time.time() + 60
     deleted: list[str] = []
     store._ensure_connected = lambda: True  # type: ignore[method-assign]
-    store._delete_redis_flight = lambda fid: deleted.append(fid) or {}  # type: ignore[method-assign]
+    store._delete_redis_flight = lambda _client, fid: deleted.append(fid) or {}  # type: ignore[method-assign]
     store.pop_flight("abc123-1")
     assert deleted == ["abc123-1"]
 

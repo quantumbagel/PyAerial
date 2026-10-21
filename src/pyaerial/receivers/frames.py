@@ -16,6 +16,13 @@ _BEAST_BUF_MAX = 65_536
 _CORRECT_WINDOW = 0.1
 _CORRECT_HAMMING = 2
 _MISSING_RSSI = -1_000.0
+# Valid frame sizes in hex digits: Mode A/C (2 bytes), Mode S short (7), long (14).
+_AVR_HEX_LENGTHS = frozenset({4, 14, 28})
+# dump1090/mlat-client stamp synthetic MLAT results with this magic clock.
+BEAST_MLAT_CLOCK = 0xFF004D4C4154
+# A chunk never spans more than this; larger clock deltas mean the 12 MHz
+# clock is not monotonic (merged streams, MLAT marker, receiver restart).
+_MAX_CLOCK_SPREAD_SECONDS = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +90,7 @@ def _better_copy(candidate: RawFrame, current: RawFrame) -> bool:
 def _hamming_bits(left: bytes, right: bytes) -> int:
     if len(left) != len(right):
         return 1 << 30
-    return sum((a ^ b).bit_count() for a, b in zip(left, right))
+    return sum((a ^ b).bit_count() for a, b in zip(left, right, strict=True))
 
 
 def _frame_identity(hex_msg: str) -> tuple[object, str | None]:
@@ -124,40 +131,57 @@ def correct_receiver_frames(
     unique = [by_hex[hex_msg] for hex_msg in order]
     kept: list[RawFrame] = []
     payloads: list[bytes] = []
-    identities: list[tuple[object, str | None]] = []
+    # Candidate index: (payload length, DF, ICAO) -> time bin -> kept indices.
+    # Two frames within ``window`` seconds are at most one bin apart, so only
+    # three bins need checking instead of every kept frame (was O(n^2)).
+    buckets: dict[tuple[int, object, str | None], dict[int, list[int]]] = {}
     for frame in unique:
         try:
             payload = bytes.fromhex(frame.hex)
         except ValueError:
             kept.append(frame)
             payloads.append(b"")
-            identities.append(_frame_identity(frame.hex))
             continue
-        identity = _frame_identity(frame.hex)
+        if not payload:
+            kept.append(frame)
+            payloads.append(payload)
+            continue
+        bins = buckets.setdefault((len(payload), *_frame_identity(frame.hex)), {})
+        time_bin = _time_bin(frame.timestamp, window)
+        candidates = sorted({
+            index
+            for offset in (-1, 0, 1)
+            for index in bins.get(time_bin + offset, ())
+        })
         merged = False
-        for index, other in enumerate(kept):
-            other_payload = payloads[index]
-            if not other_payload or len(other_payload) != len(payload):
-                continue
+        for index in candidates:
+            other = kept[index]
             if abs(frame.timestamp - other.timestamp) > window:
                 continue
             if frame.receiver and other.receiver and frame.receiver == other.receiver:
                 continue
-            if identity != identities[index]:
-                continue
-            if _hamming_bits(payload, other_payload) > max_hamming:
+            if _hamming_bits(payload, payloads[index]) > max_hamming:
                 continue
             if _better_copy(frame, other):
                 kept[index] = frame
                 payloads[index] = payload
-                identities[index] = identity
+                # Keep the index findable from the replacement's time too.
+                new_bin = _time_bin(frame.timestamp, window)
+                if index not in bins.setdefault(new_bin, []):
+                    bins[new_bin].append(index)
             merged = True
             break
         if not merged:
+            bins.setdefault(time_bin, []).append(len(kept))
             kept.append(frame)
             payloads.append(payload)
-            identities.append(identity)
     return kept
+
+
+def _time_bin(timestamp: float, window: float) -> int:
+    if window <= 0 or not math.isfinite(timestamp):
+        return 0
+    return math.floor(timestamp / window)
 
 
 def beast_level_from_dbfs(rssi: float | None) -> int:
@@ -229,11 +253,15 @@ def encode_beast_messages(messages: list[dict[str, object]]) -> bytes:
     return bytes(out)
 
 
-def parse_avr_line(line: str) -> tuple[str, int | None] | None:
+def parse_avr_line(line: str, *, strict: bool = True) -> tuple[str, int | None] | None:
     """Parse one dump1090 AVR line (``*HEX;`` or ``@CLOCKHEX;``).
 
     Returns ``(hex, clock)`` where *clock* is the 48-bit timestamp in
     12 MHz ticks from the ``@`` form, or ``None`` for classic ``*`` AVR.
+
+    With *strict* (live feeds) the payload must be pure hex of a real frame
+    size (4, 14 or 28 digits); otherwise stray characters are dropped and any
+    even-length payload is accepted (hand-written replay fixtures).
     """
     text = line.strip()
     if not text:
@@ -251,9 +279,14 @@ def parse_avr_line(line: str) -> tuple[str, int | None] | None:
         hex_msg = body
     else:
         hex_msg = text.replace("*", "").replace(";", "")
-    hex_msg = "".join(ch for ch in hex_msg if ch in _HEX_DIGITS)
-    if not hex_msg or len(hex_msg) % 2:
-        return None
+    hex_msg = hex_msg.strip()
+    if strict:
+        if len(hex_msg) not in _AVR_HEX_LENGTHS or not set(hex_msg) <= _HEX_DIGITS:
+            return None
+    else:
+        hex_msg = "".join(ch for ch in hex_msg if ch in _HEX_DIGITS)
+        if not hex_msg or len(hex_msg) % 2:
+            return None
     return hex_msg.lower(), clock
 
 
@@ -262,24 +295,35 @@ def receive_times(wall: float, clocks: list[int | None]) -> list[float]:
 
     *wall* is when this process saw the TCP chunk (after the last frame).
     Each frame with a clock is ``wall - (last_clock - clock) / 12e6``.
-    Frames without a clock keep *wall*. Equal results are jittered by 1 µs
-    so history's ``(flight_id, timestamp)`` key stays unique.
+    Frames without a clock, with the MLAT marker clock, or whose clock is not
+    plausibly before the reference (non-monotonic: merged streams, receiver
+    restart) keep *wall* rather than landing months in the past via the 48-bit
+    wrap. Equal results are jittered by 1 µs so history's
+    ``(flight_id, timestamp)`` key stays unique.
     """
-    known = [clock for clock in clocks if clock is not None]
+    usable = [
+        None if clock is None or clock == BEAST_MLAT_CLOCK else clock
+        for clock in clocks
+    ]
+    known = [clock for clock in usable if clock is not None]
     if not known:
         times = [wall] * len(clocks)
     else:
         last = known[-1]
         times = []
-        for clock in clocks:
+        for clock in usable:
             if clock is None:
                 times.append(wall)
                 continue
-            delta_ticks = (last - clock) % BEAST_CLOCK_MOD
-            times.append(wall - delta_ticks / BEAST_CLOCK_HZ)
+            delta = ((last - clock) % BEAST_CLOCK_MOD) / BEAST_CLOCK_HZ
+            if delta > _MAX_CLOCK_SPREAD_SECONDS:
+                times.append(wall)
+                continue
+            times.append(wall - delta)
     used: set[float] = set()
     unique: list[float] = []
-    for stamp in times:
+    for raw_stamp in times:
+        stamp = raw_stamp
         while stamp in used:
             stamp += 1e-6
         used.add(stamp)

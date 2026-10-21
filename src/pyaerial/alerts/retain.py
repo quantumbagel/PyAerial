@@ -36,19 +36,13 @@ def should_retain(
         for rule in zone.rules:
             rules_by_key[(zone_name, rule.name)] = rule
 
+    # An alert episode only exists once the engine's activation hold (dwell or
+    # hysteresis, on the live/predicted/curved projection) has been met, so
+    # any episode of a retain=True rule is reason enough to keep the flight.
+    # Re-measuring dwell from activated_at here dropped flights that fired.
     for alert in alerts:
         rule = rules_by_key.get((alert.get("zone", ""), alert.get("rule", "")))
-        if rule is None or not rule.retain:
-            continue
-        activated = alert.get("activated_at")
-        if activated is None:
-            continue
-        deactivated = alert.get("deactivated_at")
-        if deactivated is None:
-            deactivated = plane.get(STORE_INTERNAL, {}).get(
-                STORE_MOST_RECENT_PACKET, activated
-            )
-        if (deactivated - activated) >= rule.dwell_seconds:
+        if rule is not None and rule.retain and alert.get("activated_at") is not None:
             return True
 
     recv = plane.get(STORE_RECV_DATA, {})

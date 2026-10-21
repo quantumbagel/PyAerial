@@ -129,6 +129,111 @@ def test_reset_icao_pops_live_when_engine_is_stopped(capsys):
     assert "Dropped plane" in out
 
 
+class _UnreachableLive:
+    """Redis down: no heartbeat can be read, which is not proof of 'stopped'."""
+
+    def ping(self):
+        return False
+
+    def engine_seen_at(self):
+        return None
+
+    def get_flights(self):
+        raise AssertionError("must not read live flights while unreachable")
+
+    def clear_all(self):
+        raise AssertionError("must not clear an unreachable live store")
+
+
+def test_reset_refuses_when_engine_state_unknown(capsys):
+    class _History:
+        def reset_all(self):
+            raise AssertionError("must not wipe history when the engine may be running")
+
+        def delete_icao(self, icao):
+            raise AssertionError("must not delete history when the engine may be running")
+
+    for icao in (None, "abc123"):
+        code = reset_history(_History(), live_store=_UnreachableLive(), icao=icao, yes=True)
+        err = capsys.readouterr().err
+        assert code == 1
+        assert "--force" in err
+
+
+def test_reset_force_proceeds_when_engine_state_unknown(capsys):
+    class _History:
+        calls: list[str] = []
+
+        def reset_all(self):
+            self.calls.append("all")
+            return True
+
+        def delete_icao(self, icao):
+            self.calls.append(icao)
+            return True
+
+    history = _History()
+    history.calls = []
+    assert reset_history(history, live_store=_UnreachableLive(), yes=True, force=True) == 0
+    assert "not cleared" in capsys.readouterr().out
+    assert (
+        reset_history(
+            history, live_store=_UnreachableLive(), icao="ABC123", yes=True, force=True
+        )
+        == 0
+    )
+    assert history.calls == ["all", "abc123"]
+
+
+def test_force_never_overrides_a_running_engine(capsys):
+    class _History:
+        def reset_all(self):
+            raise AssertionError("engine is confirmed running")
+
+    class _Live:
+        def ping(self):
+            return True
+
+        def engine_seen_at(self):
+            return time.time()
+
+    assert reset_history(_History(), live_store=_Live(), yes=True, force=True) == 1
+
+
+def test_reset_reports_locked_database_cleanly(capsys):
+    from pyaerial.store.history import HistoryUnavailable
+
+    class _History:
+        def reset_all(self):
+            raise HistoryUnavailable("history archive is unavailable (reset): database is locked")
+
+    code = reset_history(_History(), yes=True)
+    assert code == 1
+    assert "database is locked" in capsys.readouterr().err
+
+
+def test_store_engine_is_live_is_tristate():
+    from pyaerial.store.live import engine_is_live
+    from pyaerial.store.redis_live import RedisLiveStore
+
+    class _Fresh:
+        def engine_seen_at(self):
+            return time.time()
+
+    class _Stale:
+        def engine_seen_at(self):
+            return time.time() - 3600
+
+    assert engine_is_live(None) is False
+    assert engine_is_live(_Fresh()) is True
+    assert engine_is_live(_Stale()) is False
+    assert engine_is_live(_UnreachableLive()) is None
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    assert engine_is_live(store) is False
+    store.touch_engine()
+    assert engine_is_live(store) is True
+
+
 def test_reset_without_yes_refuses_non_tty(capsys, monkeypatch):
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     code = reset_history(None, yes=False)

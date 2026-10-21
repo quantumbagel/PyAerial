@@ -15,6 +15,7 @@ from pyaerial.constants import LOGGING_LEVELS
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+_OWNED = "_pyaerial_handler"
 
 
 def setup_logging(
@@ -38,12 +39,17 @@ def setup_logging(
     root = logging.getLogger()
     root.setLevel(numeric_level)
 
-    # Remove handlers we may have added before (idempotent setup).
+    # Remove existing handlers (idempotent setup). Close the ones we created
+    # so a repeated setup does not leak open log files; handlers owned by
+    # someone else (e.g. a test harness) are detached but left open.
     for handler in list(root.handlers):
         root.removeHandler(handler)
+        if getattr(handler, _OWNED, False):
+            handler.close()
 
     console = logging.StreamHandler()
     console.setFormatter(formatter)
+    setattr(console, _OWNED, True)
     root.addHandler(console)
 
     if log_file:
@@ -51,6 +57,7 @@ def setup_logging(
             log_file, maxBytes=max_bytes, backupCount=backups
         )
         file_handler.setFormatter(formatter)
+        setattr(file_handler, _OWNED, True)
         root.addHandler(file_handler)
 
     # Quiet down noisy third-party libraries unless we are debugging.
