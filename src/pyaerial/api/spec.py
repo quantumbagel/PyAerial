@@ -10,6 +10,18 @@ WS_PATH = "/ws/live"
 WS_BEAST_PATH = "/ws/beast"
 WS_ALIASES = ("/ws",)
 WS_STREAMS = ("flights", "alerts", "telemetry", "stats")
+#: Pushed alert snapshots carry at least this many episodes (all active ones
+#: if more are active), newest first.
+ALERTS_PUSH_MIN = 50
+#: ``code`` values on failed ``response`` messages.
+WS_ERROR_CODES = (
+    "bad_request",
+    "not_found",
+    "rate_limited",
+    "history_unavailable",
+    "live_unavailable",
+    "internal_error",
+)
 WS_ACTIONS = (
     "subscribe",
     "fetchFlights",
@@ -40,6 +52,7 @@ def websocket_api_spec(
     *,
     beast_host: str | None = None,
     beast_port: int | None = None,
+    limits: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     spec: dict[str, Any] = {
         "protocol": WS_PROTOCOL,
@@ -61,13 +74,16 @@ def websocket_api_spec(
             "flights": "Full live flight list whenever positions or alerts change.",
             "alerts": (
                 "Live alert episodes for currently tracked flights. Pushed snapshots "
-                "are the 50 newest tracked episodes; fetchAlerts is the full list."
+                f"hold every active episode plus the newest inactive ones, at least "
+                f"{ALERTS_PUSH_MIN} in total when available (max({ALERTS_PUSH_MIN}, "
+                "active count)); fetchAlerts is the full list."
             ),
             "telemetry": "New track points since the client last received telemetry.",
             "stats": (
                 "live_flights / active_alerts / retained_flights / historical_alerts, "
-                "plus redis / history booleans and engine_seen_at (unix seconds, or null "
-                "if the tracking engine is not writing a heartbeat)."
+                "plus redis / history booleans, engine_seen_at (unix seconds, or null "
+                "if the tracking engine is not writing a heartbeat) and engine_live "
+                "(server-side heartbeat freshness check)."
             ),
         },
         "beast": {
@@ -107,12 +123,19 @@ def websocket_api_spec(
                 },
                 "notes": (
                     "History q matches ICAO, callsign, or flight id. since/until are "
-                    "unix seconds on end_time. History limit is capped at 200."
+                    "unix seconds on end_time. History limit is capped at 200 and "
+                    "skip at 10000."
                 ),
             },
             "fetchFlight": {"params": {"flightId": "required", "view": "live | history"}},
             "fetchTelemetry": {
-                "params": {"flightId": "required", "view": "live | history", "since": 0}
+                "params": {
+                    "flightId": "required",
+                    "view": "live | history",
+                    "since": 0,
+                    "limit": None,
+                },
+                "notes": "History responses are capped at 20000 points.",
             },
             "fetchAlerts": {
                 "params": {
@@ -131,6 +154,16 @@ def websocket_api_spec(
             "fetchZones": {"params": {}},
             "fetchConfig": {"params": {}},
         },
+        "errors": {
+            "shape": {
+                "type": "response",
+                "id": "opaque-id",
+                "success": False,
+                "error": "human-readable message",
+                "code": " | ".join(WS_ERROR_CODES),
+            },
+            "codes": list(WS_ERROR_CODES),
+        },
         "server_messages": [
             "hello",
             "flights",
@@ -141,4 +174,6 @@ def websocket_api_spec(
             "response",
         ],
     }
+    if limits:
+        spec["limits"] = dict(limits)
     return spec
