@@ -5,15 +5,23 @@ __pycache__/
 build/
 dist/
 .eggs/
+.pytest_cache/
+.ruff_cache/
 
 # Virtual environments
 .venv/
 venv/
 env/
 
+# Secrets
+.env
+.env.*
+!.env.example
+
 # Editors / OS
 .idea/
 .vscode/
+.cursor/
 .DS_Store
 
 # JVM / dump1090 crash logs
@@ -22,14 +30,16 @@ hs_err_pid*.log
 
 # Runtime data
 data/
-*.sqlite
-*.sqlite3
+*.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
 aircraft.db
 pyaerial.db
 live_telemetry.db
 
 # Frontend
+/node_modules/
 web/node_modules/
 src/pyaerial/static/

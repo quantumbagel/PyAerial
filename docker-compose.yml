@@ -1,19 +1,39 @@
+# Copy .env.example to .env and set REDIS_PASSWORD before `docker compose up`.
+#
+# Published ports bind to 127.0.0.1 only. To expose the portal or the Beast feed on
+# your LAN deliberately, change e.g. "127.0.0.1:10090:10090" to "10090:10090" (or to
+# "<lan-ip>:10090:10090"), ideally behind a reverse proxy with TLS and auth.
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 services:
   dump1090:
+    <<: *hardening
     image: pyaerial:latest
     container_name: pyaerial_dump1090
     restart: always
     build:
       context: .
     profiles: ["sdr"]
-    privileged: true
+    # USB access without --privileged: allow USB character devices (major 189) and
+    # bind-mount the bus so a replugged dongle shows up. The image user is in plugdev
+    # (gid 46); if the host's RTL-SDR udev rule uses another group, set SDR_GID.
+    device_cgroup_rules:
+      - "c 189:* rmw"
     volumes:
       - /dev/bus/usb:/dev/bus/usb
+    group_add:
+      - "${SDR_GID:-46}"
     expose:
       - "30002"
       - "30005"
     command: ["/opt/dump1090/dump1090", "--net", "--raw", "--quiet"]
   pyaerial:
+    <<: *hardening
     image: pyaerial:latest
     container_name: pyaerial
     restart: always
@@ -32,12 +52,13 @@ services:
       PYAERIAL_START_DUMP1090: "0"
       PYAERIAL_HISTORY: /data/pyaerial.db
       PYAERIAL_AIRCRAFT_DB: /data/aircraft.db
-      PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:-pyaerial}@redis:6379/0
+      PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
       # Without --profile sdr there is no dump1090 container; default to a host feeder.
       # With --profile sdr, set DUMP1090_HOST=dump1090.
       DUMP1090_HOST: ${DUMP1090_HOST:-host.docker.internal}
     command: ["pyaerial", "run", "-c", "/opt/PyAerial/config.yaml"]
   web:
+    <<: *hardening
     image: pyaerial:latest
     container_name: pyaerial_web
     restart: always
@@ -48,14 +69,17 @@ services:
       - pyaerial_data:/data
       - ./config.yaml:/opt/PyAerial/config.yaml:ro
     ports:
-      - "10090:10090"
-      - "30005:30005"
+      - "127.0.0.1:10090:10090"
+      - "127.0.0.1:30005:30005"
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
       PYAERIAL_START_DUMP1090: "0"
       PYAERIAL_HISTORY: /data/pyaerial.db
       PYAERIAL_AIRCRAFT_DB: /data/aircraft.db
-      PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:-pyaerial}@redis:6379/0
+      PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
+      # Listen on all interfaces inside the container; the host-side binding above
+      # decides who can actually reach it.
+      PYAERIAL_BEAST_HOST: "0.0.0.0"
       PYAERIAL_BEAST_PORT: "30005"
     command:
       [
@@ -74,10 +98,14 @@ services:
       timeout: 3s
       retries: 5
   redis:
-    image: redis:7-alpine
+    <<: *hardening
+    image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     container_name: pyaerial_redis
     restart: always
-    command: redis-server --save "" --appendonly no --requirepass ${REDIS_PASSWORD:-pyaerial}
+    # Run as the image's redis user directly so the entrypoint needs no setuid/chown
+    # capabilities (persistence is off, so /data is never written).
+    user: "999:1000"
+    command: redis-server --save "" --appendonly no --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
 
 volumes:
   pyaerial_data:

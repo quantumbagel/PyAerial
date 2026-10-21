@@ -1,0 +1,54 @@
+version: 2
+
+# cooldown: let new releases age for two weeks before proposing them (security
+# updates are not delayed). Regenerate requirements.lock with scripts/lock.sh if a
+# pip PR leaves it inconsistent with pyproject.toml.
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      web:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    ignore:
+      # Node is held at 22.16 on purpose (see Dockerfile).
+      - dependency-name: node
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    ignore:
+      # Stay on the redis 7.x line until an 8.x upgrade is tested.
+      - dependency-name: redis
+        update-types: ["version-update:semver-major"]

@@ -66,20 +66,29 @@ graph TD
 **Docker deployment**
 
 ```bash
+cp .env.example .env    # then set REDIS_PASSWORD, e.g. `openssl rand -hex 32`
 docker compose up --build
 ```
 
-Compose launches a private bridge network and binds the web portal to port `10090` and a dump1090-compatible Beast TCP feed on port `30005` (for OpenSky Network and similar feeders). Redis requires authentication via `REDIS_PASSWORD` (default `pyaerial`) and remains unexposed to host interfaces, while the engine and web services share database state on the `pyaerial_data` volume (`/data/pyaerial.db`).
+Compose refuses to start without `REDIS_PASSWORD`; there is no default. Keep `.env` out of version control (it is git- and docker-ignored).
 
-The engine connects to dump1090 via `DUMP1090_HOST` (defaulting to the internal `dump1090` compose service container), which can be redirected to host hardware or external network feeders:
+The web portal (`10090`) and the dump1090-compatible Beast TCP feed (`30005`, for OpenSky Network and similar feeders) are published on `127.0.0.1` only. To reach them from other machines, change the mapping in `docker-compose.yml` deliberately (e.g. `"127.0.0.1:10090:10090"` to `"10090:10090"`), preferably behind a reverse proxy with TLS and authentication. Redis is never published. The engine and web services share database state on the `pyaerial_data` volume (`/data/pyaerial.db`).
+
+Containers run as an unprivileged user (uid 10001) with all capabilities dropped and `no-new-privileges`. Volumes created by older, root-run images need a one-time `docker compose run --rm --no-deps --user root --cap-add CHOWN pyaerial chown -R 10001:10001 /data`.
+
+The engine connects to dump1090 via `DUMP1090_HOST` (defaulting to a feeder on the Docker host), which can be pointed at the bundled SDR service or an external feeder:
 
 ```bash
-# Ingest from physical USB SDR via compose service
-docker compose --profile sdr up --build
+# Ingest from a USB RTL-SDR via the dump1090 compose service
+DUMP1090_HOST=dump1090 docker compose --profile sdr up --build
 
-# Ingest from existing dump1090 daemon listening on host port 30002
-DUMP1090_HOST=host.docker.internal docker compose up --build
+# Ingest from an existing dump1090 daemon listening on host port 30002
+docker compose up --build
 ```
+
+The SDR service gets USB access through a device cgroup rule rather than `privileged`. Its user is in `plugdev` (gid 46); if the host's RTL-SDR udev rule assigns the device to another group, set `SDR_GID` in `.env`.
+
+To rotate secrets, change `REDIS_PASSWORD` in `.env` and run `docker compose up -d --force-recreate`; rotate webhook URLs at the provider and update the environment variables your `config.yaml` references.
 
 The portal binds `127.0.0.1` by default in local CLI environments; pass `--host 0.0.0.0` when containerizing or exposing to network interfaces.
 
@@ -99,6 +108,8 @@ Requires Python 3.11+ and Node.js 20+. `dump1090` is required for live radio rec
 ```bash
 pip install -e ".[dev]"
 ```
+
+For reproducible installs, `requirements.lock` pins every runtime dependency with hashes (`pip install --require-hashes -r requirements.lock && pip install --no-deps .`). Regenerate it with `scripts/lock.sh` (requires [`uv`](https://github.com/astral-sh/uv)) after changing dependencies in `pyproject.toml`.
 
 **Reference documentation**
 
