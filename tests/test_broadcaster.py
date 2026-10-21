@@ -81,6 +81,9 @@ class _Store:
     def get_flights(self):
         return [{"flight_id": "f1", "icao": "abc123", "timestamp": time.time()}]
 
+    def count_flights(self):
+        return len(self.get_flights())
+
     def get_alerts(self, **_kwargs):
         return []
 

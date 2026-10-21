@@ -44,6 +44,10 @@ def _history_available(history: HistoryStore | None) -> bool:
 def engine_is_live(live_store: Any | None, now: float | None = None) -> bool:
     """True when the tracking engine heartbeat is fresh.
 
+    Cheap two-state check for per-request use. ``view.reset`` needs a third
+    "unknown" state for an unreachable Redis and uses
+    :func:`pyaerial.store.live.engine_is_live` instead.
+
     The single source of truth for "is the engine live" in the API layer:
     ``/ready``, the stats payload (``engine_live``), the broadcaster, and every
     live query use it. Leftover Redis flight keys after a crash must not look
@@ -359,7 +363,7 @@ def get_stats(
     if live_store is not None:
         try:
             if engine_live:
-                live_flights = len(live_store.get_flights())
+                live_flights = live_store.count_flights()
                 active_alerts = len(live_store.get_alerts(active_only=True))
         except LiveUnavailable:
             redis_ok = False

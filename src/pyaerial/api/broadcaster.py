@@ -23,6 +23,7 @@ from pyaerial.api.spec import ALERTS_PUSH_MIN, WS_STREAMS, websocket_hello
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.store.live import LiveStore
 from pyaerial.store.redis_live import LiveUnavailable
+import contextlib
 
 log = logging.getLogger("pyaerial.webapp")
 
@@ -216,10 +217,8 @@ class LiveBroadcaster:
     async def stop(self) -> None:
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         self._task = None
         for websocket in list(self._clients):
             self.disconnect(websocket)

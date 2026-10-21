@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 from urllib.parse import urlparse
 
 from pyaerial.enrich.aircraft_db import AircraftDB, normalize_photo_url

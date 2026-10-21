@@ -15,6 +15,7 @@ from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from pyaerial.receivers.frames import encode_beast_messages
+import contextlib
 
 log = logging.getLogger("pyaerial.webapp")
 
@@ -51,11 +52,10 @@ class BeastHub:
 
     async def start(self) -> None:
         store = self.live_store
-        start_pubsub = getattr(store, "start_raw_pubsub", None)
-        if callable(start_pubsub):
+        if store is not None:
             self._raw_queue = asyncio.Queue(maxsize=_RAW_QUEUE_MAX)
             loop = asyncio.get_running_loop()
-            start_pubsub(lambda payload: self._enqueue_raw(loop, payload))
+            store.start_raw_pubsub(lambda payload: self._enqueue_raw(loop, payload))
             self._raw_task = asyncio.create_task(self._raw_loop())
         if self.port is None:
             return
@@ -79,10 +79,8 @@ class BeastHub:
         log.info("Beast TCP listening on %s:%s (dump1090-compatible)", self.host, self.port)
 
     async def stop(self) -> None:
-        store = self.live_store
-        stop_pubsub = getattr(store, "stop_raw_pubsub", None)
-        if callable(stop_pubsub):
-            stop_pubsub()
+        if self.live_store is not None:
+            self.live_store.stop_raw_pubsub()
         server = self._server
         self._server = None
         if server is not None:
@@ -103,20 +101,16 @@ class BeastHub:
         if server is not None:
             try:
                 await asyncio.wait_for(server.wait_closed(), _STOP_GRACE_SECONDS)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 log.warning("Beast TCP server did not close within %.0fs", _STOP_GRACE_SECONDS)
         if self._raw_task is not None:
             self._raw_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._raw_task
-            except asyncio.CancelledError:
-                pass
             self._raw_task = None
         for queue in list(self._queues):
-            try:
+            with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
 
     def _enqueue_raw(
         self, loop: asyncio.AbstractEventLoop, payload: dict[str, Any]
@@ -127,19 +121,13 @@ class BeastHub:
 
         def _put() -> None:
             if queue.full():
-                try:
+                with contextlib.suppress(asyncio.QueueEmpty):
                     queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-            try:
+            with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(payload)
-            except asyncio.QueueFull:
-                pass
 
-        try:
+        with contextlib.suppress(RuntimeError):
             loop.call_soon_threadsafe(_put)
-        except RuntimeError:
-            pass
 
     async def _raw_loop(self) -> None:
         queue = self._raw_queue
@@ -160,14 +148,10 @@ class BeastHub:
     def _broadcast(self, data: bytes) -> None:
         for queue in list(self._queues):
             if queue.full():
-                try:
+                with contextlib.suppress(asyncio.QueueEmpty):
                     queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-            try:
+            with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(data)
-            except asyncio.QueueFull:
-                pass
 
     def _attach(self) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
@@ -194,10 +178,8 @@ class BeastHub:
         finally:
             self._detach(queue)
             writer.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await writer
-            except asyncio.CancelledError:
-                pass
 
     async def _ws_writer(self, websocket: WebSocket, queue: asyncio.Queue) -> None:
         try:
@@ -250,10 +232,8 @@ class BeastHub:
             self._tcp_clients.pop(writer, None)
             self._detach(queue)
             pump.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await pump
-            except asyncio.CancelledError:
-                pass
             writer.close()
             await _wait_closed(writer)
             log.debug("Beast TCP client disconnected: %s", peer)

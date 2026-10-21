@@ -230,12 +230,13 @@ def test_websocket_accepts_same_origin_with_explicit_allowlist():
 def test_websocket_rejects_untrusted_host_when_allowed_hosts_set():
     """web.allowed_hosts blocks DNS-rebinding (attacker origin == attacker Host)."""
     from fastapi.testclient import TestClient
+    from starlette.testclient import WebSocketDenialResponse
 
     config = make_config()
     config.web.allowed_hosts = ["portal.example"]
     app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
     with TestClient(app, base_url="http://rebind.attacker.example") as client:
-        with pytest.raises(Exception):
+        with pytest.raises(WebSocketDenialResponse):
             with client.websocket_connect(
                 "/ws/live",
                 headers={"Origin": "http://rebind.attacker.example"},

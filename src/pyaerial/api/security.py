@@ -6,7 +6,8 @@ import ipaddress
 import re
 import time
 from collections import Counter
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 from starlette.datastructures import Headers, MutableHeaders
@@ -67,8 +68,8 @@ def host_trusted(host: str, allowed_hosts: list[str] | None = None) -> bool:
         return True
     except ValueError:
         pass
-    for entry in allowed_hosts or ():
-        entry = entry.lower()
+    for raw in allowed_hosts or ():
+        entry = raw.lower()
         if entry == "*" or entry == host:
             return True
         if entry.startswith("*.") and host.endswith(entry[1:]):
