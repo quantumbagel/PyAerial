@@ -21,8 +21,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install
-        run: pip install -e ".[dev]"
+      # Test against the exact pins the Docker image ships, not floating floors.
+      - name: Install locked runtime deps
+        run: pip install --require-hashes -r requirements.lock
+      - name: Install pyaerial and dev tools
+        run: pip install --no-deps -e . && pip install pytest httpx ruff
       - name: Tests
         run: pytest
       - name: Ruff

@@ -305,6 +305,8 @@ def test_get_telemetry_limit_pages_forward(tmp_path):
     assert [p["timestamp"] for p in store.get_telemetry(fid, since=2.0, limit=0)] == [
         float(t) for t in range(3, 11)
     ]
+    newest = store.get_telemetry(fid, limit=3, newest=True)
+    assert [p["timestamp"] for p in newest] == [8.0, 9.0, 10.0]
     store.close()
 
 

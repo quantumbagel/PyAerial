@@ -247,6 +247,9 @@ class WebConfig(_Strict):
     # /ws/live + /ws/beast connection caps and per-connection request limits.
     ws_max_connections: int = Field(default=256, ge=1)
     ws_max_connections_per_ip: int = Field(default=32, ge=1)
+    # Reverse proxies whose X-Forwarded-For is trusted for the client IP
+    # (uvicorn forwarded_allow_ips). Empty trusts only 127.0.0.1.
+    trusted_proxies: list[str] = Field(default_factory=list)
     ws_max_inflight: int = Field(default=2, ge=1, le=16)
     ws_rate_limit: float = Field(default=50.0, gt=0)
     ws_rate_burst: int = Field(default=100, ge=1)

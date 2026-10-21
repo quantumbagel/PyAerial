@@ -58,6 +58,7 @@ alert_colors:
 #   beast_max_clients: 16
 #   ws_max_connections: 256    # /ws/live + /ws/beast, all clients
 #   ws_max_connections_per_ip: 32
+#   trusted_proxies: []        # reverse proxy IPs/CIDRs whose X-Forwarded-For is trusted
 #   ws_max_inflight: 2         # concurrent RPC requests per connection
 #   ws_rate_limit: 50          # RPC requests/second per connection...
 #   ws_rate_burst: 100         # ...with this burst allowance
@@ -116,13 +117,14 @@ zones:
 |-----|---------|--------------|----------|
 | `origins` | `[]` | `PYAERIAL_WEB_ORIGINS` (comma-separated) | Browser origins allowed on `/ws/live` and `/ws/beast` besides the portal's own (same-origin is allowed for IP-address and `localhost` hosts, and for hostnames listed in `allowed_hosts`). Entries must be exact `scheme://host[:port]`; bare hostnames are rejected at load time. `["*"]` allows any origin |
 | `allow_localhost_origins` | `false` | | Also allow any `http(s)://localhost`, `127.0.0.1` or `[::1]` origin, for dev servers on other ports |
-| `allowed_hosts` | `[]` | | Accepted `Host` header values (`["tracker.example", "*.lan"]`); other hosts get HTTP 400. Required for same-origin WebSockets when the portal is served under a hostname rather than an IP address or `localhost` |
+| `allowed_hosts` | `[]` | `PYAERIAL_WEB_ALLOWED_HOSTS` (comma-separated) | Accepted `Host` header values (`["tracker.example", "*.lan"]`); other hosts get HTTP 400, except `localhost` and `127.0.0.1`, which always stay reachable (healthchecks, local access). Add a LAN IP here too if you also browse by IP. Required for same-origin WebSockets when the portal is served under a hostname rather than an IP address or `localhost` |
 | `enable_docs` | `false` | | Serve FastAPI's `/docs`, `/redoc` and `/openapi.json` |
 | `beast_host` | `127.0.0.1` | `PYAERIAL_BEAST_HOST` | Beast TCP bind address. Use `0.0.0.0` for feeders on other hosts or in other containers |
 | `beast_port` | `30005` | `PYAERIAL_BEAST_PORT` (`off` disables) | Beast TCP port; `null` disables TCP (`/ws/beast` still serves) |
 | `beast_max_clients` | `16` | | Concurrent Beast TCP feeders; extra connections are closed |
 | `ws_max_connections` | `256` | | Concurrent `/ws/live` + `/ws/beast` connections |
-| `ws_max_connections_per_ip` | `32` | | Concurrent WebSocket connections per client IP (behind a reverse proxy every client shares the proxy's IP) |
+| `ws_max_connections_per_ip` | `32` | | Concurrent WebSocket connections per client IP. Behind a reverse proxy, list it in `trusted_proxies` or every client shares the proxy's IP |
+| `trusted_proxies` | `[]` | | Proxy addresses (IPs or CIDRs) whose `X-Forwarded-For` gives the real client IP; empty trusts only `127.0.0.1` |
 | `ws_max_inflight` | `2` | | RPC requests processed concurrently per connection (1 to 16) |
 | `ws_rate_limit` / `ws_rate_burst` | `50` / `100` | | Token-bucket RPC rate per connection. Requests over the rate are delayed (the server stops reading the socket); a request that would wait more than 1 s gets `code: "rate_limited"` |
 | `ws_request_workers` | `4` | | Threads in the dedicated RPC worker pool |

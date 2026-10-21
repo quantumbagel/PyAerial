@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
 import time
 from typing import Any
@@ -287,25 +286,14 @@ def get_telemetry(
     history = _require_history(history)
     if history is None:
         return []
-    # HistoryStore.get_telemetry has no LIMIT yet; pass one when it grows the
-    # kwarg, and always truncate so one request cannot return an entire archive.
+    # Cap one request so it cannot return an entire archive. Without a cursor
+    # keep the newest points so the path ends at the flight's last position;
+    # with one, page forward from it.
     cap = MAX_HISTORY_TELEMETRY_POINTS
     if limit:
         cap = max(1, min(int(limit), MAX_HISTORY_TELEMETRY_POINTS))
-    if _accepts_kwarg(history.get_telemetry, "limit"):
-        docs = history.get_telemetry(flight_id, since=since, limit=cap)
-    else:
-        docs = history.get_telemetry(flight_id, since=since)
-    return [
-        {**telemetry_point(doc), "flight_id": flight_id} for doc in docs[:cap]
-    ]
-
-
-def _accepts_kwarg(func: Any, name: str) -> bool:
-    try:
-        return name in inspect.signature(func).parameters
-    except (TypeError, ValueError):
-        return False
+    docs = history.get_telemetry(flight_id, since=since, limit=cap, newest=since <= 0)
+    return [{**telemetry_point(doc), "flight_id": flight_id} for doc in docs]
 
 
 def get_alerts(

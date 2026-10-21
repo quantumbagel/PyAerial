@@ -152,7 +152,10 @@ def create_app(
     app.add_middleware(CORSMiddleware, **_cors_kwargs(config))
     app.add_middleware(SecurityHeadersMiddleware)
     if web.allowed_hosts:
-        app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(web.allowed_hosts))
+        # Loopback stays reachable so the container healthcheck, local access
+        # and the Vite dev proxy keep working once a hostname list is set.
+        hosts = list(dict.fromkeys([*web.allowed_hosts, "localhost", "127.0.0.1"]))
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
 
     def ws_request_handler(action: str, params: dict[str, Any]) -> Any:
         result = handle_ws_request(

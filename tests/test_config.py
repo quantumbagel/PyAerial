@@ -244,6 +244,14 @@ def test_beast_host_env_override(tmp_path, monkeypatch):
     assert config.web.beast_port is None
 
 
+def test_allowed_hosts_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYAERIAL_WEB_ALLOWED_HOSTS", "pi.local, tracker.example")
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(_MINIMAL_YAML)
+    config = load_config(cfg_path)
+    assert config.web.allowed_hosts == ["pi.local", "tracker.example"]
+
+
 def test_bad_webhook_url_error_does_not_leak_secret_path(tmp_path):
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(

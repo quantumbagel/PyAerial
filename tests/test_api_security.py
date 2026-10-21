@@ -284,12 +284,10 @@ def test_bad_json_is_not_logged_as_error(caplog):
 
 
 class _FakeHistory:
-    def __init__(self, *, alive: bool = True, points: int = 0, with_limit: bool = False):
+    def __init__(self, *, alive: bool = True, points: int = 0):
         self.alive = alive
         self.points = points
         self.calls: list[dict] = []
-        if with_limit:
-            self.get_telemetry = self._get_telemetry_limited  # type: ignore[method-assign]
 
     def ping(self) -> bool:
         return self.alive
@@ -310,13 +308,12 @@ class _FakeHistory:
     def _points(self, n):
         return [{"timestamp": float(i), "altitude": 1.0} for i in range(n)]
 
-    def get_telemetry(self, flight_id, *, since=0.0):
-        self.calls.append({"since": since})
-        return self._points(self.points)
-
-    def _get_telemetry_limited(self, flight_id, *, since=0.0, limit=None):
-        self.calls.append({"since": since, "limit": limit})
-        return self._points(min(self.points, limit or self.points))
+    def get_telemetry(self, flight_id, *, since=0.0, limit=None, newest=False):
+        self.calls.append({"since": since, "limit": limit, "newest": newest})
+        points = [p for p in self._points(self.points) if p["timestamp"] > since]
+        if limit:
+            points = points[-limit:] if newest else points[:limit]
+        return points
 
 
 def test_ws_error_codes_distinguish_failures():
@@ -353,14 +350,25 @@ def test_fetch_flights_skip_is_capped():
 def test_history_telemetry_is_capped():
     from pyaerial.api.queries import MAX_HISTORY_TELEMETRY_POINTS, get_telemetry
 
-    history = _FakeHistory(points=MAX_HISTORY_TELEMETRY_POINTS + 500)
+    total = MAX_HISTORY_TELEMETRY_POINTS + 500
+    history = _FakeHistory(points=total)
     points = get_telemetry("f", "history", 0.0, live_store=None, history=history)
     assert len(points) == MAX_HISTORY_TELEMETRY_POINTS
+    # Without a cursor the cap keeps the newest points: the path ends where the flight did.
+    assert points[-1]["timestamp"] == float(total - 1)
+    assert history.calls[-1] == {
+        "since": 0.0,
+        "limit": MAX_HISTORY_TELEMETRY_POINTS,
+        "newest": True,
+    }
 
-    limited = _FakeHistory(points=50, with_limit=True)
+    limited = _FakeHistory(points=50)
     points = get_telemetry("f", "history", 0.0, live_store=None, history=limited, limit=10)
-    assert len(points) == 10
-    assert limited.calls[-1]["limit"] == 10
+    assert [p["timestamp"] for p in points] == [float(t) for t in range(40, 50)]
+
+    # With a cursor it pages forward from it.
+    points = get_telemetry("f", "history", 5.0, live_store=None, history=limited, limit=3)
+    assert [p["timestamp"] for p in points] == [6.0, 7.0, 8.0]
 
 
 def test_ws_request_ids_are_bounded():

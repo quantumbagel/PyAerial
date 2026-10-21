@@ -284,3 +284,15 @@ def test_ready_uses_live_store_ping():
         body = ready.json()
         assert body["engine"] is True
         assert body["status"] == "ok"
+
+
+def test_allowed_hosts_keeps_loopback_reachable():
+    """Setting web.allowed_hosts must not break the 127.0.0.1 container healthcheck."""
+    from fastapi.testclient import TestClient
+
+    config = make_config()
+    config.web.allowed_hosts = ["portal.example"]
+    app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
+    for base in ("http://127.0.0.1:10090", "http://localhost:5173", "http://portal.example"):
+        with TestClient(app, base_url=base) as client:
+            assert client.get("/health").status_code == 200, base

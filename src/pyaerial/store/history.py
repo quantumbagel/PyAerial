@@ -508,22 +508,32 @@ class HistoryStore:
             raise _unavailable("flight", exc) from exc
 
     def get_telemetry(
-        self, flight_id: str, *, since: float = 0.0, limit: int | None = None
+        self,
+        flight_id: str,
+        *,
+        since: float = 0.0,
+        limit: int | None = None,
+        newest: bool = False,
     ) -> list[dict[str, Any]]:
         """Telemetry for a flight in ascending time order.
 
         ``limit`` (> 0) returns at most that many points: the oldest ones after
         ``since``, so a caller can page forward with ``since=<last timestamp>``.
+        With ``newest=True`` it keeps the most recent ones instead, so a capped
+        read still ends at the flight's last position.
         """
         sql = "SELECT * FROM telemetry WHERE flight_id = ?"
         params: list[Any] = [flight_id]
         if since > 0:
             sql += " AND timestamp > ?"
             params.append(since)
-        sql += " ORDER BY timestamp ASC"
-        if limit is not None and limit > 0:
+        limited = limit is not None and limit > 0
+        sql += " ORDER BY timestamp DESC" if limited and newest else " ORDER BY timestamp ASC"
+        if limited:
             sql += " LIMIT ?"
             params.append(int(limit))
+        if limited and newest:
+            sql = f"SELECT * FROM ({sql}) ORDER BY timestamp ASC"
         try:
             with self._session("telemetry") as conn:
                 rows = conn.execute(sql, params).fetchall()

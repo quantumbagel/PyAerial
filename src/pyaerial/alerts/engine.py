@@ -10,7 +10,7 @@ import uuid
 from shapely import Polygon
 
 from pyaerial.alerters import Alerter, create_alerter
-from pyaerial.alerts.dispatch import AlertDispatcher
+from pyaerial.alerts.dispatch import SHUTDOWN_GRACE_SECONDS, AlertDispatcher
 from pyaerial.calc import evaluate, geo
 from pyaerial.calc.motion import ResolvedMotion
 from pyaerial.config.schema import AlertActionConfig, Config, RuleConfig
@@ -63,7 +63,7 @@ class AlertEngine:
         self._pending_match: dict[tuple[str, str, str], float] = {}
         self._pending_unmatch: dict[tuple[str, str, str], float] = {}
 
-    def close(self, timeout: float = 5.0) -> None:
+    def close(self, timeout: float = SHUTDOWN_GRACE_SECONDS) -> None:
         self._dispatcher.close(timeout=timeout)
         for alerter in self._alerters.values():
             alerter.close()

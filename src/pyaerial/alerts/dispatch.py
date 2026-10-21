@@ -12,6 +12,11 @@ import zlib
 
 log = logging.getLogger("pyaerial.alerts")
 
+#: How long shutdown waits for queued notifications. One webhook can take
+#: ~16 s (3 attempts x 5 s timeout + backoff), so this covers a final
+#: deactivate per alert without letting Ctrl-C hang indefinitely.
+SHUTDOWN_GRACE_SECONDS = 30.0
+
 _Job = tuple[Callable[..., None], tuple]
 
 
@@ -70,7 +75,7 @@ class AlertDispatcher:
             return False
         return True
 
-    def close(self, timeout: float = 5.0) -> None:
+    def close(self, timeout: float = SHUTDOWN_GRACE_SECONDS) -> None:
         """Stop accepting work, let queued jobs run for up to ``timeout`` s, drop the rest."""
         if self._closed:
             return

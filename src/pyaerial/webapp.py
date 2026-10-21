@@ -70,6 +70,9 @@ def run_webapp(
             log_level="info",
             ws_max_size=WS_MAX_MESSAGE_BYTES,
             ws_max_queue=WS_MAX_QUEUE,
+            # Per-IP WebSocket caps need the real client address behind a proxy.
+            proxy_headers=True,
+            forwarded_allow_ips=",".join(config.web.trusted_proxies) or "127.0.0.1",
         )
     except KeyboardInterrupt:
         print("\nStopping web server...")
