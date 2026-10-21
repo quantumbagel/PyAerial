@@ -178,6 +178,30 @@ def test_token_bucket_refills():
     assert not bucket.take()
 
 
+def test_token_bucket_reserve_throttles_then_refuses():
+    now = [0.0]
+    bucket = TokenBucket(rate=10.0, burst=1, clock=lambda: now[0])
+    assert bucket.reserve(1.0) == 0.0
+    assert bucket.reserve(1.0) == pytest.approx(0.1)
+    assert bucket.reserve(1.0) == pytest.approx(0.2)
+    slow = TokenBucket(rate=0.5, burst=1, clock=lambda: now[0])
+    assert slow.reserve(1.0) == 0.0
+    assert slow.reserve(1.0) is None
+
+
+def test_ws_requests_over_rate_are_delayed_not_dropped():
+    config = make_config()
+    config.web.ws_rate_burst = 1
+    config.web.ws_rate_limit = 20.0
+    app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/live") as ws:
+            started = time.monotonic()
+            for index in range(4):
+                assert _request(ws, str(index), "fetchZones")["success"] is True
+            assert time.monotonic() - started >= 0.12
+
+
 def test_per_ip_ws_cap_rejects_extra_connections():
     config = make_config()
     config.web.ws_max_connections_per_ip = 1

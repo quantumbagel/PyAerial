@@ -40,6 +40,8 @@ log = logging.getLogger("pyaerial.webapp")
 
 #: Request ids are echoed back verbatim; keep them small and scalar.
 _MAX_REQUEST_ID_LEN = 128
+#: Longest a request is delayed by the rate limiter before being refused.
+_MAX_THROTTLE_SECONDS = 1.0
 
 
 def _cors_kwargs(config: Config) -> dict[str, Any]:
@@ -315,11 +317,16 @@ def create_app(
                 if not (isinstance(req, dict) and req.get("type") == "request"):
                     continue
                 req_id = _request_id(req.get("id"))
-                if not bucket.take():
+                # Over the rate, requests are delayed (we stop reading the
+                # socket meanwhile); only an unreasonably long wait is refused.
+                delay = bucket.reserve(_MAX_THROTTLE_SECONDS)
+                if delay is None:
                     broadcaster.send(
                         websocket, _error(req_id, "rate_limited", "Rate limit exceeded")
                     )
                     continue
+                if delay > 0:
+                    await asyncio.sleep(delay)
                 action = req.get("action")
                 params = req.get("params") or {}
                 if not isinstance(params, dict):

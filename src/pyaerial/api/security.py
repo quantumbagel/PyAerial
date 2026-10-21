@@ -195,15 +195,35 @@ class TokenBucket:
         self._tokens = float(burst)
         self._last = clock()
 
-    def take(self) -> bool:
+    def _refill(self) -> None:
         now = self._clock()
         elapsed = max(0.0, now - self._last)
         self._last = now
         self._tokens = min(self.burst, self._tokens + elapsed * self.rate)
+
+    def take(self) -> bool:
+        """Consume a token if one is available right now."""
+        self._refill()
         if self._tokens < 1.0:
             return False
         self._tokens -= 1.0
         return True
+
+    def reserve(self, max_wait: float) -> float | None:
+        """Claim the next token: seconds to wait first, or None if > ``max_wait``.
+
+        A granted reservation may leave the bucket in debt; the caller sleeps
+        the returned delay before acting, which throttles to ``rate``.
+        """
+        self._refill()
+        if self._tokens >= 1.0:
+            self._tokens -= 1.0
+            return 0.0
+        delay = (1.0 - self._tokens) / self.rate
+        if delay > max_wait:
+            return None
+        self._tokens -= 1.0
+        return delay
 
 
 def client_ip(connection: Any) -> str:

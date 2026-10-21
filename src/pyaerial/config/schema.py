@@ -247,8 +247,8 @@ class WebConfig(_Strict):
     ws_max_connections: int = Field(default=256, ge=1)
     ws_max_connections_per_ip: int = Field(default=32, ge=1)
     ws_max_inflight: int = Field(default=2, ge=1, le=16)
-    ws_rate_limit: float = Field(default=20.0, gt=0)
-    ws_rate_burst: int = Field(default=40, ge=1)
+    ws_rate_limit: float = Field(default=50.0, gt=0)
+    ws_rate_burst: int = Field(default=100, ge=1)
     ws_request_workers: int = Field(default=4, ge=1, le=64)
 
     @field_validator("origins")

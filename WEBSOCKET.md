@@ -28,7 +28,7 @@ Native clients that omit `Origin` connect unconditionally. Unauthorized origins 
 | WebSocket connections (`/ws/live` + `/ws/beast`) | 256 | `web.ws_max_connections` | Close `1013` (`server connection limit reached`) |
 | Connections per client IP | 32 | `web.ws_max_connections_per_ip` | Close `1013` (`per-client connection limit reached`) |
 | In-flight RPC requests per connection | 2 | `web.ws_max_inflight` | Server stops reading the socket until one finishes (back-pressure, no error) |
-| Request rate per connection | 20/s, burst 40 | `web.ws_rate_limit`, `web.ws_rate_burst` | `response` with `code: "rate_limited"` |
+| Request rate per connection | 50/s, burst 100 | `web.ws_rate_limit`, `web.ws_rate_burst` | Requests are delayed to the rate; one that would wait over 1 s gets `code: "rate_limited"` |
 | Inbound frame size | 64 KiB | fixed | Close `1009` (message too big) |
 | Beast TCP feeders | 16 | `web.beast_max_clients` | Extra connections are closed immediately |
 
@@ -232,7 +232,7 @@ Failed server reply:
 |--------|---------|
 | `bad_request` | Malformed JSON, binary frame, unknown action, missing `flightId`, or a non-numeric / non-finite `since` / `until` |
 | `not_found` | `fetchFlight` found no such flight |
-| `rate_limited` | Per-connection rate limit exceeded; retry later |
+| `rate_limited` | Per-connection rate limit exceeded by more than the server will delay; retry later |
 | `history_unavailable` | The SQLite archive is configured but cannot be read |
 | `live_unavailable` | The Redis live store is unreachable |
 | `internal_error` | Unexpected server error (logged with a traceback) |

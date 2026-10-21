@@ -59,8 +59,8 @@ alert_colors:
 #   ws_max_connections: 256    # /ws/live + /ws/beast, all clients
 #   ws_max_connections_per_ip: 32
 #   ws_max_inflight: 2         # concurrent RPC requests per connection
-#   ws_rate_limit: 20          # RPC requests/second per connection...
-#   ws_rate_burst: 40          # ...with this burst allowance
+#   ws_rate_limit: 50          # RPC requests/second per connection...
+#   ws_rate_burst: 100         # ...with this burst allowance
 #   ws_request_workers: 4      # threads serving RPC requests
 
 receivers:
@@ -124,7 +124,7 @@ zones:
 | `ws_max_connections` | `256` | | Concurrent `/ws/live` + `/ws/beast` connections |
 | `ws_max_connections_per_ip` | `32` | | Concurrent WebSocket connections per client IP (behind a reverse proxy every client shares the proxy's IP) |
 | `ws_max_inflight` | `2` | | RPC requests processed concurrently per connection (1 to 16) |
-| `ws_rate_limit` / `ws_rate_burst` | `20` / `40` | | Token-bucket RPC rate per connection; excess requests get `code: "rate_limited"` |
+| `ws_rate_limit` / `ws_rate_burst` | `50` / `100` | | Token-bucket RPC rate per connection. Requests over the rate are delayed (the server stops reading the socket); a request that would wait more than 1 s gets `code: "rate_limited"` |
 | `ws_request_workers` | `4` | | Threads in the dedicated RPC worker pool |
 
 The portal also sends `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY` on every HTTP response, caps inbound WebSocket frames at 64 KiB, and only passes `https:` aircraft photo URLs to the browser. See [WEBSOCKET.md](WEBSOCKET.md) for the limits as clients see them.
