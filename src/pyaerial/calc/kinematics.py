@@ -52,16 +52,20 @@ class Kinematics:
         self.backdate = config.tracking.backdate_packets
         self._kalman_filters: dict[str, KinematicKalmanFilter] = {}
         self._smoothed_turn_rates: dict[str, float] = {}
+        # Time of the last position fix folded into the smoothers, per ICAO.
+        self._last_fix_time: dict[str, float] = {}
 
     def close(self) -> None:
         self._kalman_filters.clear()
         self._smoothed_turn_rates.clear()
+        self._last_fix_time.clear()
 
     def forget(self, icao: str) -> None:
         """Drop Kalman / turn-rate state so the next flight of this ICAO starts clean."""
         key = icao.lower()
         self._kalman_filters.pop(key, None)
         self._smoothed_turn_rates.pop(key, None)
+        self._last_fix_time.pop(key, None)
 
     def update(self, plane: dict) -> KinematicUpdate | None:
         recv = plane.get(STORE_RECV_DATA, {})
@@ -80,6 +84,7 @@ class Kinematics:
         )
         current = (current_lat.value, current_lon.value)
         current_time = current_lat.time
+        icao = plane[STORE_INFO][STORE_ICAO].lower()
 
         prev_speed_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HORIZ_SPEED, [])
         prev_heading_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HEADING, [])
@@ -87,6 +92,23 @@ class Kinematics:
         previous_calc_heading = (
             prev_heading_series[-1].value if prev_heading_series else None
         )
+
+        last_fix = self._last_fix_time.get(icao)
+        if last_fix is not None and current_time <= last_fix:
+            # No new position since the last tick: the EMA smoothers, the
+            # turn-rate estimate and the Kalman filter must not advance again
+            # (they used to, ratcheting speed toward the raw value every tick).
+            # Only the dead-reckoned alert position moves with wall time.
+            kf = self._kalman_filters.get(icao)
+            motion = resolve_motion(
+                self.config,
+                track_heading=previous_calc_heading or 0.0,
+                track_speed_kph=previous_calc_speed or 0.0,
+                turn_rate_deg_s=self._smoothed_turn_rates.get(icao, 0.0),
+                kf=kf,
+            )
+            return self._coast(icao, current, current_time, motion)
+        self._last_fix_time[icao] = current_time
 
         speed: float | None
         heading: float | None
@@ -139,7 +161,6 @@ class Kinematics:
             )
             final_heading = (math.degrees(math.atan2(sin_val, cos_val)) + 360.0) % 360.0
 
-        icao = plane[STORE_INFO][STORE_ICAO].lower()
         kf = self._kalman_filters.get(icao)
         if kf is None:
             kf = KinematicKalmanFilter(current[0], current[1])
@@ -182,8 +203,17 @@ class Kinematics:
                 plane, STORE_CALC_DATA, STORE_HEADING, Datum(final_heading, speed_time)
             )
 
-        now = time.time()
-        age = max(0.0, now - current_time)
+        return self._coast(icao, current, current_time, motion)
+
+    @staticmethod
+    def _coast(
+        icao: str,
+        current: tuple[float, float],
+        current_time: float,
+        motion: ResolvedMotion,
+    ) -> KinematicUpdate:
+        """Dead-reckon the alert position forward from the last fix to now."""
+        age = max(0.0, time.time() - current_time)
         alert_position = current
         if 0.5 < age <= MAX_COAST_SECONDS and motion.speed_kph > 0:
             alert_position = geo.dead_reckon_curved(
