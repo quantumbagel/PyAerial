@@ -1,0 +1,24 @@
+# gitleaks config: default rules plus webhook URLs, which double as credentials.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "discord-webhook-url"
+description = "Discord webhook URL"
+regex = '''https://(?:(?:canary|ptb)\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]{20,}'''
+keywords = ["discord.com/api/webhooks", "discordapp.com/api/webhooks"]
+
+[[rules]]
+id = "slack-webhook-url"
+description = "Slack incoming webhook URL"
+regex = '''https://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/_-]{20,}'''
+keywords = ["hooks.slack.com"]
+
+# Already-public history that is not being rewritten. The webhook these commits
+# leaked must be (and stay) revoked; never allowlist a live secret here.
+[[allowlists]]
+description = "Revoked Discord webhook in published history"
+commits = [
+    "b5ad352faa1549505662932bb3ffe56486f73e58",
+    "36d9098a307d1201aca03c1b869f9e7718eb24c8",
+]
