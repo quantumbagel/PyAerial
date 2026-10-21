@@ -1,243 +1,168 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Alert, PortalView, TelemetryPoint } from '../api/types';
-import { mergeAlertsByEpisode } from '../utils/alertData';
+import type { PortalView } from '../api/types';
 import type { MapViewHandle } from '../components/MapView';
-import {
-  defaultAlertSortDirection,
-  loadAlertSort,
-  saveAlertSort,
-  type AlertSortField,
-  type SortDirection as AlertSortDirection,
-} from '../utils/alertData';
-import {
-  defaultSortDirection,
-  loadFlightSort,
-  saveFlightSort,
-  sortFlightsBy,
-  type FlightSortField,
-  type SortDirection,
-} from '../utils/flightData';
+import type { SidebarTab } from '../components/Sidebar';
+import { ALERT_SORT_STORE } from '../utils/alertData';
 import { isEngineLive } from '../utils/emptyStates';
-import { filterRawFrames } from '../utils/rawFrames';
+import { FLIGHT_SORT_STORE, sortFlightsBy } from '../utils/flightData';
 import { localDayEndSeconds, localDayStartSeconds } from '../utils/historyFilters';
+import { readStored, writeStored } from '../utils/storage';
+import { useBootstrap } from './useBootstrap';
 import { useFlightPaths } from './useFlightPaths';
-import { useFlightSelection } from './useFlightSelection';
-import { usePortalData } from './usePortalData';
-import { useRawFrames } from './useRawFrames';
+import { FLIGHT_NOT_FOUND, useFlightSelection } from './useFlightSelection';
+import { useHistoryFeed } from './useHistoryFeed';
+import { useLiveFeed } from './useLiveFeed';
+import { useSortPreference } from './useSortPreference';
+import { useStableCallback } from './useStableCallback';
+
+function initialPortalView(): PortalView {
+  const view = new URLSearchParams(window.location.search).get('view');
+  if (view === 'live' || view === 'history') return view;
+  const saved = readStored('portalView');
+  return saved === 'live' || saved === 'history' ? saved : 'live';
+}
+
+const EMPTY_MAP_HANDLE: MapViewHandle = {
+  map: null,
+  panToAlert: () => {},
+  focusOn: () => {},
+};
 
 export function usePortalApp() {
-  const [portalView, setPortalView] = useState<PortalView>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const view = params.get('view');
-    if (view === 'live' || view === 'history') return view;
-    const saved = localStorage.getItem('portalView');
-    return saved === 'live' || saved === 'history' ? saved : 'live';
-  });
+  const [portalView, setPortalView] = useState<PortalView>(initialPortalView);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('flights');
+  const [unreadAlertsCount, setUnreadAlertsCount] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [historySinceDate, setHistorySinceDate] = useState('');
   const [historyUntilDate, setHistoryUntilDate] = useState('');
   const [zonesVisible, setZonesVisible] = useState(true);
-  const [flightSortField, setFlightSortField] = useState<FlightSortField>(
-    () => loadFlightSort(portalView).field,
-  );
-  const [flightSortDirection, setFlightSortDirection] = useState<SortDirection>(
-    () => loadFlightSort(portalView).direction,
-  );
-  const [alertSortField, setAlertSortField] = useState<AlertSortField>(
-    () => loadAlertSort(portalView).field,
-  );
-  const [alertSortDirection, setAlertSortDirection] = useState<AlertSortDirection>(
-    () => loadAlertSort(portalView).direction,
-  );
+  const flightSort = useSortPreference(portalView, FLIGHT_SORT_STORE);
+  const alertSort = useSortPreference(portalView, ALERT_SORT_STORE);
+  const mapRef = useRef<MapViewHandle>(EMPTY_MAP_HANDLE);
+
+  useEffect(() => {
+    writeStored('portalView', portalView);
+    document.title = `PyAerial · ${portalView === 'live' ? 'Live' : 'History'}`;
+  }, [portalView]);
+
   useEffect(() => {
     if (portalView !== 'history') {
       setDebouncedSearch(searchQuery);
-      return;
+      return undefined;
     }
     const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
     return () => window.clearTimeout(timer);
   }, [searchQuery, portalView]);
 
-  const skipNextFlightSortSave = useRef(false);
-  const skipNextAlertSortSave = useRef(false);
-
-  useEffect(() => {
-    localStorage.setItem('portalView', portalView);
-  }, [portalView]);
-
-  useEffect(() => {
-    skipNextFlightSortSave.current = true;
-    skipNextAlertSortSave.current = true;
-    const saved = loadFlightSort(portalView);
-    setFlightSortField(saved.field);
-    setFlightSortDirection(saved.direction);
-    const savedAlerts = loadAlertSort(portalView);
-    setAlertSortField(savedAlerts.field);
-    setAlertSortDirection(savedAlerts.direction);
-  }, [portalView]);
-
-  useEffect(() => {
-    if (skipNextFlightSortSave.current) {
-      skipNextFlightSortSave.current = false;
-      return;
-    }
-    saveFlightSort(portalView, flightSortField, flightSortDirection);
-  }, [portalView, flightSortField, flightSortDirection]);
-
-  useEffect(() => {
-    if (skipNextAlertSortSave.current) {
-      skipNextAlertSortSave.current = false;
-      return;
-    }
-    saveAlertSort(portalView, alertSortField, alertSortDirection);
-  }, [portalView, alertSortField, alertSortDirection]);
-
-  const setFlightSort = useCallback((field: FlightSortField) => {
-    setFlightSortField(field);
-    setFlightSortDirection(defaultSortDirection(field));
+  const switchSidebarTab = useCallback((tab: SidebarTab) => {
+    setSidebarTab(tab);
+    if (tab === 'alerts') setUnreadAlertsCount(0);
   }, []);
 
-  const toggleFlightSortDirection = useCallback(() => {
-    setFlightSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
-  }, []);
+  const sidebarTabRef = useRef(sidebarTab);
+  useEffect(() => {
+    sidebarTabRef.current = sidebarTab;
+  }, [sidebarTab]);
 
-  const setAlertSort = useCallback((field: AlertSortField) => {
-    setAlertSortField(field);
-    setAlertSortDirection(defaultAlertSortDirection(field));
-  }, []);
-
-  const toggleAlertSortDirection = useCallback(() => {
-    setAlertSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
-  }, []);
-
-  const mapRef = useRef<MapViewHandle>({
-    map: null,
-    panToAlert: () => {},
-  });
-  const fetchAndSetPathRef = useRef<(flightId: string, view: PortalView) => Promise<void>>(
-    async () => {},
-  );
-  const clearPathsIfNeededRef = useRef<() => void>(() => {});
-  const resetPathsRef = useRef<() => void>(() => {});
-  const onSelectAlertTabRef = useRef<() => void>(() => {});
-
-  const showAllPathsRef = useRef(false);
-  const setPathCoordsRef = useRef<
-    React.Dispatch<React.SetStateAction<Record<string, [number, number][]>>>
-  >(() => {});
-  const setPathTelemetryRef = useRef<
-    React.Dispatch<React.SetStateAction<Record<string, TelemetryPoint[]>>>
-  >(() => {});
+  const bootstrap = useBootstrap();
 
   const selection = useFlightSelection({
     portalView,
     mapRef,
-    fetchAndSetPathRef,
-    clearPathsIfNeeded: () => clearPathsIfNeededRef.current(),
-    onSelectAlertTab: () => onSelectAlertTabRef.current(),
+    onAlertSelected: () => switchSidebarTab('alerts'),
   });
 
-  const portal = usePortalData({
-    portalView,
-    setPortalView,
-    activeFlightIdRef: selection.activeFlightIdRef,
-    showAllPathsRef,
-    setPathCoords: (update) => setPathCoordsRef.current(update),
-    setPathTelemetry: (update) => setPathTelemetryRef.current(update),
-    appendSelectedTelemetry: selection.appendSelectedTelemetry,
-    resetSelection: selection.resetSelection,
-    resetPaths: () => resetPathsRef.current(),
-    historyQ: portalView === 'history' ? debouncedSearch.trim() : '',
-    historySince: portalView === 'history' ? localDayStartSeconds(historySinceDate) : null,
-    historyUntil: portalView === 'history' ? localDayEndSeconds(historyUntilDate) : null,
+  const live = useLiveFeed(portalView === 'live', {
+    onFlights: (flights) => paths.appendFlightPositions(flights),
+    onTelemetry: (points) => {
+      selection.appendSelectedTelemetry(points);
+      paths.appendLiveTelemetry(points);
+    },
+    onAlertsActivated: (count) => {
+      if (sidebarTabRef.current !== 'alerts') setUnreadAlertsCount((c) => c + count);
+    },
+    onReconnect: () => {
+      void selection.refreshSelectedTelemetry();
+      paths.refetchActivePath();
+    },
   });
 
-  onSelectAlertTabRef.current = () => portal.setSidebarTab('alerts');
+  const historyFilter = useMemo(
+    () => ({
+      q: debouncedSearch.trim(),
+      since: localDayStartSeconds(historySinceDate),
+      until: localDayEndSeconds(historyUntilDate),
+    }),
+    [debouncedSearch, historySinceDate, historyUntilDate],
+  );
+  const history = useHistoryFeed(portalView === 'history', historyFilter);
+  const feed = portalView === 'live' ? live : history;
 
   const filteredFlights = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    // History is filtered server-side.
     const source =
-      portalView === 'history' || !searchQuery
-        ? portal.flightsData
-        : portal.flightsData.filter((flight) => {
-            const q = searchQuery.toLowerCase();
-            const callsign = (flight.callsign || '').toLowerCase();
-            const icao = (flight.icao || '').toLowerCase();
-            const model = (flight.model || '').toLowerCase();
-            const aircraftType = (flight.aircraft_type || '').toLowerCase();
-            const owner = (flight.owner || '').toLowerCase();
-            const flightId = (flight.flight_id || '').toLowerCase();
+      portalView === 'history' || !q
+        ? feed.flights
+        : feed.flights.filter((flight) => {
             const activeAlertText = (flight.active_alerts ?? [])
               .map((a) => `${a.zone} ${a.rule}`)
-              .join(' ')
-              .toLowerCase();
-            return (
-              callsign.includes(q) ||
-              icao.includes(q) ||
-              model.includes(q) ||
-              aircraftType.includes(q) ||
-              owner.includes(q) ||
-              flightId.includes(q) ||
-              activeAlertText.includes(q)
-            );
+              .join(' ');
+            return [
+              flight.callsign,
+              flight.icao,
+              flight.model,
+              flight.aircraft_type,
+              flight.owner,
+              flight.flight_id,
+              activeAlertText,
+            ].some((field) => (field || '').toLowerCase().includes(q));
           });
-    return sortFlightsBy(source, flightSortField, flightSortDirection);
-  }, [portal.flightsData, portalView, searchQuery, flightSortField, flightSortDirection]);
-
-  const raw = useRawFrames();
-  const filteredRawFrames = useMemo(
-    () => filterRawFrames(raw.frames, searchQuery),
-    [raw.frames, searchQuery],
-  );
+    return sortFlightsBy(source, flightSort.field, flightSort.direction);
+  }, [feed.flights, portalView, searchQuery, flightSort.field, flightSort.direction]);
 
   const paths = useFlightPaths(portalView, selection.activeFlightId, filteredFlights);
 
-  fetchAndSetPathRef.current = paths.fetchAndSetPath;
-  clearPathsIfNeededRef.current = paths.clearPathsIfNeeded;
-  resetPathsRef.current = paths.resetPaths;
-  setPathCoordsRef.current = paths.setPathCoords;
-  setPathTelemetryRef.current = paths.setPathTelemetry;
-
-  useEffect(() => {
-    showAllPathsRef.current = paths.showAllPaths;
-  }, [paths.showAllPaths]);
-
   const filteredAlerts = useMemo(() => {
     const q = searchQuery.toLowerCase();
-    const trackedFlightIds = new Set(portal.flightsData.map((f) => f.flight_id));
-    const scopedAlerts =
-      portalView === 'live'
-        ? portal.alertsData.filter(
-            (alert) => alert.flight_id && trackedFlightIds.has(alert.flight_id),
-          )
-        : portal.alertsData;
-    if (portalView === 'history' || !q) {
-      return scopedAlerts;
-    }
-    return scopedAlerts.filter((alert) => {
-      const callsign = (alert.callsign || '').toLowerCase();
-      const icao = (alert.icao || '').toLowerCase();
-      const zone = (alert.zone || '').toLowerCase();
-      const rule = (alert.rule || '').toLowerCase();
-      return (
-        callsign.includes(q) ||
-        icao.includes(q) ||
-        zone.includes(q) ||
-        rule.includes(q)
-      );
-    });
-  }, [portal.alertsData, portal.flightsData, portalView, searchQuery]);
+    if (portalView === 'history') return feed.alerts;
+    const trackedFlightIds = new Set(feed.flights.map((f) => f.flight_id));
+    const scoped = feed.alerts.filter(
+      (alert) => alert.flight_id && trackedFlightIds.has(alert.flight_id),
+    );
+    if (!q) return scoped;
+    return scoped.filter((alert) =>
+      [alert.callsign, alert.icao, alert.zone, alert.rule].some((field) =>
+        (field || '').toLowerCase().includes(q),
+      ),
+    );
+  }, [feed.alerts, feed.flights, portalView, searchQuery]);
 
-  const flightCount = useMemo(() => {
-    if (portalView === 'live') {
-      return portal.flightsData.filter((f) => f.is_live).length;
-    }
-    return portal.flightsData.length;
-  }, [portal.flightsData, portalView]);
+  const flightCount = useMemo(
+    () =>
+      portalView === 'live'
+        ? feed.flights.filter((f) => f.is_live).length
+        : feed.flights.length,
+    [feed.flights, portalView],
+  );
 
   const { activeFlightId, closeDrawer, setFollowSelectedPlane, syncFlightAlerts, selectFlight } =
     selection;
+  const { resetPaths, mergeLiveAlerts } = paths;
 
+  const switchPortalView = useCallback(
+    (view: PortalView) => {
+      if (view === portalView) return;
+      setPortalView(view);
+      setUnreadAlertsCount(0);
+      closeDrawer();
+      resetPaths();
+    },
+    [portalView, closeDrawer, resetPaths],
+  );
+
+  // ?flight=<id> deep links: select it, falling back from live to history.
   const pendingUrlFlight = useRef<string | null>(
     new URLSearchParams(window.location.search).get('flight'),
   );
@@ -245,28 +170,28 @@ export function usePortalApp() {
   useEffect(() => {
     const id = pendingUrlFlight.current;
     if (!id) return;
-    selectFlight(id);
+    void selectFlight(id);
   }, [selectFlight, portalView]);
 
   useEffect(() => {
     const id = pendingUrlFlight.current;
     if (!id) return;
-    if (selection.flightDetail && selection.activeFlightId === id) {
+    if (selection.flightDetail && activeFlightId === id) {
       pendingUrlFlight.current = null;
       return;
     }
-    if (selection.selectionError === 'Flight not found.' && !selection.isLoading) {
+    if (selection.selectionError === FLIGHT_NOT_FOUND && !selection.isLoading) {
       if (portalView === 'live') {
-        portal.switchPortalView('history');
+        switchPortalView('history');
       } else {
         pendingUrlFlight.current = null;
       }
     }
   }, [
     portalView,
-    portal.switchPortalView,
+    switchPortalView,
     selection.flightDetail,
-    selection.activeFlightId,
+    activeFlightId,
     selection.selectionError,
     selection.isLoading,
   ]);
@@ -287,62 +212,43 @@ export function usePortalApp() {
     closeDrawer();
   }, [closeDrawer]);
 
+  // A live flight that drops off the feed takes its drawer with it.
   useEffect(() => {
     if (portalView !== 'live' || !activeFlightId) return;
-    if (portal.isLoadingFlights) return;
-    const exists = portal.flightsData.some((f) => f.flight_id === activeFlightId);
-    if (exists) return;
+    if (feed.isLoadingFlights) return;
+    if (feed.flights.some((f) => f.flight_id === activeFlightId)) return;
     if (pendingUrlFlight.current === activeFlightId) return;
     closeDrawer();
-  }, [portal.flightsData, activeFlightId, portalView, portal.isLoadingFlights, closeDrawer]);
+  }, [feed.flights, activeFlightId, portalView, feed.isLoadingFlights, closeDrawer]);
 
-  useEffect(() => {
-    if (portalView === 'live' && activeFlightId) {
-      syncFlightAlerts(portal.alertsData);
-    }
-  }, [portal.alertsData, portalView, activeFlightId, syncFlightAlerts]);
-
-  // Keep the map's alert-path overlays in sync with live alert updates so newly
-  // activated/deactivated episodes are reflected without re-fetching the path.
   useEffect(() => {
     if (portalView !== 'live') return;
-    const byFlight = new Map<string, Alert[]>();
-    for (const alert of portal.alertsData) {
-      if (!alert.flight_id) continue;
-      const arr = byFlight.get(alert.flight_id);
-      if (arr) {
-        arr.push(alert);
-      } else {
-        byFlight.set(alert.flight_id, [alert]);
-      }
-    }
-    if (byFlight.size === 0) return;
-    paths.setPathAlerts((prev) => {
-      let next = prev;
-      let updated = false;
-      for (const [flightId, alerts] of byFlight) {
-        const existing = prev[flightId];
-        if (!existing || existing.length === 0) continue;
-        const merged = mergeAlertsByEpisode(existing, alerts);
-        if (merged.length !== existing.length || merged.some((a, i) => a !== existing[i])) {
-          if (!updated) {
-            next = { ...next };
-            updated = true;
-          }
-          next[flightId] = merged;
-        }
-      }
-      return next;
-    });
-  }, [portal.alertsData, portalView, paths.setPathAlerts]);
+    if (activeFlightId) syncFlightAlerts(feed.alerts);
+    // Keep alert-path overlays in sync with newly (de)activated episodes.
+    mergeLiveAlerts(feed.alerts);
+  }, [feed.alerts, portalView, activeFlightId, syncFlightAlerts, mergeLiveAlerts]);
 
-  const disableFollow = useCallback(
-    () => setFollowSelectedPlane(false),
-    [setFollowSelectedPlane],
+  const disableFollow = useCallback(() => setFollowSelectedPlane(false), [setFollowSelectedPlane]);
+
+  const retryFlights = useStableCallback(() =>
+    portalView === 'live' ? live.retry() : history.retry('flights'),
   );
+  const retryAlerts = useStableCallback(() =>
+    portalView === 'live' ? live.retry() : history.retry('alerts'),
+  );
+  const loadMoreFlights = useStableCallback(() => {
+    if (portalView === 'history') void history.loadMore('flights');
+  });
+  const loadMoreAlerts = useStableCallback(() => {
+    if (portalView === 'history') void history.loadMore('alerts');
+  });
 
   return {
     portalView,
+    switchPortalView,
+    sidebarTab,
+    switchSidebarTab,
+    unreadAlertsCount,
     searchQuery,
     setSearchQuery,
     historySinceDate,
@@ -353,26 +259,23 @@ export function usePortalApp() {
     setZonesVisible,
     mapRef,
     selection: { ...selection, closeDrawer: handleCloseDrawer },
-    portal,
+    bootstrap,
+    feed,
     paths,
     filteredFlights,
     filteredAlerts,
     flightCount,
-    flightSortField,
-    flightSortDirection,
-    setFlightSort,
-    toggleFlightSortDirection,
-    alertSortField,
-    alertSortDirection,
-    setAlertSort,
-    toggleAlertSortDirection,
+    flightSort,
+    alertSort,
     disableFollow,
-    raw,
-    filteredRawFrames,
+    retryFlights,
+    retryAlerts,
+    loadMoreFlights,
+    loadMoreAlerts,
     engineIdle:
       portalView === 'live' &&
-      portal.wsStatus === 'connected' &&
-      portal.serverStats != null &&
-      !isEngineLive(portal.serverStats),
+      bootstrap.wsStatus === 'connected' &&
+      feed.stats != null &&
+      !isEngineLive(feed.stats),
   };
 }

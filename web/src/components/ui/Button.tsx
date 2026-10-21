@@ -1,4 +1,4 @@
-import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
+import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 import { cn } from './cn';
 
 type ButtonVariant = 'primary' | 'ghost' | 'toggle' | 'icon' | 'subtle' | 'link';
@@ -17,11 +17,13 @@ type SharedProps = {
 type ButtonProps = SharedProps &
   ButtonHTMLAttributes<HTMLButtonElement> & {
     as?: 'button';
+    ref?: Ref<HTMLButtonElement>;
   };
 
 type LinkButtonProps = SharedProps &
   AnchorHTMLAttributes<HTMLAnchorElement> & {
     as: 'a';
+    ref?: Ref<HTMLAnchorElement>;
   };
 
 export function Button({
@@ -47,7 +49,9 @@ export function Button({
   );
 
   if (as === 'a') {
-    const anchorProps = props as AnchorHTMLAttributes<HTMLAnchorElement>;
+    const anchorProps = props as AnchorHTMLAttributes<HTMLAnchorElement> & {
+      ref?: Ref<HTMLAnchorElement>;
+    };
     return (
       <a className={classes} {...anchorProps}>
         {children}
@@ -55,7 +59,9 @@ export function Button({
     );
   }
 
-  const buttonProps = props as ButtonHTMLAttributes<HTMLButtonElement>;
+  const buttonProps = props as ButtonHTMLAttributes<HTMLButtonElement> & {
+    ref?: Ref<HTMLButtonElement>;
+  };
   return (
     <button type="button" className={classes} {...buttonProps}>
       {children}

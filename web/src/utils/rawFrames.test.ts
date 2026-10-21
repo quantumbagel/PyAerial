@@ -88,7 +88,7 @@ describe('emptyRawMessage', () => {
     ).toMatch(/filters/);
     expect(
       emptyRawMessage({ hasFilters: false, stats: stats(), rawStatus: 'rejected' }),
-    ).toMatch(/denied/);
+    ).toMatch(/web\.allowed_hosts|web\.origins/);
     expect(
       emptyRawMessage({
         hasFilters: false,
