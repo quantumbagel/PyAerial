@@ -1,19 +1,28 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { Alert, AppConfig, FlightDetail, FlightSummary, TelemetryPoint, Zone } from '../api/types';
+import { formatActiveAlerts, formatAlertHistory } from '../utils/alertData';
 import {
-  formatActiveAlerts,
+  EMPTY,
+  LIST_SEP,
+  cleanField,
+  displayCallsign,
+  displayField,
+  displayIcao,
+  formatAgo,
   formatAltitude,
+  formatCoordinate,
   formatDateTime,
-  formatFlightAlertSummary,
+  formatDuration,
   formatHeading,
   formatSpeed,
   isFlightLive,
+  safeHttpsUrl,
 } from '../utils/format';
+import { FlightAlertBadges } from './AlertBadges';
 import { AlertTimeline } from './AlertTimeline';
 import { ExternalLinks } from './ExternalLinks';
-import { LevelBadge } from './LevelBadge';
 import { TelemetryTable } from './TelemetryTable';
-import { Button, Chip, Spinner, Tab, TabList } from './ui';
+import { Button, Chip, StateView, Tab, TabList, TabPanel, useTabIds } from './ui';
 
 type DrawerTab = 'alerts' | 'telemetry';
 
@@ -38,6 +47,46 @@ interface DetailsDrawerProps {
   onSelectAlert: (alert: Alert, episodeKey: string) => void;
 }
 
+/** Live flights: merge the fresher list summary over the fetched detail. */
+function mergeDisplayFlight(detail: FlightDetail | null, summary: FlightSummary | null) {
+  const base = detail ?? summary;
+  if (!base || !summary?.is_live) return base;
+  return {
+    ...base,
+    latitude: summary.latitude ?? base.latitude,
+    longitude: summary.longitude ?? base.longitude,
+    heading: summary.heading ?? base.heading,
+    speed: summary.speed ?? base.speed,
+    altitude: summary.altitude ?? base.altitude,
+    active_alerts: summary.active_alerts ?? base.active_alerts,
+    alert_stats: summary.alert_stats ?? base.alert_stats,
+  };
+}
+
+function seenRange(
+  detail: FlightDetail | null,
+  summary: FlightSummary | null,
+  telemetry: TelemetryPoint[],
+): { first: number | null; last: number | null } {
+  const valid = (values: (number | null | undefined)[]) =>
+    values.filter((ts): ts is number => typeof ts === 'number' && ts > 0);
+  const firsts = valid([detail?.start_time, summary?.start_time, telemetry[0]?.timestamp]);
+  const lasts = valid([
+    telemetry[telemetry.length - 1]?.timestamp,
+    summary?.timestamp,
+    summary?.end_time,
+    detail?.timestamp,
+    detail?.end_time,
+    ...firsts,
+  ]);
+  return {
+    first: firsts.length ? Math.min(...firsts) : null,
+    last: lasts.length ? Math.max(...lasts) : null,
+  };
+}
+
+type Kinematics = Pick<TelemetryPoint, 'altitude' | 'speed' | 'heading' | 'latitude' | 'longitude'>;
+
 export function DetailsDrawer({
   open,
   flightDetail,
@@ -58,17 +107,24 @@ export function DetailsDrawer({
   onSwitchTab,
   onSelectAlert,
 }: DetailsDrawerProps) {
-  const drawerRef = useRef<HTMLDivElement>(null);
-  const headingId = useId();
+  const drawerRef = useRef<HTMLElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const alertListRef = useRef<HTMLDivElement>(null);
+  const headingId = useId();
+  const tabIds = useTabIds();
   const [prevTelemetryLength, setPrevTelemetryLength] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  const displayFlight = useMemo(
+    () => mergeDisplayFlight(flightDetail, flightSummary),
+    [flightDetail, flightSummary],
+  );
+  const live = displayFlight ? isFlightLive(displayFlight) : false;
 
   useEffect(() => {
-    if (!open || !flightDetail || !isFlightLive(flightDetail)) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    if (!open || !live) return undefined;
+    const id = setInterval(() => setNow(Date.now() / 1000), 1000);
     return () => clearInterval(id);
-  }, [open, flightDetail]);
+  }, [open, live]);
 
   const onCloseRef = useRef(onClose);
   useEffect(() => {
@@ -121,282 +177,233 @@ export function DetailsDrawer({
     return undefined;
   }, [open]);
 
+  // Keep the telemetry table pinned to the newest row unless the user scrolled up.
   useEffect(() => {
     if (!open || drawerTab !== 'telemetry') return;
     const el = tableContainerRef.current;
-    if (!el) return;
-
-    const diff = flightTelemetry.length - prevTelemetryLength;
     const oldLength = prevTelemetryLength;
     setPrevTelemetryLength(flightTelemetry.length);
-
-    if (flightTelemetry.length > 0) {
-      if (oldLength === 0) {
-        el.scrollTop = el.scrollHeight;
-      } else if (diff > 0) {
-        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        if (distanceFromBottom < 100) {
-          el.scrollTop = el.scrollHeight;
-        }
-      }
+    if (!el || flightTelemetry.length === 0) return;
+    if (oldLength === 0) {
+      el.scrollTop = el.scrollHeight;
+    } else if (flightTelemetry.length > oldLength) {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceFromBottom < 100) el.scrollTop = el.scrollHeight;
     }
   }, [flightTelemetry, prevTelemetryLength, open, drawerTab]);
 
   useEffect(() => {
-    if (open && drawerTab === 'telemetry') {
-      const el = tableContainerRef.current;
-      if (el) {
-        requestAnimationFrame(() => {
-          el.scrollTop = el.scrollHeight;
-        });
-      }
-    }
+    if (!open || drawerTab !== 'telemetry') return undefined;
+    const el = tableContainerRef.current;
+    if (!el) return undefined;
+    const frame = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [open, drawerTab]);
 
   useEffect(() => {
-    if (activeAlertId && drawerTab === 'alerts' && open) {
-      document
-        .querySelector('#alert-timeline-list .ui-display.is-active')
-        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
+    if (!activeAlertId || drawerTab !== 'alerts' || !open) return;
+    alertListRef.current
+      ?.querySelector('.ui-display.is-active')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [activeAlertId, drawerTab, open]);
 
   const isLoadingPlane = isLoading || (!flightDetail && !selectionError);
-  const rawCallsign = (flightDetail?.callsign || flightSummary?.callsign)?.trim();
-  const rawIcao = (flightDetail?.icao || flightSummary?.icao)?.toUpperCase() || '';
-  const callsign =
-    rawCallsign && rawCallsign.toUpperCase() !== 'UNKNOWN'
-      ? rawCallsign
-      : rawIcao || 'Loading plane details…';
-  const icao = rawIcao || 'N/A';
-  const photoUrl = typeof flightDetail?.photo_url === 'string' ? flightDetail.photo_url : null;
-  const hasPhoto = Boolean(photoUrl);
-  const sortedAlerts = [...flightAlerts].sort(
-    (a, b) => (a.activated_at || 0) - (b.activated_at || 0),
+  const identity = flightDetail ?? flightSummary;
+  const title = identity ? displayCallsign(identity) : EMPTY;
+  const icao = cleanField(identity?.icao);
+  const photoUrl = safeHttpsUrl(flightDetail?.photo_url);
+  const photoLink = safeHttpsUrl(flightDetail?.photo_link);
+  const sortedAlerts = useMemo(
+    () => [...flightAlerts].sort((a, b) => (a.activated_at || 0) - (b.activated_at || 0)),
+    [flightAlerts],
   );
   const lastPoint = flightTelemetry.length > 0 ? flightTelemetry[flightTelemetry.length - 1] : null;
-  const readingPoint = selectedTelemetryPoint ?? lastPoint;
-  const displayFlight = useMemo(() => {
-    const base = flightDetail ?? flightSummary;
-    if (!base) return null;
-    if (!flightSummary?.is_live) {
-      return base;
-    }
-    return {
-      ...base,
-      latitude: flightSummary.latitude ?? base.latitude,
-      longitude: flightSummary.longitude ?? base.longitude,
-      heading: flightSummary.heading ?? base.heading,
-      speed: flightSummary.speed ?? base.speed,
-      altitude: flightSummary.altitude ?? base.altitude,
-      active_alerts: flightSummary.active_alerts ?? base.active_alerts,
-      alert_stats: flightSummary.alert_stats ?? base.alert_stats,
-    };
-  }, [flightDetail, flightSummary]);
+  const readingPoint: Kinematics | null = selectedTelemetryPoint ?? lastPoint;
+  const reading = (key: keyof Kinematics) => readingPoint?.[key] ?? displayFlight?.[key];
+  const { first: firstSeen, last: lastSeen } = seenRange(flightDetail, flightSummary, flightTelemetry);
+  const remember = appConfig?.remember_planes ?? null;
+  const secsAgo = lastSeen != null ? Math.max(0, now - lastSeen) : null;
+  const activeAlerts = displayFlight?.active_alerts ?? [];
+  const pastEpisodes = displayFlight?.alert_stats?.episode_count ?? 0;
+  const hasAlertsTab = flightAlerts.length > 0;
+  const shownTab: DrawerTab = drawerTab === 'alerts' && !hasAlertsTab ? 'telemetry' : drawerTab;
+
+  const alertSummary = activeAlerts.length
+    ? formatActiveAlerts(activeAlerts, now)
+    : pastEpisodes > 0
+      ? formatAlertHistory(displayFlight?.alert_stats)
+      : 'None';
+  const alertTone = activeAlerts.length ? 'warn' : pastEpisodes > 0 ? 'accent' : 'muted';
 
   return (
-    <div
-      id="details-drawer"
+    <aside
       ref={drawerRef}
-      className={open ? 'open' : ''}
-      role="complementary"
+      className={`details-drawer${open ? ' is-open' : ''}`}
       aria-labelledby={headingId}
       aria-hidden={!open}
       inert={!open ? true : undefined}
       tabIndex={-1}
     >
-      <div id="drawer-header">
+      <header className="drawer-header">
         <Button
-          id="close-drawer-btn"
           variant="ghost"
           className="drawer-close-btn"
           title="Close"
           aria-label="Close aircraft details"
           onClick={onClose}
         >
-          &times;
+          <span aria-hidden="true">&times;</span>
         </Button>
-        <div className="drawer-header-label">Selected Aircraft</div>
-        <h2 id={headingId}>
-          <span id="detail-callsign">{callsign}</span>{' '}
-          {rawIcao && rawIcao !== callsign && (
-            <Chip id="detail-icao">{icao}</Chip>
-          )}
+        <div className="drawer-header-label">Selected aircraft</div>
+        <h2 id={headingId} className="drawer-title">
+          <span>{title}</span>
+          {icao && cleanField(identity?.callsign) ? <Chip>{displayIcao(icao)}</Chip> : null}
           {displayFlight && (
-            <LevelBadge flight={displayFlight} zones={zones} alertColors={alertColors} />
+            <FlightAlertBadges flight={displayFlight} zones={zones} alertColors={alertColors} />
           )}
         </h2>
-      </div>
+      </header>
       <div className="drawer-content">
         {selectionError ? (
-          <div className="info-section">
-            <StatusError onRetry={onRetry}>{selectionError}</StatusError>
-          </div>
+          <StateView kind="error" onRetry={onRetry}>
+            {selectionError}
+          </StateView>
         ) : isLoadingPlane ? (
-          <div className="drawer-loading-container">
-            <Spinner size="xl" />
-            <span>Loading plane details…</span>
-          </div>
+          <StateView kind="loading">Loading aircraft details…</StateView>
         ) : (
           <>
-            {hasPhoto && photoUrl && (
-              <div id="detail-photo-container">
+            {photoUrl && (
+              <figure className="drawer-photo">
                 <img
-                  id="detail-photo"
                   src={photoUrl}
-                  alt={rawCallsign ? `Photo of ${rawCallsign}` : 'Aircraft photo'}
+                  alt={`Photo of ${title}`}
                   onError={(event) => {
-                    const wrap = event.currentTarget.closest('#detail-photo-container');
-                    if (wrap instanceof HTMLElement) wrap.style.display = 'none';
+                    const fig = event.currentTarget.closest('figure');
+                    if (fig) fig.hidden = true;
                   }}
                 />
-                <div className="photo-gradient-bottom">
+                <figcaption className="drawer-photo__caption">
                   <span>
                     Photo by{' '}
-                    <span id="detail-photo-photographer" className="photo-credit-name">
-                      {flightDetail?.photo_photographer || 'Planespotters'}
+                    <span className="drawer-photo__credit">
+                      {cleanField(flightDetail?.photo_photographer) ?? 'Planespotters'}
                     </span>
                   </span>
-                  <a
-                    id="detail-photo-link"
-                    className="photo-link"
-                    href={flightDetail?.photo_link || '#'}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View on Planespotters.net
-                  </a>
-                </div>
-              </div>
+                  {photoLink && (
+                    <a className="drawer-photo__link" href={photoLink} target="_blank" rel="noreferrer">
+                      View on Planespotters.net
+                    </a>
+                  )}
+                </figcaption>
+              </figure>
             )}
 
             <ExternalLinks flightDetail={flightDetail} icao={icao} />
 
-            <div className="info-section">
-              <h3>Aircraft Details</h3>
-              <div className="ui-fields">
-                <span className="ui-field-label">Registration</span>
-                <span className="ui-field-value ui-field-value--emphasis" id="detail-registration">
-                  {flightDetail?.registration && flightDetail.registration !== 'Unknown' ? flightDetail.registration : '—'}
-                </span>
-                <span className="ui-field-label">Model</span>
-                <span className="ui-field-value" id="detail-model">
-                  {flightDetail?.model && flightDetail.model !== 'Unknown Model' ? flightDetail.model : '—'}
-                </span>
-                <span className="ui-field-label">Aircraft Type</span>
-                <span className="ui-field-value" id="detail-type">
-                  {flightDetail?.aircraft_type || '—'}
-                </span>
-                <span className="ui-field-label">Owner</span>
-                <span className="ui-field-value" id="detail-owner">
-                  {flightDetail?.owner && flightDetail.owner !== 'Unknown Owner' ? flightDetail.owner : '—'}
-                </span>
-                <span className="ui-field-label">Registration Country</span>
-                <span className="ui-field-value" id="detail-country">
-                  {flightDetail?.country && flightDetail.country !== 'Unknown' ? flightDetail.country : '—'}
-                </span>
-                <span className="ui-field-label">
-                  {isFlightLive(displayFlight ?? {}) ? 'Active Alerts' : 'Alert Summary'}
-                </span>
-                <span
-                  className={`ui-field-value${
-                    (displayFlight?.active_alerts?.length ?? 0) > 0
-                      ? ' ui-field-value--warn'
-                      : (displayFlight?.alert_stats?.episode_count ?? 0) > 0
-                      ? ' ui-field-value--accent'
-                      : ' ui-field-value--muted'
-                  }`}
-                  id="detail-active-alerts"
-                >
-                  {isFlightLive(displayFlight ?? {})
-                    ? (displayFlight?.active_alerts?.length ?? 0) > 0
-                      ? formatActiveAlerts(displayFlight?.active_alerts)
-                      : (displayFlight?.alert_stats?.episode_count ?? 0) > 0
-                      ? `None (${displayFlight?.alert_stats?.episode_count} past episode${
-                          displayFlight?.alert_stats?.episode_count === 1 ? '' : 's'
-                        })`
-                      : 'None'
-                    : formatFlightAlertSummary(displayFlight ?? {})}
-                </span>
-              </div>
-            </div>
+            <section className="info-section">
+              <h3>Aircraft details</h3>
+              <dl className="ui-fields">
+                <dt className="ui-field-label">Registration</dt>
+                <dd className="ui-field-value ui-field-value--emphasis">
+                  {displayField(flightDetail?.registration)}
+                </dd>
+                <dt className="ui-field-label">Model</dt>
+                <dd className="ui-field-value">{displayField(flightDetail?.model)}</dd>
+                <dt className="ui-field-label">Aircraft type</dt>
+                <dd className="ui-field-value">{displayField(flightDetail?.aircraft_type)}</dd>
+                <dt className="ui-field-label">Owner</dt>
+                <dd className="ui-field-value">{displayField(flightDetail?.owner)}</dd>
+                <dt className="ui-field-label">Registration country</dt>
+                <dd className="ui-field-value">{displayField(flightDetail?.country)}</dd>
+                <dt className="ui-field-label">{live ? 'Active alerts' : 'Alerts'}</dt>
+                <dd className={`ui-field-value ui-field-value--${alertTone}`}>{alertSummary}</dd>
+              </dl>
+            </section>
 
-            <div className="info-section">
-              <h3>{selectedTelemetryPoint ? 'Selected Fix' : 'Telemetry Readings'}</h3>
-              <div className="ui-fields">
-                {renderTelemetrySummary(
-                  flightDetail,
-                  flightSummary,
-                  flightTelemetry,
-                  appConfig,
-                  now,
+            <section className="info-section">
+              <h3>{selectedTelemetryPoint ? 'Selected fix' : 'Latest readings'}</h3>
+              <dl className="ui-fields">
+                <dt className="ui-field-label">First seen</dt>
+                <dd className="ui-field-value">{formatDateTime(firstSeen, { withSeconds: true })}</dd>
+                <dt className="ui-field-label">Last seen</dt>
+                <dd className={`ui-field-value${live ? ' ui-field-value--emphasis' : ''}`}>
+                  {formatDateTime(lastSeen, { withSeconds: true })}
+                  {live && secsAgo != null && (
+                    <span className="ui-field-sub">
+                      {formatAgo(lastSeen, now)}
+                      {remember != null
+                        ? `${LIST_SEP}drops in ${formatDuration(Math.max(0, remember - secsAgo))}`
+                        : ''}
+                    </span>
+                  )}
+                </dd>
+                {selectedTelemetryPoint && (
+                  <>
+                    <dt className="ui-field-label">Fix time</dt>
+                    <dd className="ui-field-value">
+                      {formatDateTime(selectedTelemetryPoint.timestamp, { withSeconds: true })}
+                    </dd>
+                  </>
                 )}
-                <span className="ui-field-label">Altitude</span>
-                <span className="ui-field-value" id="detail-altitude">
-                  {formatAltitude(readingPoint?.altitude ?? displayFlight?.altitude)}
-                </span>
-                <span className="ui-field-label">Speed</span>
-                <span className="ui-field-value" id="detail-speed">
-                  {formatSpeed(readingPoint?.speed ?? displayFlight?.speed)}
-                </span>
-                <span className="ui-field-label">Heading</span>
-                <span className="ui-field-value" id="detail-heading">
-                  {formatHeading(readingPoint?.heading ?? displayFlight?.heading)}
-                </span>
-                <span className="ui-field-label">Latitude</span>
-                <span className="ui-field-value" id="detail-latitude">
-                  {(readingPoint?.latitude ?? displayFlight?.latitude) != null
-                    ? (readingPoint?.latitude ?? displayFlight?.latitude)!.toFixed(5)
-                    : 'N/A'}
-                </span>
-                <span className="ui-field-label">Longitude</span>
-                <span className="ui-field-value" id="detail-longitude">
-                  {(readingPoint?.longitude ?? displayFlight?.longitude) != null
-                    ? (readingPoint?.longitude ?? displayFlight?.longitude)!.toFixed(5)
-                    : 'N/A'}
-                </span>
-              </div>
-            </div>
+                <dt className="ui-field-label">Altitude</dt>
+                <dd className="ui-field-value">{formatAltitude(reading('altitude'))}</dd>
+                <dt className="ui-field-label">Speed</dt>
+                <dd className="ui-field-value">{formatSpeed(reading('speed'))}</dd>
+                <dt className="ui-field-label">Heading</dt>
+                <dd className="ui-field-value">{formatHeading(reading('heading'))}</dd>
+                <dt className="ui-field-label">Latitude</dt>
+                <dd className="ui-field-value">{formatCoordinate(reading('latitude'))}</dd>
+                <dt className="ui-field-label">Longitude</dt>
+                <dd className="ui-field-value">{formatCoordinate(reading('longitude'))}</dd>
+              </dl>
+            </section>
 
-            <TabList aria-label="Flight detail tabs">
-              {flightAlerts.length > 0 && (
+            <TabList aria-label="Flight detail views">
+              {hasAlertsTab && (
                 <Tab
-                  id="tab-btn-alerts"
-                  active={drawerTab === 'alerts'}
+                  id={tabIds.tab('alerts')}
+                  controls={tabIds.panel('alerts')}
+                  active={shownTab === 'alerts'}
                   onClick={() => onSwitchTab('alerts')}
                 >
                   Alerts
                 </Tab>
               )}
               <Tab
-                id="tab-btn-telemetry"
-                active={drawerTab === 'telemetry'}
+                id={tabIds.tab('telemetry')}
+                controls={tabIds.panel('telemetry')}
+                active={shownTab === 'telemetry'}
                 onClick={() => onSwitchTab('telemetry')}
               >
                 Telemetry
               </Tab>
             </TabList>
 
-            <div
+            {hasAlertsTab && (
+              <TabPanel
+                id={tabIds.panel('alerts')}
+                labelledBy={tabIds.tab('alerts')}
+                active={shownTab === 'alerts'}
+                className="tab-content"
+              >
+                <div ref={alertListRef}>
+                  <AlertTimeline
+                    alerts={sortedAlerts}
+                    activeAlertId={activeAlertId}
+                    zones={zones}
+                    alertColors={alertColors}
+                    onSelectAlert={onSelectAlert}
+                  />
+                </div>
+              </TabPanel>
+            )}
+            <TabPanel
+              id={tabIds.panel('telemetry')}
+              labelledBy={tabIds.tab('telemetry')}
+              active={shownTab === 'telemetry'}
               className="tab-content"
-              id="tab-alerts"
-              role="tabpanel"
-              hidden={drawerTab !== 'alerts'}
-            >
-              <AlertTimeline
-                alerts={sortedAlerts}
-                activeAlertId={activeAlertId}
-                zones={zones}
-                alertColors={alertColors}
-                onSelectAlert={onSelectAlert}
-              />
-            </div>
-
-            <div
-              className="tab-content"
-              id="tab-telemetry"
-              role="tabpanel"
-              hidden={drawerTab !== 'telemetry'}
             >
               <TelemetryTable
                 telemetry={flightTelemetry}
@@ -404,96 +411,11 @@ export function DetailsDrawer({
                 onSelectTelemetryPoint={onSelectTelemetryPoint}
                 containerRef={tableContainerRef}
               />
-            </div>
+            </TabPanel>
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-function StatusError({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
-  return (
-    <div className="ui-empty ui-empty--error">
-      <span>{children}</span>
-      {onRetry && (
-        <Button variant="primary" size="md" onClick={onRetry}>
-          Try again
-        </Button>
-      )}
-    </div>
-  );
-}
-
-function renderTelemetrySummary(
-  flightDetail: FlightDetail | null,
-  flightSummary: FlightSummary | null,
-  flightTelemetry: TelemetryPoint[],
-  appConfig: AppConfig | null,
-  now: number,
-) {
-  const formatTs = (ts?: number | null) =>
-    ts ? formatDateTime(ts, { withSeconds: true }) : 'N/A';
-  const live = flightDetail
-    ? isFlightLive(flightDetail)
-    : flightSummary
-    ? isFlightLive(flightSummary)
-    : false;
-
-  const firstTsCandidates = [
-    flightDetail?.start_time,
-    flightSummary?.start_time,
-    flightTelemetry.length > 0 ? flightTelemetry[0].timestamp : null,
-  ].filter((ts): ts is number => typeof ts === 'number' && ts > 0);
-  const firstTs = firstTsCandidates.length > 0 ? Math.min(...firstTsCandidates) : null;
-
-  const lastPoint = flightTelemetry.length > 0 ? flightTelemetry[flightTelemetry.length - 1] : null;
-
-  const lastTsCandidates = [
-    lastPoint?.timestamp,
-    flightSummary?.timestamp,
-    flightSummary?.end_time,
-    flightDetail?.timestamp,
-    flightDetail?.end_time,
-    flightDetail?.start_time,
-    flightSummary?.start_time,
-  ].filter((ts): ts is number => typeof ts === 'number' && ts > 0);
-  const lastTs = lastTsCandidates.length > 0 ? Math.max(...lastTsCandidates) : null;
-
-  if (live) {
-    const secsAgo = lastTs ? Math.max(0, Math.round(now / 1000 - lastTs)) : null;
-    const rememberSecs = appConfig?.remember_planes ?? null;
-    const dropIn =
-      secsAgo != null && rememberSecs != null ? Math.max(0, rememberSecs - secsAgo) : null;
-    return (
-      <>
-        <span className="ui-field-label">First Seen</span>
-        <span className="ui-field-value" id="detail-first-seen">
-          {formatTs(firstTs)}
-        </span>
-        <span className="ui-field-label">Last Seen</span>
-        <span className="ui-field-value ui-field-value--emphasis" id="detail-last-seen">
-          {formatTs(lastTs)}
-          {secsAgo != null && (
-            <span className="ui-field-sub">
-              {secsAgo}s ago{dropIn != null ? ` · drops in ${dropIn}s` : ''}
-            </span>
-          )}
-        </span>
-      </>
-    );
-  }
-  return (
-    <>
-      <span className="ui-field-label">First Seen</span>
-      <span className="ui-field-value" id="detail-first-seen">
-        {formatTs(firstTs)}
-      </span>
-      <span className="ui-field-label">Last Seen</span>
-      <span className="ui-field-value" id="detail-last-seen">
-        {formatTs(lastTs)}
-      </span>
-    </>
+    </aside>
   );
 }
 

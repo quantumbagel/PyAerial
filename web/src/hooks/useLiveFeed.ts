@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
+import { describeError } from '../api/errors';
 import { connectLiveSocket } from '../api/liveSocket';
 import type { Alert, FlightSummary, ServerStats, TelemetryPoint } from '../api/types';
-import { alertEpisodeIdentity, dedupeAlerts, mergeAlertsByEpisode } from '../utils/alertData';
+import {
+  alertEpisodeIdentity,
+  dedupeAlerts,
+  isAlertActive,
+  mergeAlertsByEpisode,
+} from '../utils/alertData';
 import { applyTelemetryBatch, mergeLiveFlights } from '../utils/flightData';
-import { isAlertActive } from '../utils/format';
 import { useLatestRef } from './useStableCallback';
 
 export interface LiveFeedCallbacks {
@@ -85,7 +90,7 @@ export function useLiveFeed(enabled: boolean, callbacks: LiveFeedCallbacks = {})
         callbacksRef.current.onFlights?.(merged);
       } else {
         console.error('Failed to load live flights.', flightsRes.reason);
-        setFlightsError('Failed to load live flights.');
+        setFlightsError(describeError(flightsRes.reason, 'Failed to load live flights.'));
       }
       if (alertsRes.status === 'fulfilled') {
         let next = mergeAlertsByEpisode(alertsRef.current, dedupeAlerts(alertsRes.value));
@@ -96,7 +101,7 @@ export function useLiveFeed(enabled: boolean, callbacks: LiveFeedCallbacks = {})
         setAlertsError(null);
       } else {
         console.error('Failed to load live alerts.', alertsRes.reason);
-        setAlertsError('Failed to load live alerts.');
+        setAlertsError(describeError(alertsRes.reason, 'Failed to load live alerts.'));
       }
       if (statsRes.status === 'fulfilled' && statsRes.value) setStats(statsRes.value);
       setIsLoadingFlights(false);

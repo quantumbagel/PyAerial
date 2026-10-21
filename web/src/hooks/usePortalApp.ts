@@ -9,7 +9,7 @@ import { localDayEndSeconds, localDayStartSeconds } from '../utils/historyFilter
 import { readStored, writeStored } from '../utils/storage';
 import { useBootstrap } from './useBootstrap';
 import { useFlightPaths } from './useFlightPaths';
-import { useFlightSelection } from './useFlightSelection';
+import { FLIGHT_NOT_FOUND, useFlightSelection } from './useFlightSelection';
 import { useHistoryFeed } from './useHistoryFeed';
 import { useLiveFeed } from './useLiveFeed';
 import { useSortPreference } from './useSortPreference';
@@ -43,6 +43,7 @@ export function usePortalApp() {
 
   useEffect(() => {
     writeStored('portalView', portalView);
+    document.title = `PyAerial · ${portalView === 'live' ? 'Live' : 'History'}`;
   }, [portalView]);
 
   useEffect(() => {
@@ -179,7 +180,7 @@ export function usePortalApp() {
       pendingUrlFlight.current = null;
       return;
     }
-    if (selection.selectionError === 'Flight not found.' && !selection.isLoading) {
+    if (selection.selectionError === FLIGHT_NOT_FOUND && !selection.isLoading) {
       if (portalView === 'live') {
         switchPortalView('history');
       } else {

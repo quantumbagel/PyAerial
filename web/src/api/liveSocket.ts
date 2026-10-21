@@ -1,3 +1,4 @@
+import { ApiError, apiErrorFromResponse } from './errors';
 import { ReconnectingSocket, socketUrl } from './reconnectingSocket';
 import type { LiveMessage } from './types';
 
@@ -14,7 +15,7 @@ export const LIVE_IDLE_TIMEOUT_MS = 45_000;
 
 type Settle = {
   resolve: (val: unknown) => void;
-  reject: (err: Error) => void;
+  reject: (err: ApiError) => void;
   timer: ReturnType<typeof setTimeout>;
 };
 
@@ -32,7 +33,7 @@ const socket = new ReconnectingSocket({
   },
   onMessage: (event) => handleMessage(event),
   onClose: (code, reason) => {
-    rejectAllPending('Connection closed');
+    rejectAllPending();
     handlersSet.forEach((h) => h.onClose?.(code, reason));
   },
 });
@@ -42,10 +43,10 @@ function generateId(): string {
   return `${Date.now().toString(36)}-${nextId}`;
 }
 
-function rejectAllPending(reason: string) {
+function rejectAllPending() {
   pendingRequests.forEach((req) => {
     clearTimeout(req.timer);
-    req.reject(new Error(reason));
+    req.reject(new ApiError('disconnected', 'Connection closed'));
   });
   pendingRequests.clear();
   // Queued requests were never sent; a rejected socket will never send them.
@@ -53,7 +54,7 @@ function rejectAllPending(reason: string) {
     while (requestQueue.length > 0) {
       const req = requestQueue.shift()!;
       clearTimeout(req.timer);
-      req.reject(new Error('Connection rejected'));
+      req.reject(new ApiError('rejected', 'Connection rejected'));
     }
   }
 }
@@ -63,12 +64,12 @@ function scheduleTimeout(id: string): ReturnType<typeof setTimeout> {
     const pending = pendingRequests.get(id);
     if (pending) {
       pendingRequests.delete(id);
-      pending.reject(new Error('Request timed out'));
+      pending.reject(new ApiError('timeout', 'Request timed out'));
     }
     const queuedIdx = requestQueue.findIndex((req) => req.id === id);
     if (queuedIdx !== -1) {
       const [queued] = requestQueue.splice(queuedIdx, 1);
-      queued.reject(new Error('Request timed out'));
+      queued.reject(new ApiError('timeout', 'Request timed out'));
     }
   }, REQUEST_TIMEOUT_MS);
 }
@@ -98,14 +99,21 @@ function handleMessage(event: MessageEvent) {
     return;
   }
   if (!data || typeof data !== 'object') return;
-  const msg = data as { type?: string; id?: string; success?: boolean; data?: unknown; error?: string };
+  const msg = data as {
+    type?: string;
+    id?: string;
+    success?: boolean;
+    data?: unknown;
+    error?: string;
+    code?: string;
+  };
   if (msg.type === 'response') {
     const req = msg.id ? pendingRequests.get(msg.id) : undefined;
     if (!req || !msg.id) return;
     clearTimeout(req.timer);
     pendingRequests.delete(msg.id);
     if (msg.success) req.resolve(msg.data);
-    else req.reject(new Error(msg.error || 'Request failed'));
+    else req.reject(apiErrorFromResponse(msg.code, msg.error));
     return;
   }
   // Pings only keep the idle timer alive (handled by ReconnectingSocket).
@@ -146,7 +154,7 @@ export function sendWsRequest<T>(action: string, params: Record<string, unknown>
 
     if (socket.isRejected) {
       clearTimeout(settle.timer);
-      reject(new Error('Connection rejected'));
+      reject(new ApiError('rejected', 'Connection rejected'));
       return;
     }
 
@@ -158,7 +166,7 @@ export function sendWsRequest<T>(action: string, params: Record<string, unknown>
 
     if (requestQueue.length >= MAX_QUEUE_SIZE) {
       clearTimeout(settle.timer);
-      reject(new Error('Request queue full'));
+      reject(new ApiError('queue_full', 'Request queue full'));
       return;
     }
 

@@ -1,5 +1,17 @@
-import type { ButtonHTMLAttributes, HTMLAttributes, KeyboardEvent, ReactNode } from 'react';
+import { useId, type ButtonHTMLAttributes, type HTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
 import { cn } from './cn';
+
+/**
+ * Unique, paired ids for a tab set: `tab(name)` for the tab button and
+ * `panel(name)` for its panel. Two tab sets never collide.
+ */
+export function useTabIds() {
+  const base = useId();
+  return {
+    tab: (name: string) => `${base}-tab-${name}`,
+    panel: (name: string) => `${base}-panel-${name}`,
+  };
+}
 
 interface TabListProps extends HTMLAttributes<HTMLDivElement> {
   compact?: boolean;
@@ -7,19 +19,26 @@ interface TabListProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 interface TabProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  id: string;
+  controls: string;
   active?: boolean;
   children: ReactNode;
 }
 
+interface TabPanelProps extends HTMLAttributes<HTMLDivElement> {
+  id: string;
+  labelledBy: string;
+  active: boolean;
+  children?: ReactNode;
+}
+
+/** Arrow/Home/End move between tabs and activate them (automatic activation). */
 export function TabList({ compact = false, className, children, onKeyDown, ...props }: TabListProps) {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     onKeyDown?.(event);
     if (event.defaultPrevented) return;
-    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft' && event.key !== 'Home' && event.key !== 'End') {
-      return;
-    }
+    if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
     const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
-    if (!tabs.length) return;
     const current = tabs.indexOf(document.activeElement as HTMLElement);
     if (current < 0) return;
     event.preventDefault();
@@ -44,11 +63,13 @@ export function TabList({ compact = false, className, children, onKeyDown, ...pr
   );
 }
 
-export function Tab({ active = false, className, children, ...props }: TabProps) {
+export function Tab({ id, controls, active = false, className, children, ...props }: TabProps) {
   return (
     <button
       type="button"
       role="tab"
+      id={id}
+      aria-controls={controls}
       className={cn('ui-tab', active && 'is-active', className)}
       aria-selected={active}
       tabIndex={active ? 0 : -1}
@@ -56,5 +77,21 @@ export function Tab({ active = false, className, children, ...props }: TabProps)
     >
       {children}
     </button>
+  );
+}
+
+/** Inactive panels use the `hidden` attribute (everywhere, one mechanism). */
+export function TabPanel({ id, labelledBy, active, className, children, ...props }: TabPanelProps) {
+  return (
+    <div
+      role="tabpanel"
+      id={id}
+      aria-labelledby={labelledBy}
+      hidden={!active}
+      className={className}
+      {...props}
+    >
+      {children}
+    </div>
   );
 }

@@ -1,10 +1,11 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { DetailsDrawer } from './components/DetailsDrawer';
 import { DisconnectedBanner } from './components/DisconnectedBanner';
 import { MapView } from './components/MapView';
 import { Sidebar } from './components/Sidebar';
 import { usePortalApp } from './hooks/usePortalApp';
-import type { TelemetryPoint } from './api/types';
+import type { Alert, TelemetryPoint } from './api/types';
+import { ENGINE_IDLE_BANNER } from './utils/emptyStates';
 
 export function PortalApp() {
   const app = usePortalApp();
@@ -24,9 +25,27 @@ export function PortalApp() {
     followSelectedPlane,
     setFollowSelectedPlane,
     selectFlight,
+    selectAlert,
     setSelectedTelemetryPoint,
     drawerTab,
   } = selection;
+
+  // Small screens only (CSS decides): the sidebar is a slide-in panel.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const selectFromList = useCallback(
+    (flightId: string) => {
+      setSidebarOpen(false);
+      void selectFlight(flightId);
+    },
+    [selectFlight],
+  );
+  const selectAlertFromList = useCallback(
+    (alert: Alert, key: string) => {
+      setSidebarOpen(false);
+      void selectAlert(alert, key);
+    },
+    [selectAlert],
+  );
 
   const selectedFlightSummary = useMemo(
     () => feed.flights.find((f) => f.flight_id === activeFlightId) ?? null,
@@ -41,9 +60,9 @@ export function PortalApp() {
   const handleSelectRawIcao = useCallback(
     (icao: string) => {
       const match = feed.flights.find((f) => f.icao.toLowerCase() === icao.toLowerCase());
-      if (match) void selectFlight(match.flight_id);
+      if (match) selectFromList(match.flight_id);
     },
-    [feed.flights, selectFlight],
+    [feed.flights, selectFromList],
   );
 
   const handleToggleFollow = useCallback(() => {
@@ -79,6 +98,7 @@ export function PortalApp() {
         flights={app.filteredFlights}
         alerts={app.filteredAlerts}
         allAlerts={feed.alerts}
+        allFlights={feed.flights}
         unreadAlertsCount={app.unreadAlertsCount}
         serverStats={feed.stats}
         activeFlightId={activeFlightId}
@@ -105,15 +125,25 @@ export function PortalApp() {
         historyUntilDate={app.historyUntilDate}
         onHistorySinceChange={app.setHistorySinceDate}
         onHistoryUntilChange={app.setHistoryUntilDate}
-        onSelectFlight={selectFlight}
-        onSelectAlert={selection.selectAlert}
+        onSelectFlight={selectFromList}
+        onSelectAlert={selectAlertFromList}
         onLoadMoreAlerts={app.loadMoreAlerts}
         onLoadMoreFlights={app.loadMoreFlights}
         zones={zonesData?.zones}
         alertColors={zonesData?.alert_colors}
         rawAntenna={rawAntenna}
         onSelectRawIcao={handleSelectRawIcao}
+        open={sidebarOpen}
+        id="portal-sidebar"
       />
+      {sidebarOpen && (
+        <button
+          type="button"
+          className="sidebar-scrim"
+          aria-label="Close the list"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
       <MapView
         flights={feed.flights}
         filteredFlights={app.filteredFlights}
@@ -132,13 +162,10 @@ export function PortalApp() {
         onToggleFollow={handleToggleFollow}
         onToggleZones={() => setZonesVisible((v) => !v)}
         onTogglePaths={() => paths.setShowAllPaths((v) => !v)}
-        followLabel={followSelectedPlane ? 'Following' : 'Follow'}
-        zonesLabel={app.zonesVisible ? 'Zones On' : 'Zones Off'}
-        pathsLabel={paths.showAllPaths ? 'Paths On' : 'Paths Off'}
-        followVisible={!!activeFlightId}
-        followActive={followSelectedPlane}
-        zonesActive={app.zonesVisible}
-        pathsActive={paths.showAllPaths}
+        drawerOpen={selection.drawerOpen}
+        onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        sidebarOpen={sidebarOpen}
+        sidebarId="portal-sidebar"
         mapRef={mapRef}
         drawer={
           <DetailsDrawer
@@ -159,7 +186,7 @@ export function PortalApp() {
             onSelectTelemetryPoint={handleSelectTelemetryPoint}
             onClose={selection.closeDrawer}
             onSwitchTab={selection.setDrawerTab}
-            onSelectAlert={selection.selectAlert}
+            onSelectAlert={selectAlert}
           />
         }
       />
@@ -167,9 +194,7 @@ export function PortalApp() {
         status={bootstrap.wsStatus}
         message={
           bootstrap.bootstrapError ||
-          (app.engineIdle
-            ? 'Tracking engine is idle. Start `pyaerial run`; frozen aircraft will expire shortly.'
-            : null)
+          (app.engineIdle ? ENGINE_IDLE_BANNER : null)
         }
       />
     </>

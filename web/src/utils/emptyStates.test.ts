@@ -72,12 +72,12 @@ describe('emptyFlightsMessage', () => {
     ).toMatch(/pyaerial run/);
     expect(
       emptyFlightsMessage({ view: 'live', hasFilters: false, stats: stats() }),
-    ).toBe('No aircraft on the live feed.');
+    ).toBe('No aircraft in range right now.');
   });
 
   it('does not claim the engine is down before stats arrive', () => {
     expect(emptyFlightsMessage({ view: 'live', hasFilters: false, stats: null })).toBe(
-      'No aircraft on the live feed.',
+      'No aircraft in range right now.',
     );
   });
 });
@@ -86,9 +86,18 @@ describe('emptyAlertsMessage', () => {
   it('matches the live / history split', () => {
     expect(
       emptyAlertsMessage({ view: 'history', hasFilters: false, stats: stats() }),
-    ).toMatch(/retained alerts/);
+    ).toMatch(/archived alerts/);
     expect(
       emptyAlertsMessage({ view: 'live', hasFilters: false, stats: stats() }),
-    ).toBe('No geofence alerts yet.');
+    ).toBe('No alerts yet.');
+  });
+
+  it('never shows markdown backticks to users', () => {
+    for (const view of ['live', 'history'] as const) {
+      for (const s of [stats(), stats({ engine_seen_at: null, engine_live: false }), null]) {
+        expect(emptyAlertsMessage({ view, hasFilters: false, stats: s })).not.toContain('`');
+        expect(emptyFlightsMessage({ view, hasFilters: false, stats: s })).not.toContain('`');
+      }
+    }
   });
 });

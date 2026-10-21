@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
+import { describeError } from '../api/errors';
 import type { Alert, FlightSummary, ServerStats } from '../api/types';
 import { alertEpisodeIdentity, dedupeAlerts, mergeAlertsByEpisode } from '../utils/alertData';
 
@@ -126,7 +127,7 @@ export function useHistoryFeed(enabled: boolean, filter: HistoryFilter) {
         if (gen !== generation.current) return;
         console.error(`Failed to load ${kind}.`, err);
         // A failed background refresh keeps what is already on screen.
-        if (!lists.current[kind].length) setError(kind, `Failed to load ${kind}.`);
+        if (!lists.current[kind].length) setError(kind, describeError(err, `Failed to load ${kind}.`));
       } finally {
         if (inFlight.current[kind] === gen) inFlight.current[kind] = null;
         if (gen === generation.current) setLoading(kind, false);

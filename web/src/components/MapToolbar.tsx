@@ -5,87 +5,89 @@ interface MapToolbarProps {
   followActive: boolean;
   zonesActive: boolean;
   pathsActive: boolean;
-  followLabel: string;
-  zonesLabel: string;
-  pathsLabel: string;
   onToggleFollow: () => void;
   onToggleZones: () => void;
   onTogglePaths: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
+  /** Small screens: show the button that opens the sidebar panel. */
+  onToggleSidebar?: () => void;
+  sidebarOpen?: boolean;
+  sidebarId?: string;
 }
 
+/** Map controls. Toggles keep a fixed label; their state is aria-pressed (and styling). */
 export function MapToolbar({
   followVisible,
   followActive,
   zonesActive,
   pathsActive,
-  followLabel,
-  zonesLabel,
-  pathsLabel,
   onToggleFollow,
   onToggleZones,
   onTogglePaths,
   onZoomIn,
   onZoomOut,
+  onToggleSidebar,
+  sidebarOpen = false,
+  sidebarId,
 }: MapToolbarProps) {
   return (
-    <div id="map-controls" className="ui-toolbar" role="toolbar" aria-label="Map controls">
+    <div className="map-controls ui-toolbar" role="toolbar" aria-label="Map controls">
+      {onToggleSidebar && (
+        <>
+          <div className="ui-btn-group map-controls__sidebar">
+            <Button
+              variant="toggle"
+              active={sidebarOpen}
+              aria-expanded={sidebarOpen}
+              aria-controls={sidebarId}
+              title="Show flights and alerts"
+              onClick={onToggleSidebar}
+            >
+              <span aria-hidden="true">☰</span> List
+            </Button>
+          </div>
+          <div className="ui-toolbar__divider map-controls__sidebar" aria-hidden="true" />
+        </>
+      )}
       <div className="ui-btn-group">
         {followVisible && (
           <Button
-            id="follow-btn"
             variant="toggle"
             active={followActive}
-            title="Follow selected aircraft"
+            title="Keep the selected aircraft centred"
             aria-pressed={followActive}
             onClick={onToggleFollow}
           >
-            {followLabel}
+            Follow
           </Button>
         )}
         <Button
-          id="zones-btn"
           variant="toggle"
           active={zonesActive}
           title="Show configured geofence zones"
           aria-pressed={zonesActive}
           onClick={onToggleZones}
         >
-          {zonesLabel}
+          Zones
         </Button>
         <Button
-          id="paths-btn"
           variant="toggle"
           active={pathsActive}
-          title="Show flight paths for all visible aircraft"
+          title="Show flight paths for all listed aircraft"
           aria-pressed={pathsActive}
           onClick={onTogglePaths}
         >
-          {pathsLabel}
+          Paths
         </Button>
       </div>
       <div className="ui-toolbar__divider" aria-hidden="true" />
       <div className="ui-btn-group">
-        <Button
-          id="zoom-in-btn"
-          variant="toggle"
-          zoom
-          title="Zoom in"
-          aria-label="Zoom in"
-          onClick={onZoomIn}
-        >
-          +
+        <Button variant="toggle" zoom title="Zoom in" aria-label="Zoom in" onClick={onZoomIn}>
+          <span aria-hidden="true">+</span>
         </Button>
-        <Button
-          id="zoom-out-btn"
-          variant="toggle"
-          zoom
-          title="Zoom out"
-          aria-label="Zoom out"
-          onClick={onZoomOut}
-        >
-          −
+        <Button variant="toggle" zoom title="Zoom out" aria-label="Zoom out" onClick={onZoomOut}>
+          <span aria-hidden="true">−</span>
         </Button>
       </div>
     </div>

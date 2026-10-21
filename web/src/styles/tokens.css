@@ -1,4 +1,14 @@
+/*
+ * Design tokens.
+ *
+ * Colours shared with the map (--accent, --accent-soft, --status-live, --warn,
+ * --alert, --neutral, --neutral-dark, --home) are defined once in
+ * src/utils/colors.ts and written onto :root at startup by applyPaletteTokens().
+ */
 :root {
+    color-scheme: dark;
+
+    /* Surfaces & text */
     --bg: #121212;
     --panel: #1a1a1a;
     --panel-raised: #151515;
@@ -9,16 +19,10 @@
     --input-border: #3f3f46;
     --text: #fafafa;
     --text-secondary: #a1a1aa;
-    --text-muted: #71717a;
-    --accent: #3b82f6;
-    --accent-soft: #dbeafe;
-    --accent-active-bg: #1e3a5f;
-    --status-live: #34d399;
-    --warn: #f59e0b;
-    --alert: #ef4444;
-    --neutral: #64748b;
-    --neutral-dark: #334155;
+    /* ≥ 4.5:1 on --panel, --panel-raised and --panel-hover */
+    --text-muted: #8e8e98;
     --text-on-accent: #ffffff;
+    --accent-active-bg: #1e3a5f;
     --surface-overlay: rgba(26, 26, 26, 0.95);
     --surface-toolbar: rgba(15, 18, 24, 0.9);
     --surface-toolbar-border: rgba(51, 65, 85, 0.8);
@@ -27,6 +31,10 @@
     --surface-photo: #0c0f16;
     --surface-ghost: rgba(255, 255, 255, 0.03);
     --surface-ghost-hover: rgba(255, 255, 255, 0.08);
+    --scrim: rgba(0, 0, 0, 0.5);
+
+    /* Spacing */
+    --space-0: 2px;
     --space-1: 4px;
     --space-2: 8px;
     --space-3: 12px;
@@ -34,30 +42,62 @@
     --space-5: 20px;
     --space-6: 24px;
     --space-8: 32px;
+
+    /* Radii */
     --radius-sm: 4px;
     --radius-md: 6px;
     --radius-lg: 8px;
     --radius-pill: 999px;
-    --font-xs: 0.65rem;
-    --font-sm: 0.7rem;
-    --font-section: 0.75rem;
-    --font-title: 0.95rem;
-    --font-body: 0.8rem;
+
+    /* Type: nothing smaller than 0.75rem */
+    --font-sans: 'Outfit', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --font-xs: 0.75rem;
+    --font-sm: 0.75rem;
     --font-meta: 0.75rem;
+    --font-section: 0.8rem;
+    --font-body: 0.8125rem;
+    --font-title: 0.95rem;
     --font-icon: 1rem;
     --font-icon-lg: 1.5rem;
+
+    /* Controls */
     --control-h-sm: 24px;
     --control-h-md: 28px;
-    --control-px: 8px;
-    --control-py: 4px;
+    --control-px: var(--space-2);
+    --control-py: var(--space-1);
     --row-py: var(--space-2);
     --row-px: var(--space-3);
-    --row-gap: 2px;
+    --row-gap: var(--space-0);
+
+    /* Layout */
+    --sidebar-w: 360px;
+    --drawer-w: min(420px, 42vw);
+
+    /* Elevation: Leaflet panes use up to 700 and its controls 1000. */
+    --z-sidebar: 10;
+    --z-map-controls: 1005;
+    --z-drawer: 1010;
+    --z-sidebar-overlay: 1020;
+    --z-menu: 1030;
+    --z-banner: 2000;
+
+    /* Motion */
+    --duration-fast: 0.15s;
+    --duration-base: 0.25s;
+    --duration-slow: 0.35s;
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
     --shadow-toolbar: 0 4px 16px rgba(0, 0, 0, 0.45);
     --shadow-popup: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
 }
 
 @media (prefers-reduced-motion: reduce) {
+    :root {
+        --duration-fast: 0.01ms;
+        --duration-base: 0.01ms;
+        --duration-slow: 0.01ms;
+    }
     *,
     *::before,
     *::after {
@@ -74,20 +114,27 @@
     padding: 0;
 }
 
+/* One hide mechanism everywhere: the hidden attribute always wins. */
+[hidden] {
+    display: none !important;
+}
+
 body {
-    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+    font-family: var(--font-sans);
     background-color: var(--bg);
     color: var(--text);
     display: flex;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
 }
 
 #root {
     display: flex;
     width: 100%;
-    height: 100vh;
+    height: 100%;
     overflow: hidden;
+    position: relative;
 }
 
 :focus-visible {
@@ -98,6 +145,18 @@ body {
 button:focus:not(:focus-visible),
 a:focus:not(:focus-visible) {
     outline: none;
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 ::-webkit-scrollbar {
@@ -115,7 +174,7 @@ a:focus:not(:focus-visible) {
     to { transform: rotate(360deg); }
 }
 
-@keyframes bannerSlideDown {
+@keyframes banner-slide-down {
     from { transform: translateX(-50%) translateY(-110%); opacity: 0; }
     to { transform: translateX(-50%) translateY(0); opacity: 1; }
 }

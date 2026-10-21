@@ -1,5 +1,7 @@
+import { ORIGIN_REJECTED_MESSAGE } from '../api/errors';
+import { EMPTY, formatNumber } from './format';
 import type { BufferedRawFrame, RawFrame, ServerStats, WsStatus } from '../api/types';
-import { isEngineLive } from './emptyStates';
+import { ENGINE_DOWN, REDIS_DOWN, isEngineLive } from './emptyStates';
 
 export const RAW_BUFFER_CAP = 400;
 
@@ -38,11 +40,11 @@ export function filterRawFrames(
 }
 
 export function formatRawDf(df?: number): string {
-  return df != null && Number.isFinite(df) ? `DF${df}` : 'DF—';
+  return df != null && Number.isFinite(df) ? `DF${df}` : `DF${EMPTY}`;
 }
 
 export function formatRawRssi(rssi?: number): string {
-  return rssi != null && Number.isFinite(rssi) ? `${rssi.toFixed(1)} dBFS` : '';
+  return rssi != null && Number.isFinite(rssi) ? `${formatNumber(rssi, 1)} dBFS` : '';
 }
 
 export function emptyRawMessage({
@@ -56,13 +58,13 @@ export function emptyRawMessage({
 }): string {
   if (hasFilters) return 'No frames match your filters.';
   if (rawStatus === 'rejected') {
-    return 'Beast stream access denied. Check web.origins.';
+    return ORIGIN_REJECTED_MESSAGE;
   }
   if (stats?.redis === false) {
-    return 'Live store (Redis) is unreachable. The portal cannot see receiver frames.';
+    return REDIS_DOWN;
   }
   if (stats != null && !isEngineLive(stats)) {
-    return 'Tracking engine is not running. Start `pyaerial run`.';
+    return ENGINE_DOWN;
   }
-  return 'No Beast frames yet. Frames appear when dump1090 is feeding `pyaerial run`.';
+  return 'No Beast frames yet. They appear once dump1090 is feeding the tracker.';
 }

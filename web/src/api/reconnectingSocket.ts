@@ -9,6 +9,8 @@
  */
 
 export const POLICY_VIOLATION = 1008;
+/** Server is at its connection cap ("try again later"): retry, but not eagerly. */
+export const TRY_AGAIN_LATER = 1013;
 /** Close code we report for sockets we dropped because they went quiet. */
 export const IDLE_TIMEOUT_CODE = 4000;
 
@@ -153,6 +155,7 @@ export class ReconnectingSocket {
       this.rejected = true;
       this.running = false;
     }
+    if (code === TRY_AGAIN_LATER) this.attempt = Math.max(this.attempt, 3);
     this.opts.onClose?.(code, reason);
     if (this.running) this.scheduleReconnect();
   }

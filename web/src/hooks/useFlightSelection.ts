@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import * as api from '../api/client';
+import { describeError, errorCode } from '../api/errors';
 import type { Alert, FlightDetail, PortalView, TelemetryPoint } from '../api/types';
 import { mergeAlertsByEpisode } from '../utils/alertData';
 import { SELECTED_POINT_CAP, insertByTimestamp, trimToCap } from '../utils/buffers';
@@ -13,6 +14,8 @@ interface UseFlightSelectionOptions {
   /** Called when an alert is selected (e.g. to reveal the Alerts sidebar tab). */
   onAlertSelected?: () => void;
 }
+
+export const FLIGHT_NOT_FOUND = 'Flight not found.';
 
 function sortedTelemetry(points: TelemetryPoint[]): TelemetryPoint[] {
   const sorted = [...points].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
@@ -126,7 +129,7 @@ export function useFlightSelection({
         if (token !== selectionTokenRef.current) return;
         if (!detail) {
           setIsLoading(false);
-          setSelectionError('Flight not found.');
+          setSelectionError(FLIGHT_NOT_FOUND);
           return;
         }
         const points = sortedTelemetry(telemetry);
@@ -151,8 +154,10 @@ export function useFlightSelection({
       } catch (err) {
         if (token !== selectionTokenRef.current) return;
         setIsLoading(false);
-        const raw = err instanceof Error ? err.message : '';
-        const message = /not found/i.test(raw) ? 'Flight not found.' : 'Failed to load flight details.';
+        const message =
+          errorCode(err) === 'not_found'
+            ? FLIGHT_NOT_FOUND
+            : describeError(err, 'Failed to load flight details.');
         console.error(message, err);
         setSelectionError(message);
       }

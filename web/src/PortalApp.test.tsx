@@ -45,7 +45,6 @@ vi.mock('./api/rawSocket', () => ({
 }));
 
 vi.mock('./api/client', () => ({
-  HISTORY_FETCH_CAP: 200,
   fetchFlights: vi.fn(async () => flights),
   fetchAlerts: vi.fn(async () => []),
   fetchStats: vi.fn(async () => ({

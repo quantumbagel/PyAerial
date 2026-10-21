@@ -1,10 +1,16 @@
+import { memo } from 'react';
 import type { TelemetryPoint } from '../api/types';
 import {
-  formatAltitudeCell,
+  formatAltitudeCompact,
+  formatCoordinate,
   formatDateTime,
   formatHeading,
-  formatSpeedCell,
+  formatSpeedCompact,
 } from '../utils/format';
+import { StateView } from './ui';
+
+/** Rows rendered (newest kept); the selected flight buffers up to 5k points. */
+export const TELEMETRY_TABLE_ROWS = 250;
 
 interface TelemetryTableProps {
   telemetry: TelemetryPoint[];
@@ -13,22 +19,23 @@ interface TelemetryTableProps {
   containerRef?: React.Ref<HTMLDivElement>;
 }
 
-export function TelemetryTable({
+export const TelemetryTable = memo(function TelemetryTable({
   telemetry,
   selectedTelemetryPoint,
   onSelectTelemetryPoint,
   containerRef,
 }: TelemetryTableProps) {
-  const handleKeyDown = (event: React.KeyboardEvent, point: TelemetryPoint) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      onSelectTelemetryPoint(point);
-    }
-  };
-
+  if (telemetry.length === 0) {
+    return <StateView layout="inline">No telemetry yet.</StateView>;
+  }
+  const rows = telemetry.length > TELEMETRY_TABLE_ROWS ? telemetry.slice(-TELEMETRY_TABLE_ROWS) : telemetry;
+  const selectedTs = selectedTelemetryPoint?.timestamp;
   return (
     <div className="table-container" ref={containerRef}>
       <table className="tel-table">
+        <caption className="visually-hidden">
+          Telemetry fixes, oldest first. Choose a time to show that fix on the map.
+        </caption>
         <thead>
           <tr>
             <th scope="col">Time</th>
@@ -39,45 +46,39 @@ export function TelemetryTable({
             <th scope="col" className="tel-num">Longitude</th>
           </tr>
         </thead>
-        <tbody id="telemetry-table-body">
-          {telemetry.length === 0 ? (
-            <tr>
-              <td colSpan={6} className="empty-cell">
-                No telemetry data.
-              </td>
-            </tr>
-          ) : (
-            telemetry.slice(-250).map((point, index) => {
-              const timeStr = formatDateTime(point.timestamp, { withSeconds: true });
-              const latVal = point.latitude != null ? point.latitude.toFixed(4) : 'N/A';
-              const lonVal = point.longitude != null ? point.longitude.toFixed(4) : 'N/A';
-              const isSelected =
-                selectedTelemetryPoint != null &&
-                selectedTelemetryPoint.timestamp === point.timestamp &&
-                selectedTelemetryPoint.latitude === point.latitude &&
-                selectedTelemetryPoint.longitude === point.longitude;
-              return (
-                <tr
-                  key={`${point.timestamp ?? 't'}-${index}`}
-                  tabIndex={0}
-                  role="button"
-                  onClick={() => onSelectTelemetryPoint(point)}
-                  onKeyDown={(event) => handleKeyDown(event, point)}
-                  className={isSelected ? 'active-tel-row tel-row-interactive' : 'tel-row-interactive'}
-                  aria-pressed={isSelected}
-                >
-                  <td>{timeStr}</td>
-                  <td className="tel-num">{formatAltitudeCell(point.altitude)}</td>
-                  <td className="tel-num">{formatSpeedCell(point.speed)}</td>
-                  <td className="tel-num">{formatHeading(point.heading)}</td>
-                  <td className="tel-num">{latVal}</td>
-                  <td className="tel-num">{lonVal}</td>
-                </tr>
-              );
-            })
-          )}
+        <tbody>
+          {rows.map((point) => {
+            const isSelected = selectedTs != null && selectedTs === point.timestamp;
+            return (
+              <tr
+                key={point.timestamp}
+                className={isSelected ? 'is-selected' : undefined}
+                // Mouse users can click anywhere on the row; keyboard users get the button.
+                onClick={() => onSelectTelemetryPoint(point)}
+              >
+                <td>
+                  <button
+                    type="button"
+                    className="tel-select"
+                    aria-pressed={isSelected}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelectTelemetryPoint(point);
+                    }}
+                  >
+                    {formatDateTime(point.timestamp, { withSeconds: true })}
+                  </button>
+                </td>
+                <td className="tel-num">{formatAltitudeCompact(point.altitude)}</td>
+                <td className="tel-num">{formatSpeedCompact(point.speed)}</td>
+                <td className="tel-num">{formatHeading(point.heading)}</td>
+                <td className="tel-num">{formatCoordinate(point.latitude)}</td>
+                <td className="tel-num">{formatCoordinate(point.longitude)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
-}
+});

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as api from '../api/client';
+import { ORIGIN_REJECTED_MESSAGE, describeError } from '../api/errors';
 import { connectLiveSocket } from '../api/liveSocket';
 import { POLICY_VIOLATION } from '../api/reconnectingSocket';
 import type { AppConfig, WsStatus, ZonesData } from '../api/types';
@@ -26,7 +27,7 @@ export function useBootstrap() {
         .catch((err) => {
           if (cancelled) return;
           console.error('Failed to fetch zones', err);
-          setZonesError('Could not load zones.');
+          setZonesError(describeError(err, 'Could not load zones.'));
         });
       api
         .fetchConfig()
@@ -38,7 +39,7 @@ export function useBootstrap() {
         .catch((err) => {
           if (cancelled) return;
           console.error('Failed to fetch config', err);
-          setConfigError('Could not load station config.');
+          setConfigError(describeError(err, 'Could not load the station config.'));
         });
     };
     const unsubscribe = connectLiveSocket({
@@ -47,10 +48,10 @@ export function useBootstrap() {
         setWsRejectReason(null);
         load();
       },
-      onClose: (code, reason) => {
+      onClose: (code) => {
         if (code === POLICY_VIOLATION) {
           setWsStatus('rejected');
-          setWsRejectReason(reason?.trim() || 'Access denied.');
+          setWsRejectReason(ORIGIN_REJECTED_MESSAGE);
           return;
         }
         setWsStatus((prev) => (prev === 'connecting' ? 'connecting' : 'reconnecting'));

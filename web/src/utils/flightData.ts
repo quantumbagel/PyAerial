@@ -1,14 +1,17 @@
 import type { FlightSummary, TelemetryPoint } from '../api/types';
 import { readStoredJson, writeStored } from './storage';
+import { flightAlertLabel } from './alertData';
 import {
-  formatDate,
+  cleanField,
+  displayCallsign,
+  displayField,
+  displayIcao,
+  formatAltitudeCompact,
   formatDateTime,
   formatDuration,
-  formatFlightAlertSummary,
-  formatTime,
-  isFiniteNumber,
+  formatSpeedCompact,
+  formatTimeRange,
   isFlightLive,
-  isSameLocalDay,
 } from './format';
 
 export type FlightSortField =
@@ -56,7 +59,7 @@ function getFlightDuration(flight: FlightSummary): number {
 }
 
 function getFlightAircraftType(flight: FlightSummary): string {
-  return (flight.aircraft_type || '').toLowerCase();
+  return (cleanField(flight.aircraft_type) || '').toLowerCase();
 }
 
 function isFiniteSortNumber(value: unknown): value is number {
@@ -83,11 +86,11 @@ function isFlightSortValueMissing(flight: FlightSummary, field: FlightSortField)
     case 'first_seen':
       return (flight.start_time ?? 0) === 0;
     case 'callsign':
-      return !flight.callsign?.trim();
+      return !cleanField(flight.callsign);
     case 'icao':
-      return !flight.icao?.trim();
+      return !cleanField(flight.icao);
     case 'model':
-      return !flight.model?.trim();
+      return !cleanField(flight.model);
     case 'type':
       return !getFlightAircraftType(flight);
     case 'alerts':
@@ -96,6 +99,9 @@ function isFlightSortValueMissing(flight: FlightSummary, field: FlightSortField)
       return false;
   }
 }
+
+const textCompare = (a?: string | null, b?: string | null) =>
+  (a || '').localeCompare(b || '', undefined, { sensitivity: 'base' });
 
 function compareFlightsByField(
   a: FlightSummary,
@@ -115,13 +121,13 @@ function compareFlightsByField(
     case 'duration':
       return getFlightDuration(a) - getFlightDuration(b);
     case 'callsign':
-      return (a.callsign || '').localeCompare(b.callsign || '', undefined, { sensitivity: 'base' });
+      return textCompare(cleanField(a.callsign), cleanField(b.callsign));
     case 'icao':
-      return (a.icao || '').localeCompare(b.icao || '', undefined, { sensitivity: 'base' });
+      return textCompare(a.icao, b.icao);
     case 'model':
-      return (a.model || '').localeCompare(b.model || '', undefined, { sensitivity: 'base' });
+      return textCompare(cleanField(a.model), cleanField(b.model));
     case 'type':
-      return getFlightAircraftType(a).localeCompare(getFlightAircraftType(b), undefined, { sensitivity: 'base' });
+      return textCompare(getFlightAircraftType(a), getFlightAircraftType(b));
     case 'altitude':
       return (a.altitude as number) - (b.altitude as number);
     case 'speed':
@@ -287,78 +293,39 @@ export function applyTelemetryPoint(
   return applyTelemetryBatch(flights, [point]);
 }
 
-export function sortFlights(flights: FlightSummary[]): FlightSummary[] {
-  return [...flights].sort((a, b) => {
-    const aLive = isFlightLive(a);
-    const bLive = isFlightLive(b);
-    if (aLive && !bLive) return -1;
-    if (!aLive && bLive) return 1;
-    return (b.start_time || 0) - (a.start_time || 0);
-  });
-}
-
-export function flightSortValueLabel(
-  flight: FlightSummary,
-  sortField: FlightSortField,
-  alertCount?: number,
-): string {
+/** Trailing text in a flight row for the active sort field. */
+export function flightSortValueLabel(flight: FlightSummary, sortField: FlightSortField): string {
   switch (sortField) {
-    case 'alerts': {
-      if ((flight.alert_stats?.episode_count ?? 0) > 0 || (flight.active_alerts?.length ?? 0) > 0) {
-        return formatFlightAlertSummary(flight);
-      }
-      const count = alertCount ?? 0;
-      return count === 1 ? '1 active' : `${count} active`;
-    }
+    case 'alerts':
+      return flightAlertLabel(flight);
     case 'altitude':
-      return isFiniteNumber(flight.altitude)
-        ? `${Math.round(Number(flight.altitude)).toLocaleString('en-US')} m`
-        : 'N/A';
+      return formatAltitudeCompact(flight.altitude);
     case 'speed':
-      return isFiniteNumber(flight.speed)
-        ? `${Math.round(Number(flight.speed)).toLocaleString('en-US')} km/h`
-        : 'N/A';
+      return formatSpeedCompact(flight.speed);
     case 'callsign':
-      return flight.callsign?.trim() || 'N/A';
+      return displayCallsign(flight);
     case 'icao':
-      return flight.icao?.toUpperCase().trim() || 'N/A';
+      return displayIcao(flight.icao);
     case 'model':
-      return flight.model?.trim() || 'N/A';
+      return displayField(flight.model);
     case 'type':
-      return flight.aircraft_type?.trim() || 'N/A';
-    case 'duration': {
-      const start = flight.start_time ?? 0;
-      const end = flight.end_time ?? flight.timestamp ?? start;
-      const secs = Math.max(0, end - start);
-      return formatDuration(secs);
-    }
+      return displayField(flight.aircraft_type);
+    case 'duration':
+      return formatDuration(getFlightDuration(flight));
     default:
       return flightTimeLabel(flight, sortField);
   }
 }
 
+/** When the flight was seen: last fix for live flights, the full span otherwise. */
 export function flightTimeLabel(flight: FlightSummary, sortField?: FlightSortField): string {
-  const isLive = isFlightLive(flight);
-  const formatTs = (ts?: number) => (ts ? formatDateTime(ts) : '');
-
   if (sortField === 'first_seen') {
-    return formatTs(flight.start_time) || formatTs(flight.timestamp ?? flight.end_time);
+    return formatDateTime(flight.start_time ?? flight.timestamp ?? flight.end_time);
   }
-
-  if (isLive) {
-    const liveTime = flight.timestamp ?? flight.end_time ?? flight.start_time;
-    return formatTs(liveTime);
+  if (isFlightLive(flight)) {
+    return formatDateTime(flight.timestamp ?? flight.end_time ?? flight.start_time);
   }
-
-  const start = flight.start_time;
-  const end = flight.end_time;
-  if (start && end) {
-    if (isSameLocalDay(start, end)) {
-      return `${formatDate(start)} · ${formatTime(start)} – ${formatTime(end)}`;
-    }
-    return `${formatDateTime(start)} : ${formatDateTime(end)}`;
-  }
-  return formatTs(start ?? end);
+  return formatTimeRange(flight.start_time, flight.end_time);
 }
 
 export const FLIGHT_SORT_STORE = {

@@ -3,8 +3,7 @@ import type { FlightSummary, RawAntenna, ServerStats } from '../api/types';
 import { useRawFrames } from '../hooks/useRawFrames';
 import { emptyRawMessage, filterRawFrames } from '../utils/rawFrames';
 import { RawListItem } from './RawListItem';
-import { StatusMessage } from './StatusMessage';
-import { Chip } from './ui';
+import { Chip, StateView } from './ui';
 
 function subscribeVisibility(onChange: () => void) {
   document.addEventListener('visibilitychange', onChange);
@@ -55,15 +54,15 @@ export function RawPanel({ searchQuery, flights, antenna, stats, onSelectIcao }:
           ))}
         </div>
       ) : null}
-      <ul id="raw-list">
+      <ul className="sidebar-list">
         {filtered.length === 0 && (status === 'connecting' || status === 'reconnecting') ? (
-          <StatusMessage variant="loading">
-            {status === 'reconnecting' ? 'Reconnecting to Beast stream…' : 'Connecting to Beast stream…'}
-          </StatusMessage>
+          <StateView as="li" kind="loading">
+            {status === 'reconnecting' ? 'Reconnecting to the Beast stream…' : 'Connecting to the Beast stream…'}
+          </StateView>
         ) : filtered.length === 0 ? (
-          <StatusMessage>
+          <StateView as="li" kind={status === 'rejected' ? 'error' : 'empty'}>
             {emptyRawMessage({ hasFilters: Boolean(searchQuery), stats, rawStatus: status })}
-          </StatusMessage>
+          </StateView>
         ) : (
           filtered.map((row) => (
             <RawListItem
