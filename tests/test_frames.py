@@ -270,3 +270,105 @@ def test_correct_receiver_frames_skips_different_icao():
     )
     merged = correct_receiver_frames([a, b])
     assert {frame.hex for frame in merged} == {a.hex, b.hex}
+
+
+def _reference_merge(frames: list[RawFrame], window: float = 0.1) -> list[RawFrame]:
+    """The original O(n^2) merge, kept as an oracle for the indexed version."""
+    from pyaerial.receivers.frames import _better_copy, _frame_identity, _hamming_bits
+
+    by_hex: dict[str, RawFrame] = {}
+    order: list[str] = []
+    for frame in frames:
+        prev = by_hex.get(frame.hex)
+        if prev is None:
+            by_hex[frame.hex] = frame
+            order.append(frame.hex)
+        elif _better_copy(frame, prev):
+            by_hex[frame.hex] = frame
+    kept: list[RawFrame] = []
+    for frame in (by_hex[h] for h in order):
+        payload = bytes.fromhex(frame.hex)
+        for index, other in enumerate(kept):
+            other_payload = bytes.fromhex(other.hex)
+            if len(other_payload) != len(payload):
+                continue
+            if abs(frame.timestamp - other.timestamp) > window:
+                continue
+            if frame.receiver == other.receiver:
+                continue
+            if _frame_identity(frame.hex) != _frame_identity(other.hex):
+                continue
+            if _hamming_bits(payload, other_payload) > 2:
+                continue
+            if _better_copy(frame, other):
+                kept[index] = frame
+            break
+        else:
+            kept.append(frame)
+    return kept
+
+
+def test_correct_receiver_frames_matches_reference_merge():
+    import random
+
+    rng = random.Random(42)
+    bases = ["8d%06x%022x" % (rng.randrange(8), rng.getrandbits(88)) for _ in range(12)]
+    frames = []
+    for i in range(600):
+        payload = bytearray(bytes.fromhex(rng.choice(bases)))
+        for _ in range(rng.choice((0, 0, 1, 2, 3))):
+            payload[rng.randrange(4, 14)] ^= 1 << rng.randrange(8)
+        frames.append(
+            RawFrame(
+                hex=payload.hex(),
+                timestamp=1.7e9 + i * 0.013 + rng.uniform(-0.05, 0.05),
+                receiver=rng.choice("ab"),
+                rssi=rng.choice((None, -10.0, -20.0, -30.0)),
+            )
+        )
+    assert correct_receiver_frames(frames) == _reference_merge(frames)
+
+
+def test_correct_receiver_frames_is_not_quadratic():
+    """Regression: 10k frames took ~3.8 s with the all-pairs scan."""
+    import random
+    import time
+
+    rng = random.Random(1)
+    frames = [
+        RawFrame(
+            hex="8d%06x%022x" % (rng.randrange(1 << 24), rng.getrandbits(88)),
+            timestamp=1.7e9 + i * 1e-5,
+            receiver="ab"[i % 2],
+        )
+        for i in range(10_000)
+    ]
+    started = time.perf_counter()
+    merged = correct_receiver_frames(frames)
+    assert time.perf_counter() - started < 0.5
+    assert len(merged) == len(frames)
+
+
+def test_receive_times_ignores_non_monotonic_clock():
+    """Regression: a clock after the reference wrapped to ~271 days ago."""
+    stamps = receive_times(100.0, [12_000_000, 24_000_000, 18_000_000])
+    assert stamps[1] == 100.0  # later than the reference -> wall time
+    assert abs(stamps[0] - 99.5) < 1e-9
+    assert min(stamps) > 97.0
+
+
+def test_receive_times_ignores_mlat_marker_clock():
+    from pyaerial.receivers.frames import BEAST_MLAT_CLOCK
+
+    stamps = receive_times(100.0, [12_000_000, 18_000_000, BEAST_MLAT_CLOCK])
+    assert abs(stamps[0] - 99.5) < 1e-9
+    assert abs(stamps[1] - 100.0) < 1e-5
+    assert abs(stamps[2] - 100.0) < 1e-5
+
+
+def test_parse_avr_rejects_bad_lengths_and_garbage():
+    assert parse_avr_line("*8D406B902015A678D4D220AA4B;") is None  # 26 digits
+    assert parse_avr_line("*8D406B902015A6;") == ("8d406b902015a6", None)
+    assert parse_avr_line("*7700;") == ("7700", None)
+    assert parse_avr_line("*8D406B90zz15A678D4D220AA4BDA;") is None
+    assert parse_avr_line("AABBCC", strict=False) == ("aabbcc", None)

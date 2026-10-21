@@ -81,12 +81,12 @@ class ReplayReceiver(Receiver):
             if len(parts) >= 2:
                 try:
                     stamp = float(parts[0])
-                    parsed = parse_avr_line(parts[1])
+                    parsed = parse_avr_line(parts[1], strict=False)
                     hex_msg = parsed[0] if parsed else parts[1]
                 except ValueError:
                     stamp = None
             if stamp is None:
-                parsed = parse_avr_line(line)
+                parsed = parse_avr_line(line, strict=False)
                 if not parsed:
                     continue
                 hex_msg, clock = parsed
