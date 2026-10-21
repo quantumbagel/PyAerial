@@ -65,7 +65,9 @@ def test_retain_false_is_honored_even_with_alerts():
     assert should_retain(_plane(), alerts, config, store.polygons) is False
 
 
-def test_retain_true_requires_dwell():
+def test_retain_true_keeps_any_fired_episode():
+    """Regression: an alert that fired (activation hold already met by the
+    engine) used to be dropped when its episode was shorter than dwell."""
     config = make_config(
         zones={
             "pad": ZoneConfig(
@@ -96,8 +98,12 @@ def test_retain_true_requires_dwell():
             "deactivated_at": 80.0,
         }
     ]
-    assert should_retain(_plane(), short, config, store.polygons) is False
+    assert should_retain(_plane(), short, config, store.polygons) is True
     assert should_retain(_plane(), long, config, store.polygons) is True
+    never_fired = [{"zone": "pad", "rule": "warn", "activated_at": None}]
+    assert should_retain(_plane(), never_fired, config, store.polygons) is False
+    unknown_rule = [{"zone": "pad", "rule": "gone", "activated_at": 1.0}]
+    assert should_retain(_plane(), unknown_rule, config, store.polygons) is False
 
 
 def test_retain_fallback_uses_matching_seconds_not_sample_count():
