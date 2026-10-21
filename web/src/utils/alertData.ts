@@ -1,4 +1,5 @@
 import type { Alert } from '../api/types';
+import { readStoredJson, writeStored } from './storage';
 import {
   formatActiveSince,
   formatEpisodeDuration,
@@ -172,21 +173,17 @@ export function loadAlertSort(view: 'live' | 'history'): {
   field: AlertSortField;
   direction: SortDirection;
 } {
-  try {
-    const raw = localStorage.getItem(`alertSort:${view}`);
-    if (!raw) return { field: 'activated', direction: 'desc' };
-    const parsed = JSON.parse(raw) as { field?: AlertSortField; direction?: SortDirection };
-    const field = ALERT_SORT_OPTIONS.some((o) => o.value === parsed.field)
-      ? parsed.field!
-      : 'activated';
-    const direction =
-      parsed.direction === 'asc' || parsed.direction === 'desc'
-        ? parsed.direction
-        : defaultAlertSortDirection(field);
-    return { field, direction };
-  } catch {
-    return { field: 'activated', direction: 'desc' };
-  }
+  const parsed = readStoredJson<{ field?: AlertSortField; direction?: SortDirection }>(
+    `alertSort:${view}`,
+  );
+  const field = ALERT_SORT_OPTIONS.some((o) => o.value === parsed?.field)
+    ? parsed!.field!
+    : 'activated';
+  const direction =
+    parsed?.direction === 'asc' || parsed?.direction === 'desc'
+      ? parsed.direction
+      : defaultAlertSortDirection(field);
+  return { field, direction };
 }
 
 export function saveAlertSort(
@@ -194,7 +191,7 @@ export function saveAlertSort(
   field: AlertSortField,
   direction: SortDirection,
 ): void {
-  localStorage.setItem(`alertSort:${view}`, JSON.stringify({ field, direction }));
+  writeStored(`alertSort:${view}`, JSON.stringify({ field, direction }));
 }
 
 export function alertSortValueLabel(alert: Alert, sortField: AlertSortField): string {
@@ -231,3 +228,9 @@ export function alertSortValueLabel(alert: Alert, sortField: AlertSortField): st
     }
   }
 }
+
+export const ALERT_SORT_STORE = {
+  load: loadAlertSort,
+  save: saveAlertSort,
+  defaultDirection: defaultAlertSortDirection,
+};

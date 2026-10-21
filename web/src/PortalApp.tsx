@@ -1,140 +1,143 @@
+import { useCallback, useMemo } from 'react';
 import { DetailsDrawer } from './components/DetailsDrawer';
 import { DisconnectedBanner } from './components/DisconnectedBanner';
 import { MapView } from './components/MapView';
 import { Sidebar } from './components/Sidebar';
 import { usePortalApp } from './hooks/usePortalApp';
+import type { TelemetryPoint } from './api/types';
 
 export function PortalApp() {
+  const app = usePortalApp();
   const {
     portalView,
-    searchQuery,
-    setSearchQuery,
-    historySinceDate,
-    historyUntilDate,
-    setHistorySinceDate,
-    setHistoryUntilDate,
-    zonesVisible,
-    setZonesVisible,
-    mapRef,
     selection,
-    portal,
+    bootstrap,
+    feed,
     paths,
-    filteredFlights,
-    filteredAlerts,
-    flightCount,
-    flightSortField,
-    flightSortDirection,
-    setFlightSort,
-    toggleFlightSortDirection,
-    alertSortField,
-    alertSortDirection,
-    setAlertSort,
-    toggleAlertSortDirection,
+    mapRef,
     disableFollow,
-    raw,
-    filteredRawFrames,
-    engineIdle,
-  } = usePortalApp();
+    setZonesVisible,
+  } = app;
+  const { zonesData, appConfig } = bootstrap;
+  const {
+    activeFlightId,
+    followSelectedPlane,
+    setFollowSelectedPlane,
+    selectFlight,
+    setSelectedTelemetryPoint,
+    drawerTab,
+  } = selection;
 
-  const selectedFlightSummary =
-    portal.flightsData.find((f) => f.flight_id === selection.activeFlightId) || null;
+  const selectedFlightSummary = useMemo(
+    () => feed.flights.find((f) => f.flight_id === activeFlightId) ?? null,
+    [feed.flights, activeFlightId],
+  );
+
+  const rawAntenna = useMemo(
+    () => (appConfig ? { home: appConfig.home, receivers: appConfig.receivers ?? [] } : null),
+    [appConfig],
+  );
+
+  const handleSelectRawIcao = useCallback(
+    (icao: string) => {
+      const match = feed.flights.find((f) => f.icao.toLowerCase() === icao.toLowerCase());
+      if (match) void selectFlight(match.flight_id);
+    },
+    [feed.flights, selectFlight],
+  );
+
+  const handleToggleFollow = useCallback(() => {
+    if (!activeFlightId) return;
+    if (followSelectedPlane) {
+      setFollowSelectedPlane(false);
+      return;
+    }
+    setFollowSelectedPlane(true);
+    if (selectedFlightSummary?.latitude != null && selectedFlightSummary.longitude != null) {
+      mapRef.current.focusOn(selectedFlightSummary.latitude, selectedFlightSummary.longitude, 11);
+    }
+  }, [activeFlightId, followSelectedPlane, setFollowSelectedPlane, selectedFlightSummary, mapRef]);
+
+  const handleRetrySelection = useCallback(() => {
+    if (activeFlightId) void selectFlight(activeFlightId, drawerTab);
+  }, [activeFlightId, drawerTab, selectFlight]);
+
+  const handleSelectTelemetryPoint = useCallback(
+    (point: TelemetryPoint) => {
+      disableFollow();
+      setSelectedTelemetryPoint(point);
+    },
+    [disableFollow, setSelectedTelemetryPoint],
+  );
 
   return (
     <>
       <Sidebar
         portalView={portalView}
-        sidebarTab={portal.sidebarTab}
-        searchQuery={searchQuery}
-        flights={filteredFlights}
-        alerts={filteredAlerts}
-        allAlerts={portal.alertsData}
-        unreadAlertsCount={portal.unreadAlertsCount}
-        serverStats={portal.serverStats}
-        activeFlightId={selection.activeFlightId}
+        sidebarTab={app.sidebarTab}
+        searchQuery={app.searchQuery}
+        flights={app.filteredFlights}
+        alerts={app.filteredAlerts}
+        allAlerts={feed.alerts}
+        unreadAlertsCount={app.unreadAlertsCount}
+        serverStats={feed.stats}
+        activeFlightId={activeFlightId}
         activeAlertId={selection.activeAlertId}
-        flightCount={flightCount}
-        flightSortField={flightSortField}
-        flightSortDirection={flightSortDirection}
-        alertSortField={alertSortField}
-        alertSortDirection={alertSortDirection}
-        isLoadingFlights={portal.isLoadingFlights}
-        isLoadingAlerts={portal.isLoadingAlerts}
-        flightsError={portal.flightsError}
-        alertsError={portal.alertsError}
-        onRetryFlights={portal.retryFlights}
-        onRetryAlerts={portal.retryAlerts}
-        onSwitchPortalView={portal.switchPortalView}
-        onFlightSortChange={setFlightSort}
-        onFlightSortDirectionToggle={toggleFlightSortDirection}
-        onAlertSortChange={setAlertSort}
-        onAlertSortDirectionToggle={toggleAlertSortDirection}
-        onSwitchSidebarTab={portal.handleSwitchSidebarTab}
-        onSearchChange={setSearchQuery}
-        historySinceDate={historySinceDate}
-        historyUntilDate={historyUntilDate}
-        onHistorySinceChange={setHistorySinceDate}
-        onHistoryUntilChange={setHistoryUntilDate}
-        onSelectFlight={selection.selectFlight}
+        flightCount={app.flightCount}
+        flightSortField={app.flightSort.field}
+        flightSortDirection={app.flightSort.direction}
+        alertSortField={app.alertSort.field}
+        alertSortDirection={app.alertSort.direction}
+        isLoadingFlights={feed.isLoadingFlights}
+        isLoadingAlerts={feed.isLoadingAlerts}
+        flightsError={feed.flightsError}
+        alertsError={feed.alertsError}
+        onRetryFlights={app.retryFlights}
+        onRetryAlerts={app.retryAlerts}
+        onSwitchPortalView={app.switchPortalView}
+        onFlightSortChange={app.flightSort.setField}
+        onFlightSortDirectionToggle={app.flightSort.toggleDirection}
+        onAlertSortChange={app.alertSort.setField}
+        onAlertSortDirectionToggle={app.alertSort.toggleDirection}
+        onSwitchSidebarTab={app.switchSidebarTab}
+        onSearchChange={app.setSearchQuery}
+        historySinceDate={app.historySinceDate}
+        historyUntilDate={app.historyUntilDate}
+        onHistorySinceChange={app.setHistorySinceDate}
+        onHistoryUntilChange={app.setHistoryUntilDate}
+        onSelectFlight={selectFlight}
         onSelectAlert={selection.selectAlert}
-        onAlertsScroll={portal.handleAlertsScroll}
-        onFlightsScroll={portal.handleFlightsScroll}
-        zones={portal.zonesData?.zones}
-        alertColors={portal.zonesData?.alert_colors}
-        rawFrames={filteredRawFrames}
-        rawAntenna={
-          portal.appConfig
-            ? {
-                home: portal.appConfig.home,
-                receivers: portal.appConfig.receivers ?? [],
-              }
-            : null
-        }
-        rawStatus={raw.status}
-        onSelectRawIcao={(icao) => {
-          const match = portal.flightsData.find(
-            (f) => f.icao.toLowerCase() === icao.toLowerCase(),
-          );
-          if (match) selection.selectFlight(match.flight_id);
-        }}
+        onLoadMoreAlerts={app.loadMoreAlerts}
+        onLoadMoreFlights={app.loadMoreFlights}
+        zones={zonesData?.zones}
+        alertColors={zonesData?.alert_colors}
+        rawAntenna={rawAntenna}
+        onSelectRawIcao={handleSelectRawIcao}
       />
       <MapView
-        flights={portal.flightsData}
-        filteredFlights={filteredFlights}
-        activeFlightId={selection.activeFlightId}
+        flights={feed.flights}
+        filteredFlights={app.filteredFlights}
+        activeFlightId={activeFlightId}
         selectedTelemetryPoint={selection.selectedTelemetryPoint}
-        followSelectedPlane={selection.followSelectedPlane}
-        zonesVisible={zonesVisible}
+        followSelectedPlane={followSelectedPlane}
+        zonesVisible={app.zonesVisible}
         showAllPaths={paths.showAllPaths}
-        zonesData={portal.zonesData}
-        appConfig={portal.appConfig}
+        zonesData={zonesData}
+        appConfig={appConfig}
         pathCoords={paths.pathCoords}
         pathTelemetry={paths.pathTelemetry}
         pathAlerts={paths.pathAlerts}
-        onSelectFlight={selection.selectFlight}
+        onSelectFlight={selectFlight}
         onFollowDisabled={disableFollow}
-        onToggleFollow={() => {
-          if (!selection.activeFlightId) return;
-          if (selection.followSelectedPlane) {
-            selection.setFollowSelectedPlane(false);
-          } else {
-            selection.setFollowSelectedPlane(true);
-            const flight = portal.flightsData.find((f) => f.flight_id === selection.activeFlightId);
-            if (flight?.latitude != null && flight?.longitude != null && mapRef.current.map) {
-              mapRef.current.map.setView(
-                [flight.latitude, flight.longitude],
-                Math.max(mapRef.current.map.getZoom(), 11),
-              );
-            }
-          }
-        }}
+        onToggleFollow={handleToggleFollow}
         onToggleZones={() => setZonesVisible((v) => !v)}
         onTogglePaths={() => paths.setShowAllPaths((v) => !v)}
-        followLabel={selection.followSelectedPlane ? 'Following' : 'Follow'}
-        zonesLabel={zonesVisible ? 'Zones On' : 'Zones Off'}
+        followLabel={followSelectedPlane ? 'Following' : 'Follow'}
+        zonesLabel={app.zonesVisible ? 'Zones On' : 'Zones Off'}
         pathsLabel={paths.showAllPaths ? 'Paths On' : 'Paths Off'}
-        followVisible={!!selection.activeFlightId}
-        followActive={selection.followSelectedPlane}
-        zonesActive={zonesVisible}
+        followVisible={!!activeFlightId}
+        followActive={followSelectedPlane}
+        zonesActive={app.zonesVisible}
         pathsActive={paths.showAllPaths}
         mapRef={mapRef}
         drawer={
@@ -146,21 +149,14 @@ export function PortalApp() {
             activeAlertId={selection.activeAlertId}
             flightAlerts={selection.flightAlerts}
             flightTelemetry={selection.flightTelemetry}
-            drawerTab={selection.drawerTab}
+            drawerTab={drawerTab}
             selectedTelemetryPoint={selection.selectedTelemetryPoint}
-            appConfig={portal.appConfig}
-            zones={portal.zonesData?.zones}
-            alertColors={portal.zonesData?.alert_colors}
+            appConfig={appConfig}
+            zones={zonesData?.zones}
+            alertColors={zonesData?.alert_colors}
             selectionError={selection.selectionError}
-            onRetry={() => {
-              if (selection.activeFlightId) {
-                selection.selectFlight(selection.activeFlightId, selection.drawerTab);
-              }
-            }}
-            onSelectTelemetryPoint={(point) => {
-              disableFollow();
-              selection.setSelectedTelemetryPoint(point);
-            }}
+            onRetry={handleRetrySelection}
+            onSelectTelemetryPoint={handleSelectTelemetryPoint}
             onClose={selection.closeDrawer}
             onSwitchTab={selection.setDrawerTab}
             onSelectAlert={selection.selectAlert}
@@ -168,10 +164,10 @@ export function PortalApp() {
         }
       />
       <DisconnectedBanner
-        status={portal.wsStatus}
+        status={bootstrap.wsStatus}
         message={
-          portal.bootstrapError ||
-          (engineIdle
+          bootstrap.bootstrapError ||
+          (app.engineIdle
             ? 'Tracking engine is idle. Start `pyaerial run`; frozen aircraft will expire shortly.'
             : null)
         }

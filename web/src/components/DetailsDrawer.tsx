@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Alert, AppConfig, FlightDetail, FlightSummary, TelemetryPoint, Zone } from '../api/types';
 import {
   formatActiveAlerts,
@@ -59,6 +59,7 @@ export function DetailsDrawer({
   onSelectAlert,
 }: DetailsDrawerProps) {
   const drawerRef = useRef<HTMLDivElement>(null);
+  const headingId = useId();
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [prevTelemetryLength, setPrevTelemetryLength] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -69,21 +70,56 @@ export function DetailsDrawer({
     return () => clearInterval(id);
   }, [open, flightDetail]);
 
+  const onCloseRef = useRef(onClose);
   useEffect(() => {
-    if (!open) return;
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  // Escape closes the drawer unless something inside handled it first (an
+  // open sort menu, an input, ...).
+  useEffect(() => {
+    if (!open) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      // Don't steal Escape from inputs (search box, sort dropdowns, etc.).
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
       const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) {
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
         return;
       }
-      onClose();
+      onCloseRef.current();
     };
     window.addEventListener('keydown', onKeyDown);
-    drawerRef.current?.focus();
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+  }, [open]);
+
+  // Move focus in only when the drawer opens, and hand it back when it closes.
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const drawer = drawerRef.current;
+    if (!drawer) return undefined;
+    if (open) {
+      const active = document.activeElement;
+      returnFocusRef.current =
+        active instanceof HTMLElement && active !== document.body && !drawer.contains(active)
+          ? active
+          : null;
+      drawer.focus({ preventScroll: true });
+      return undefined;
+    }
+    const target = returnFocusRef.current;
+    returnFocusRef.current = null;
+    const active = document.activeElement;
+    const focusWasInside = !active || active === document.body || drawer.contains(active);
+    if (target && target.isConnected && focusWasInside) {
+      target.focus({ preventScroll: true });
+    }
+    return undefined;
+  }, [open]);
 
   useEffect(() => {
     if (!open || drawerTab !== 'telemetry') return;
@@ -163,11 +199,10 @@ export function DetailsDrawer({
       id="details-drawer"
       ref={drawerRef}
       className={open ? 'open' : ''}
-      role="dialog"
-      aria-modal={open ? true : undefined}
+      role="complementary"
+      aria-labelledby={headingId}
       aria-hidden={!open}
       inert={!open ? true : undefined}
-      aria-label="Selected aircraft details"
       tabIndex={-1}
     >
       <div id="drawer-header">
@@ -182,7 +217,7 @@ export function DetailsDrawer({
           &times;
         </Button>
         <div className="drawer-header-label">Selected Aircraft</div>
-        <h2>
+        <h2 id={headingId}>
           <span id="detail-callsign">{callsign}</span>{' '}
           {rawIcao && rawIcao !== callsign && (
             <Chip id="detail-icao">{icao}</Chip>

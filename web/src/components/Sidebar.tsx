@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import type { Alert, BufferedRawFrame, FlightSummary, RawAntenna, ServerStats, WsStatus, Zone } from '../api/types';
+import type { Alert, FlightSummary, RawAntenna, ServerStats, Zone } from '../api/types';
 import { type FlightSortField, type SortDirection } from '../utils/flightData';
 import {
   alertEpisodeKey,
@@ -8,17 +8,20 @@ import {
   type SortDirection as AlertSortDirection,
 } from '../utils/alertData';
 import { emptyAlertsMessage, emptyFlightsMessage } from '../utils/emptyStates';
-import { emptyRawMessage } from '../utils/rawFrames';
 import { isAlertActive } from '../utils/format';
 import { AlertListItem } from './AlertListItem';
-import { RawListItem } from './RawListItem';
+import { RawPanel } from './RawPanel';
 import { AlertSortControls } from './AlertSortControls';
 import { FlightListItem } from './FlightListItem';
 import { FlightSortControls } from './FlightSortControls';
 import { StatusMessage } from './StatusMessage';
-import { Button, Chip, Input, Stat, StatValue, Tab, TabList } from './ui';
+import { Button, Input, Stat, StatValue, Tab, TabList } from './ui';
 
 type SidebarTab = 'flights' | 'alerts' | 'raw';
+
+function nearBottom(el: HTMLElement): boolean {
+  return el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
+}
 
 interface SidebarProps {
   portalView: 'live' | 'history';
@@ -55,13 +58,11 @@ interface SidebarProps {
   onHistoryUntilChange?: (value: string) => void;
   onSelectFlight: (flightId: string) => void;
   onSelectAlert: (alert: Alert, episodeKey: string) => void;
-  onAlertsScroll: (el: HTMLElement) => void;
-  onFlightsScroll?: (el: HTMLElement) => void;
+  onLoadMoreAlerts?: () => void;
+  onLoadMoreFlights?: () => void;
   zones?: Zone[];
   alertColors?: Record<string, string>;
-  rawFrames?: BufferedRawFrame[];
   rawAntenna?: RawAntenna | null;
-  rawStatus?: WsStatus;
   onSelectRawIcao?: (icao: string) => void;
 }
 
@@ -100,13 +101,11 @@ export function Sidebar({
   onHistoryUntilChange,
   onSelectFlight,
   onSelectAlert,
-  onAlertsScroll,
-  onFlightsScroll,
+  onLoadMoreAlerts,
+  onLoadMoreFlights,
   zones,
   alertColors,
-  rawFrames = [],
   rawAntenna = null,
-  rawStatus = 'connecting',
   onSelectRawIcao,
 }: SidebarProps) {
   useEffect(() => {
@@ -158,14 +157,6 @@ export function Sidebar({
     () => sortAlertsBy(alerts, alertSortField, alertSortDirection),
     [alerts, alertSortField, alertSortDirection],
   );
-
-  const selectableIcaos = useMemo(() => {
-    const set = new Set<string>();
-    for (const flight of flights) {
-      if (flight.icao) set.add(flight.icao.toLowerCase());
-    }
-    return set;
-  }, [flights]);
 
   return (
     <div id="sidebar">
@@ -303,11 +294,6 @@ export function Sidebar({
           onClick={() => onSwitchSidebarTab('raw')}
         >
           Raw
-          {rawFrames.length > 0 && sidebarTab !== 'raw' ? (
-            <span className="ui-count" aria-label={`${rawFrames.length} buffered frames`}>
-              {rawFrames.length}
-            </span>
-          ) : null}
         </Tab>
       </TabList>
       <div
@@ -323,7 +309,7 @@ export function Sidebar({
         />
         <ul
           id="flight-list"
-          onScroll={(e) => onFlightsScroll?.(e.currentTarget)}
+          onScroll={(e) => nearBottom(e.currentTarget) && onLoadMoreFlights?.()}
         >
           {isLoadingFlights ? (
             <StatusMessage variant="loading">Loading flights…</StatusMessage>
@@ -369,7 +355,7 @@ export function Sidebar({
         <ul
           id="alert-list"
           key={`${alertSortField}-${alertSortDirection}`}
-          onScroll={(e) => onAlertsScroll(e.currentTarget)}
+          onScroll={(e) => nearBottom(e.currentTarget) && onLoadMoreAlerts?.()}
         >
           {isLoadingAlerts ? (
             <StatusMessage variant="loading">Loading alerts…</StatusMessage>
@@ -409,42 +395,15 @@ export function Sidebar({
         role="tabpanel"
         className={`sidebar-panel${sidebarTab === 'raw' ? ' active' : ''}`}
       >
-        {rawAntenna?.receivers?.length ? (
-          <div className="raw-antenna" aria-label="Configured receivers">
-            {rawAntenna.receivers.map((receiver) => (
-              <Chip key={receiver.name}>
-                {receiver.name}
-                {receiver.format ? ` · ${receiver.format}` : ` · ${receiver.type}`}
-              </Chip>
-            ))}
-          </div>
+        {sidebarTab === 'raw' ? (
+          <RawPanel
+            searchQuery={searchQuery}
+            flights={flights}
+            antenna={rawAntenna}
+            stats={serverStats ?? null}
+            onSelectIcao={onSelectRawIcao}
+          />
         ) : null}
-        <ul id="raw-list">
-          {rawFrames.length === 0 && (rawStatus === 'connecting' || rawStatus === 'reconnecting') ? (
-            <StatusMessage variant="loading">
-              {rawStatus === 'reconnecting' ? 'Reconnecting to Beast stream…' : 'Connecting to Beast stream…'}
-            </StatusMessage>
-          ) : rawFrames.length === 0 ? (
-            <StatusMessage>
-              {emptyRawMessage({
-                hasFilters: Boolean(searchQuery),
-                stats: serverStats ?? null,
-                rawStatus,
-              })}
-            </StatusMessage>
-          ) : (
-            rawFrames.map((row) => (
-              <RawListItem
-                key={row.id}
-                frame={row}
-                selectable={Boolean(
-                  row.icao && onSelectRawIcao && selectableIcaos.has(row.icao.toLowerCase()),
-                )}
-                onSelectIcao={onSelectRawIcao}
-              />
-            ))
-          )}
-        </ul>
       </div>
     </div>
   );

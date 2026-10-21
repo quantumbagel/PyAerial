@@ -29,6 +29,8 @@ export const FlightSortControls = memo(function FlightSortControls({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // Consume it so the details drawer doesn't also close.
+        e.preventDefault();
         setIsOpen(false);
       }
     };

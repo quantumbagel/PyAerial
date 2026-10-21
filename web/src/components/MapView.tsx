@@ -22,6 +22,8 @@ const OPENFREEMAP_DARK = 'https://tiles.openfreemap.org/styles/dark';
 export interface MapViewHandle {
   map: L.Map | null;
   panToAlert: (lat: number, lon: number) => void;
+  /** Center on a point, zooming in to at least `minZoom`. */
+  focusOn: (lat: number, lon: number, minZoom: number) => void;
 }
 
 interface MapViewProps {
@@ -172,6 +174,9 @@ export function MapView({
       panToAlert: (lat: number, lon: number) => {
         map.setView([lat, lon], Math.max(map.getZoom(), 14));
       },
+      focusOn: (lat: number, lon: number, minZoom: number) => {
+        map.setView([lat, lon], Math.max(map.getZoom(), minZoom));
+      },
     };
     const resizeObserver = new ResizeObserver(() => map.invalidateSize());
     resizeObserver.observe(containerRef.current);
@@ -185,7 +190,7 @@ export function MapView({
       planeAlertPaths.current = {};
       zoneLayers.current = [];
       selectedTelemetryMarker.current = null;
-      mapRef.current = { map: null, panToAlert: () => {} };
+      mapRef.current = { map: null, panToAlert: () => {}, focusOn: () => {} };
     };
   }, [mapRef]);
 

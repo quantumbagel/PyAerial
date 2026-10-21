@@ -2,23 +2,27 @@ import { useCallback, useRef, useState } from 'react';
 import * as api from '../api/client';
 import type { Alert, FlightDetail, PortalView, TelemetryPoint } from '../api/types';
 import { mergeAlertsByEpisode } from '../utils/alertData';
+import { SELECTED_POINT_CAP, insertByTimestamp, trimToCap } from '../utils/buffers';
 import type { DrawerTab } from '../components/DetailsDrawer';
 import type { MapViewHandle } from '../components/MapView';
+import { useLatestRef, useStableCallback } from './useStableCallback';
 
 interface UseFlightSelectionOptions {
   portalView: PortalView;
   mapRef: React.RefObject<MapViewHandle>;
-  fetchAndSetPathRef: React.RefObject<(flightId: string, view: PortalView) => Promise<void>>;
-  clearPathsIfNeeded: () => void;
-  onSelectAlertTab: () => void;
+  /** Called when an alert is selected (e.g. to reveal the Alerts sidebar tab). */
+  onAlertSelected?: () => void;
+}
+
+function sortedTelemetry(points: TelemetryPoint[]): TelemetryPoint[] {
+  const sorted = [...points].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  return trimToCap(sorted, SELECTED_POINT_CAP);
 }
 
 export function useFlightSelection({
   portalView,
   mapRef,
-  fetchAndSetPathRef,
-  clearPathsIfNeeded,
-  onSelectAlertTab,
+  onAlertSelected,
 }: UseFlightSelectionOptions) {
   const [activeFlightId, setActiveFlightId] = useState<string | null>(null);
   const [activeAlertId, setActiveAlertId] = useState<string | null>(null);
@@ -32,21 +36,16 @@ export function useFlightSelection({
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Read synchronously by socket handlers between renders, so it is written
+  // where the selection changes rather than mirrored after commit.
   const activeFlightIdRef = useRef<string | null>(null);
   const selectionTokenRef = useRef(0);
-  const portalViewRef = useRef(portalView);
-  activeFlightIdRef.current = activeFlightId;
-  portalViewRef.current = portalView;
+  const portalViewRef = useLatestRef(portalView);
+  const notifyAlertSelected = useStableCallback(() => onAlertSelected?.());
 
-  const loadFlightAlerts = useCallback(async (flightId: string, view: PortalView) => {
-    const token = selectionTokenRef.current;
-    const alerts = await api.fetchAlerts(view, {
-      flightId,
-      activeOnly: false,
-    });
-    if (token !== selectionTokenRef.current) return alerts;
-    setFlightAlerts(alerts);
-    return alerts;
+  const setActive = useCallback((flightId: string | null) => {
+    activeFlightIdRef.current = flightId;
+    setActiveFlightId(flightId);
   }, []);
 
   const syncFlightAlerts = useCallback((alerts: Alert[]) => {
@@ -57,46 +56,45 @@ export function useFlightSelection({
     setFlightAlerts((prev) => mergeAlertsByEpisode(prev, forFlight));
   }, []);
 
-  const loadFlightTelemetry = useCallback(
-    async (flightId: string, view: PortalView, token = selectionTokenRef.current) => {
-      const points = await api.fetchTelemetry(flightId, view);
-      if (token !== selectionTokenRef.current) return points;
-      setFlightTelemetry(points.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)));
-      return points;
-    },
-    [],
-  );
-
+  /** Merge live points for the selected flight (in order, capped). */
   const appendSelectedTelemetry = useCallback((points: TelemetryPoint[]) => {
     const flightId = activeFlightIdRef.current;
+    if (!flightId) return;
     const forFlight = points.filter((p) => !p.flight_id || p.flight_id === flightId);
     if (!forFlight.length) return;
-    setFlightTelemetry((prev) => {
-      const ts = new Set(prev.map((t) => t.timestamp));
-      return [...prev, ...forFlight.filter((p) => !ts.has(p.timestamp))].sort(
-        (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
-      );
+    setFlightTelemetry((prev) => insertByTimestamp(prev, forFlight, SELECTED_POINT_CAP));
+    const latestPoint = forFlight.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
+    setFlightDetail((prev) => {
+      if (!prev) return prev;
+      if (prev.flight_id && prev.flight_id !== flightId) return prev;
+      const newTs = Math.max(prev.timestamp ?? 0, prev.end_time ?? 0, latestPoint.timestamp);
+      return {
+        ...prev,
+        timestamp: newTs,
+        end_time: newTs,
+        latitude: latestPoint.latitude ?? prev.latitude,
+        longitude: latestPoint.longitude ?? prev.longitude,
+        altitude: latestPoint.altitude ?? prev.altitude,
+        speed: latestPoint.speed ?? prev.speed,
+        heading: latestPoint.heading ?? prev.heading,
+        active_alerts: latestPoint.active_alerts ?? prev.active_alerts,
+      };
     });
-    const latestPoint = forFlight[forFlight.length - 1];
-    if (latestPoint) {
-      setFlightDetail((prev) => {
-        if (!prev) return prev;
-        if (flightId && prev.flight_id && prev.flight_id !== flightId) return prev;
-        const newTs = Math.max(prev.timestamp ?? 0, prev.end_time ?? 0, latestPoint.timestamp);
-        return {
-          ...prev,
-          timestamp: newTs,
-          end_time: newTs,
-          latitude: latestPoint.latitude ?? prev.latitude,
-          longitude: latestPoint.longitude ?? prev.longitude,
-          altitude: latestPoint.altitude ?? prev.altitude,
-          speed: latestPoint.speed ?? prev.speed,
-          heading: latestPoint.heading ?? prev.heading,
-          active_alerts: latestPoint.active_alerts ?? prev.active_alerts,
-        };
-      });
-    }
   }, []);
+
+  /** After a reconnect, backfill telemetry the selected flight produced while we were away. */
+  const refreshSelectedTelemetry = useCallback(async () => {
+    const flightId = activeFlightIdRef.current;
+    if (!flightId) return;
+    const token = selectionTokenRef.current;
+    try {
+      const points = await api.fetchTelemetry(flightId, portalViewRef.current);
+      if (token !== selectionTokenRef.current) return;
+      if (points.length) appendSelectedTelemetry(points);
+    } catch {
+      // the live stream will fill in
+    }
+  }, [appendSelectedTelemetry, portalViewRef]);
 
   const selectFlight = useCallback(
     async (
@@ -105,29 +103,25 @@ export function useFlightSelection({
       opts?: { follow?: boolean; panToLatest?: boolean; keepAlert?: boolean },
     ) => {
       const token = ++selectionTokenRef.current;
+      const view = portalViewRef.current;
       const follow = opts?.follow ?? true;
       const panToLatest = opts?.panToLatest ?? true;
       setSelectionError(null);
       setIsLoading(true);
-      setActiveFlightId(flightId);
+      setActive(flightId);
       setSelectedTelemetryPoint(null);
       setFollowSelectedPlane(follow);
       setDrawerOpen(true);
       setFlightDetail(null);
       setFlightAlerts([]);
       setFlightTelemetry([]);
-      if (!opts?.keepAlert) {
-        setActiveAlertId(null);
-      }
-      if (initialTab) {
-        setDrawerTab(initialTab);
-      }
+      if (!opts?.keepAlert) setActiveAlertId(null);
+      if (initialTab) setDrawerTab(initialTab);
       try {
         const [detail, telemetry, alerts] = await Promise.all([
-          api.fetchFlight(flightId, portalViewRef.current),
-          loadFlightTelemetry(flightId, portalViewRef.current, token),
-          loadFlightAlerts(flightId, portalViewRef.current),
-          fetchAndSetPathRef.current(flightId, portalViewRef.current),
+          api.fetchFlight(flightId, view),
+          api.fetchTelemetry(flightId, view),
+          api.fetchAlerts(view, { flightId, activeOnly: false }),
         ]);
         if (token !== selectionTokenRef.current) return;
         if (!detail) {
@@ -135,62 +129,63 @@ export function useFlightSelection({
           setSelectionError('Flight not found.');
           return;
         }
+        const points = sortedTelemetry(telemetry);
         setFlightDetail(detail);
+        // Live points may have arrived while the fetch was in flight.
+        setFlightTelemetry((prev) => insertByTimestamp(points, prev, SELECTED_POINT_CAP));
+        setFlightAlerts((prev) => mergeAlertsByEpisode(alerts, prev));
         setIsLoading(false);
-        if (!initialTab) {
-          setDrawerTab(alerts && alerts.length > 0 ? 'alerts' : 'telemetry');
+        if (!initialTab) setDrawerTab(alerts.length > 0 ? 'alerts' : 'telemetry');
+        let lastFix: TelemetryPoint | undefined;
+        for (let i = points.length - 1; i >= 0; i -= 1) {
+          if (points[i].latitude != null && points[i].longitude != null) {
+            lastFix = points[i];
+            break;
+          }
         }
-        const lastFix = [...(telemetry || [])]
-          .reverse()
-          .find((point) => point.latitude != null && point.longitude != null);
         const lat = detail.latitude ?? lastFix?.latitude;
         const lon = detail.longitude ?? lastFix?.longitude;
-        if (panToLatest && lat != null && lon != null && mapRef.current?.map) {
-          mapRef.current.map.setView(
-            [lat, lon],
-            Math.max(mapRef.current.map.getZoom(), 11),
-          );
+        if (panToLatest && lat != null && lon != null) {
+          mapRef.current?.focusOn(lat, lon, 11);
         }
       } catch (err) {
         if (token !== selectionTokenRef.current) return;
         setIsLoading(false);
         const raw = err instanceof Error ? err.message : '';
-        const message = /not found/i.test(raw)
-          ? 'Flight not found.'
-          : 'Failed to load flight details.';
+        const message = /not found/i.test(raw) ? 'Flight not found.' : 'Failed to load flight details.';
         console.error(message, err);
         setSelectionError(message);
       }
     },
-    [loadFlightTelemetry, loadFlightAlerts, fetchAndSetPathRef, mapRef],
+    [mapRef, portalViewRef, setActive],
   );
 
   const selectAlert = useCallback(
     async (alert: Alert, episodeKey: string) => {
       setActiveAlertId(episodeKey);
-      onSelectAlertTab();
+      notifyAlertSelected();
       if (alert.latitude != null && alert.longitude != null) {
         mapRef.current?.panToAlert(alert.latitude, alert.longitude);
       }
-      if (alert.flight_id) {
-        if (alert.flight_id === activeFlightIdRef.current) {
-          setDrawerTab('alerts');
-          return;
-        }
-        await selectFlight(alert.flight_id, 'alerts', {
-          follow: false,
-          panToLatest: false,
-          keepAlert: true,
-        });
+      if (!alert.flight_id) return;
+      if (alert.flight_id === activeFlightIdRef.current) {
+        setDrawerTab('alerts');
+        return;
       }
+      await selectFlight(alert.flight_id, 'alerts', {
+        follow: false,
+        panToLatest: false,
+        keepAlert: true,
+      });
     },
-    [selectFlight, mapRef, onSelectAlertTab],
+    [selectFlight, mapRef, notifyAlertSelected],
   );
 
+  /** Clear the selection and close the drawer. Stable identity. */
   const closeDrawer = useCallback(() => {
     selectionTokenRef.current += 1;
+    setActive(null);
     setDrawerOpen(false);
-    setActiveFlightId(null);
     setActiveAlertId(null);
     setSelectedTelemetryPoint(null);
     setFollowSelectedPlane(false);
@@ -199,22 +194,7 @@ export function useFlightSelection({
     setFlightTelemetry([]);
     setSelectionError(null);
     setIsLoading(false);
-    clearPathsIfNeeded();
-  }, [clearPathsIfNeeded]);
-
-  const resetSelection = useCallback(() => {
-    selectionTokenRef.current += 1;
-    setActiveFlightId(null);
-    setActiveAlertId(null);
-    setFollowSelectedPlane(false);
-    setDrawerOpen(false);
-    setFlightDetail(null);
-    setFlightAlerts([]);
-    setFlightTelemetry([]);
-    setSelectedTelemetryPoint(null);
-    setSelectionError(null);
-    setIsLoading(false);
-  }, []);
+  }, [setActive]);
 
   return {
     activeFlightId,
@@ -235,8 +215,9 @@ export function useFlightSelection({
     selectFlight,
     selectAlert,
     closeDrawer,
-    resetSelection,
+    resetSelection: closeDrawer,
     syncFlightAlerts,
     appendSelectedTelemetry,
+    refreshSelectedTelemetry,
   };
 }
