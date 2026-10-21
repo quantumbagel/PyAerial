@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import math
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -52,9 +55,7 @@ def _bind_eta(eta: Any) -> float | None:
         value = float(eta)
     except (TypeError, ValueError):
         return None
-    if value != value or value in (float("inf"), float("-inf")):
-        return None
-    return value
+    return value if math.isfinite(value) else None
 
 
 def _bind_reason(reason: Any) -> str | None:
@@ -233,39 +234,64 @@ class HistoryStore:
             )
             conn.commit()
 
+    def _reconnect_if_due(self) -> None:
+        """Caller holds ``self._lock``."""
+        if self._conn is None:
+            now = time.monotonic()
+            if now - self._last_connect_attempt >= _RECONNECT_DELAY:
+                self._last_connect_attempt = now
+                self._connect()
+
     def _ensure_connected(self) -> bool:
         if self.disabled:
             return False
         with self._lock:
-            if self._conn is None:
-                now = time.monotonic()
-                if now - self._last_connect_attempt >= _RECONNECT_DELAY:
-                    self._last_connect_attempt = now
-                    self._connect()
+            self._reconnect_if_due()
             return self._conn is not None
 
+    @contextlib.contextmanager
+    def _session(self, action: str) -> Iterator[sqlite3.Connection]:
+        """Yield the connection with the lock held for the whole block.
+
+        Checking for a connection and then using it under a separately
+        acquired lock let another thread close it in between. Raises
+        :class:`HistoryUnavailable` when there is no connection.
+        """
+        if self.disabled:
+            raise _unavailable(action)
+        with self._lock:
+            self._reconnect_if_due()
+            conn = self._conn
+            if conn is None:
+                raise _unavailable(action)
+            yield conn
+
     def ping(self) -> bool:
-        if not self._ensure_connected():
+        if self.disabled:
             return False
-        assert self._conn is not None
-        try:
-            with self._lock:
-                self._conn.execute("SELECT 1").fetchone()
-            return True
-        except sqlite3.Error:
-            if not self._reported_down:
-                log.info("Lost history database connection; operating in offline mode.")
-                self._reported_down = True
-            with self._lock:
+        with self._lock:
+            self._reconnect_if_due()
+            conn = self._conn
+            if conn is None:
+                return False
+            try:
+                conn.execute("SELECT 1").fetchone()
+                return True
+            except sqlite3.Error:
+                if not self._reported_down:
+                    log.info(
+                        "Lost history database connection; operating in offline mode."
+                    )
+                    self._reported_down = True
                 self._close_conn()
-            return False
+                return False
 
     def _close_conn(self) -> None:
         if self._conn is not None:
             try:
                 self._conn.close()
-            except sqlite3.Error:
-                pass
+            except sqlite3.Error as exc:
+                log.debug("Error closing history database: %s", exc)
             self._conn = None
 
     def close(self) -> None:
@@ -334,16 +360,15 @@ class HistoryStore:
         *,
         telemetry_docs: list[dict[str, Any]] | None = None,
     ) -> bool:
-        assert self._conn is not None
         info = plane.get(STORE_INFO, {})
         internal = plane[STORE_INTERNAL]
         icao = info[STORE_ICAO].lower()
         if telemetry_docs is None:
             telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         try:
-            with self._lock:
-                with self._conn:
-                    self._conn.execute(
+            with self._session("persist") as conn:
+                with conn:
+                    conn.execute(
                         """
                         INSERT OR REPLACE INTO flights (
                             flight_id, icao, status, start_time, end_time,
@@ -368,10 +393,10 @@ class HistoryStore:
                             ),
                         ),
                     )
-                    self._conn.execute(
+                    conn.execute(
                         "DELETE FROM telemetry WHERE flight_id = ?", (flight_id,)
                     )
-                    self._conn.executemany(
+                    conn.executemany(
                         """
                         INSERT OR REPLACE INTO telemetry (
                             flight_id, timestamp, icao, latitude, longitude,
@@ -392,7 +417,7 @@ class HistoryStore:
                             for doc in telemetry_docs
                         ],
                     )
-                    self._conn.execute(
+                    conn.execute(
                         "DELETE FROM alerts WHERE flight_id = ?", (flight_id,)
                     )
                     alert_rows = []
@@ -421,7 +446,7 @@ class HistoryStore:
                                 alert.get("altitude"),
                             )
                         )
-                    self._conn.executemany(
+                    conn.executemany(
                         """
                         INSERT OR REPLACE INTO alerts (
                             alert_id, flight_id, icao, callsign, zone, rule,
@@ -432,7 +457,7 @@ class HistoryStore:
                         alert_rows,
                     )
             return True
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, HistoryUnavailable) as exc:
             log.error("Failed to persist completed flight %s: %s", flight_id, exc)
             return False
 
@@ -445,9 +470,6 @@ class HistoryStore:
         since: float | None = None,
         until: float | None = None,
     ) -> list[dict[str, Any]]:
-        if not self._ensure_connected():
-            raise _unavailable("flights")
-        assert self._conn is not None
         clauses = ["status != ?", "retained = 1"]
         params: list[Any] = [_FLIGHT_STATUS_LIVE]
         if since is not None:
@@ -469,19 +491,16 @@ class HistoryStore:
         )
         params.extend([limit, skip])
         try:
-            with self._lock:
-                rows = self._conn.execute(sql, params).fetchall()
+            with self._session("flights") as conn:
+                rows = conn.execute(sql, params).fetchall()
             return [self._flight_from_row(row) for row in rows]
         except sqlite3.Error as exc:
             raise _unavailable("flights", exc) from exc
 
     def get_flight(self, flight_id: str) -> dict[str, Any] | None:
-        if not self._ensure_connected():
-            raise _unavailable("flight")
-        assert self._conn is not None
         try:
-            with self._lock:
-                row = self._conn.execute(
+            with self._session("flight") as conn:
+                row = conn.execute(
                     "SELECT * FROM flights WHERE flight_id = ?", (flight_id,)
                 ).fetchone()
             return self._flight_from_row(row) if row else None
@@ -489,20 +508,25 @@ class HistoryStore:
             raise _unavailable("flight", exc) from exc
 
     def get_telemetry(
-        self, flight_id: str, *, since: float = 0.0
+        self, flight_id: str, *, since: float = 0.0, limit: int | None = None
     ) -> list[dict[str, Any]]:
-        if not self._ensure_connected():
-            raise _unavailable("telemetry")
-        assert self._conn is not None
+        """Telemetry for a flight in ascending time order.
+
+        ``limit`` (> 0) keeps only the newest ``limit`` points (still returned
+        oldest-first) so a caller can bound the response size.
+        """
         sql = "SELECT * FROM telemetry WHERE flight_id = ?"
         params: list[Any] = [flight_id]
         if since > 0:
             sql += " AND timestamp > ?"
             params.append(since)
+        if limit is not None and limit > 0:
+            sql = f"SELECT * FROM ({sql} ORDER BY timestamp DESC LIMIT ?)"
+            params.append(int(limit))
         sql += " ORDER BY timestamp ASC"
         try:
-            with self._lock:
-                rows = self._conn.execute(sql, params).fetchall()
+            with self._session("telemetry") as conn:
+                rows = conn.execute(sql, params).fetchall()
             return [self._telemetry_from_row(row) for row in rows]
         except sqlite3.Error as exc:
             raise _unavailable("telemetry", exc) from exc
@@ -510,9 +534,6 @@ class HistoryStore:
     def latest_telemetry(self, flight_ids: list[str]) -> dict[str, dict[str, Any]]:
         if not flight_ids:
             return {}
-        if not self._ensure_connected():
-            raise _unavailable("latest telemetry")
-        assert self._conn is not None
         placeholders = ",".join("?" * len(flight_ids))
         sql = f"""
             SELECT t.* FROM telemetry t
@@ -525,8 +546,8 @@ class HistoryStore:
               ON t.flight_id = latest.flight_id AND t.timestamp = latest.ts
         """
         try:
-            with self._lock:
-                rows = self._conn.execute(sql, flight_ids).fetchall()
+            with self._session("latest telemetry") as conn:
+                rows = conn.execute(sql, flight_ids).fetchall()
             return {row["flight_id"]: self._telemetry_from_row(row) for row in rows}
         except sqlite3.Error as exc:
             raise _unavailable("latest telemetry", exc) from exc
@@ -542,9 +563,6 @@ class HistoryStore:
         limit: int = 0,
         skip: int = 0,
     ) -> list[dict[str, Any]]:
-        if not self._ensure_connected():
-            raise _unavailable("alerts")
-        assert self._conn is not None
         clauses: list[str] = []
         params: list[Any] = []
         if since:
@@ -578,8 +596,8 @@ class HistoryStore:
             sql += " LIMIT ?"
             params.append(limit)
         try:
-            with self._lock:
-                rows = self._conn.execute(sql, params).fetchall()
+            with self._session("alerts") as conn:
+                rows = conn.execute(sql, params).fetchall()
             return [self._alert_from_row(row) for row in rows]
         except sqlite3.Error as exc:
             raise _unavailable("alerts", exc) from exc
@@ -587,13 +605,10 @@ class HistoryStore:
     def alerts_for_flights(self, flight_ids: list[str]) -> list[dict[str, Any]]:
         if not flight_ids:
             return []
-        if not self._ensure_connected():
-            raise _unavailable("alert stats")
-        assert self._conn is not None
         placeholders = ",".join("?" * len(flight_ids))
         try:
-            with self._lock:
-                rows = self._conn.execute(
+            with self._session("alert stats") as conn:
+                rows = conn.execute(
                     f"SELECT * FROM alerts WHERE flight_id IN ({placeholders})",
                     flight_ids,
                 ).fetchall()
@@ -602,136 +617,124 @@ class HistoryStore:
             raise _unavailable("alert stats", exc) from exc
 
     def count_flights(self) -> int:
-        if not self._ensure_connected():
-            return 0
-        assert self._conn is not None
         try:
-            with self._lock:
-                row = self._conn.execute(
+            with self._session("query") as conn:
+                row = conn.execute(
                     "SELECT COUNT(*) AS n FROM flights "
                     "WHERE status != ? AND retained = 1",
                     (_FLIGHT_STATUS_LIVE,),
                 ).fetchone()
             return int(row["n"] if row else 0)
-        except sqlite3.Error:
+        except (sqlite3.Error, HistoryUnavailable):
             return 0
 
     def count_alerts(self) -> int:
-        if not self._ensure_connected():
-            return 0
-        assert self._conn is not None
         try:
-            with self._lock:
-                row = self._conn.execute("SELECT COUNT(*) AS n FROM alerts").fetchone()
+            with self._session("query") as conn:
+                row = conn.execute("SELECT COUNT(*) AS n FROM alerts").fetchone()
             return int(row["n"] if row else 0)
-        except sqlite3.Error:
+        except (sqlite3.Error, HistoryUnavailable):
             return 0
 
     def distinct_icaos(self) -> list[str]:
-        if not self._ensure_connected():
-            return []
-        assert self._conn is not None
         try:
-            with self._lock:
-                rows = self._conn.execute(
+            with self._session("query") as conn:
+                rows = conn.execute(
                     "SELECT DISTINCT icao FROM flights ORDER BY icao"
                 ).fetchall()
             return [row["icao"] for row in rows if row["icao"]]
-        except sqlite3.Error:
+        except (sqlite3.Error, HistoryUnavailable):
             return []
 
     def flights_for_icao(self, icao: str) -> list[dict[str, Any]]:
-        if not self._ensure_connected():
-            return []
-        assert self._conn is not None
         try:
-            with self._lock:
-                rows = self._conn.execute(
+            with self._session("query") as conn:
+                rows = conn.execute(
                     "SELECT * FROM flights WHERE icao = ? ORDER BY start_time",
                     (icao.lower(),),
                 ).fetchall()
             return [self._flight_from_row(row) for row in rows]
-        except sqlite3.Error:
+        except (sqlite3.Error, HistoryUnavailable):
             return []
 
     def has_icao(self, icao: str) -> bool:
-        if not self._ensure_connected():
-            return False
-        assert self._conn is not None
         try:
-            with self._lock:
-                row = self._conn.execute(
+            with self._session("query") as conn:
+                row = conn.execute(
                     "SELECT 1 FROM flights WHERE icao = ? LIMIT 1",
                     (icao.lower(),),
                 ).fetchone()
             return row is not None
-        except sqlite3.Error:
+        except (sqlite3.Error, HistoryUnavailable):
             return False
 
     def has_flight(self, icao: str, flight_id: str) -> bool:
-        if not self._ensure_connected():
-            return False
-        assert self._conn is not None
         try:
-            with self._lock:
-                row = self._conn.execute(
+            with self._session("query") as conn:
+                row = conn.execute(
                     "SELECT 1 FROM flights WHERE icao = ? AND flight_id = ? LIMIT 1",
                     (icao.lower(), flight_id),
                 ).fetchone()
             return row is not None
-        except sqlite3.Error:
+        except (sqlite3.Error, HistoryUnavailable):
             return False
 
     def telemetry_count(self, flight_id: str) -> int:
-        if not self._ensure_connected():
-            return 0
-        assert self._conn is not None
         try:
-            with self._lock:
-                row = self._conn.execute(
+            with self._session("query") as conn:
+                row = conn.execute(
                     "SELECT COUNT(*) AS n FROM telemetry WHERE flight_id = ?",
                     (flight_id,),
                 ).fetchone()
             return int(row["n"] if row is not None else 0)
-        except sqlite3.Error:
+        except (sqlite3.Error, HistoryUnavailable):
             return 0
 
     def has_completed_flight(self, flight_id: str) -> bool:
-        if not self._ensure_connected():
-            return False
-        assert self._conn is not None
         try:
-            with self._lock:
-                row = self._conn.execute(
+            with self._session("query") as conn:
+                row = conn.execute(
                     "SELECT 1 FROM flights WHERE flight_id = ? AND status = ? LIMIT 1",
                     (flight_id, _FLIGHT_STATUS_COMPLETED),
                 ).fetchone()
             return row is not None
-        except sqlite3.Error:
+        except (sqlite3.Error, HistoryUnavailable):
             return False
 
     def reset_all(self) -> bool:
+        """Drop and recreate every table. False when the archive is offline.
+
+        Raises :class:`HistoryUnavailable` with a readable message when SQLite
+        refuses (e.g. "database is locked" while the engine is writing).
+        """
         if not self._ensure_connected():
             return False
-        assert self._conn is not None
-        with self._lock:
-            with self._conn:
-                self._conn.execute("DROP TABLE IF EXISTS alerts")
-                self._conn.execute("DROP TABLE IF EXISTS telemetry")
-                self._conn.execute("DROP TABLE IF EXISTS flights")
-            self._ensure_schema(self._conn)
+        try:
+            with self._session("reset") as conn:
+                with conn:
+                    conn.execute("DROP TABLE IF EXISTS alerts")
+                    conn.execute("DROP TABLE IF EXISTS telemetry")
+                    conn.execute("DROP TABLE IF EXISTS flights")
+                self._ensure_schema(conn)
+        except sqlite3.Error as exc:
+            raise _unavailable("reset", exc) from exc
         return True
 
     def delete_icao(self, icao: str) -> bool:
+        """Delete every archived flight of ``icao``. False when offline.
+
+        Raises :class:`HistoryUnavailable` when SQLite refuses (e.g. locked).
+        """
         if not self._ensure_connected():
             return False
-        assert self._conn is not None
         icao = icao.lower()
-        with self._lock:
-            with self._conn:
-                self._conn.execute("DELETE FROM alerts WHERE icao = ?", (icao,))
-                self._conn.execute("DELETE FROM telemetry WHERE icao = ?", (icao,))
-                self._conn.execute("DELETE FROM flights WHERE icao = ?", (icao,))
+        try:
+            with self._session("delete") as conn, conn:
+                conn.execute("DELETE FROM alerts WHERE icao = ?", (icao,))
+                conn.execute("DELETE FROM telemetry WHERE icao = ?", (icao,))
+                conn.execute("DELETE FROM flights WHERE icao = ?", (icao,))
+        except sqlite3.Error as exc:
+            raise _unavailable("delete", exc) from exc
         return True
 
     def data_size(self) -> int:
