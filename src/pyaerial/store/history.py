@@ -512,18 +512,18 @@ class HistoryStore:
     ) -> list[dict[str, Any]]:
         """Telemetry for a flight in ascending time order.
 
-        ``limit`` (> 0) keeps only the newest ``limit`` points (still returned
-        oldest-first) so a caller can bound the response size.
+        ``limit`` (> 0) returns at most that many points: the oldest ones after
+        ``since``, so a caller can page forward with ``since=<last timestamp>``.
         """
         sql = "SELECT * FROM telemetry WHERE flight_id = ?"
         params: list[Any] = [flight_id]
         if since > 0:
             sql += " AND timestamp > ?"
             params.append(since)
-        if limit is not None and limit > 0:
-            sql = f"SELECT * FROM ({sql} ORDER BY timestamp DESC LIMIT ?)"
-            params.append(int(limit))
         sql += " ORDER BY timestamp ASC"
+        if limit is not None and limit > 0:
+            sql += " LIMIT ?"
+            params.append(int(limit))
         try:
             with self._session("telemetry") as conn:
                 rows = conn.execute(sql, params).fetchall()

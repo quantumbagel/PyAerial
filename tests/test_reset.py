@@ -212,6 +212,28 @@ def test_reset_reports_locked_database_cleanly(capsys):
     assert "database is locked" in capsys.readouterr().err
 
 
+def test_store_engine_is_live_is_tristate():
+    from pyaerial.store.live import engine_is_live
+    from pyaerial.store.redis_live import RedisLiveStore
+
+    class _Fresh:
+        def engine_seen_at(self):
+            return time.time()
+
+    class _Stale:
+        def engine_seen_at(self):
+            return time.time() - 3600
+
+    assert engine_is_live(None) is False
+    assert engine_is_live(_Fresh()) is True
+    assert engine_is_live(_Stale()) is False
+    assert engine_is_live(_UnreachableLive()) is None
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    assert engine_is_live(store) is False
+    store.touch_engine()
+    assert engine_is_live(store) is True
+
+
 def test_reset_without_yes_refuses_non_tty(capsys, monkeypatch):
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     code = reset_history(None, yes=False)

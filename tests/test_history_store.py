@@ -288,7 +288,7 @@ def test_list_flights_errors_when_disconnected(tmp_path):
     store.close()
 
 
-def test_get_telemetry_limit_keeps_newest_points_in_order(tmp_path):
+def test_get_telemetry_limit_pages_forward(tmp_path):
     store = _store(tmp_path)
     plane = _plane()
     plane[STORE_RECV_DATA][STORE_LAT] = [Datum(35.725, float(t)) for t in range(1, 11)]
@@ -298,7 +298,9 @@ def test_get_telemetry_limit_keeps_newest_points_in_order(tmp_path):
     fid = "abc123-1"
     assert len(store.get_telemetry(fid)) == 10
     limited = store.get_telemetry(fid, limit=3)
-    assert [p["timestamp"] for p in limited] == [8.0, 9.0, 10.0]
+    assert [p["timestamp"] for p in limited] == [1.0, 2.0, 3.0]
+    page = store.get_telemetry(fid, since=limited[-1]["timestamp"], limit=3)
+    assert [p["timestamp"] for p in page] == [4.0, 5.0, 6.0]
     assert [p["timestamp"] for p in store.get_telemetry(fid, since=2.0, limit=0)] == [
         float(t) for t in range(3, 11)
     ]

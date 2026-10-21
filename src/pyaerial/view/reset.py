@@ -3,37 +3,22 @@
 from __future__ import annotations
 
 import sys
-import time
 from typing import Any, Literal
 
 from pyaerial.config import load_config
-from pyaerial.constants import LIVE_ENGINE_TTL_SECONDS
 from pyaerial.store.history import HistoryStore, HistoryUnavailable
+from pyaerial.store.live import engine_is_live
 from pyaerial.view.store import open_live_session
 
 EngineState = Literal["live", "stopped", "unknown"]
 
 
-def engine_is_live(live_store: Any, now: float | None = None) -> bool:
-    getter = getattr(live_store, "engine_seen_at", None)
-    seen = getter() if callable(getter) else None
-    if not isinstance(seen, (int, float)):
-        return False
-    return (now if now is not None else time.time()) - seen < LIVE_ENGINE_TTL_SECONDS
-
-
 def engine_state(live_store: Any) -> EngineState:
-    """Whether the tracking engine is running, per the live store.
-
-    "unknown" when the store cannot be reached: no heartbeat is *not* proof
-    that the engine is stopped if Redis itself is down.
-    """
-    if live_store is None:
-        return "stopped"
-    ping = getattr(live_store, "ping", None)
-    if callable(ping) and not ping():
+    """Map :func:`pyaerial.store.live.engine_is_live` onto a reset decision."""
+    live = engine_is_live(live_store)
+    if live is None:
         return "unknown"
-    return "live" if engine_is_live(live_store) else "stopped"
+    return "live" if live else "stopped"
 
 
 _UNKNOWN_ENGINE_MSG = (

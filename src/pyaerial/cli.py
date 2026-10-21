@@ -164,6 +164,7 @@ def _cmd_web(args: argparse.Namespace) -> None:
 
     run_webapp(
         args.config,
+        config=config,  # already loaded; avoid parsing the file twice
         aircraft_db_path=args.aircraft_db,
         host=args.host,
         port=args.port,
