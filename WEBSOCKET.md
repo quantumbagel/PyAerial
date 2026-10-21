@@ -19,7 +19,7 @@ Browser connections to `/ws/live` and `/ws/beast` must present an allowed `Origi
 - **`web.origins`**: exact `scheme://host[:port]` matches (`https://portal.example` does not match `http://portal.example` or `https://portal.example:8443`). Default `[]`; `["*"]` accepts any origin.
 - **`web.allow_localhost_origins: true`**: any `http(s)://localhost`, `127.0.0.1` or `[::1]` origin on any port (Vite dev servers). Off by default.
 
-Native clients that omit `Origin` connect unconditionally. Unauthorized origins are rejected with close code `1008` (`origin not allowed`). Because same-origin trusts the `Host` header, set `web.allowed_hosts` to the names you serve the portal on to block DNS-rebinding; requests for other hosts get HTTP `400`.
+Native clients that omit `Origin` connect unconditionally. Unauthorized origins are rejected with close code `1008` (`origin not allowed`). Same-origin (Origin matching the `Host` header) is accepted automatically when the portal is reached by IP address or `localhost`. If you serve it under a hostname (`pi.local`, a reverse-proxy domain), list that name in `web.allowed_hosts`; unlisted hostnames are refused so DNS-rebinding pages cannot pose as same-origin.
 
 **Connection and request limits**
 

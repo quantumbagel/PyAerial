@@ -51,7 +51,7 @@ alert_colors:
 # web:                         # all optional; defaults shown
 #   origins: []                # extra browser origins, exact scheme://host[:port]; ["*"] = any
 #   allow_localhost_origins: false
-#   allowed_hosts: []          # Host header allowlist (DNS-rebinding guard); [] = any
+#   allowed_hosts: []          # hostnames the portal is served on (DNS-rebinding guard)
 #   enable_docs: false         # serve /docs, /redoc, /openapi.json
 #   beast_host: "127.0.0.1"    # 0.0.0.0 to accept Beast feeders from other hosts
 #   beast_port: 30005          # dump1090-compatible Beast TCP (OpenSky). null disables.
@@ -114,9 +114,9 @@ zones:
 
 | Key | Default | Env override | Function |
 |-----|---------|--------------|----------|
-| `origins` | `[]` | `PYAERIAL_WEB_ORIGINS` (comma-separated) | Browser origins allowed on `/ws/live` and `/ws/beast` besides the portal's own (same-origin, Origin matching the `Host` header, is always allowed). Entries must be exact `scheme://host[:port]`; bare hostnames are rejected at load time. `["*"]` allows any origin |
+| `origins` | `[]` | `PYAERIAL_WEB_ORIGINS` (comma-separated) | Browser origins allowed on `/ws/live` and `/ws/beast` besides the portal's own (same-origin is allowed for IP-address and `localhost` hosts, and for hostnames listed in `allowed_hosts`). Entries must be exact `scheme://host[:port]`; bare hostnames are rejected at load time. `["*"]` allows any origin |
 | `allow_localhost_origins` | `false` | | Also allow any `http(s)://localhost`, `127.0.0.1` or `[::1]` origin, for dev servers on other ports |
-| `allowed_hosts` | `[]` | | Accepted `Host` header values (`["tracker.example", "*.lan"]`); other hosts get HTTP 400. Set it on any network-reachable portal to stop DNS-rebinding pages from using same-origin |
+| `allowed_hosts` | `[]` | | Accepted `Host` header values (`["tracker.example", "*.lan"]`); other hosts get HTTP 400. Required for same-origin WebSockets when the portal is served under a hostname rather than an IP address or `localhost` |
 | `enable_docs` | `false` | | Serve FastAPI's `/docs`, `/redoc` and `/openapi.json` |
 | `beast_host` | `127.0.0.1` | `PYAERIAL_BEAST_HOST` | Beast TCP bind address. Use `0.0.0.0` for feeders on other hosts or in other containers |
 | `beast_port` | `30005` | `PYAERIAL_BEAST_PORT` (`off` disables) | Beast TCP port; `null` disables TCP (`/ws/beast` still serves) |

@@ -220,6 +220,7 @@ def create_app(
             web.origins,
             host_header=websocket.headers.get("host"),
             allow_localhost=web.allow_localhost_origins,
+            allowed_hosts=web.allowed_hosts,
         ):
             log.info("WebSocket from origin %r rejected", origin)
             await _reject(websocket, 1008, "origin not allowed")

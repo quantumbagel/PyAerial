@@ -236,7 +236,8 @@ class WebConfig(_Strict):
     origins: list[str] = Field(default_factory=list)
     # Also allow any http(s)://localhost / 127.0.0.1 / [::1] origin (dev servers).
     allow_localhost_origins: bool = False
-    # Host header allowlist (DNS-rebinding guard). Empty accepts any Host.
+    # Host header allowlist (DNS-rebinding guard). Empty accepts any Host, but
+    # same-origin WebSockets then only trust IP-literal and loopback hosts.
     allowed_hosts: list[str] = Field(default_factory=list)
     # Serve FastAPI's /docs, /redoc and /openapi.json.
     enable_docs: bool = False

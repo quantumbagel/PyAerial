@@ -217,6 +217,7 @@ def test_websocket_accepts_same_origin_with_explicit_allowlist():
 
     config = make_config()
     config.web.origins = ["https://portal.example"]
+    config.web.allowed_hosts = ["testserver"]
     app = create_app(config=config, history=None, live_store=None, aircraft_db=None)
     with TestClient(app) as client:
         with client.websocket_connect(

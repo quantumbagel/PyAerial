@@ -73,10 +73,28 @@ def test_localhost_origins_are_opt_in():
 
 
 def test_same_origin_uses_host_header():
-    assert origin_allowed("http://pi.local:10090", [], host_header="pi.local:10090")
-    assert origin_allowed("https://tracker.example", [], host_header="tracker.example")
+    hosts = ["pi.local", "tracker.example"]
+    assert origin_allowed(
+        "http://pi.local:10090", [], host_header="pi.local:10090", allowed_hosts=hosts
+    )
+    assert origin_allowed(
+        "https://tracker.example", [], host_header="tracker.example", allowed_hosts=hosts
+    )
+    assert origin_allowed("http://192.168.1.20:10090", [], host_header="192.168.1.20:10090")
+    assert origin_allowed("http://[::1]:10090", [], host_header="[::1]:10090")
+    assert origin_allowed("http://localhost:10090", [], host_header="localhost:10090")
     assert not origin_allowed("http://pi.local:8080", [], host_header="pi.local:10090")
     assert not origin_allowed("https://evil.example", [], host_header="pi.local")
+
+
+def test_same_origin_hostname_needs_allowed_hosts():
+    # DNS rebinding: attacker.example re-resolves to the portal, so Origin == Host.
+    assert not origin_allowed(
+        "http://attacker.example:10090", [], host_header="attacker.example:10090"
+    )
+    assert origin_allowed(
+        "http://pi.lan:10090", [], host_header="pi.lan:10090", allowed_hosts=["*.lan"]
+    )
 
 
 def test_default_config_rejects_foreign_and_localhost_browser_origins():
@@ -89,10 +107,19 @@ def test_default_config_rejects_foreign_and_localhost_browser_origins():
                 ) as ws:
                     ws.receive_json()
             assert excinfo.value.code == 1008
+        # Same-origin by IP address is trusted without configuration...
         with client.websocket_connect(
-            "/ws/live", headers={"Origin": "http://testserver"}
+            "/ws/live",
+            headers={"Origin": "http://192.168.1.20:10090", "Host": "192.168.1.20:10090"},
         ) as ws:
             assert ws.receive_json()["type"] == "hello"
+        # ...but an unlisted hostname is not (DNS rebinding looks exactly like this).
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            with client.websocket_connect(
+                "/ws/live", headers={"Origin": "http://testserver"}
+            ) as ws:
+                ws.receive_json()
+        assert excinfo.value.code == 1008
 
 
 def test_allow_localhost_origins_flag():

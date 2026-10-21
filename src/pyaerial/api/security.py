@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import time
 from collections import Counter
@@ -53,19 +54,43 @@ def _parse_host_header(value: str | None) -> tuple[str, int | None] | None:
     return host.lower(), port
 
 
+def host_trusted(host: str, allowed_hosts: list[str] | None = None) -> bool:
+    """Whether a ``Host`` name can be trusted for same-origin checks.
+
+    DNS rebinding always arrives with the attacker's hostname, so IP literals
+    and loopback names are safe; any other name must be listed explicitly.
+    """
+    if host in _LOCAL_HOSTS:
+        return True
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        pass
+    for entry in allowed_hosts or ():
+        entry = entry.lower()
+        if entry == "*" or entry == host:
+            return True
+        if entry.startswith("*.") and host.endswith(entry[1:]):
+            return True
+    return False
+
+
 def origin_allowed(
     origin: str | None,
     allowed: list[str] | None = None,
     *,
     host_header: str | None = None,
     allow_localhost: bool = False,
+    allowed_hosts: list[str] | None = None,
 ) -> bool:
     """Decide whether a browser ``Origin`` may open a WebSocket.
 
     * No ``Origin`` header: a native (non-browser) client; allowed.
     * ``"*"`` in ``allowed``: any origin.
     * Exact ``scheme://host:port`` match against ``allowed``.
-    * Same origin: the Origin's host and port equal the request ``Host``.
+    * Same origin: the Origin's host and port equal the request ``Host``, and
+      that host is trusted (see :func:`host_trusted`).
     * ``allow_localhost``: any http(s) origin on localhost / 127.0.0.1 / [::1].
     """
     if not origin:
@@ -85,7 +110,11 @@ def origin_allowed(
     request_host = _parse_host_header(host_header)
     if request_host is not None:
         req_host, req_port = request_host
-        if req_host == host and (req_port or _DEFAULT_PORTS[scheme]) == port:
+        if (
+            req_host == host
+            and (req_port or _DEFAULT_PORTS[scheme]) == port
+            and host_trusted(host, allowed_hosts)
+        ):
             return True
     return False
 
