@@ -15,7 +15,7 @@ String values support environment variable interpolation via `${VAR}` and `${VAR
 | `receivers` | Named transport inputs (`dump1090`, `replay`) |
 | `zones` | Named polygonal geofences and associated rule arrays |
 | `alert_colors` | Hex color overrides mapped to rule names for map rendering |
-| `web` | Allowed browser origins, Beast TCP bind (`beast_host` / `beast_port`) |
+| `web` | Browser origin policy, WebSocket limits, Beast TCP bind and client cap, API docs toggle |
 
 **Annotated configuration**
 
@@ -48,10 +48,20 @@ alert_colors:
   warn: "#f59e0b"
   alert: "#ef4444"
 
-# web:
-#   origins: ["*"]
-#   beast_host: "0.0.0.0"
-#   beast_port: 30005        # dump1090-compatible Beast TCP (OpenSky). null disables.
+# web:                         # all optional; defaults shown
+#   origins: []                # extra browser origins, exact scheme://host[:port]; ["*"] = any
+#   allow_localhost_origins: false
+#   allowed_hosts: []          # Host header allowlist (DNS-rebinding guard); [] = any
+#   enable_docs: false         # serve /docs, /redoc, /openapi.json
+#   beast_host: "127.0.0.1"    # 0.0.0.0 to accept Beast feeders from other hosts
+#   beast_port: 30005          # dump1090-compatible Beast TCP (OpenSky). null disables.
+#   beast_max_clients: 16
+#   ws_max_connections: 256    # /ws/live + /ws/beast, all clients
+#   ws_max_connections_per_ip: 32
+#   ws_max_inflight: 2         # concurrent RPC requests per connection
+#   ws_rate_limit: 20          # RPC requests/second per connection...
+#   ws_rate_burst: 40          # ...with this burst allowance
+#   ws_request_workers: 4      # threads serving RPC requests
 
 receivers:
   main:
@@ -90,7 +100,8 @@ zones:
           - method: webhook
             options:
               url: "${PYAERIAL_WEBHOOK_URL}"
-              format: discord
+              format: discord            # json (default), discord, slack
+              # method: POST             # POST (default) or PUT
         on_deactivate:
           - method: print
         while_active:
@@ -98,6 +109,40 @@ zones:
           actions:
             - method: print
 ```
+
+**Web portal (`web`)**
+
+| Key | Default | Env override | Function |
+|-----|---------|--------------|----------|
+| `origins` | `[]` | `PYAERIAL_WEB_ORIGINS` (comma-separated) | Browser origins allowed on `/ws/live` and `/ws/beast` besides the portal's own (same-origin, Origin matching the `Host` header, is always allowed). Entries must be exact `scheme://host[:port]`; bare hostnames are rejected at load time. `["*"]` allows any origin |
+| `allow_localhost_origins` | `false` | | Also allow any `http(s)://localhost`, `127.0.0.1` or `[::1]` origin, for dev servers on other ports |
+| `allowed_hosts` | `[]` | | Accepted `Host` header values (`["tracker.example", "*.lan"]`); other hosts get HTTP 400. Set it on any network-reachable portal to stop DNS-rebinding pages from using same-origin |
+| `enable_docs` | `false` | | Serve FastAPI's `/docs`, `/redoc` and `/openapi.json` |
+| `beast_host` | `127.0.0.1` | `PYAERIAL_BEAST_HOST` | Beast TCP bind address. Use `0.0.0.0` for feeders on other hosts or in other containers |
+| `beast_port` | `30005` | `PYAERIAL_BEAST_PORT` (`off` disables) | Beast TCP port; `null` disables TCP (`/ws/beast` still serves) |
+| `beast_max_clients` | `16` | | Concurrent Beast TCP feeders; extra connections are closed |
+| `ws_max_connections` | `256` | | Concurrent `/ws/live` + `/ws/beast` connections |
+| `ws_max_connections_per_ip` | `32` | | Concurrent WebSocket connections per client IP (behind a reverse proxy every client shares the proxy's IP) |
+| `ws_max_inflight` | `2` | | RPC requests processed concurrently per connection (1 to 16) |
+| `ws_rate_limit` / `ws_rate_burst` | `20` / `40` | | Token-bucket RPC rate per connection; excess requests get `code: "rate_limited"` |
+| `ws_request_workers` | `4` | | Threads in the dedicated RPC worker pool |
+
+The portal also sends `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY` on every HTTP response, caps inbound WebSocket frames at 64 KiB, and only passes `https:` aircraft photo URLs to the browser. See [WEBSOCKET.md](WEBSOCKET.md) for the limits as clients see them.
+
+**Webhook alerter (`method: webhook`)**
+
+| Option | Default | Function |
+|--------|---------|----------|
+| `url` | Required | `https://` endpoint (`http://` only for localhost). Treat it as a secret: logs and config errors show only `scheme://host` |
+| `format` | `json` | `json`, `discord`, or `slack` body |
+| `method` | `POST` | `POST` or `PUT` |
+| `headers` | `{}` | Extra request headers |
+
+Delivery never follows redirects (a `3xx` is a failure). Transport errors and `5xx` are retried up to 3 attempts with backoff; `429` is retried after its `Retry-After` (capped at 30 s); other `4xx` responses are not retried.
+
+**Geofence files**
+
+`.kml`, `.kmz` and `.geojson` files (and the KML inside a KMZ) are limited to 20 MB. KML containing `DOCTYPE` or `ENTITY` declarations is rejected.
 
 **Rule condition fields (`when`)**
 

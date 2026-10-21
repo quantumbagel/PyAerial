@@ -22,7 +22,9 @@ home:
   longitude: -78.8758528
 
 # web:
-#   origins: ["*"]           # default; restrict to a host list if the portal is public
+#   origins: []              # default: the portal's own origin only; add exact
+#                            # scheme://host[:port] entries, or ["*"] for any
+#   beast_host: "127.0.0.1"  # default; 0.0.0.0 to accept remote Beast feeders
 #   beast_port: 30005        # dump1090-compatible Beast TCP (OpenSky feeder)
 
 receivers:
