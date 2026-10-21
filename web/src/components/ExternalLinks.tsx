@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { FlightDetail } from '../api/types';
 import { cleanField } from '../utils/format';
 import { Button } from './ui';
@@ -38,11 +39,12 @@ export function externalTrackerLinks(
 }
 
 export function ExternalLinks({ flightDetail, icao }: ExternalLinksProps) {
+  const headingId = useId();
   const links = externalTrackerLinks(flightDetail, icao);
   if (!links.length) return null;
   return (
-    <section className="info-section" aria-labelledby="external-trackers-heading">
-      <h3 id="external-trackers-heading">External trackers</h3>
+    <section className="info-section" aria-labelledby={headingId}>
+      <h3 id={headingId}>External trackers</h3>
       <div className="ui-link-grid">
         {links.map((link) => (
           <Button key={link.label} as="a" variant="link" href={link.href} target="_blank" rel="noreferrer">
