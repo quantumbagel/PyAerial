@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 from pyaerial.enrich.aircraft_db import AircraftDB, normalize_photo_url
 from pyaerial.config.schema import Config
@@ -15,7 +16,61 @@ def sanitize_for_json(data: Any) -> Any:
     """Convert non-finite floats to null so responses are valid JSON."""
     return sanitize(data)
 
+
 FLIGHT_STATUS_LIVE = "live"
+
+#: Aircraft metadata fields shared by live and history flight payloads.
+TEXT_FIELDS = ("callsign", "model", "owner", "country", "aircraft_type", "registration")
+_PLACEHOLDERS = frozenset({"", "unknown", "unknown model", "unknown owner"})
+
+
+def clean_text(value: Any) -> Any:
+    """Map enrichment placeholders ('Unknown Model', 'UNKNOWN', '') to ``None``."""
+    if isinstance(value, str):
+        text = value.strip()
+        return None if text.lower() in _PLACEHOLDERS else text
+    return value
+
+
+def first_text(*values: Any) -> Any:
+    """First value that is not ``None`` or a placeholder string."""
+    for value in values:
+        cleaned = clean_text(value)
+        if cleaned is not None:
+            return cleaned
+    return None
+
+
+def merge_text_fields(*sources: dict[str, Any]) -> dict[str, Any]:
+    """Resolve :data:`TEXT_FIELDS` across sources in priority order."""
+    return {
+        name: first_text(*(source.get(name) for source in sources))
+        for name in TEXT_FIELDS
+    }
+
+
+def https_url(value: Any) -> str | None:
+    """Return ``value`` only if it is an absolute https: URL."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    try:
+        parsed = urlparse(text)
+        host = parsed.hostname
+    except ValueError:
+        return None
+    if parsed.scheme.lower() != "https" or not host:
+        return None
+    return text
+
+
+def alert_id_for(doc: dict[str, Any], flight_id: Any = None) -> str:
+    """Stable alert id: the stored one, else ``flight:zone:rule``. Never empty."""
+    existing = doc.get("alert_id")
+    if existing:
+        return str(existing)
+    owner = doc.get("flight_id") or flight_id or ""
+    return f"{owner}:{doc.get('zone') or ''}:{doc.get('rule') or ''}"
 
 
 def antenna_payload(config: Config) -> dict[str, Any]:
@@ -101,15 +156,15 @@ def enrich_from_aircraft_db(
     if not meta:
         return {}
     return {
-        "callsign": meta.get("callsign"),
-        "model": meta.get("model"),
-        "owner": meta.get("owner"),
-        "country": meta.get("country"),
-        "aircraft_type": meta.get("typecode"),
-        "registration": meta.get("registration"),
-        "photo_url": normalize_photo_url(meta.get("photo_url")),
-        "photo_photographer": meta.get("photo_photographer"),
-        "photo_link": meta.get("photo_link"),
+        "callsign": clean_text(meta.get("callsign")),
+        "model": clean_text(meta.get("model")),
+        "owner": clean_text(meta.get("owner")),
+        "country": clean_text(meta.get("country")),
+        "aircraft_type": clean_text(meta.get("typecode")),
+        "registration": clean_text(meta.get("registration")),
+        "photo_url": https_url(normalize_photo_url(meta.get("photo_url"))),
+        "photo_photographer": clean_text(meta.get("photo_photographer")),
+        "photo_link": https_url(meta.get("photo_link")),
     }
 
 
@@ -126,9 +181,6 @@ def telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
     return point
 
 
-
-
-
 def _alert_coords(doc: dict[str, Any]) -> tuple[Any, Any]:
     if doc.get("latitude") is not None or doc.get("longitude") is not None:
         return doc.get("latitude"), doc.get("longitude")
@@ -141,15 +193,11 @@ def _alert_coords(doc: dict[str, Any]) -> tuple[Any, Any]:
 
 def format_alert(doc: dict[str, Any]) -> dict[str, Any]:
     latitude, longitude = _alert_coords(doc)
-    alert_id = (
-        doc.get("alert_id")
-        or f"{doc.get('flight_id', '')}:{doc.get('zone', '')}:{doc.get('rule', '')}"
-    )
     return {
-        "alert_id": alert_id,
+        "alert_id": alert_id_for(doc),
         "flight_id": doc.get("flight_id"),
         "icao": doc.get("icao"),
-        "callsign": doc.get("callsign"),
+        "callsign": clean_text(doc.get("callsign")),
         "zone": doc.get("zone"),
         "rule": doc.get("rule"),
         "active": doc.get("active", False),
@@ -164,15 +212,17 @@ def format_alert(doc: dict[str, Any]) -> dict[str, Any]:
 
 def format_active_alerts(doc: dict[str, Any]) -> list[dict[str, Any]]:
     alerts = doc.get("active_alerts") or []
+    flight_id = doc.get("flight_id") or doc.get("_id")
     return [
         {
-            "alert_id": item.get("alert_id", ""),
-            "zone": item.get("zone", ""),
-            "rule": item.get("rule", ""),
+            "alert_id": alert_id_for(item, flight_id),
+            "zone": item.get("zone") or "",
+            "rule": item.get("rule") or "",
             "activated_at": item.get("activated_at"),
             "eta": item.get("eta"),
         }
         for item in alerts
+        if isinstance(item, dict)
     ]
 
 
@@ -202,12 +252,9 @@ def alert_stats_by_flight(
     episodes: dict[str, dict[str, dict[str, float | None]]] = defaultdict(dict)
     for doc in alerts:
         flight_id = doc.get("flight_id")
-        alert_id = (
-            doc.get("alert_id")
-            or f"{flight_id}:{doc.get('zone', '')}:{doc.get('rule', '')}"
-        )
-        if not flight_id or not alert_id:
+        if not flight_id:
             continue
+        alert_id = alert_id_for(doc)
         bucket = episodes[flight_id].setdefault(
             alert_id,
             {
@@ -251,17 +298,14 @@ def enrich_flight_summary(
     summary: dict[str, Any], aircraft_db: AircraftDB | None
 ) -> dict[str, Any]:
     enriched = enrich_from_aircraft_db(summary.get("icao", ""), aircraft_db)
-    active_alerts = summary.get("active_alerts") or []
+    active_alerts = format_active_alerts(summary)
     alert_stats = summary.get("alert_stats")
     if alert_stats is None and active_alerts:
         alert_stats = live_alert_stats(active_alerts)
     result = {
         **summary,
-        "callsign": summary.get("callsign") or enriched.get("callsign"),
-        "model": summary.get("model") or enriched.get("model"),
-        "owner": summary.get("owner") or enriched.get("owner"),
-        "country": summary.get("country") or enriched.get("country"),
-        "aircraft_type": summary.get("aircraft_type") or enriched.get("aircraft_type"),
+        "active_alerts": active_alerts,
+        **merge_text_fields(summary, enriched),
     }
     if alert_stats is not None:
         result["alert_stats"] = alert_stats
@@ -273,7 +317,7 @@ def flight_summary(
 ) -> dict[str, Any]:
     icao = doc.get("icao", "")
     enriched = enrich_from_aircraft_db(icao, aircraft_db)
-    info = doc.get("info", {})
+    info = doc.get("info") or {}
     lat = lon = alt = speed = heading = timestamp = None
     if last_tel:
         tel = telemetry_point(last_tel)
@@ -296,15 +340,7 @@ def flight_summary(
         "active_alerts": active_alerts,
         "start_time": doc.get("start_time"),
         "end_time": doc.get("end_time"),
-        "callsign": doc.get("callsign")
-        or info.get("callsign")
-        or enriched.get("callsign"),
-        "model": doc.get("model") or info.get("model") or enriched.get("model"),
-        "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
-        "country": doc.get("country") or info.get("country") or enriched.get("country"),
-        "aircraft_type": doc.get("aircraft_type")
-        or info.get("aircraft_type")
-        or enriched.get("aircraft_type"),
+        **merge_text_fields(doc, info, enriched),
         "latitude": lat,
         "longitude": lon,
         "altitude": alt,
@@ -324,22 +360,17 @@ def enrich_flight_detail(
     flight_data: dict[str, Any], icao: str, aircraft_db: AircraftDB | None
 ) -> dict[str, Any]:
     enriched = enrich_from_aircraft_db(icao, aircraft_db)
-    active_alerts = flight_data.get("active_alerts") or []
+    active_alerts = format_active_alerts(flight_data)
     alert_stats = flight_data.get("alert_stats")
     if alert_stats is None and active_alerts:
         alert_stats = live_alert_stats(active_alerts)
     result = {
         **flight_data,
-        "callsign": flight_data.get("callsign") or enriched.get("callsign"),
-        "model": flight_data.get("model") or enriched.get("model"),
-        "owner": flight_data.get("owner") or enriched.get("owner"),
-        "country": flight_data.get("country") or enriched.get("country"),
-        "aircraft_type": flight_data.get("aircraft_type")
-        or enriched.get("aircraft_type"),
-        "registration": flight_data.get("registration") or enriched.get("registration"),
-        "photo_url": enriched.get("photo_url"),
+        "active_alerts": active_alerts,
+        **merge_text_fields(flight_data, enriched),
+        "photo_url": https_url(enriched.get("photo_url")),
         "photo_photographer": enriched.get("photo_photographer"),
-        "photo_link": enriched.get("photo_link"),
+        "photo_link": https_url(enriched.get("photo_link")),
     }
     if alert_stats is not None:
         result["alert_stats"] = alert_stats

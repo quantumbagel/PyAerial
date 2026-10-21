@@ -2,24 +2,32 @@
 
 from __future__ import annotations
 
+import inspect
+import logging
+import time
 from typing import Any
 
 from pyaerial.api.payloads import (
     alert_stats_by_flight,
     enrich_flight_detail,
     enrich_flight_summary,
-    enrich_from_aircraft_db,
     flight_summary,
     format_active_alerts,
     format_alert,
+    merge_text_fields,
     telemetry_point,
 )
-from pyaerial.api.protocol import LiveStore
+from pyaerial.constants import LIVE_ENGINE_TTL_SECONDS
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.store.history import HistoryStore, HistoryUnavailable
+from pyaerial.store.live import LiveStore
 from pyaerial.store.redis_live import LiveUnavailable
 
+log = logging.getLogger("pyaerial.webapp")
+
 _MAX_Q = 80
+#: Hard cap on telemetry points returned by one history fetchTelemetry.
+MAX_HISTORY_TELEMETRY_POINTS = 20_000
 
 
 def _normalize_q(q: str | None) -> str | None:
@@ -33,20 +41,35 @@ def _history_available(history: HistoryStore | None) -> bool:
     return bool(history is not None and history.ping())
 
 
-def _engine_is_live(live_store: LiveStore | None) -> bool:
+def engine_is_live(live_store: Any | None, now: float | None = None) -> bool:
     """True when the tracking engine heartbeat is fresh.
 
-    Leftover Redis flight keys after a crash must not look like live traffic.
+    The single source of truth for "is the engine live" in the API layer:
+    ``/ready``, the stats payload (``engine_live``), the broadcaster, and every
+    live query use it. Leftover Redis flight keys after a crash must not look
+    like live traffic.
     """
     if live_store is None:
         return False
-    getter = getattr(live_store, "engine_is_live", None)
-    if callable(getter):
+    live_fn = getattr(live_store, "engine_is_live", None)
+    if callable(live_fn):
         try:
-            return bool(getter())
-        except Exception:
+            return bool(live_fn())
+        except Exception as exc:
+            log.debug("engine_is_live check failed: %r", exc)
             return False
-    return False
+    getter = getattr(live_store, "engine_seen_at", None)
+    if not callable(getter):
+        return False
+    try:
+        seen = getter()
+    except Exception as exc:
+        log.debug("engine_seen_at check failed: %r", exc)
+        return False
+    if not isinstance(seen, (int, float)) or isinstance(seen, bool):
+        return False
+    stamp = time.time() if now is None else now
+    return stamp - seen < LIVE_ENGINE_TTL_SECONDS
 
 
 def _require_history(history: HistoryStore | None) -> HistoryStore | None:
@@ -65,7 +88,7 @@ def _require_history(history: HistoryStore | None) -> HistoryStore | None:
 def get_live_flights(
     live_store: LiveStore | None, aircraft_db: AircraftDB | None
 ) -> list[dict[str, Any]]:
-    if live_store is None or not _engine_is_live(live_store):
+    if live_store is None or not engine_is_live(live_store):
         return []
     return [
         enrich_flight_summary(summary, aircraft_db)
@@ -130,7 +153,7 @@ def get_live_alerts(
     skip: int = 0,
     active_only: bool = True,
 ) -> list[dict[str, Any]]:
-    if live_store is None or not _engine_is_live(live_store):
+    if live_store is None or not engine_is_live(live_store):
         return []
     alerts = live_store.get_alerts(
         since=since,
@@ -180,7 +203,7 @@ def get_flight_detail(
     aircraft_db: AircraftDB | None,
 ) -> dict[str, Any] | None:
     if view == "live":
-        if live_store is None or not _engine_is_live(live_store):
+        if live_store is None or not engine_is_live(live_store):
             return None
         flight_data = live_store.get_flight(flight_id)
         if not flight_data:
@@ -209,8 +232,7 @@ def get_flight_detail(
     if not doc:
         return None
     icao = doc.get("icao", "")
-    enriched = enrich_from_aircraft_db(icao, aircraft_db)
-    info = doc.get("info", {})
+    info = doc.get("info") or {}
     flight_end = doc.get("end_time") or doc.get("start_time") or 0
     alert_stats = alert_stats_by_flight(
         history.alerts_for_flights([flight_id]),
@@ -233,20 +255,7 @@ def get_flight_detail(
             "speed": last_point.get("speed"),
             "heading": last_point.get("heading"),
             "timestamp": last_point.get("timestamp") or flight_end,
-            "callsign": doc.get("callsign")
-            or info.get("callsign")
-            or enriched.get("callsign"),
-            "model": doc.get("model") or info.get("model") or enriched.get("model"),
-            "owner": doc.get("owner") or info.get("owner") or enriched.get("owner"),
-            "country": doc.get("country")
-            or info.get("country")
-            or enriched.get("country"),
-            "aircraft_type": doc.get("aircraft_type")
-            or info.get("aircraft_type")
-            or enriched.get("aircraft_type"),
-            "registration": doc.get("registration")
-            or info.get("registration")
-            or enriched.get("registration"),
+            **merge_text_fields(doc, info),
             "is_live": False,
             "status": doc.get("status", "completed"),
         },
@@ -262,9 +271,10 @@ def get_telemetry(
     *,
     live_store: LiveStore | None,
     history: HistoryStore | None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     if view == "live":
-        if live_store is None or not _engine_is_live(live_store):
+        if live_store is None or not engine_is_live(live_store):
             return []
         return [
             {**telemetry_point(doc), "flight_id": flight_id}
@@ -273,10 +283,25 @@ def get_telemetry(
     history = _require_history(history)
     if history is None:
         return []
+    # HistoryStore.get_telemetry has no LIMIT yet; pass one when it grows the
+    # kwarg, and always truncate so one request cannot return an entire archive.
+    cap = MAX_HISTORY_TELEMETRY_POINTS
+    if limit:
+        cap = max(1, min(int(limit), MAX_HISTORY_TELEMETRY_POINTS))
+    if _accepts_kwarg(history.get_telemetry, "limit"):
+        docs = history.get_telemetry(flight_id, since=since, limit=cap)
+    else:
+        docs = history.get_telemetry(flight_id, since=since)
     return [
-        {**telemetry_point(doc), "flight_id": flight_id}
-        for doc in history.get_telemetry(flight_id, since=since)
+        {**telemetry_point(doc), "flight_id": flight_id} for doc in docs[:cap]
     ]
+
+
+def _accepts_kwarg(func: Any, name: str) -> bool:
+    try:
+        return name in inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def get_alerts(
@@ -294,7 +319,7 @@ def get_alerts(
     active_only: bool | None = None,
 ) -> list[dict[str, Any]]:
     if view == "live":
-        if live_store is None or not _engine_is_live(live_store):
+        if live_store is None or not engine_is_live(live_store):
             return []
         resolved_active_only = active_only if active_only is not None else not flight_id
         return get_live_alerts(
@@ -330,9 +355,10 @@ def get_stats(
     live_flights = 0
     active_alerts = 0
     redis_ok = bool(live_store.ping()) if live_store is not None else False
+    engine_live = engine_is_live(live_store)
     if live_store is not None:
         try:
-            if _engine_is_live(live_store):
+            if engine_live:
                 live_flights = len(live_store.get_flights())
                 active_alerts = len(live_store.get_alerts(active_only=True))
         except LiveUnavailable:
@@ -342,7 +368,8 @@ def get_stats(
     if callable(getter):
         try:
             engine_seen_at = getter()
-        except Exception:
+        except Exception as exc:
+            log.debug("engine_seen_at read failed: %r", exc)
             engine_seen_at = None
     retained_flights = 0
     historical_alerts = 0
@@ -358,4 +385,5 @@ def get_stats(
         "redis": redis_ok,
         "history": history_ok,
         "engine_seen_at": engine_seen_at,
+        "engine_live": engine_live,
     }

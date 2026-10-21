@@ -5,13 +5,26 @@ import time
 import requests
 
 from pyaerial.alerters import Alerter, register_alerter
-from pyaerial.config.loader import webhook_url_allowed
+from pyaerial.config.loader import redact_url, webhook_url_allowed
 from pyaerial.units import KMH_TO_KT, M_TO_FT, MPS_TO_FT_PER_MIN
 
 log = logging.getLogger("pyaerial.alerter.webhook")
 _WEBHOOK_ATTEMPTS = 3
 _WEBHOOK_RETRY_BACKOFF = 0.5
 _WEBHOOK_TIMEOUT = 5
+_WEBHOOK_MAX_RETRY_AFTER = 30.0
+_WEBHOOK_METHODS = frozenset({"POST", "PUT"})
+
+
+def _retry_after_seconds(value: object, fallback: float) -> float:
+    """Seconds from a numeric ``Retry-After`` header, bounded; else ``fallback``."""
+    try:
+        seconds = float(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+    if math.isnan(seconds) or seconds < 0:
+        return fallback
+    return min(seconds, _WEBHOOK_MAX_RETRY_AFTER)
 
 
 def build_tracker_links(
@@ -118,8 +131,76 @@ class WebhookAlerter(Alerter):
         if not isinstance(headers, dict):
             raise ValueError("webhook headers must be an object of string keys")
         self.headers = {str(key): str(value) for key, value in headers.items()}
-        self.http_method = arguments.get("method", "POST")
+        method = str(arguments.get("method") or "POST").strip().upper()
+        if method not in _WEBHOOK_METHODS:
+            raise ValueError("webhook method must be POST or PUT")
+        self.http_method = method
         self.payload_format = arguments.get("format", "json")  # json, discord, slack
+        # Webhook paths carry secrets; logs only ever see scheme://host.
+        self._target = redact_url(url)
+        self._session = requests.Session()
+
+    def close(self) -> None:
+        session = getattr(self, "_session", None)
+        if session is not None:
+            session.close()
+
+    def _deliver(self, body: dict) -> None:
+        for attempt in range(1, _WEBHOOK_ATTEMPTS + 1):
+            delay = _WEBHOOK_RETRY_BACKOFF * (2 ** (attempt - 1))
+            try:
+                resp = self._session.request(
+                    self.http_method,
+                    self.url,
+                    json=body,
+                    headers=self.headers,
+                    timeout=_WEBHOOK_TIMEOUT,
+                    allow_redirects=False,
+                )
+            except requests.RequestException as exc:
+                # The exception text embeds the full URL; log only its type.
+                failure = type(exc).__name__
+            else:
+                status = resp.status_code
+                retry_after = resp.headers.get("Retry-After")
+                resp.close()
+                if 200 <= status < 300:
+                    return
+                if 300 <= status < 400:
+                    log.error(
+                        "Webhook %s answered HTTP %d (redirects are not followed); "
+                        "alert dropped",
+                        self._target,
+                        status,
+                    )
+                    return
+                if status == 429:
+                    delay = _retry_after_seconds(retry_after, delay)
+                elif 400 <= status < 500:
+                    log.error(
+                        "Webhook %s rejected the alert with HTTP %d; not retrying",
+                        self._target,
+                        status,
+                    )
+                    return
+                failure = f"HTTP {status}"
+            if attempt < _WEBHOOK_ATTEMPTS:
+                log.warning(
+                    "Webhook %s delivery failed (attempt %d/%d, %s); retrying in %.1fs",
+                    self._target,
+                    attempt,
+                    _WEBHOOK_ATTEMPTS,
+                    failure,
+                    delay,
+                )
+                time.sleep(delay)
+            else:
+                log.error(
+                    "Failed to deliver webhook alert to %s after %d attempts (%s)",
+                    self._target,
+                    _WEBHOOK_ATTEMPTS,
+                    failure,
+                )
 
     def alert(self, meta: dict, payload: dict) -> None:
         icao = meta.get("icao", "")
@@ -149,35 +230,7 @@ class WebhookAlerter(Alerter):
         else:
             body = alert_data
 
-        last_error: BaseException | None = None
-        for attempt in range(1, _WEBHOOK_ATTEMPTS + 1):
-            try:
-                resp = requests.request(
-                    self.http_method,
-                    self.url,
-                    json=body,
-                    headers=self.headers,
-                    timeout=_WEBHOOK_TIMEOUT,
-                )
-                resp.raise_for_status()
-                return
-            except Exception as exc:
-                last_error = exc
-                if attempt < _WEBHOOK_ATTEMPTS:
-                    delay = _WEBHOOK_RETRY_BACKOFF * (2 ** (attempt - 1))
-                    log.warning(
-                        "Webhook delivery failed (attempt %d/%d); retrying in %.1fs: %s",
-                        attempt,
-                        _WEBHOOK_ATTEMPTS,
-                        delay,
-                        exc,
-                    )
-                    time.sleep(delay)
-        log.error(
-            "Failed to deliver webhook alert after %d attempts: %s",
-            _WEBHOOK_ATTEMPTS,
-            last_error,
-        )
+        self._deliver(body)
 
     def _format_discord(
         self,
