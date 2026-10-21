@@ -3,10 +3,17 @@ import type { PortalView, ServerStats } from '../api/types';
 /** Keep in sync with pyaerial.constants.LIVE_ENGINE_TTL_SECONDS */
 export const ENGINE_STALE_SECONDS = 10;
 
+/**
+ * Whether the tracking engine is heartbeating. Prefers the server's own
+ * verdict (`engine_live`), so a skewed browser clock can't flag a healthy
+ * engine as idle; falls back to comparing `engine_seen_at` with our clock for
+ * older servers.
+ */
 export function isEngineLive(
   stats: ServerStats | null | undefined,
   nowSeconds = Date.now() / 1000,
 ): boolean {
+  if (typeof stats?.engine_live === 'boolean') return stats.engine_live;
   const seen = stats?.engine_seen_at;
   if (seen == null || !Number.isFinite(seen)) return false;
   return nowSeconds - seen < ENGINE_STALE_SECONDS;

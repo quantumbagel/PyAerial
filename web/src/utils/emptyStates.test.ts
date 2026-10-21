@@ -31,6 +31,11 @@ describe('isEngineLive', () => {
     );
   });
 
+  it('trusts the server-computed engine_live flag over the client clock', () => {
+    expect(isEngineLive(stats({ engine_live: true, engine_seen_at: NOW - 3600 }), NOW)).toBe(true);
+    expect(isEngineLive(stats({ engine_live: false, engine_seen_at: NOW }), NOW)).toBe(false);
+  });
+
   it('is true when heartbeat is recent', () => {
     expect(isEngineLive(stats({ engine_seen_at: NOW - 1 }), NOW)).toBe(true);
   });
