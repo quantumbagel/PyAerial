@@ -23,6 +23,7 @@ const flights: FlightSummary[] = [
 ];
 
 const socket = vi.hoisted(() => ({
+  reject: false,
   handlers: new Set<{
     onOpen?: () => void;
     onMessage?: (m: LiveMessage) => void;
@@ -33,7 +34,9 @@ const socket = vi.hoisted(() => ({
 vi.mock('./api/liveSocket', () => ({
   connectLiveSocket: (h: Parameters<typeof socket.handlers.add>[0]) => {
     socket.handlers.add(h);
-    queueMicrotask(() => h.onOpen?.());
+    queueMicrotask(() =>
+      socket.reject ? h.onClose?.(1008, 'origin not allowed') : h.onOpen?.(),
+    );
     return () => socket.handlers.delete(h);
   },
   sendWsRequest: vi.fn(),
@@ -71,6 +74,7 @@ vi.mock('./components/MapView', () => ({
 const { PortalApp } = await import('./PortalApp');
 
 beforeEach(() => {
+  socket.reject = false;
   socket.handlers.clear();
   window.history.replaceState(null, '', '/');
 });
@@ -102,5 +106,15 @@ describe('PortalApp', () => {
       );
     });
     expect(await screen.findByRole('button', { name: /DEF456/ })).toBeInTheDocument();
+  });
+
+  it('shows one origin-rejected message everywhere, with nothing left loading', async () => {
+    socket.reject = true;
+    render(<PortalApp />);
+    await waitFor(() =>
+      expect(screen.getAllByText(/web\.allowed_hosts/).length).toBeGreaterThanOrEqual(2),
+    );
+    expect(screen.queryByText(/Loading/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });

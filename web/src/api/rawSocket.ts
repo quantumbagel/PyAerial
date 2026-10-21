@@ -47,7 +47,7 @@ const socket = new ReconnectingSocket({
  */
 export function connectRawSocket(handlers: BeastSocketHandlers): () => void {
   handlersSet.add(handlers);
-  if (socket.isOpen) {
+  if (socket.isReady) {
     handlers.onOpen?.();
   } else if (!socket.isRunning) {
     socket.start();

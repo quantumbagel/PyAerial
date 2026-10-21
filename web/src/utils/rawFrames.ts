@@ -1,7 +1,7 @@
 import { ORIGIN_REJECTED_MESSAGE } from '../api/errors';
 import { EMPTY, formatNumber } from './format';
 import type { BufferedRawFrame, RawFrame, ServerStats, WsStatus } from '../api/types';
-import { ENGINE_DOWN, REDIS_DOWN, isEngineLive } from './emptyStates';
+import { ENGINE_DOWN, REDIS_DOWN, liveIssue } from './emptyStates';
 
 export const RAW_BUFFER_CAP = 400;
 
@@ -60,11 +60,8 @@ export function emptyRawMessage({
   if (rawStatus === 'rejected') {
     return ORIGIN_REJECTED_MESSAGE;
   }
-  if (stats?.redis === false) {
-    return REDIS_DOWN;
-  }
-  if (stats != null && !isEngineLive(stats)) {
-    return ENGINE_DOWN;
-  }
+  const issue = liveIssue(stats);
+  if (issue === 'live_unavailable') return REDIS_DOWN;
+  if (issue === 'engine_down') return ENGINE_DOWN;
   return 'No Beast frames yet. They appear once dump1090 is feeding the tracker.';
 }

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerStats } from '../api/types';
 import {
+  BUSY_BANNER,
+  ENGINE_IDLE_BANNER,
   ENGINE_STALE_SECONDS,
+  REDIS_DOWN,
+  statusBanner,
   emptyAlertsMessage,
   emptyFlightsMessage,
   isEngineLive,
@@ -99,5 +103,32 @@ describe('emptyAlertsMessage', () => {
         expect(emptyFlightsMessage({ view, hasFilters: false, stats: s })).not.toContain('`');
       }
     }
+  });
+});
+
+describe('statusBanner', () => {
+  const base = { wsStatus: 'connected' as const, view: 'live' as const };
+
+  it('agrees with the empty state when the live store is down', () => {
+    const down = stats({ redis: false, engine_live: false });
+    expect(statusBanner({ ...base, stats: down })?.text).toBe(REDIS_DOWN);
+    expect(emptyFlightsMessage({ view: 'live', hasFilters: false, stats: down })).toBe(REDIS_DOWN);
+  });
+
+  it('reports an idle engine only when the store is reachable', () => {
+    const idle = stats({ engine_live: false });
+    expect(statusBanner({ ...base, stats: idle })?.text).toBe(ENGINE_IDLE_BANNER);
+    expect(emptyFlightsMessage({ view: 'live', hasFilters: false, stats: idle })).toMatch(/pyaerial run/);
+  });
+
+  it('puts connection problems first, and is quiet when healthy', () => {
+    expect(
+      statusBanner({ ...base, wsStatus: 'rejected', stats: null, rejectedMessage: 'nope' }),
+    ).toEqual({ text: 'nope', pending: false });
+    expect(statusBanner({ ...base, wsStatus: 'busy', stats: stats({ redis: false }) })?.text).toBe(
+      BUSY_BANNER,
+    );
+    expect(statusBanner({ ...base, stats: stats({ engine_live: true }) })).toBeNull();
+    expect(statusBanner({ ...base, view: 'history', stats: stats({ engine_live: false }) })).toBeNull();
   });
 });

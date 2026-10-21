@@ -77,7 +77,7 @@ describe('ReconnectingSocket', () => {
     vi.useRealTimers();
   });
 
-  it('reconnects with growing delays and resets after a successful open', () => {
+  it('reconnects with growing delays and resets once a connection holds', () => {
     const { sock, onClose } = makeSocket();
     sock.start();
     expect(FakeSocket.instances).toHaveLength(1);
@@ -96,6 +96,7 @@ describe('ReconnectingSocket', () => {
     expect(FakeSocket.instances).toHaveLength(3);
 
     FakeSocket.instances[2].serverOpen();
+    vi.advanceTimersByTime(5000); // stayed up: backoff forgiven
     FakeSocket.instances[2].serverClose();
     vi.advanceTimersByTime(1000);
     expect(FakeSocket.instances).toHaveLength(4);
@@ -153,5 +154,62 @@ describe('ReconnectingSocket', () => {
     second.serverOpen();
     second.serverMessage('x');
     expect(onMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ReconnectingSocket handshake', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    FakeSocket.instances = [];
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const isHello = (e: MessageEvent) => e.data === 'hello';
+
+  it('only reports open after the ready message', () => {
+    const { sock, onOpen } = makeSocket({ isReadyMessage: isHello });
+    sock.start();
+    const ws = FakeSocket.instances[0];
+    ws.serverOpen();
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(sock.isReady).toBe(false);
+    ws.serverMessage('hello');
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(sock.isReady).toBe(true);
+  });
+
+  it('keeps backing off when the server accepts then closes (connection cap)', () => {
+    const { sock, onOpen } = makeSocket({ isReadyMessage: isHello, maxDelayMs: 60_000 });
+    sock.start();
+    // 1013 bumps the attempt to 3 (8 s); an accepted-then-closed socket
+    // must not reset it back to 1 s.
+    FakeSocket.instances[0].serverOpen();
+    FakeSocket.instances[0].serverClose(1013, 'too many connections');
+    vi.advanceTimersByTime(8000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    FakeSocket.instances[1].serverOpen();
+    FakeSocket.instances[1].serverClose(1013, 'too many connections');
+    vi.advanceTimersByTime(8000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    vi.advanceTimersByTime(8000);
+    expect(FakeSocket.instances).toHaveLength(3);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('without a handshake, forgives failures only after the socket stays up', () => {
+    const { sock, onOpen } = makeSocket({ stableMs: 5000 });
+    sock.start();
+    FakeSocket.instances[0].serverClose();
+    vi.advanceTimersByTime(1000);
+    FakeSocket.instances[1].serverOpen();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    FakeSocket.instances[1].serverClose();
+    // Closed before stableMs: the next delay is still the grown one (2 s).
+    vi.advanceTimersByTime(1999);
+    expect(FakeSocket.instances).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    expect(FakeSocket.instances).toHaveLength(3);
   });
 });

@@ -3,7 +3,8 @@
  *
  * Server codes (pyaerial.api.spec.WS_ERROR_CODES): bad_request, not_found,
  * rate_limited, history_unavailable, live_unavailable, internal_error.
- * Client-side codes: timeout, disconnected, rejected, queue_full.
+ * Client-side codes: timeout, disconnected, rejected (close 1008), busy (close
+ * 1013), queue_full.
  */
 export type ApiErrorCode =
   | 'bad_request'
@@ -15,6 +16,7 @@ export type ApiErrorCode =
   | 'timeout'
   | 'disconnected'
   | 'rejected'
+  | 'busy'
   | 'queue_full'
   | 'unknown';
 
@@ -71,7 +73,9 @@ export function describeError(err: unknown, fallback: string): string {
     case 'timeout':
       return 'The server took too long to answer. Try again.';
     case 'disconnected':
-      return 'Lost the connection to the server. Retrying…';
+      return 'Lost the connection to the server. Try again once it reconnects.';
+    case 'busy':
+      return 'The server is at its connection limit. Reconnecting automatically…';
     case 'rejected':
       return ORIGIN_REJECTED_MESSAGE;
     case 'not_found':

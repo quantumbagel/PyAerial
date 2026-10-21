@@ -54,6 +54,8 @@ interface MapViewProps {
   sidebarId?: string;
   mapRef: React.RefObject<MapViewHandle>;
   drawer?: React.ReactNode;
+  /** Status line placed under the toolbar so it never covers the controls. */
+  banner?: React.ReactNode;
 }
 
 /** Below this width the drawer is a bottom sheet (keep in sync with components.css). */
@@ -144,6 +146,7 @@ export function MapView({
   sidebarId,
   mapRef,
   drawer,
+  banner,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -495,7 +498,8 @@ export function MapView({
 
   return (
     <div className="map-container" ref={rootRef}>
-      <MapToolbar
+      <div className="map-overlay">
+        <MapToolbar
         followVisible={!!activeFlightId}
         followActive={followSelectedPlane}
         zonesActive={zonesVisible}
@@ -508,7 +512,9 @@ export function MapView({
         onToggleSidebar={onToggleSidebar}
         sidebarOpen={sidebarOpen}
         sidebarId={sidebarId}
-      />
+        />
+        {banner}
+      </div>
       <div className="map" ref={containerRef} />
       {drawer}
     </div>
