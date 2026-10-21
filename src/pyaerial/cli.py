@@ -85,6 +85,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="bypass interactive confirmation prompt",
     )
+    reset_p.add_argument(
+        "--force",
+        action="store_true",
+        help="reset even when Redis is unreachable and the engine state is unknown",
+    )
     reset_p.set_defaults(func=_cmd_reset)
 
     web_p = sub.add_parser("web", help="start web portal and WebSocket API server")
@@ -142,7 +147,7 @@ def _cmd_validate(args: argparse.Namespace) -> None:
 def _cmd_reset(args: argparse.Namespace) -> None:
     setup_logging("warning")
     try:
-        run_reset(args.config, icao=args.icao, yes=args.yes)
+        run_reset(args.config, icao=args.icao, yes=args.yes, force=args.force)
     except ConfigError as exc:
         print(f"Configuration error:\n{exc}", file=sys.stderr)
         sys.exit(1)
