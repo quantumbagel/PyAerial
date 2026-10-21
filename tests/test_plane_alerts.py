@@ -44,17 +44,20 @@ def test_while_active_starts_at_activation_time(monkeypatch):
     calc = PlaneCalculator(config, build_polygons(config.zones))
     try:
         t0 = time.time()
+        m0 = time.monotonic()
         monkeypatch.setattr(time, "time", lambda: t0)
+        monkeypatch.setattr(time, "monotonic", lambda: m0)
         plane = _plane(t=t0)
         calc.calculate_plane(plane)
         assert calc._alert_state == {}
         monkeypatch.setattr(time, "time", lambda: t0 + 1.5)
+        monkeypatch.setattr(time, "monotonic", lambda: m0 + 1.5)
         calc.calculate_plane(plane)
         keys = [k for k in calc._alert_state if k[0] == "abc123"]
         assert keys, "expected an active alert after dwell"
         state = calc._alert_state[keys[0]]
-        assert state["last_periodic"] == state["activated_at"]
-        assert state["last_periodic"] > 0
+        assert state["activated_at"] == t0 + 1.5
+        assert state["last_periodic"] == m0 + 1.5
     finally:
         calc.close()
 

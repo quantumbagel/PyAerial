@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import logging
 import math
 import time
@@ -11,6 +10,7 @@ import uuid
 from shapely import Polygon
 
 from pyaerial.alerters import Alerter, create_alerter
+from pyaerial.alerts.dispatch import AlertDispatcher
 from pyaerial.calc import evaluate, geo
 from pyaerial.calc.motion import ResolvedMotion
 from pyaerial.config.schema import AlertActionConfig, Config, RuleConfig
@@ -55,16 +55,16 @@ class AlertEngine:
         self.polygons = polygons
         self.store = store
         self._alerters: dict[tuple[str, str], Alerter] = {}
-        self._alert_executor = ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="alert-dispatch"
-        )
-        # (icao, zone, rule) -> {activated_at, last_periodic, alert_id}
+        self._dispatcher = AlertDispatcher()
+        # (icao, zone, rule) -> {activated_at (wall), last_periodic (monotonic), alert_id}
         self._alert_state: dict[tuple[str, str, str], dict] = {}
+        # Hold / hysteresis start times use time.monotonic() so a wall-clock
+        # step (NTP, manual change) cannot fire or suppress alerts.
         self._pending_match: dict[tuple[str, str, str], float] = {}
         self._pending_unmatch: dict[tuple[str, str, str], float] = {}
 
-    def close(self) -> None:
-        self._alert_executor.shutdown(wait=True, cancel_futures=False)
+    def close(self, timeout: float = 5.0) -> None:
+        self._dispatcher.close(timeout=timeout)
         for alerter in self._alerters.values():
             alerter.close()
         self._alerters.clear()
@@ -82,6 +82,7 @@ class AlertEngine:
         icao = plane[STORE_INFO][STORE_ICAO].lower()
         flight_id = flight_id_for_plane(plane)
         now = time.time()
+        mono = time.monotonic()
         geofence_etas: dict[str, float] = {}
         matching: dict[tuple[str, str, str], tuple[str, RuleConfig, float]] = {}
 
@@ -142,14 +143,14 @@ class AlertEngine:
             self._pending_unmatch.pop(key, None)
             state = self._alert_state.get(key)
             if state is None:
-                first_match = self._pending_match.setdefault(key, now)
-                if now - first_match < rule.activation_hold_seconds():
+                first_match = self._pending_match.setdefault(key, mono)
+                if mono - first_match < rule.activation_hold_seconds():
                     continue
                 self._pending_match.pop(key, None)
                 alert_id = f"{flight_id}:{zone_name}:{rule.name}:{uuid.uuid4().hex}"
                 state = {
                     "activated_at": now,
-                    "last_periodic": now,
+                    "last_periodic": mono,
                     "alert_id": alert_id,
                     "eta": eta,
                 }
@@ -180,8 +181,8 @@ class AlertEngine:
                 )
                 if rule.while_active is not None:
                     interval = rule.while_active.interval_seconds
-                    if now - state["last_periodic"] >= interval:
-                        state["last_periodic"] = now
+                    if mono - state["last_periodic"] >= interval:
+                        state["last_periodic"] = mono
                         self._on_while_active(
                             plane,
                             zone_name,
@@ -190,6 +191,7 @@ class AlertEngine:
                             geofence_etas,
                             position,
                             callsign,
+                            state["alert_id"],
                         )
 
             active_alerts.append(
@@ -220,8 +222,8 @@ class AlertEngine:
                 else None
             )
             hyst = rule.hysteresis_seconds if rule is not None else 0
-            first_unmatch = self._pending_unmatch.setdefault(key, now)
-            if now - first_unmatch < (hyst or 0):
+            first_unmatch = self._pending_unmatch.setdefault(key, mono)
+            if mono - first_unmatch < (hyst or 0):
                 active_alerts.append(
                     {
                         "alert_id": state["alert_id"],
@@ -289,10 +291,11 @@ class AlertEngine:
         recv = plane.get(STORE_RECV_DATA, {})
         lat_series = recv.get(STORE_LAT, [])
         lon_series = recv.get(STORE_LONG, [])
+        # No fix means no position: report None, never a fake (0, 0) in the
+        # Gulf of Guinea.
+        position: tuple[float, float] | None = None
         if lat_series and lon_series:
             position = (lat_series[-1].value, lon_series[-1].value)
-        else:
-            position = (0.0, 0.0)
 
         geofence_etas = {z: None for z in self.config.zones}
         for key in stale_keys:
@@ -392,14 +395,16 @@ class AlertEngine:
                 meta[field] = val
         return meta
 
-    def _build_payload(self, plane: dict, position: tuple[float, float]) -> dict:
+    def _build_payload(
+        self, plane: dict, position: tuple[float, float] | None
+    ) -> dict:
         alt = get_latest(STORE_RECV_DATA, STORE_ALT, plane)
         speed = get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane)
         heading = get_latest(STORE_CALC_DATA, STORE_HEADING, plane)
         vert_speed = get_latest(STORE_RECV_DATA, STORE_VERT_SPEED, plane)
         return {
-            STORE_LAT: position[0],
-            STORE_LONG: position[1],
+            STORE_LAT: position[0] if position is not None else None,
+            STORE_LONG: position[1] if position is not None else None,
             STORE_ALT: alt.value if alt else None,
             STORE_HORIZ_SPEED: speed.value if speed else None,
             STORE_HEADING: heading.value if heading else None,
@@ -407,13 +412,18 @@ class AlertEngine:
         }
 
     def _run_actions(
-        self, actions: list[AlertActionConfig], meta: dict, payload: dict
+        self,
+        actions: list[AlertActionConfig],
+        meta: dict,
+        payload: dict,
+        alert_id: str,
     ) -> None:
         for action in actions:
             alerter = self._get_alerter(action.method, action.options)
             if alerter is None:
                 continue
-            self._alert_executor.submit(self._safe_alert, alerter, meta, payload)
+            # Keyed by alert id: one alert's hooks are delivered in order.
+            self._dispatcher.submit(alert_id, self._safe_alert, alerter, meta, payload)
 
     @staticmethod
     def _safe_alert(alerter: Alerter, meta: dict, payload: dict) -> None:
@@ -439,7 +449,7 @@ class AlertEngine:
         )
         payload = self._build_payload(plane, position)
         if rule.on_activate:
-            self._run_actions(rule.on_activate, meta, payload)
+            self._run_actions(rule.on_activate, meta, payload, alert_id)
         if self.store is not None:
             self.store.record_alert_episode(
                 plane,
@@ -457,7 +467,7 @@ class AlertEngine:
         rule: RuleConfig,
         eta: float | None,
         geofence_etas: dict[str, float | None],
-        position: tuple[float, float],
+        position: tuple[float, float] | None,
         callsign: str,
         now: float,
         alert_id: str,
@@ -468,7 +478,7 @@ class AlertEngine:
         )
         payload = self._build_payload(plane, position)
         if rule.on_deactivate:
-            self._run_actions(rule.on_deactivate, meta, payload)
+            self._run_actions(rule.on_deactivate, meta, payload, alert_id)
         if self.store is not None:
             self.store.record_alert_episode(
                 plane,
@@ -515,6 +525,7 @@ class AlertEngine:
         geofence_etas: dict[str, float],
         position: tuple[float, float],
         callsign: str,
+        alert_id: str,
     ) -> None:
         while_active = rule.while_active
         if while_active is None or not while_active.actions:
@@ -529,7 +540,7 @@ class AlertEngine:
             _ALERT_HOOK_WHILE_ACTIVE,
         )
         payload = self._build_payload(plane, position)
-        self._run_actions(while_active.actions, meta, payload)
+        self._run_actions(while_active.actions, meta, payload, alert_id)
 
     def _get_alerter(self, method: str, arguments: dict) -> Alerter | None:
         key = (method, str(sorted(arguments.items())))
