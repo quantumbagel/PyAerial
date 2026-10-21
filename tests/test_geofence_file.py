@@ -155,3 +155,38 @@ zones:
     )
     with pytest.raises(ConfigError, match="not found"):
         load_config(cfg_path)
+
+
+def test_kml_with_entity_declarations_rejected(tmp_path):
+    path = tmp_path / "bomb.kml"
+    path.write_text(
+        """<?xml version="1.0"?>
+<!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;">]>
+<kml><Placemark><Polygon><outerBoundaryIs><LinearRing>
+<coordinates>&lol2;</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark></kml>
+"""
+    )
+    with pytest.raises(GeofenceFileError, match="DOCTYPE"):
+        load_geofence_coordinates(path)
+
+
+def test_kmz_member_size_is_capped(tmp_path, monkeypatch):
+    import pyaerial.config.geofence_file as geofence_file
+
+    kml = _kml(tmp_path)
+    kmz = tmp_path / "pad.kmz"
+    with zipfile.ZipFile(kmz, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("doc.kml", kml.read_text() + (" " * 50_000))
+    assert kmz.stat().st_size < 10_000
+    monkeypatch.setattr(geofence_file, "MAX_GEOFENCE_BYTES", 10_000)
+    with pytest.raises(GeofenceFileError, match="too large|exceeds"):
+        load_geofence_coordinates(kmz)
+
+
+def test_oversized_geofence_file_rejected(tmp_path, monkeypatch):
+    import pyaerial.config.geofence_file as geofence_file
+
+    path = _geojson(tmp_path)
+    monkeypatch.setattr(geofence_file, "MAX_GEOFENCE_BYTES", 10)
+    with pytest.raises(GeofenceFileError, match="too large"):
+        load_geofence_coordinates(path)

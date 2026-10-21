@@ -3,9 +3,21 @@
 from __future__ import annotations
 
 import json
+import re
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
+
+try:  # Prefer defusedxml when installed; the DTD guard below covers its absence.
+    from defusedxml import ElementTree as _SafeET
+    from defusedxml.common import DefusedXmlException as _DefusedError
+except ImportError:  # pragma: no cover - depends on the environment
+    _SafeET = None
+    _DefusedError = ValueError
+
+#: Upper bound for a KML/GeoJSON file or the KML member of a KMZ archive.
+MAX_GEOFENCE_BYTES = 20 * 1024 * 1024
+_DTD_RE = re.compile(r"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
 
 
 class GeofenceFileError(ValueError):
@@ -15,6 +27,19 @@ class GeofenceFileError(ValueError):
 def load_geofence_coordinates(path: Path) -> list[list[float]]:
     """Return ``[[lat, lon], ...]`` from a KML, KMZ, or GeoJSON file."""
     suffix = path.suffix.lower()
+    if suffix not in {".kmz", ".kml", ".json", ".geojson"}:
+        raise GeofenceFileError(
+            f"unsupported geofence file type {suffix or path.name!r}; "
+            "use .kml, .kmz, or .geojson"
+        )
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise GeofenceFileError(f"cannot read geofence file: {exc}") from exc
+    if size > MAX_GEOFENCE_BYTES:
+        raise GeofenceFileError(
+            f"geofence file is too large ({size} bytes; limit {MAX_GEOFENCE_BYTES})"
+        )
     if suffix == ".kmz":
         return _from_kmz(path)
     if suffix == ".kml":
@@ -25,10 +50,7 @@ def load_geofence_coordinates(path: Path) -> list[list[float]]:
         except json.JSONDecodeError as exc:
             raise GeofenceFileError(f"invalid GeoJSON: {exc}") from exc
         return _from_geojson(payload)
-    raise GeofenceFileError(
-        f"unsupported geofence file type {suffix or path.name!r}; "
-        "use .kml, .kmz, or .geojson"
-    )
+    raise GeofenceFileError(f"unsupported geofence file type {suffix!r}")
 
 
 def _from_kmz(path: Path) -> list[list[float]]:
@@ -41,7 +63,20 @@ def _from_kmz(path: Path) -> list[list[float]]:
                 (name for name in names if Path(name).name.lower() == "doc.kml"),
                 names[0],
             )
-            text = archive.read(preferred).decode("utf-8", errors="replace")
+            info = archive.getinfo(preferred)
+            if info.file_size > MAX_GEOFENCE_BYTES:
+                raise GeofenceFileError(
+                    f"KMZ member {preferred!r} is too large "
+                    f"({info.file_size} bytes; limit {MAX_GEOFENCE_BYTES})"
+                )
+            with archive.open(info) as member:
+                # Never trust the header size alone: cap the decompressed read.
+                raw = member.read(MAX_GEOFENCE_BYTES + 1)
+            if len(raw) > MAX_GEOFENCE_BYTES:
+                raise GeofenceFileError(
+                    f"KMZ member {preferred!r} exceeds {MAX_GEOFENCE_BYTES} bytes"
+                )
+            text = raw.decode("utf-8", errors="replace")
     except zipfile.BadZipFile as exc:
         raise GeofenceFileError(f"invalid KMZ archive: {exc}") from exc
     return _from_kml(text)
@@ -51,11 +86,23 @@ def _local_tag(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].lower()
 
 
-def _from_kml(text: str) -> list[list[float]]:
+def _parse_xml(text: str) -> ET.Element:
+    # KML never needs a DTD; refusing one blocks entity expansion (billion
+    # laughs) and external entities regardless of the parser in use.
+    if _DTD_RE.search(text):
+        raise GeofenceFileError("KML must not contain DOCTYPE or ENTITY declarations")
     try:
-        root = ET.fromstring(text)
+        if _SafeET is not None:
+            return _SafeET.fromstring(text)
+        return ET.fromstring(text)
     except ET.ParseError as exc:
         raise GeofenceFileError(f"invalid KML: {exc}") from exc
+    except _DefusedError as exc:
+        raise GeofenceFileError(f"unsafe KML rejected: {exc}") from exc
+
+
+def _from_kml(text: str) -> list[list[float]]:
+    root = _parse_xml(text)
     found: list[list[list[float]]] = []
     for elem in root.iter():
         if _local_tag(elem.tag) != "polygon":
