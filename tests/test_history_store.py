@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import time
 
 from pyaerial.api.queries import (
@@ -354,10 +355,8 @@ def test_queries_survive_close_between_check_and_use(tmp_path):
         store.distinct_icaos,
     ):
         store._last_connect_attempt = time.monotonic()  # no instant reconnect
-        try:
+        with contextlib.suppress(HistoryUnavailable):
             call()
-        except HistoryUnavailable:
-            pass
     store._last_connect_attempt = 0.0
     assert store.finalize_plane(_plane(), alerts=alerts) is True
     store.close()

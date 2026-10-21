@@ -90,7 +90,7 @@ def _better_copy(candidate: RawFrame, current: RawFrame) -> bool:
 def _hamming_bits(left: bytes, right: bytes) -> int:
     if len(left) != len(right):
         return 1 << 30
-    return sum((a ^ b).bit_count() for a, b in zip(left, right))
+    return sum((a ^ b).bit_count() for a, b in zip(left, right, strict=True))
 
 
 def _frame_identity(hex_msg: str) -> tuple[object, str | None]:
@@ -322,7 +322,8 @@ def receive_times(wall: float, clocks: list[int | None]) -> list[float]:
             times.append(wall - delta)
     used: set[float] = set()
     unique: list[float] = []
-    for stamp in times:
+    for raw_stamp in times:
+        stamp = raw_stamp
         while stamp in used:
             stamp += 1e-6
         used.add(stamp)

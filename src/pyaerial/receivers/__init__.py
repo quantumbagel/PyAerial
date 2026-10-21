@@ -5,7 +5,8 @@ from __future__ import annotations
 import abc
 import logging
 import threading
-from typing import Callable, Protocol
+from typing import Protocol
+from collections.abc import Callable
 
 from pyaerial.receivers.frames import RawFrame
 
@@ -48,7 +49,7 @@ class Receiver(abc.ABC):
         self._stop = threading.Event()
         self.configure(arguments)
 
-    def configure(self, arguments: dict) -> None:
+    def configure(self, arguments: dict) -> None:  # noqa: B027 - optional hook
         """Validate/store receiver-specific arguments. Override as needed."""
 
     @abc.abstractmethod

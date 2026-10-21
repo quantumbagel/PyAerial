@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import queue
 import signal
@@ -510,10 +511,9 @@ class Engine:
             self._shutdown.set()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
+            # Not the main thread (tests, embedding): keep default handling.
+            with contextlib.suppress(ValueError, OSError):
                 signal.signal(sig, _handler)
-            except (ValueError, OSError):
-                pass
 
 
 def run_engine(config: Config, *, aircraft_db_path: str = DEFAULT_AIRCRAFT_DB) -> None:

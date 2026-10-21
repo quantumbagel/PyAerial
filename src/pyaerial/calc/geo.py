@@ -227,7 +227,7 @@ def time_to_enter_geofence_curved(
             (shortest_lon_delta(lon, lon0) * m_per_deg_lon, (lat - lat0) * m_per_deg_lat)
             for lat, lon in ring
         ]
-        for (ax, ay), (bx, by) in zip(local, local[1:]):
+        for (ax, ay), (bx, by) in zip(local, local[1:], strict=False):
             dx, dy = bx - ax, by - ay
             fx, fy = ax - cx, ay - cy
             aa = dx * dx + dy * dy

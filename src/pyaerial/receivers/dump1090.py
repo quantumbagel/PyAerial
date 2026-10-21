@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import socket
 import time
 
@@ -63,17 +64,15 @@ class Dump1090Receiver(Receiver):
                 return self._run_beast(client)
             return self._run_avr(client)
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 client.close()
-            except OSError:
-                pass
 
     def _run_avr(self, client: socket.socket) -> str | None:
         buffer = ""
         while not self.should_stop():
             try:
                 chunk = client.recv(_RECV_BUFFER)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except ConnectionResetError:
                 return "connection reset by peer"
@@ -94,7 +93,7 @@ class Dump1090Receiver(Receiver):
                 continue
             now = time.time()
             stamps = receive_times(now, [clock for _hex, clock in parsed_rows])
-            for (hex_msg, clock), stamp in zip(parsed_rows, stamps):
+            for (hex_msg, clock), stamp in zip(parsed_rows, stamps, strict=True):
                 self.emit(hex_msg, stamp, rssi=None, clock=clock)
 
         return None
@@ -104,7 +103,7 @@ class Dump1090Receiver(Receiver):
         while not self.should_stop():
             try:
                 chunk = client.recv(_RECV_BUFFER)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except ConnectionResetError:
                 return "connection reset by peer"
@@ -116,6 +115,6 @@ class Dump1090Receiver(Receiver):
                 continue
             now = time.time()
             stamps = receive_times(now, [clock for _hex, _rssi, clock in frames])
-            for (hex_msg, rssi, clock), stamp in zip(frames, stamps):
+            for (hex_msg, rssi, clock), stamp in zip(frames, stamps, strict=True):
                 self.emit(hex_msg, stamp, rssi=rssi, clock=clock)
         return None

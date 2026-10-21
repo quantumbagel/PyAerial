@@ -781,10 +781,8 @@ class HistoryStore:
         raw = _row_dict(row)
         reason = raw["reason"]
         if isinstance(reason, str) and reason[:1] in "{[":
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 reason = json.loads(reason)
-            except json.JSONDecodeError:
-                pass
         return {
             "alert_id": raw["alert_id"],
             "flight_id": raw["flight_id"],
