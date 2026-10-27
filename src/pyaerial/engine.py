@@ -84,7 +84,8 @@ class Engine:
             writer=True,
         )
         self._last_status_log = 0.0
-        self._last_frame_prune = 0.0
+        # -inf, not 0: monotonic() can be under the interval on a fresh boot.
+        self._last_frame_prune = float("-inf")
         self.history_store = HistoryStore(
             config.database.path,
             config=config,
