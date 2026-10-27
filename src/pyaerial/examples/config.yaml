@@ -13,6 +13,12 @@ tracking:
   # use_kalman_eta: true
   # curved_projection: true
 
+archive:
+  flights: all                  # all: every flight with >= min_positions samples; rules: retain: true matches only
+  min_positions: 2
+  raw_frames: false             # true: store every receiver copy of every frame
+  raw_frames_keep_hours: 24     # 0 keeps raw frames forever
+
 logging:
   level: info
 

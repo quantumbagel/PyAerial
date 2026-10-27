@@ -18,6 +18,7 @@ from pyaerial.constants import (
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
     STORE_PACKET_TYPE,
+    STORE_POSITION_RECEIVERS,
     STORE_RECV_DATA,
     STORE_TOTAL_PACKETS,
 )
@@ -75,9 +76,13 @@ class Tracker:
         self,
         messages: list[tuple[str, float]],
         *,
-        receivers: dict[str, str] | None = None,
+        receivers: dict[str, tuple[str, ...]] | None = None,
     ) -> int:
-        """Classify and merge ``messages`` into the plane store. Returns count processed."""
+        """Classify and merge ``messages`` into the plane store; returns the count.
+
+        *receivers* maps a frame's hex to every receiver that heard it, the
+        strongest copy's first.
+        """
         processed = 0
         receivers = receivers or {}
         for msg_hex, timestamp in messages:
@@ -106,7 +111,8 @@ class Tracker:
                     internal = plane.setdefault(STORE_INTERNAL, {})
                     internal[STORE_GATE_REJECTS] = internal.get(STORE_GATE_REJECTS, 0) + 1
 
-            receiver = receivers.get(msg_hex)
+            heard = receivers.get(msg_hex) or ()
+            receiver = heard[0] if heard else None
             reference = None
             if self.positions is not None:
                 antenna = self.positions.get(receiver)
@@ -128,7 +134,7 @@ class Tracker:
                 continue
             if STORE_LAT in classified.data.get(STORE_RECV_DATA, {}):
                 self._gate_rejects.pop(icao, None)
-            self._merge(classified, timestamp, receiver=receiver)
+            self._merge(classified, timestamp, heard=heard)
             processed += 1
         return processed
 
@@ -217,7 +223,7 @@ class Tracker:
         classified: ClassifiedMessage,
         timestamp: float,
         *,
-        receiver: str | None = None,
+        heard: tuple[str, ...] = (),
     ) -> None:
         message_data = classified.data
         typecode_cat = classified.typecode_category
@@ -274,11 +280,12 @@ class Tracker:
             internal[STORE_PACKET_TYPE] = pkt_types
         pkt_types[typecode_cat] += 1
 
-        if receiver:
-            plane[STORE_INFO]["receiver"] = receiver
+        if heard:
+            plane[STORE_INFO]["receiver"] = heard[0]
             seen = plane[STORE_INFO].setdefault("receivers", [])
-            if receiver not in seen:
-                seen.append(receiver)
+            seen.extend(name for name in heard if name not in seen)
+            if STORE_LAT in message_data[STORE_RECV_DATA]:
+                internal.setdefault(STORE_POSITION_RECEIVERS, {})[timestamp] = heard
 
         # Live Redis trims to telemetry_keep_seconds. The in-memory series is
         # the archive source for SQLite on expire, so it is not clipped here.

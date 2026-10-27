@@ -12,6 +12,7 @@ from pyaerial.constants import (
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
     STORE_PACKET_TYPE,
+    STORE_POSITION_RECEIVERS,
     STORE_RECV_DATA,
     STORE_TOTAL_PACKETS,
 )
@@ -272,6 +273,9 @@ def test_first_fix_decodes_against_receiving_antenna():
     )
     tracker = Tracker(config, positions=ReceiverPositions(config, fetch=False))
     msg = "8d40621d58c382d690c8ac2863a7"
-    tracker.ingest([(msg, 1.0)], receivers={msg: "nl"})
-    lat = tracker.planes["40621D"][STORE_RECV_DATA][STORE_LAT][-1].value
+    tracker.ingest([(msg, 1.0)], receivers={msg: ("nl", "be")})
+    plane = tracker.planes["40621D"]
+    lat = plane[STORE_RECV_DATA][STORE_LAT][-1].value
     assert abs(lat - 52.2572) < 0.01
+    assert plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS] == {1.0: ("nl", "be")}
+    assert plane[STORE_INFO]["receivers"] == ["nl", "be"]

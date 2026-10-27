@@ -4,65 +4,71 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Version](https://img.shields.io/badge/version-0.21.0-green.svg)](pyproject.toml)
 
-PyAerial decodes Mode S / ADS-B transponder messages, computes real-time aircraft kinematics, evaluates polygon geofence rules, broadcasts live state over WebSockets, and archives matching flights into SQLite.
+PyAerial connects a network of ADS-B receivers, checks every aircraft's broadcasts against what the receivers physically measured, and archives the verified data for research. At [AERPAW](https://aerpaw.org) it also alerts on aircraft near the test site.
 
-**Architecture**
+**How it works**
 
 ```mermaid
-graph TD
-    subgraph Inputs ["ADS-B / Mode S Data Sources"]
-        DUMP1090["dump1090 (TCP Raw Stream)"]
-        REPLAY["Replay Receiver (Recorded Hex File)"]
+graph LR
+    subgraph Network ["Receiver network"]
+        RX["dump1090 / AoA receivers<br/>(each with a known antenna position)"]
+        REPLAY["Replay captures"]
     end
 
-    subgraph Core ["PyAerial Engine & Processing"]
-        ENGINE["PyAerial Tracking Engine<br/>(Deduplication & Vector Math)"]
-        AIRCRAFT_DB[("SQLite Index<br/>(aircraft.db Metadata)")]
+    subgraph Engine ["pyaerial run"]
+        TRACK["Decode & track<br/>(merge receiver copies)"]
+        INTEGRITY["Integrity checks<br/>(AoA, TDOA, signal vs. range,<br/>radio horizon, Mode S, ...)"]
+        RULES["Zone rules<br/>(position, ETA, integrity score)"]
     end
 
-    subgraph Alerts ["Alerting & Geofencing"]
-        GEOFENCE["Geofence Engine<br/>(Polygons & Early Warning Rules)"]
-        ALERTERS["Pluggable Alerters<br/>(Console / Webhook)"]
+    subgraph Outputs ["Outputs"]
+        ARCHIVE[("Research archive · SQLite<br/>flights, labelled telemetry,<br/>integrity verdicts, raw frames")]
+        ALERTS["Alerts<br/>(console, Discord, Slack, webhook)"]
+        LIVE[("Redis live state")]
+        PORTAL["Portal · pyaerial web<br/>(live map, history)"]
     end
 
-    subgraph Storage ["Dual-Tier Data Storage"]
-        REDIS[("Redis Live Store<br/>(In-Flight Buffers & Alerts)")]
-        SQLITE[("SQLite History Store<br/>(Retained Flight Records)")]
-    end
-
-    subgraph Frontend ["Web Portal & Interfaces"]
-        WEBAPP["FastAPI Server & WebSocket API<br/>(/ws/live, /ws/beast + Beast TCP)"]
-        WEBUI["React + Vite Web UI<br/>(Live Radar & History View)"]
-        CLI["Terminal Interface<br/>(pyaerial reset)"]
-    end
-
-    DUMP1090 --> ENGINE
-    REPLAY --> ENGINE
-
-    ENGINE <--> AIRCRAFT_DB
-    ENGINE --> GEOFENCE
-    GEOFENCE --> ALERTERS
-
-    ENGINE --> REDIS
-    ENGINE --> SQLITE
-
-    REDIS --> WEBAPP
-    SQLITE --> WEBAPP
-    REDIS --> CLI
-
-    WEBAPP <--> WEBUI
+    RX --> TRACK
+    REPLAY --> TRACK
+    RX -- "every copy, before merge" --> INTEGRITY
+    TRACK --> INTEGRITY
+    INTEGRITY -- "score per aircraft" --> RULES
+    TRACK --> RULES
+    RULES --> ALERTS
+    INTEGRITY -- "verdict per sample" --> ARCHIVE
+    TRACK --> ARCHIVE
+    TRACK --> LIVE
+    LIVE --> PORTAL
+    ARCHIVE --> PORTAL
 ```
 
-**System capabilities**
+**Collect**
 
-- Ingests raw frames from dump1090 TCP sockets (AVR or Beast binary) and recorded capture files simultaneously, delegating radio DSP decoding to external daemons.
-- Decodes position, altitude, ground speed, vertical velocity, heading, callsign, and aircraft category via [`pyModeS`](https://github.com/junzis/pymodes).
-- Scores every aircraft for spoofing using each receiver's antenna position: angle of arrival, TDOA between receivers (with automatic clock sync and multilateration of the real transmitter), signal strength vs. range, radio horizon, Mode S reply cross-checks, transmit timing, kinematics, replay and identity checks.
-- Evaluates polygon geofences from inline coordinates or `.kml`, `.kmz`, and `.geojson` geometries against altitude, speed, distance, and projected track ETA.
-- Dispatches alert notifications to console logs and authenticated Discord, Slack, or generic JSON webhooks across activation, steady-state, and deactivation lifecycles.
-- Maintains active flight buffers and alert episodes in Redis, while committing qualifying flights and high-resolution tracks to SQLite using Write-Ahead Logging.
-- Caches airframe details, registrations, and photo links in a local `aircraft.db` SQLite file through HexDB and Planespotters APIs.
-- Serves interactive Leaflet radar views, alert streams, raw frame diagnostics, and historical telemetry tables from an integrated FastAPI portal.
+- Ingests dump1090 TCP feeds (Beast or AVR), angle-of-arrival receivers, and recorded captures from any number of receivers at once. Each receiver's antenna position comes from config or its own `receiver.json`.
+- Merges the copies of one transmission heard by several receivers, keeping track of which receivers heard it.
+- Decodes position, altitude, velocity, heading, callsign, and category via [`pyModeS`](https://github.com/junzis/pymodes).
+
+**Verify**
+
+- Scores every aircraft from 0 to 1 for spoofing, using angle of arrival, TDOA between receivers (with automatic clock sync and multilateration of the real transmitter), signal strength vs. range, radio horizon, Mode S reply cross-checks, transmit timing, kinematics, replay, and identity. Which checks can run depends on the receivers: AoA needs an antenna array, and TDOA needs two or more receivers with clocks.
+
+**Archive**
+
+- Writes every completed flight to SQLite by default (`archive.flights: all`). Suspected spoofs are labelled, not dropped.
+- Labels each telemetry sample with the receivers that heard it and the integrity verdict in effect at the time, and logs every verdict change with its full check results.
+- Optionally stores every raw receiver frame (RSSI, 12 MHz clock, AoA), so the evidence behind each verdict stays available for later analysis.
+
+**Alert**
+
+- Evaluates polygon zones (inline, `.kml`, `.kmz`, `.geojson`) against altitude, speed, distance, projected-track ETA, and the integrity score.
+- Sends activation, steady-state, and deactivation alerts to the console and to Discord, Slack, or generic JSON webhooks.
+
+**Watch**
+
+- A read-only portal shows the live map, alerts, raw frames, per-aircraft integrity, and archived history. It also re-serves frames as a dump1090 Beast feed for OpenSky and similar networks.
+- Caches airframe registration and photos from HexDB and Planespotters in a local `aircraft.db`.
+
+See [CONFIGURATION.md](CONFIGURATION.md) for the archive tables and example research queries.
 
 **Docker deployment**
 
@@ -116,7 +122,7 @@ For reproducible installs, `requirements.lock` pins every runtime dependency wit
 
 | Document | Focus |
 |----------|-------|
-| [CONFIGURATION.md](CONFIGURATION.md) | YAML schema, spatial rule syntax, Redis schema, and SQLite tables |
+| [CONFIGURATION.md](CONFIGURATION.md) | YAML schema, integrity checks, zone rules, Redis schema, and the research archive tables |
 | [CLI.md](CLI.md) | Subcommands, environment variable overrides, and service execution |
 | [WEBSOCKET.md](WEBSOCKET.md) | Wire protocol, stream subscriptions, RPC action schemas, and client examples |
 | [UNITS.md](UNITS.md) | SI base units, conversion formulas, and sensor timestamp standards |
@@ -125,9 +131,9 @@ For reproducible installs, `requirements.lock` pins every runtime dependency wit
 
 | Command | Process role |
 |---------|--------------|
-| `pyaerial run` | Tracking engine (ingests frames, writes Redis live state and SQLite history) |
+| `pyaerial run` | Engine (ingests receivers, scores integrity, alerts, writes Redis live state and the SQLite archive) |
 | `pyaerial web` | Web portal and API server (reads Redis and SQLite; does not track) |
 | `pyaerial validate` | Syntax, schema, and filesystem cross-reference verification |
-| `pyaerial reset` | Retention purger (`--yes`; clears Redis only when engine is stopped) |
+| `pyaerial reset` | Archive purger (`--yes`; clears Redis only when engine is stopped; recreates an archive from an incompatible schema) |
 
 Licensed under GPL-3.0-or-later. See [LICENSE](LICENSE).

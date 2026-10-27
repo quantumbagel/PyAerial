@@ -1,4 +1,5 @@
-"""SQLite persistence engine for retained flights, telemetry tracks, and alert episodes."""
+"""SQLite research archive: flights, labelled telemetry, integrity verdicts,
+alert episodes, and (optionally) every raw receiver frame."""
 
 from __future__ import annotations
 
@@ -22,23 +23,39 @@ from pyaerial.constants import (
     STORE_FIRST_PACKET,
     STORE_ICAO,
     STORE_INFO,
+    STORE_INTEGRITY_LOG,
     STORE_INTERNAL,
     STORE_LAT,
     STORE_MOST_RECENT_PACKET,
     STORE_RECV_DATA,
 )
 from pyaerial.jsonutil import dumps as json_dumps
-from pyaerial.models import flight_id_for_plane, iter_telemetry_samples
+from pyaerial.models import (
+    Verdict,
+    flight_id_for_plane,
+    iter_telemetry_samples,
+    sample_provenance,
+)
+from pyaerial.receivers.frames import RawFrame, frame_fields
 
 log = logging.getLogger("pyaerial.store")
 
 _RECONNECT_DELAY = 2.0
+_SCHEMA_VERSION = 2
+# Rows deleted per prune_frames call, so one prune never stalls the engine tick.
+_FRAME_PRUNE_BATCH = 100_000
+# Telemetry columns stored as JSON arrays.
+_JSON_LIST_COLUMNS = ("receivers", "integrity_flags")
 _FLIGHT_STATUS_COMPLETED = "completed"
 _FLIGHT_STATUS_LIVE = "live"
 
 
 class HistoryUnavailable(RuntimeError):
     """Configured SQLite archive cannot be read."""
+
+
+class HistorySchemaMismatch(RuntimeError):
+    """The archive file was written by an incompatible PyAerial version."""
 
 
 def _unavailable(action: str, exc: sqlite3.Error | None = None) -> HistoryUnavailable:
@@ -66,10 +83,22 @@ def _bind_reason(reason: Any) -> str | None:
     return json_dumps(reason, default=str)
 
 
+def _json_list(value: Any) -> str | None:
+    return json_dumps(list(value)) if value else None
+
+
+def _finite(value: float | None) -> float | None:
+    return value if value is not None and math.isfinite(value) else None
+
+
 def build_telemetry_docs(
     plane: dict, flight_id: str, icao: str
 ) -> list[dict[str, Any]]:
-    """Build telemetry documents from a plane's in-memory time series."""
+    """Build telemetry documents from a plane's in-memory time series.
+
+    Each sample carries the receivers that heard it and the integrity verdict
+    in effect when it arrived (see :func:`pyaerial.models.sample_provenance`).
+    """
     docs: list[dict[str, Any]] = []
     used_ts: set[float] = set()
     for timestamp, lat, lon, alt, speed, heading in iter_telemetry_samples(plane):
@@ -90,6 +119,7 @@ def build_telemetry_docs(
             doc["speed"] = speed
         if heading is not None:
             doc["heading"] = heading
+        doc.update(sample_provenance(plane, timestamp))
         docs.append(doc)
     return docs
 
@@ -114,7 +144,7 @@ def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 
 class HistoryStore:
-    """SQLite writer/reader for retained completed flights only."""
+    """SQLite writer/reader for the research archive."""
 
     def __init__(
         self,
@@ -134,10 +164,11 @@ class HistoryStore:
         self._lock = threading.Lock()
         self._last_connect_attempt = 0.0
         self._reported_down = False
+        self._dropping_frames = False
         if not disabled:
             self._connect()
 
-    def _connect(self) -> None:
+    def _connect(self, *, recreate: bool = False) -> None:
         try:
             db_path = Path(self.path)
             if db_path.parent:
@@ -148,14 +179,23 @@ class HistoryStore:
             conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")
-            self._ensure_schema(conn)
-            self._migrate_schema(conn)
+            try:
+                if recreate:
+                    self._drop_tables(conn)
+                self._ensure_schema(conn)
+            except BaseException:
+                conn.close()
+                raise
             self._conn = conn
             if self._reported_down:
                 log.info("Reconnected to history database %s", self.path)
             else:
                 log.info("Opened history database %s", self.path)
             self._reported_down = False
+        except HistorySchemaMismatch as exc:
+            if not self._reported_down:
+                log.error("%s", exc)
+                self._reported_down = True
         except sqlite3.Error:
             if not self._reported_down:
                 log.info(
@@ -166,6 +206,13 @@ class HistoryStore:
             self._conn = None
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (0, _SCHEMA_VERSION):
+            raise HistorySchemaMismatch(
+                f"History database {self.path} uses schema version {version}; "
+                f"this PyAerial needs version {_SCHEMA_VERSION}. Run "
+                "`pyaerial reset --yes` (or delete the file) to recreate it."
+            )
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS flights (
@@ -187,6 +234,8 @@ class HistoryStore:
             CREATE INDEX IF NOT EXISTS idx_flights_icao ON flights(icao);
             CREATE INDEX IF NOT EXISTS idx_flights_callsign ON flights(callsign);
 
+            -- receivers / integrity_flags are JSON arrays; integrity_* is the
+            -- verdict in effect when the sample arrived (NULL before the first).
             CREATE TABLE IF NOT EXISTS telemetry (
                 flight_id TEXT NOT NULL,
                 timestamp REAL NOT NULL,
@@ -196,10 +245,44 @@ class HistoryStore:
                 altitude REAL,
                 speed REAL,
                 heading REAL,
+                receivers TEXT,
+                integrity_score REAL,
+                integrity_status TEXT,
+                integrity_flags TEXT,
                 PRIMARY KEY (flight_id, timestamp)
             );
             CREATE INDEX IF NOT EXISTS idx_telemetry_icao_ts
                 ON telemetry(icao, timestamp);
+
+            -- Every integrity verdict change; checks is the full JSON result.
+            CREATE TABLE IF NOT EXISTS integrity (
+                flight_id TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                icao TEXT NOT NULL,
+                score REAL NOT NULL,
+                status TEXT NOT NULL,
+                flags TEXT NOT NULL DEFAULT '[]',
+                checks TEXT,
+                PRIMARY KEY (flight_id, timestamp)
+            );
+            CREATE INDEX IF NOT EXISTS idx_integrity_icao_ts
+                ON integrity(icao, timestamp);
+
+            -- One row per receiver copy of every frame (archive.raw_frames).
+            CREATE TABLE IF NOT EXISTS frames (
+                timestamp REAL NOT NULL,
+                receiver TEXT NOT NULL DEFAULT '',
+                hex TEXT NOT NULL,
+                df INTEGER,
+                icao TEXT,
+                rssi REAL,
+                clock INTEGER,
+                bearing REAL,
+                elevation REAL,
+                cfo REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_frames_icao_ts ON frames(icao, timestamp);
 
             CREATE TABLE IF NOT EXISTS alerts (
                 alert_id TEXT PRIMARY KEY,
@@ -223,16 +306,15 @@ class HistoryStore:
                 ON alerts(activated_at DESC);
             """
         )
-        conn.execute("PRAGMA user_version = 1")
+        conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         conn.commit()
 
-    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(flights)")}
-        if "registration" not in columns:
-            conn.execute(
-                "ALTER TABLE flights ADD COLUMN registration TEXT NOT NULL DEFAULT ''"
-            )
-            conn.commit()
+    @staticmethod
+    def _drop_tables(conn: sqlite3.Connection) -> None:
+        with conn:
+            for table in ("alerts", "frames", "integrity", "telemetry", "flights"):
+                conn.execute(f"DROP TABLE IF EXISTS {table}")
+            conn.execute("PRAGMA user_version = 0")
 
     def _reconnect_if_due(self) -> None:
         """Caller holds ``self._lock``."""
@@ -305,7 +387,7 @@ class HistoryStore:
         alerts: list[dict[str, Any]] | None = None,
         from_snapshot: bool = False,
     ) -> bool:
-        """Persist a completed flight if retention rules are met.
+        """Persist a completed flight if the archive policy keeps it.
 
         Returns True when it is safe to drop the live Redis copy: the flight
         was written, was intentionally discarded, or persistence is disabled.
@@ -322,18 +404,24 @@ class HistoryStore:
         if self.config is None:
             log.error("Cannot retain flights without a Config")
             return False
-        retained = should_retain(plane, alert_docs, self.config, self.polygons)
+        flight_id = flight_id_for_plane(plane)
+        icao = str(plane.get(STORE_INFO, {}).get(STORE_ICAO, "")).lower()
+        telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
+        retained = should_retain(
+            plane,
+            alert_docs,
+            self.config,
+            self.polygons,
+            positions=len(telemetry_docs),
+        )
         if not retained and from_snapshot:
             recv = plane.get(STORE_RECV_DATA) or {}
             retained = bool(alert_docs) or bool(recv.get(STORE_LAT))
         if not retained:
-            log.debug("Discarded uninteresting flight %s", flight_id_for_plane(plane))
+            log.debug("Discarded flight %s (archive policy)", flight_id)
             return True
         if not self._ensure_connected():
             return False
-        flight_id = flight_id_for_plane(plane)
-        icao = str(plane.get(STORE_INFO, {}).get(STORE_ICAO, "")).lower()
-        telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         if self.has_completed_flight(flight_id):
             existing = self.telemetry_count(flight_id)
             if len(telemetry_docs) <= existing:
@@ -400,8 +488,9 @@ class HistoryStore:
                         """
                         INSERT OR REPLACE INTO telemetry (
                             flight_id, timestamp, icao, latitude, longitude,
-                            altitude, speed, heading
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            altitude, speed, heading, receivers,
+                            integrity_score, integrity_status, integrity_flags
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         [
                             (
@@ -413,8 +502,43 @@ class HistoryStore:
                                 doc.get("altitude"),
                                 doc.get("speed"),
                                 doc.get("heading"),
+                                _json_list(doc.get("receivers")),
+                                doc.get("integrity_score"),
+                                doc.get("integrity_status"),
+                                (
+                                    json_dumps(doc["integrity_flags"])
+                                    if "integrity_flags" in doc
+                                    else None
+                                ),
                             )
                             for doc in telemetry_docs
+                        ],
+                    )
+                    conn.execute(
+                        "DELETE FROM integrity WHERE flight_id = ?", (flight_id,)
+                    )
+                    verdicts: list[Verdict] = internal.get(STORE_INTEGRITY_LOG) or []
+                    conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO integrity (
+                            flight_id, timestamp, icao, score, status, flags, checks
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            (
+                                flight_id,
+                                verdict.time,
+                                icao,
+                                verdict.score,
+                                verdict.status,
+                                json_dumps(list(verdict.flagged)),
+                                (
+                                    json_dumps(verdict.checks)
+                                    if verdict.checks is not None
+                                    else None
+                                ),
+                            )
+                            for verdict in verdicts
                         ],
                     )
                     conn.execute(
@@ -460,6 +584,68 @@ class HistoryStore:
         except (sqlite3.Error, HistoryUnavailable) as exc:
             log.error("Failed to persist completed flight %s: %s", flight_id, exc)
             return False
+
+    def write_frames(self, frames: list[RawFrame]) -> bool:
+        """Append receiver frames to ``frames``. False (frames dropped) when offline."""
+        if self.disabled or not frames:
+            return True
+        rows = []
+        for frame in frames:
+            fields = frame_fields(frame.hex)
+            rows.append(
+                (
+                    frame.timestamp,
+                    frame.receiver,
+                    fields["hex"],
+                    fields.get("df"),
+                    fields.get("icao"),
+                    _finite(frame.rssi),
+                    frame.clock,
+                    _finite(frame.bearing),
+                    _finite(frame.elevation),
+                    _finite(frame.cfo),
+                )
+            )
+        try:
+            with self._session("frames") as conn, conn:
+                conn.executemany(
+                    """
+                    INSERT INTO frames (
+                        timestamp, receiver, hex, df, icao, rssi, clock,
+                        bearing, elevation, cfo
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+        except (sqlite3.Error, HistoryUnavailable) as exc:
+            if not self._dropping_frames:
+                log.warning("Dropping raw frames while history is unavailable: %s", exc)
+                self._dropping_frames = True
+            return False
+        if self._dropping_frames:
+            log.info("Raw frame archiving resumed")
+            self._dropping_frames = False
+        return True
+
+    def prune_frames(self, before: float) -> int:
+        """Delete up to one batch of frames older than *before*; returns the count."""
+        if self.disabled:
+            return 0
+        try:
+            with self._session("prune frames") as conn, conn:
+                cursor = conn.execute(
+                    """
+                    DELETE FROM frames WHERE rowid IN (
+                        SELECT rowid FROM frames WHERE timestamp < ?
+                        ORDER BY timestamp LIMIT ?
+                    )
+                    """,
+                    (before, _FRAME_PRUNE_BATCH),
+                )
+            return cursor.rowcount
+        except (sqlite3.Error, HistoryUnavailable) as exc:
+            log.warning("Could not prune raw frames: %s", exc)
+            return 0
 
     def list_flights(
         self,
@@ -717,14 +903,16 @@ class HistoryStore:
         Raises :class:`HistoryUnavailable` with a readable message when SQLite
         refuses (e.g. "database is locked" while the engine is writing).
         """
-        if not self._ensure_connected():
+        if self.disabled:
             return False
+        with self._lock:
+            if self._conn is None:
+                # Also the way out of a schema mismatch, which refuses to open.
+                self._connect(recreate=True)
+                return self._conn is not None
         try:
             with self._session("reset") as conn:
-                with conn:
-                    conn.execute("DROP TABLE IF EXISTS alerts")
-                    conn.execute("DROP TABLE IF EXISTS telemetry")
-                    conn.execute("DROP TABLE IF EXISTS flights")
+                self._drop_tables(conn)
                 self._ensure_schema(conn)
         except sqlite3.Error as exc:
             raise _unavailable("reset", exc) from exc
@@ -740,9 +928,8 @@ class HistoryStore:
         icao = icao.lower()
         try:
             with self._session("delete") as conn, conn:
-                conn.execute("DELETE FROM alerts WHERE icao = ?", (icao,))
-                conn.execute("DELETE FROM telemetry WHERE icao = ?", (icao,))
-                conn.execute("DELETE FROM flights WHERE icao = ?", (icao,))
+                for table in ("alerts", "frames", "integrity", "telemetry", "flights"):
+                    conn.execute(f"DELETE FROM {table} WHERE icao = ?", (icao,))
         except sqlite3.Error as exc:
             raise _unavailable("delete", exc) from exc
         return True
@@ -784,8 +971,13 @@ class HistoryStore:
         }
 
     def _telemetry_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
-        doc = _row_dict(row)
-        return {key: value for key, value in doc.items() if value is not None}
+        doc = {
+            key: value for key, value in _row_dict(row).items() if value is not None
+        }
+        for key in _JSON_LIST_COLUMNS:
+            if key in doc:
+                doc[key] = json.loads(doc[key])
+        return doc
 
     def _alert_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         raw = _row_dict(row)

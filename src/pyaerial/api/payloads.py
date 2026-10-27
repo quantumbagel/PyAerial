@@ -171,6 +171,15 @@ def enrich_from_aircraft_db(
     }
 
 
+# Per-sample receivers and integrity verdict (see models.sample_provenance).
+_PROVENANCE_FIELDS = (
+    "receivers",
+    "integrity_score",
+    "integrity_status",
+    "integrity_flags",
+)
+
+
 def telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
     point: dict[str, Any] = {
         "timestamp": doc["timestamp"],
@@ -181,6 +190,9 @@ def telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
     if "latitude" in doc and "longitude" in doc:
         point["latitude"] = doc["latitude"]
         point["longitude"] = doc["longitude"]
+    for key in _PROVENANCE_FIELDS:
+        if key in doc:
+            point[key] = doc[key]
     return point
 
 

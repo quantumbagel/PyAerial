@@ -71,6 +71,12 @@ export interface TelemetryPoint {
   flight_id?: string;
   icao?: string;
   active_alerts?: ActiveAlert[];
+  /** Receivers that heard this position, strongest copy first. */
+  receivers?: string[];
+  /** Integrity verdict in effect when the sample arrived. */
+  integrity_score?: number;
+  integrity_status?: string;
+  integrity_flags?: string[];
 }
 
 export interface Alert {

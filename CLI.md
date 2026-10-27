@@ -9,7 +9,7 @@
 | `pyaerial run` | Tracking engine (ingests frames, writes Redis live state and SQLite history) |
 | `pyaerial web` | Read-only API server and web portal (reads Redis and SQLite; does not track) |
 | `pyaerial validate` | Syntax, schema, and filesystem cross-reference verification |
-| `pyaerial reset` | Retention purger (`--yes`; optional single ICAO; clears Redis only when engine is stopped) |
+| `pyaerial reset` | Archive purger (`--yes`; optional single ICAO; clears Redis only when engine is stopped). Also recreates an archive file from an incompatible schema version |
 
 The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias). Corrected Mode S frames are re-encoded as dump1090 Beast binary on `/ws/beast` and, when `web.beast_port` is set, on a TCP listener for OpenSky Network. Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).
 
@@ -25,7 +25,7 @@ pyaerial validate -c config.yaml
 # Start web portal bound to all network interfaces
 pyaerial web -c config.yaml --host 0.0.0.0 --port 10090
 
-# Purge all retained flights, tracks, and alerts from SQLite
+# Purge all archived flights, telemetry, integrity verdicts, raw frames, and alerts
 pyaerial reset --yes
 
 # Purge history for a single ICAO target

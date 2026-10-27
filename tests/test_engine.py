@@ -334,7 +334,7 @@ def test_engine_outgoing_frames_prefer_stronger_receiver(tmp_path):
     try:
         hex_msg = "8d406b902015a678d4d220aa4bda"
         now = time.time()
-        outgoing, new_messages = engine._outgoing_frames(
+        outgoing, new_messages, heard_by = engine._outgoing_frames(
             [
                 RawFrame(
                     hex=hex_msg, timestamp=now, receiver="weak", rssi=-30.0, clock=1
@@ -348,7 +348,8 @@ def test_engine_outgoing_frames_prefer_stronger_receiver(tmp_path):
         assert outgoing[0].receiver == "strong"
         assert outgoing[0].clock == 2
         assert new_messages == [(hex_msg, now)]
-        again, _ = engine._outgoing_frames(
+        assert heard_by == {hex_msg: ("strong", "weak")}
+        again, _, _ = engine._outgoing_frames(
             [RawFrame(hex=hex_msg, timestamp=now + 0.1, receiver="weak", rssi=-4.0)]
         )
         assert again == []
@@ -392,3 +393,41 @@ def test_engine_scores_integrity_into_live_flights(tmp_path):
     finally:
         engine._shutdown.set()
         runner.join(timeout=5)
+
+
+def test_engine_archives_every_receiver_copy_when_raw_frames_enabled(tmp_path):
+    from pyaerial.config.schema import ArchiveConfig
+    from pyaerial.receivers.frames import RawFrame
+
+    class _Recorder:
+        def __init__(self):
+            self.frames: list = []
+            self.pruned: list = []
+
+        def write_frames(self, frames):
+            self.frames.extend(frames)
+            return True
+
+        def prune_frames(self, before):
+            self.pruned.append(before)
+            return 0
+
+    config = make_config(archive=ArchiveConfig(raw_frames=True, raw_frames_keep_hours=1))
+    engine = Engine(config, isolated=True, aircraft_db_path=str(tmp_path / "aircraft.db"))
+    real = engine.history_store
+    recorder = _Recorder()
+    engine.history_store = recorder
+    try:
+        hex_msg = "8d406b902015a678d4d220aa4bda"
+        copies = [
+            RawFrame(hex=hex_msg, timestamp=1.0, receiver="a", rssi=-30.0),
+            RawFrame(hex=hex_msg, timestamp=1.0, receiver="b", rssi=-8.0),
+        ]
+        engine._archive_frames(copies)
+        engine._archive_frames(copies)
+        assert recorder.frames == copies * 2
+        assert len(recorder.pruned) == 1  # pruning is rate limited
+        assert time.time() - 3600 - recorder.pruned[0] < 5
+    finally:
+        engine.history_store = real
+        engine.shutdown()

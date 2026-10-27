@@ -123,19 +123,36 @@ def correct_receiver_frames(
     (same DF/ICAO, Hamming distance ``<= max_hamming``) collapse to the
     stronger copy.
     """
+    merged = merge_receiver_frames(frames, window=window, max_hamming=max_hamming)
+    return [frame for frame, _heard in merged]
+
+
+def merge_receiver_frames(
+    frames: list[RawFrame],
+    *,
+    window: float = _CORRECT_WINDOW,
+    max_hamming: int = _CORRECT_HAMMING,
+) -> list[tuple[RawFrame, tuple[str, ...]]]:
+    """:func:`correct_receiver_frames`, plus every receiver that heard each kept
+    frame (the kept copy's receiver first)."""
     if not frames:
         return []
     by_hex: dict[str, RawFrame] = {}
+    heard_hex: dict[str, list[str]] = {}
     order: list[str] = []
     for frame in frames:
         prev = by_hex.get(frame.hex)
         if prev is None:
             by_hex[frame.hex] = frame
+            heard_hex[frame.hex] = []
             order.append(frame.hex)
         elif _better_copy(frame, prev):
             by_hex[frame.hex] = frame
+        if frame.receiver and frame.receiver not in heard_hex[frame.hex]:
+            heard_hex[frame.hex].append(frame.receiver)
     unique = [by_hex[hex_msg] for hex_msg in order]
     kept: list[RawFrame] = []
+    heard: list[list[str]] = []
     payloads: list[bytes] = []
     # Candidate index: (payload length, DF, ICAO) -> time bin -> kept indices.
     # Two frames within ``window`` seconds are at most one bin apart, so only
@@ -146,10 +163,12 @@ def correct_receiver_frames(
             payload = bytes.fromhex(frame.hex)
         except ValueError:
             kept.append(frame)
+            heard.append(list(heard_hex[frame.hex]))
             payloads.append(b"")
             continue
         if not payload:
             kept.append(frame)
+            heard.append(list(heard_hex[frame.hex]))
             payloads.append(payload)
             continue
         bins = buckets.setdefault((len(payload), *_frame_identity(frame.hex)), {})
@@ -168,6 +187,9 @@ def correct_receiver_frames(
                 continue
             if _hamming_bits(payload, payloads[index]) > max_hamming:
                 continue
+            heard[index].extend(
+                name for name in heard_hex[frame.hex] if name not in heard[index]
+            )
             if _better_copy(frame, other):
                 kept[index] = frame
                 payloads[index] = payload
@@ -180,8 +202,15 @@ def correct_receiver_frames(
         if not merged:
             bins.setdefault(time_bin, []).append(len(kept))
             kept.append(frame)
+            heard.append(list(heard_hex[frame.hex]))
             payloads.append(payload)
-    return kept
+    out: list[tuple[RawFrame, tuple[str, ...]]] = []
+    for frame, names in zip(kept, heard, strict=True):
+        if frame.receiver in names:
+            names.remove(frame.receiver)
+            names.insert(0, frame.receiver)
+        out.append((frame, tuple(names)))
+    return out
 
 
 def _time_bin(timestamp: float, window: float) -> int:

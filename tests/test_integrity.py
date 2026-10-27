@@ -19,7 +19,7 @@ from pyaerial.config.schema import (
     ReceiverConfig,
     ReceiverPositionConfig,
 )
-from pyaerial.constants import STORE_INFO, STORE_INTERNAL
+from pyaerial.constants import STORE_INFO, STORE_INTEGRITY_LOG, STORE_INTERNAL
 from pyaerial.integrity import STATUS_OK, STATUS_SPOOFED, IntegrityMonitor, checks, geodesy
 from pyaerial.integrity.identity import icao_to_n_number
 from pyaerial.integrity.tdoa import multilaterate
@@ -181,6 +181,24 @@ def test_genuine_traffic_scores_ok():
     _run(world, monitor, 40)
     statuses = {icao: plane[STORE_INFO]["integrity"]["status"] for icao, plane in world.planes.items()}
     assert set(statuses.values()) == {STATUS_OK}
+
+
+def test_verdict_changes_are_logged_on_the_plane():
+    antennas = [Antenna("a", *HOME)]
+    world = World(antennas)
+    world.add_genuine(5)
+    _spoof(world, "b00001", claim_km=150)
+    monitor = _monitor(world, _config(antennas))
+    _run(world, monitor, 40)
+    plane = world.planes["B00001"]
+    verdicts = plane[STORE_INTERNAL][STORE_INTEGRITY_LOG]
+    assert [v.time for v in verdicts] == sorted(v.time for v in verdicts)
+    latest = plane[STORE_INFO]["integrity"]
+    assert verdicts[-1].status == latest["status"]
+    assert verdicts[-1].checks == latest["checks"]
+    assert set(verdicts[-1].flagged) == {
+        name for name, check in latest["checks"].items() if check["status"] != "pass"
+    }
 
 
 def test_spoofer_fails_signal_and_horizon_checks():

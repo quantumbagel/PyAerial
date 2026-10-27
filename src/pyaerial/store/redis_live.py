@@ -29,14 +29,22 @@ from pyaerial.constants import (
     STORE_HORIZ_SPEED,
     STORE_ICAO,
     STORE_INFO,
+    STORE_INTEGRITY_LOG,
     STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
+    STORE_POSITION_RECEIVERS,
     STORE_RECV_DATA,
 )
 from pyaerial.jsonutil import dumps as json_dumps
-from pyaerial.models import Datum, flight_id_for_plane, iter_telemetry_samples
+from pyaerial.models import (
+    Datum,
+    Verdict,
+    flight_id_for_plane,
+    iter_telemetry_samples,
+    sample_provenance,
+)
 from pyaerial.store.memory import MemoryLiveBuffer
 from pyaerial.store.present import live_flight_detail, live_flight_summary
 
@@ -930,6 +938,8 @@ class RedisLiveStore:
                 return
             bucket.setdefault(key, []).append(Datum(value, ts))
 
+        heard_by: dict[float, tuple[str, ...]] = {}
+        verdicts: list[Verdict] = []
         for point in points:
             ts = point.get("timestamp")
             if not isinstance(ts, (int, float)):
@@ -939,6 +949,21 @@ class RedisLiveStore:
             _append(recv, STORE_ALT, point.get("altitude"), ts)
             _append(calc, STORE_HORIZ_SPEED, point.get("speed"), ts)
             _append(calc, STORE_HEADING, point.get("heading"), ts)
+            receivers = point.get("receivers")
+            if isinstance(receivers, list) and receivers:
+                heard_by[ts] = tuple(str(name) for name in receivers)
+            score = point.get("integrity_score")
+            status = point.get("integrity_status")
+            if isinstance(score, (int, float)) and isinstance(status, str):
+                flags = point.get("integrity_flags") or []
+                flagged = tuple(str(name) for name in flags)
+                last = verdicts[-1] if verdicts else None
+                if last is None or (last.score, last.status, last.flagged) != (
+                    score,
+                    status,
+                    flagged,
+                ):
+                    verdicts.append(Verdict(ts, float(score), status, flagged))
         start = doc.get("start_time")
         end = doc.get("end_time")
         if not isinstance(start, (int, float)):
@@ -950,6 +975,8 @@ class RedisLiveStore:
             STORE_INTERNAL: {
                 STORE_FIRST_PACKET: start,
                 STORE_MOST_RECENT_PACKET: end,
+                STORE_POSITION_RECEIVERS: heard_by,
+                STORE_INTEGRITY_LOG: verdicts,
             },
             STORE_RECV_DATA: recv,
             STORE_CALC_DATA: calc,
@@ -1204,6 +1231,7 @@ class RedisLiveStore:
                 point["speed"] = speed
             if heading is not None:
                 point["heading"] = heading
+            point.update(sample_provenance(plane, timestamp))
 
             self._mem.telemetry[flight_id].append(point)
             if pipe is not None and key:

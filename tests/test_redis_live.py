@@ -10,13 +10,15 @@ from pyaerial.constants import (
     STORE_FIRST_PACKET,
     STORE_ICAO,
     STORE_INFO,
+    STORE_INTEGRITY_LOG,
     STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
+    STORE_POSITION_RECEIVERS,
     STORE_RECV_DATA,
 )
-from pyaerial.models import Datum
+from pyaerial.models import Datum, Verdict, sample_provenance
 from pyaerial.store.redis_live import LiveUnavailable, RedisLiveStore, redact_uri
 from fake_redis import FakeRedis
 
@@ -170,3 +172,21 @@ def test_unchanged_flights_are_not_rewritten(fake):
     store.write_live_planes(planes)
     assert fake.calls.count("execute") == 1
     assert '"NEW1"' in fake.kv["live:flight:a00000-1000"]
+
+
+def test_snapshot_keeps_sample_receivers_and_integrity(fake):
+    store = RedisLiveStore(URI, writer=True)
+    t = time.time()
+    plane = _plane(t=t)
+    plane[STORE_RECV_DATA][STORE_LAT].append(Datum(35.1, t + 5))
+    plane[STORE_RECV_DATA][STORE_LONG].append(Datum(-78.1, t + 5))
+    plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS] = {t: ("nl", "be"), t + 5: ("nl",)}
+    plane[STORE_INTERNAL][STORE_INTEGRITY_LOG] = [
+        Verdict(t - 1, 0.9, "ok", (), {}),
+        Verdict(t + 2, 0.3, "spoofed", ("aoa",), {}),
+    ]
+    store.write_live_planes({"abc123": plane})
+    rebuilt = store.plane_for_finalize(f"abc123-{int(t)}")
+    assert rebuilt is not None
+    for stamp in (t, t + 5):
+        assert sample_provenance(rebuilt, stamp) == sample_provenance(plane, stamp)

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import contextlib
+import json
+import logging
+import sqlite3
 import time
 
 from pyaerial.api.queries import (
@@ -18,18 +21,21 @@ from pyaerial.constants import (
     STORE_HORIZ_SPEED,
     STORE_ICAO,
     STORE_INFO,
+    STORE_INTEGRITY_LOG,
     STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
+    STORE_POSITION_RECEIVERS,
     STORE_RECV_DATA,
 )
-from pyaerial.models import Datum
+from pyaerial.models import Datum, Verdict
+from pyaerial.receivers.frames import RawFrame
 import pytest
 
 from pyaerial.store.history import HistoryStore, HistoryUnavailable
 from helpers import make_config, make_rule
-from pyaerial.config.schema import ZoneConfig
+from pyaerial.config.schema import ArchiveConfig, ZoneConfig
 
 
 def _plane(*, icao: str = "abc123", callsign: str = "SWA123"):
@@ -50,8 +56,9 @@ def _plane(*, icao: str = "abc123", callsign: str = "SWA123"):
     }
 
 
-def _store(tmp_path, **kwargs) -> HistoryStore:
+def _store(tmp_path, *, archive: ArchiveConfig | None = None, **kwargs) -> HistoryStore:
     config = make_config(
+        archive=archive,
         zones={
             "pad": ZoneConfig(
                 coordinates=[
@@ -192,7 +199,7 @@ def test_finalize_persists_alert_reason_dict_and_finite_eta(tmp_path):
 
 
 def test_unretained_flight_is_not_written(tmp_path):
-    store = _store(tmp_path)
+    store = _store(tmp_path, archive=ArchiveConfig(flights="rules"))
     assert store.finalize_plane(_plane(), alerts=[]) is True
     assert store.list_flights() == []
     store.close()
@@ -361,4 +368,101 @@ def test_queries_survive_close_between_check_and_use(tmp_path):
             call()
     store._last_connect_attempt = 0.0
     assert store.finalize_plane(_plane(), alerts=alerts) is True
+    store.close()
+
+
+def test_archive_all_writes_flights_without_alerts(tmp_path):
+    store = _store(tmp_path)
+    assert store.finalize_plane(_plane(), alerts=[]) is True
+    assert [doc["icao"] for doc in store.list_flights()] == ["abc123"]
+    store.close()
+
+
+def test_telemetry_carries_receivers_and_integrity_verdict(tmp_path):
+    store = _store(tmp_path)
+    plane = _plane()
+    plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS] = {1.0: ("nl", "be"), 10.0: ("nl",)}
+    plane[STORE_INTERNAL][STORE_INTEGRITY_LOG] = [
+        Verdict(0.5, 0.95, "ok", (), {"kinematics": {"status": "pass", "detail": "ok"}}),
+        Verdict(
+            5.0, 0.4, "spoofed", ("aoa", "tdoa"), {"aoa": {"status": "fail", "detail": "40°"}}
+        ),
+    ]
+    assert store.finalize_plane(plane, alerts=[]) is True
+    points = store.get_telemetry("abc123-1")
+    assert points[0]["receivers"] == ["nl", "be"]
+    assert points[0]["integrity_status"] == "ok"
+    assert points[0]["integrity_flags"] == []
+    assert points[1]["integrity_status"] == "spoofed"
+    assert points[1]["integrity_flags"] == ["aoa", "tdoa"]
+    portal = get_telemetry("abc123-1", "history", 0.0, history=store, live_store=None)
+    assert portal[1]["integrity_score"] == 0.4
+
+    with sqlite3.connect(store.path) as conn:
+        verdicts = conn.execute(
+            "SELECT timestamp, status, flags, checks FROM integrity ORDER BY timestamp"
+        ).fetchall()
+        multi = conn.execute(
+            "SELECT COUNT(*) FROM telemetry WHERE json_array_length(receivers) >= 2"
+        ).fetchone()[0]
+    assert [(row[0], row[1]) for row in verdicts] == [(0.5, "ok"), (5.0, "spoofed")]
+    assert json.loads(verdicts[1][2]) == ["aoa", "tdoa"]
+    assert json.loads(verdicts[1][3])["aoa"]["status"] == "fail"
+    assert multi == 1
+    store.close()
+
+
+def test_raw_frames_are_archived_pruned_and_deleted_by_icao(tmp_path):
+    store = _store(tmp_path)
+    frames = [
+        RawFrame(
+            hex="8D406B902015A678D4D220AA4BDA",
+            timestamp=100.0,
+            receiver="nl",
+            rssi=-12.0,
+            clock=5,
+        ),
+        RawFrame(
+            hex="8d406b902015a678d4d220aa4bda",
+            timestamp=100.0,
+            receiver="be",
+            rssi=float("-inf"),
+        ),
+        RawFrame(hex="5d4ca2d4e3d2a7", timestamp=200.0, receiver="nl"),
+    ]
+    assert store.write_frames(frames) is True
+
+    def rows():
+        with sqlite3.connect(store.path) as conn:
+            return conn.execute(
+                "SELECT timestamp, receiver, hex, df, icao, rssi, clock FROM frames "
+                "ORDER BY timestamp, receiver"
+            ).fetchall()
+
+    assert rows() == [
+        (100.0, "be", "8d406b902015a678d4d220aa4bda", 17, "406b90", None, None),
+        (100.0, "nl", "8d406b902015a678d4d220aa4bda", 17, "406b90", -12.0, 5),
+        (200.0, "nl", "5d4ca2d4e3d2a7", 11, None, None, None),
+    ]
+    assert store.prune_frames(150.0) == 2
+    assert len(rows()) == 1
+    store.write_frames(frames[:1])
+    assert store.delete_icao("406B90") is True
+    assert [row[2] for row in rows()] == ["5d4ca2d4e3d2a7"]
+    store.close()
+
+
+def test_old_schema_refuses_to_open_until_reset(tmp_path, caplog):
+    path = tmp_path / "pyaerial.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE flights (flight_id TEXT)")
+        conn.execute("PRAGMA user_version = 1")
+    conn.close()
+    with caplog.at_level(logging.ERROR, logger="pyaerial.store"):
+        store = HistoryStore(path, config=make_config(), polygons={})
+    assert store.ping() is False
+    assert "pyaerial reset" in caplog.text
+    assert store.reset_all() is True
+    assert store.ping() is True
+    assert store.finalize_plane(_plane(), alerts=[]) is True
     store.close()

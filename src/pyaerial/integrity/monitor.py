@@ -36,6 +36,7 @@ from pyaerial.constants import (
     STORE_HEADING,
     STORE_HORIZ_SPEED,
     STORE_INFO,
+    STORE_INTEGRITY_LOG,
     STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
@@ -44,7 +45,7 @@ from pyaerial.constants import (
     STORE_VERT_SPEED,
 )
 from pyaerial.integrity import checks, geodesy
-from pyaerial.integrity.checks import FAIL, WARN, CheckResult
+from pyaerial.integrity.checks import FAIL, PASS, WARN, CheckResult
 from pyaerial.integrity.evidence import (
     AircraftEvidence,
     _series_value,
@@ -56,7 +57,7 @@ from pyaerial.integrity.evidence import (
 from pyaerial.integrity.network import NetworkChecker
 from pyaerial.integrity.stats import circular_median_deg
 from pyaerial.integrity.tdoa import ClockSync, TdoaObservation, multilaterate
-from pyaerial.models import nearest_datum
+from pyaerial.models import Verdict, nearest_datum
 from pyaerial.receivers.frames import BEAST_MLAT_CLOCK, RawFrame
 from pyaerial.receivers.positions import ReceiverPosition, ReceiverPositions
 from pyaerial.tracker import STORE_GATE_REJECTS
@@ -954,10 +955,11 @@ class IntegrityMonitor:
             return
         self._signatures[icao] = signature
         self._written_at[icao] = now
+        checks_doc = {name: r.as_dict() for name, r in sorted(weighted.items())}
         doc: dict[str, object] = {
             "score": score,
             "status": status,
-            "checks": {name: r.as_dict() for name, r in sorted(weighted.items())},
+            "checks": checks_doc,
         }
         if emitter is not None:
             doc["emitter"] = emitter
@@ -965,6 +967,12 @@ class IntegrityMonitor:
         if ev is not None and ev.rebroadcast:
             doc["rebroadcast"] = True
         plane.setdefault(STORE_INFO, {})[STORE_INTEGRITY] = doc
+        # The archive labels each telemetry sample with the verdict in effect
+        # when it arrived, and keeps every verdict in the integrity table.
+        flagged = tuple(name for name, r in checks_doc.items() if r["status"] != PASS)
+        plane.setdefault(STORE_INTERNAL, {}).setdefault(STORE_INTEGRITY_LOG, []).append(
+            Verdict(now, score, status, flagged, checks_doc)
+        )
 
     def score(self, icao: str) -> float | None:
         return self._scores.get(icao.upper())

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -46,6 +47,18 @@ class TrackingConfig(_Strict):
     curved_projection: bool = False
     telemetry_keep_seconds: float = Field(default=600, ge=0)
     status_interval: float = Field(default=10, gt=0)
+
+
+class ArchiveConfig(_Strict):
+    # Which completed flights SQLite keeps: "all" archives every flight with at
+    # least ``min_positions`` position samples (plus any flight a retain: true
+    # rule alerted on); "rules" archives only flights a retain: true rule matched.
+    flights: Literal["all", "rules"] = "all"
+    min_positions: int = Field(default=2, ge=1)
+    # Store every received frame, one row per receiver copy, in ``frames``.
+    raw_frames: bool = False
+    # Delete archived frames older than this many hours; 0 keeps them forever.
+    raw_frames_keep_hours: float = Field(default=24, ge=0)
 
 
 class LoggingConfig(_Strict):
@@ -404,6 +417,7 @@ class WebConfig(_Strict):
 class Config(_Strict):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     tracking: TrackingConfig = Field(default_factory=TrackingConfig)
+    archive: ArchiveConfig = Field(default_factory=ArchiveConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     home: HomeConfig
     receivers: dict[str, ReceiverConfig] = Field(min_length=1)

@@ -10,6 +10,7 @@ from pyaerial.receivers.frames import (
     correct_receiver_frames,
     encode_beast,
     encode_beast_messages,
+    merge_receiver_frames,
     parse_avr_line,
     raw_payload,
     receive_times,
@@ -243,6 +244,22 @@ def test_correct_receiver_frames_hamming_vote():
     assert len(merged) == 1
     assert merged[0].hex == good
     assert merged[0].receiver == "b"
+
+
+def test_merge_receiver_frames_lists_every_receiver_strongest_first():
+    good = "8d406b902015a678d4d220aa4bda"
+    flipped = "8d406b902015a678d4d220aa4bdb"
+    frames = [
+        RawFrame(hex=flipped, timestamp=1.0, receiver="a", rssi=-28.0),
+        RawFrame(hex=good, timestamp=1.01, receiver="c", rssi=-20.0),
+        RawFrame(hex=good, timestamp=1.02, receiver="b", rssi=-10.0),
+    ]
+    merged = merge_receiver_frames(frames)
+    assert len(merged) == 1
+    frame, heard = merged[0]
+    assert frame.receiver == "b"
+    assert heard[0] == "b"
+    assert sorted(heard) == ["a", "b", "c"]
 
 
 def test_correct_receiver_frames_leaves_same_receiver_alone():

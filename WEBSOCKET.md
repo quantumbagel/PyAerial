@@ -143,7 +143,7 @@ Active alerts broadcast (`type: "alerts"`) for currently tracked flights: every 
 }
 ```
 
-Incremental telemetry points (`type: "telemetry"`), delivering only points newer than the last one this client received for the same flight (a late write for one flight is not hidden by another flight's newer point):
+Incremental telemetry points (`type: "telemetry"`), delivering only points newer than the last one this client received for the same flight (a late write for one flight is not hidden by another flight's newer point). Points also carry, when known, `receivers` (receivers that heard the position, strongest copy first) and the integrity verdict in effect when the point arrived (`integrity_score`, `integrity_status`, `integrity_flags`); `fetchTelemetry` returns the same fields for live and history views. See the research archive section of [CONFIGURATION.md](CONFIGURATION.md):
 
 ```json
 {
@@ -158,7 +158,11 @@ Incremental telemetry points (`type: "telemetry"`), delivering only points newer
       "altitude": 1250.0,
       "speed": 420.5,
       "heading": 185.0,
-      "timestamp": 1721832015.2
+      "timestamp": 1721832015.2,
+      "receivers": ["roof", "mast"],
+      "integrity_score": 0.96,
+      "integrity_status": "ok",
+      "integrity_flags": []
     }
   ]
 }

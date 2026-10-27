@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pyaerial.config.schema import (
+    ArchiveConfig,
     Config,
     FieldConstraint,
     HomeConfig,
@@ -42,6 +43,7 @@ def make_config(
     zones: dict | None = None,
     tracking: TrackingConfig | None = None,
     receivers: dict | None = None,
+    archive: ArchiveConfig | None = None,
 ) -> Config:
     if zones is None:
         zones = {
@@ -61,5 +63,6 @@ def make_config(
         receivers=receivers or {"main": ReceiverConfig(type="dump1090")},
         zones=zones,
         tracking=tracking or TrackingConfig(),
+        archive=archive or ArchiveConfig(),
         web=WebConfig(beast_port=None),
     )

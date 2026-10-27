@@ -35,6 +35,10 @@ STORE_MOST_RECENT_PACKET = "last_update"
 STORE_TOTAL_PACKETS = "packets"
 STORE_PACKET_TYPE = "packet_type"
 STORE_FIRST_PACKET = "first_packet"
+# position-fix timestamp -> receivers that heard that frame, strongest first
+STORE_POSITION_RECEIVERS = "position_receivers"
+# Integrity verdict changes: [(time, score, status, flagged checks, checks doc)]
+STORE_INTEGRITY_LOG = "integrity_log"
 
 # --- Alert payload fields -----------------------------------------------------
 ALERT_CAT_TYPE = "type"
