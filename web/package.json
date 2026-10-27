@@ -1,7 +1,7 @@
 {
   "name": "pyaerial-web",
   "private": true,
-  "version": "0.21.0",
+  "version": "0.22.0",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
@@ -14,9 +14,6 @@
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
-    "@luomus/leaflet-smooth-wheel-zoom": "^1.0.0",
-    "@maplibre/maplibre-gl-leaflet": "^0.1.4",
-    "leaflet": "^1.9.4",
     "maplibre-gl": "^6.4.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -25,7 +22,6 @@
     "@eslint/js": "^9.22.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.2.0",
-    "@types/leaflet": "1.9.21",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",

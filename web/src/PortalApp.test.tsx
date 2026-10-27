@@ -66,7 +66,7 @@ vi.mock('./api/client', () => ({
   ]),
 }));
 
-// Leaflet + MapLibre need a real canvas/WebGL; the map is exercised separately.
+// MapLibre needs a real canvas/WebGL; the map is exercised separately.
 vi.mock('./components/MapView', () => ({
   MapView: ({ drawer }: { drawer: React.ReactNode }) => <div data-testid="map">{drawer}</div>,
 }));
@@ -116,5 +116,37 @@ describe('PortalApp', () => {
     );
     expect(screen.queryByText(/Loading/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('badges new live alerts until the alerts tab is opened', async () => {
+    render(<PortalApp />);
+    await screen.findByRole('button', { name: /TEST1/ });
+
+    const alert = {
+      alert_id: 'a1',
+      flight_id: 'f1',
+      icao: 'abc123',
+      callsign: 'TEST1',
+      zone: 'home',
+      rule: 'low',
+      active: true,
+      activated_at: NOW,
+    };
+    act(() => {
+      socket.handlers.forEach((h) => h.onMessage?.({ type: 'alerts', alerts: [alert] }));
+    });
+    expect(screen.queryByRole('tab', { name: /1 new/ })).toBeNull();
+
+    act(() => {
+      socket.handlers.forEach((h) =>
+        h.onMessage?.({
+          type: 'alerts',
+          alerts: [alert, { ...alert, alert_id: 'a2' }],
+        }),
+      );
+    });
+    const badge = await screen.findByRole('tab', { name: /Alerts.*1 new/ });
+    fireEvent.click(badge);
+    await waitFor(() => expect(screen.queryByRole('tab', { name: /1 new/ })).toBeNull());
   });
 });

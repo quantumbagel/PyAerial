@@ -12,7 +12,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any, TypedDict
+from typing import Any, NamedTuple, TypedDict
 
 from pyaerial.constants import (
     STORE_ALT,
@@ -22,10 +22,12 @@ from pyaerial.constants import (
     STORE_HORIZ_SPEED,
     STORE_ICAO,
     STORE_INFO,
+    STORE_INTEGRITY_LOG,
     STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
+    STORE_POSITION_RECEIVERS,
     STORE_RECV_DATA,
 )
 
@@ -43,6 +45,18 @@ class Datum:
 
     def __repr__(self) -> str:  # pragma: no cover - debug convenience
         return f"Datum({self.value}, {self.time})"
+
+
+class Verdict(NamedTuple):
+    """One integrity verdict, logged in ``internal`` each time it changes."""
+
+    time: float
+    score: float
+    status: str
+    # Checks that did not pass (warn or fail), by name.
+    flagged: tuple[str, ...]
+    # Full check results; None when rebuilt from live telemetry points.
+    checks: dict[str, Any] | None = None
 
 
 class PlaneState(TypedDict, total=False):
@@ -206,6 +220,35 @@ def last_update(plane: Plane | PlaneState | dict) -> float:
 def flight_id_for_plane(plane: Plane | PlaneState | dict) -> str:
     """Stable id for one continuous track: ``{icao}-{first_packet_unix}``."""
     return f"{icao_of(plane)}-{int(first_packet_time(plane))}"
+
+
+def _verdict_time(verdict: Verdict) -> float:
+    return verdict.time
+
+
+def sample_provenance(
+    plane: Plane | PlaneState | dict, timestamp: float
+) -> dict[str, Any]:
+    """Receivers and integrity verdict for the position sample at *timestamp*.
+
+    ``receivers`` lists the receivers that heard the position frame, the one
+    whose copy was kept (strongest) first. The integrity fields are the verdict in effect when the sample
+    arrived (the latest one published at or before it), so a sample received
+    before the aircraft's first verdict carries none.
+    """
+    internal = plane.get(STORE_INTERNAL) or {}
+    out: dict[str, Any] = {}
+    heard = (internal.get(STORE_POSITION_RECEIVERS) or {}).get(timestamp)
+    if heard:
+        out["receivers"] = list(heard)
+    verdicts = internal.get(STORE_INTEGRITY_LOG) or []
+    idx = bisect_right(verdicts, timestamp, key=_verdict_time)
+    if idx:
+        verdict = verdicts[idx - 1]
+        out["integrity_score"] = verdict.score
+        out["integrity_status"] = verdict.status
+        out["integrity_flags"] = list(verdict.flagged)
+    return out
 
 
 def _tail_after(series: Sequence[Datum], since: float | None) -> Sequence[Datum]:

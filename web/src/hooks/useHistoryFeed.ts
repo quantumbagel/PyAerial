@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
 import { describeError } from '../api/errors';
 import type { Alert, FlightSummary, ServerStats } from '../api/types';
-import { alertEpisodeIdentity, dedupeAlerts, mergeAlertsByEpisode } from '../utils/alertData';
+import { mergeAlertsByEpisode } from '../utils/alertData';
 
 export const HISTORY_PAGE_LIMIT = 50;
 export const HISTORY_REFRESH_MS = 10_000;
@@ -37,6 +37,7 @@ export function mergeFirstPage<T>(
 }
 
 const flightKey = (f: FlightSummary) => f.flight_id;
+const alertKey = (a: Alert) => a.alert_id;
 
 /**
  * Archived flights/alerts with server-side filtering and infinite scroll.
@@ -55,7 +56,6 @@ export function useHistoryFeed(enabled: boolean, filter: HistoryFilter) {
   const [alertsError, setAlertsError] = useState<string | null>(null);
 
   const generation = useRef(0);
-  const filterRef = useRef(filter);
   const lists = useRef({ flights: [] as FlightSummary[], alerts: [] as Alert[] });
   const fetched = useRef({ flights: 0, alerts: 0 });
   const hasMore = useRef({ flights: true, alerts: true });
@@ -65,13 +65,12 @@ export function useHistoryFeed(enabled: boolean, filter: HistoryFilter) {
   const { q, since, until } = filter;
 
   const listOpts = useCallback((): api.HistoryListOpts => {
-    const f = filterRef.current;
     const opts: api.HistoryListOpts = { limit: HISTORY_PAGE_LIMIT };
-    if (f.q) opts.q = f.q;
-    if (f.since != null) opts.since = f.since;
-    if (f.until != null) opts.until = f.until;
+    if (q) opts.q = q;
+    if (since != null) opts.since = since;
+    if (until != null) opts.until = until;
     return opts;
-  }, []);
+  }, [q, since, until]);
 
   const commit = useCallback((kind: Kind, items: FlightSummary[] | Alert[]) => {
     if (kind === 'flights') {
@@ -109,12 +108,12 @@ export function useHistoryFeed(enabled: boolean, filter: HistoryFilter) {
           if (initial) hasMore.current.flights = page.length >= HISTORY_PAGE_LIMIT;
           commit('flights', items);
         } else {
-          const page = dedupeAlerts(await api.fetchAlerts('history', opts));
+          const page = await api.fetchAlerts('history', opts);
           if (gen !== generation.current) return;
           const { items, added } = mergeFirstPage(
             lists.current.alerts,
             page,
-            alertEpisodeIdentity,
+            alertKey,
             mergeAlertsByEpisode,
           );
           const initial = fetched.current.alerts === 0;
@@ -147,7 +146,6 @@ export function useHistoryFeed(enabled: boolean, filter: HistoryFilter) {
 
   useEffect(() => {
     if (!enabled) return undefined;
-    filterRef.current = { q, since, until };
     const gen = ++generation.current;
     lists.current = { flights: [], alerts: [] };
     fetched.current = { flights: 0, alerts: 0 };
@@ -190,12 +188,11 @@ export function useHistoryFeed(enabled: boolean, filter: HistoryFilter) {
           const extra = data.filter((f) => !seen.has(f.flight_id));
           if (extra.length) commit('flights', [...lists.current.flights, ...extra]);
         } else {
-          // Paginate on the server's count, not the deduped client list.
           const data = await api.fetchAlerts('history', opts);
           if (gen !== generation.current) return;
           fetched.current.alerts += data.length;
           hasMore.current.alerts = data.length >= HISTORY_PAGE_LIMIT;
-          if (data.length) commit('alerts', dedupeAlerts([...lists.current.alerts, ...data]));
+          if (data.length) commit('alerts', mergeAlertsByEpisode(lists.current.alerts, data));
         }
       } catch (err) {
         console.error(`Failed to load more ${kind}.`, err);

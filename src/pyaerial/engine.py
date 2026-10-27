@@ -18,10 +18,12 @@ from pyaerial.calc.geo import build_polygons
 from pyaerial.calc.plane import PlaneCalculator
 from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
+from pyaerial.integrity import IntegrityMonitor
 from pyaerial.logging_setup import setup_logging
 from pyaerial.models import flight_id_for_plane
 from pyaerial.receivers import RawFrame, Receiver, available_receivers, create_receiver
-from pyaerial.receivers.frames import correct_receiver_frames, raw_payload
+from pyaerial.receivers.frames import merge_receiver_frames, raw_payload
+from pyaerial.receivers.positions import ReceiverPositions
 from pyaerial.store import HistoryStore, RedisLiveStore
 from pyaerial.tracker import Tracker
 
@@ -34,6 +36,7 @@ _MESSAGE_QUEUE_MAXSIZE = 10_000
 _PENDING_FINALIZE_MAX = 256
 _DROP_LOG_INTERVAL = 10.0
 _RAW_PUBLISH_BATCH = 2_000
+_FRAME_PRUNE_INTERVAL = 600.0
 
 
 def _closed_alert(alert: dict) -> dict:
@@ -69,7 +72,9 @@ class Engine:
     ):
         self.config = config
         self._isolated = isolated
-        self.tracker = Tracker(config)
+        self.positions = ReceiverPositions(config, fetch=not isolated)
+        self.tracker = Tracker(config, positions=self.positions)
+        self.integrity = IntegrityMonitor(config, self.positions)
         self.polygons: dict[str, Polygon] = build_polygons(config.zones)
         self.aircraft_db = AircraftDB(aircraft_db_path)
         self.live_store = RedisLiveStore(
@@ -79,6 +84,7 @@ class Engine:
             writer=True,
         )
         self._last_status_log = 0.0
+        self._last_frame_prune = 0.0
         self.history_store = HistoryStore(
             config.database.path,
             config=config,
@@ -137,8 +143,20 @@ class Engine:
             *,
             rssi: float | None = None,
             clock: int | None = None,
+            bearing: float | None = None,
+            elevation: float | None = None,
+            cfo: float | None = None,
         ) -> None:
-            self._enqueue_message(msg_hex, timestamp, name, rssi=rssi, clock=clock)
+            self._enqueue_message(
+                msg_hex,
+                timestamp,
+                name,
+                rssi=rssi,
+                clock=clock,
+                bearing=bearing,
+                elevation=elevation,
+                cfo=cfo,
+            )
 
         try:
             receiver = create_receiver(method, name, emit, arguments)
@@ -171,6 +189,9 @@ class Engine:
         *,
         rssi: float | None = None,
         clock: int | None = None,
+        bearing: float | None = None,
+        elevation: float | None = None,
+        cfo: float | None = None,
     ) -> None:
         """Push a raw frame onto the bounded queue, dropping the oldest if full."""
         item = RawFrame(
@@ -179,6 +200,9 @@ class Engine:
             receiver=receiver_name,
             rssi=rssi,
             clock=clock,
+            bearing=bearing,
+            elevation=elevation,
+            cfo=cfo,
         )
         try:
             self._message_queue.put_nowait(item)
@@ -266,20 +290,48 @@ class Engine:
 
     def _outgoing_frames(
         self, frames: list[RawFrame]
-    ) -> tuple[list[RawFrame], list[tuple[str, float]]]:
-        """Merge dual-receiver copies, then drop recently seen exact frames."""
-        merged = correct_receiver_frames(frames)
-        pairs = [(frame.hex, frame.timestamp) for frame in merged]
+    ) -> tuple[list[RawFrame], list[tuple[str, float]], dict[str, tuple[str, ...]]]:
+        """Merge dual-receiver copies, then drop recently seen exact frames.
+
+        Also returns, per outgoing frame hex, every receiver that heard it.
+        """
+        merged = merge_receiver_frames(frames)
+        pairs = [(frame.hex, frame.timestamp) for frame, _heard in merged]
         new_messages = self.tracker.collect_new_messages(pairs)
         outgoing_hex = {hex_msg for hex_msg, _ts in new_messages}
-        outgoing = [frame for frame in merged if frame.hex in outgoing_hex]
-        return outgoing, new_messages
+        outgoing = [frame for frame, _heard in merged if frame.hex in outgoing_hex]
+        heard_by = {
+            frame.hex: heard
+            for frame, heard in merged
+            if heard and frame.hex in outgoing_hex
+        }
+        return outgoing, new_messages, heard_by
 
-    def _publish_raw(self, frames: list[RawFrame]) -> None:
+    def _archive_frames(self, frames: list[RawFrame]) -> None:
+        """Store every receiver copy (before merge) when raw archiving is on."""
+        archive = self.config.archive
+        if not archive.raw_frames:
+            return
+        if frames:
+            self.history_store.write_frames(frames)
+        now = time.monotonic()
+        keep = archive.raw_frames_keep_hours
+        if keep > 0 and now - self._last_frame_prune >= _FRAME_PRUNE_INTERVAL:
+            self._last_frame_prune = now
+            self.history_store.prune_frames(time.time() - keep * 3600)
+
+    def _publish_raw(
+        self,
+        frames: list[RawFrame],
+        heard_by: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
         """Fan raw sensor frames out to the live store (Redis pub/sub)."""
         if not frames:
             return
-        payloads = [raw_payload(frame) for frame in frames]
+        payloads = [
+            raw_payload(frame, receivers=(heard_by or {}).get(frame.hex))
+            for frame in frames
+        ]
         for offset in range(0, len(payloads), _RAW_PUBLISH_BATCH):
             self.live_store.publish_raw(payloads[offset : offset + _RAW_PUBLISH_BATCH])
 
@@ -287,6 +339,8 @@ class Engine:
         """Blocking main loop."""
         self._running = True
         self._install_signal_handlers()
+        self.positions.start()
+        self.integrity.start()
         self.start_receivers()
 
         hz = self.config.tracking.hz
@@ -314,15 +368,15 @@ class Engine:
                 self._restart_dead_receivers()
 
                 raw = self._drain_messages()
-                outgoing, new_messages = self._outgoing_frames(raw)
-                self._publish_raw(outgoing)
-                receivers = {
-                    frame.hex: frame.receiver
-                    for frame in outgoing
-                    if frame.receiver
-                }
-                processed = self.tracker.ingest(new_messages, receivers=receivers)
+                # Integrity sees every copy before merge/de-dup: per-receiver
+                # copies drive TDOA, exact repeats reveal replay.
+                self.integrity.observe_frames(raw)
+                self._archive_frames(raw)
+                outgoing, new_messages, heard_by = self._outgoing_frames(raw)
+                self._publish_raw(outgoing, heard_by)
+                processed = self.tracker.ingest(new_messages, receivers=heard_by)
 
+                self.integrity.evaluate(self.tracker.planes)
                 self.calculator.calculate_all(self.tracker.planes)
                 self.live_store.write_live_planes(self.tracker.planes)
                 self.live_store.touch_engine()
@@ -333,6 +387,8 @@ class Engine:
                     removed = self.tracker.remove_planes(expired)
                     for plane in removed:
                         self._finalize_plane(plane)
+                    for icao in expired:
+                        self.integrity.forget(icao)
                     log.debug("Expired %d plane(s): %s", len(expired), expired)
                 self._retry_pending_finalizes()
                 self._retry_orphan_live_flights()
@@ -379,6 +435,8 @@ class Engine:
         self._shutdown.set()
         log.info("Shutting down...")
 
+        self.positions.stop()
+        self.integrity.stop()
         for handle in self._receivers.values():
             handle.receiver.stop()
         for handle in self._receivers.values():

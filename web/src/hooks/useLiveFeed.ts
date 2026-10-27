@@ -1,16 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
 import { describeError } from '../api/errors';
 import { connectLiveSocket } from '../api/liveSocket';
 import type { Alert, FlightSummary, ServerStats, TelemetryPoint } from '../api/types';
-import {
-  alertEpisodeIdentity,
-  dedupeAlerts,
-  isAlertActive,
-  mergeAlertsByEpisode,
-} from '../utils/alertData';
+import { isAlertActive, mergeAlertsByEpisode } from '../utils/alertData';
 import { applyTelemetryBatch, mergeLiveFlights } from '../utils/flightData';
-import { useLatestRef } from './useStableCallback';
 
 export interface LiveFeedCallbacks {
   /** Each live `flights` snapshot (after merging). */
@@ -25,11 +19,11 @@ export interface LiveFeedCallbacks {
 
 /** Count episodes that are active in `next` but were absent or inactive in `prev`. */
 export function countActivations(prev: Alert[], next: Alert[]): number {
-  const before = new Map(prev.map((a) => [alertEpisodeIdentity(a), a]));
+  const before = new Map(prev.map((a) => [a.alert_id, a]));
   let count = 0;
   for (const alert of next) {
     if (!isAlertActive(alert)) continue;
-    const old = before.get(alertEpisodeIdentity(alert));
+    const old = before.get(alert.alert_id);
     if (!old || !isAlertActive(old)) count += 1;
   }
   return count;
@@ -54,8 +48,15 @@ export function useLiveFeed(enabled: boolean, callbacks: LiveFeedCallbacks = {})
   const [flightsError, setFlightsError] = useState<string | null>(null);
   const [alertsError, setAlertsError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
-  const callbacksRef = useLatestRef(callbacks);
-  // Mirrors of state so socket handlers can compute without impure updaters.
+  // Socket handlers outlive the render that created them; they read this, not
+  // a stale closure. Re-subscribing on every callback identity change would
+  // refetch the whole live store.
+  const callbacksRef = useRef(callbacks);
+  useLayoutEffect(() => {
+    callbacksRef.current = callbacks;
+  });
+  // Written in the same tick as setState so merge/prune in the socket handler
+  // sees the lists the UI has, including updates that have not committed yet.
   const flightsRef = useRef<FlightSummary[]>([]);
   const alertsRef = useRef<Alert[]>([]);
 
@@ -93,7 +94,7 @@ export function useLiveFeed(enabled: boolean, callbacks: LiveFeedCallbacks = {})
         setFlightsError(describeError(flightsRes.reason, 'Failed to load live flights.'));
       }
       if (alertsRes.status === 'fulfilled') {
-        let next = mergeAlertsByEpisode(alertsRef.current, dedupeAlerts(alertsRes.value));
+        let next = mergeAlertsByEpisode(alertsRef.current, alertsRes.value);
         if (flightsRes.status === 'fulfilled') {
           next = pruneUntracked(next, new Set(flightsRes.value.map((f) => f.flight_id)));
         }
@@ -135,7 +136,7 @@ export function useLiveFeed(enabled: boolean, callbacks: LiveFeedCallbacks = {})
             break;
           }
           case 'alerts': {
-            const incoming = dedupeAlerts(message.alerts);
+            const incoming = message.alerts;
             const prev = alertsRef.current;
             // Merge rather than replace: the snapshot only covers tracked
             // flights, so replacing would drop their ended episodes.
@@ -177,7 +178,7 @@ export function useLiveFeed(enabled: boolean, callbacks: LiveFeedCallbacks = {})
       setFlightsError(null);
       setAlertsError(null);
     };
-  }, [enabled, retryToken, callbacksRef]);
+  }, [enabled, retryToken]);
 
   /** Re-run the full fetch (re-subscribes; the socket itself stays up). */
   const retry = useCallback(() => setRetryToken((t) => t + 1), []);

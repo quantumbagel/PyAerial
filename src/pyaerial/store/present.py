@@ -19,6 +19,7 @@ def live_flight_detail(doc: dict[str, Any], flight_id: str) -> dict[str, Any]:
         "country": doc.get("country") or info.get("country"),
         "aircraft_type": doc.get("aircraft_type") or info.get("aircraft_type"),
         "registration": doc.get("registration") or info.get("registration"),
+        "integrity": info.get("integrity"),
         "is_live": True,
         "status": "live",
     }
@@ -54,6 +55,7 @@ def live_flight_summary(
         "altitude": alt,
         "speed": speed,
         "heading": heading,
+        "integrity": info.get("integrity"),
         "is_live": True,
         "status": "live",
         "retained": False,

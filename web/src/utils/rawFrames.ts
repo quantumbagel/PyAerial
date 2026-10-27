@@ -18,12 +18,18 @@ export function prependRawFrames<T>(
   return newestFirst.concat(existing.length > keep ? existing.slice(0, keep) : existing);
 }
 
+/** Receivers that heard this frame, strongest first; falls back to `receiver`. */
+export function rawReceiverNames(frame: RawFrame): string[] {
+  if (frame.receivers?.length) return frame.receivers;
+  return frame.receiver ? [frame.receiver] : [];
+}
+
 export function rawFrameMatches(frame: RawFrame, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   if ((frame.icao || '').toLowerCase().includes(q)) return true;
   if ((frame.hex || '').toLowerCase().includes(q)) return true;
-  if ((frame.receiver || '').toLowerCase().includes(q)) return true;
+  if (rawReceiverNames(frame).some((name) => name.toLowerCase().includes(q))) return true;
   if (frame.df != null) {
     const df = String(frame.df);
     if (df === q || `df${df}` === q) return true;
@@ -63,5 +69,5 @@ export function emptyRawMessage({
   const issue = liveIssue(stats);
   if (issue === 'live_unavailable') return REDIS_DOWN;
   if (issue === 'engine_down') return ENGINE_DOWN;
-  return 'No Beast frames yet. They appear once dump1090 is feeding the tracker.';
+  return 'No raw frames yet. They appear once dump1090 is feeding the tracker.';
 }

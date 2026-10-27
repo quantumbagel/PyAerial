@@ -1,7 +1,7 @@
 """
-ADS-B and Mode S tracking pipeline with polygon rule evaluation, live WebSocket telemetry, and flight archival.
+ADS-B receiver network: integrity-checked tracking, a labelled research archive, and zone alerts.
 
 (c) 2024 Julian Reder (quantumbagel)
 """
 
-__version__ = "0.21.0"
+__version__ = "0.22.0"

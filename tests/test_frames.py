@@ -10,6 +10,7 @@ from pyaerial.receivers.frames import (
     correct_receiver_frames,
     encode_beast,
     encode_beast_messages,
+    merge_receiver_frames,
     parse_avr_line,
     raw_payload,
     receive_times,
@@ -55,17 +56,26 @@ def test_raw_payload_includes_df_icao_rssi():
     assert payload["rssi"] == -12.3
     assert payload["clock"] == 99
     assert payload["receiver"] == "main"
+    assert "receivers" not in payload
+
+    with_heard = raw_payload(frame, receivers=("main", "north"))
+    assert with_heard["receiver"] == "main"
+    assert with_heard["receivers"] == ["main", "north"]
 
 
 def test_raw_payload_omits_missing_rssi():
     payload = raw_payload(RawFrame(hex="8d406b90", timestamp=1.0, receiver="r"))
     assert "rssi" not in payload
     assert "clock" not in payload
+    assert "receivers" not in raw_payload(
+        RawFrame(hex="8d406b90", timestamp=1.0, receiver="r"), receivers=()
+    )
 
 
 def _beast_frame(hex_msg: str, *, clock: int = 1, signal: int = 128) -> bytes:
     body = clock.to_bytes(6, "big") + bytes([signal]) + bytes.fromhex(hex_msg)
-    escaped = bytearray([BEAST_ESC, 0x33])
+    kind = {2: 0x31, 7: 0x32, 14: 0x33}[len(hex_msg) // 2]
+    escaped = bytearray([BEAST_ESC, kind])
     for byte in body:
         escaped.append(byte)
         if byte == BEAST_ESC:
@@ -142,8 +152,14 @@ def test_beast_parser_resyncs_on_bare_esc_in_payload():
     assert any(frame[0] == hex_msg for frame in frames)
 
 
-def test_dump1090_defaults_to_avr():
+def test_dump1090_defaults_to_beast():
     receiver = Dump1090Receiver("main", _emit, {})
+    assert receiver.format == "beast"
+    assert receiver.port == 30005
+
+
+def test_dump1090_avr_port_implies_avr():
+    receiver = Dump1090Receiver("main", _emit, {"tcp_connection_port": 30002})
     assert receiver.format == "avr"
     assert receiver.port == 30002
 
@@ -236,6 +252,22 @@ def test_correct_receiver_frames_hamming_vote():
     assert len(merged) == 1
     assert merged[0].hex == good
     assert merged[0].receiver == "b"
+
+
+def test_merge_receiver_frames_lists_every_receiver_strongest_first():
+    good = "8d406b902015a678d4d220aa4bda"
+    flipped = "8d406b902015a678d4d220aa4bdb"
+    frames = [
+        RawFrame(hex=flipped, timestamp=1.0, receiver="a", rssi=-28.0),
+        RawFrame(hex=good, timestamp=1.01, receiver="c", rssi=-20.0),
+        RawFrame(hex=good, timestamp=1.02, receiver="b", rssi=-10.0),
+    ]
+    merged = merge_receiver_frames(frames)
+    assert len(merged) == 1
+    frame, heard = merged[0]
+    assert frame.receiver == "b"
+    assert heard[0] == "b"
+    assert sorted(heard) == ["a", "b", "c"]
 
 
 def test_correct_receiver_frames_leaves_same_receiver_alone():
@@ -372,3 +404,21 @@ def test_parse_avr_rejects_bad_lengths_and_garbage():
     assert parse_avr_line("*7700;") == ("7700", None)
     assert parse_avr_line("*8D406B90zz15A678D4D220AA4BDA;") is None
     assert parse_avr_line("AABBCC", strict=False) == ("aabbcc", None)
+
+
+def test_beast_parser_same_frames_for_any_chunking():
+    frames_in = [
+        ("8d406b902015a678d4d220aa4bda", 5, 128),
+        ("8d1a6b902015a678d4d220aa4bda", 0x1A1A, 0x1A),
+        ("5d484fdea248f5", 77, 200),
+    ]
+    stream = b"\x00garbage" + b"".join(
+        _beast_frame(h, clock=c, signal=s) for h, c, s in frames_in
+    )
+    whole = BeastParser().feed(stream)
+    parser = BeastParser()
+    split: list = []
+    for i in range(len(stream)):
+        split.extend(parser.feed(stream[i : i + 1]))
+    assert [f[0] for f in whole] == [h for h, _c, _s in frames_in]
+    assert split == whole

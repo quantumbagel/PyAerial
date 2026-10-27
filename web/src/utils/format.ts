@@ -199,21 +199,12 @@ export function formatTimeRange(
 
 // ── Identity fields ──────────────────────────────────────────
 
-const PLACEHOLDERS = new Set(['', 'unknown', 'unknown model', 'unknown owner', 'n/a', 'none', 'null']);
-
-/** Trimmed value, or null for missing/placeholder text from older servers. */
-export function cleanField(value: string | null | undefined): string | null {
-  if (value == null) return null;
-  const trimmed = String(value).trim();
-  return PLACEHOLDERS.has(trimmed.toLowerCase()) ? null : trimmed;
-}
-
 export function displayField(value: string | null | undefined): string {
-  return cleanField(value) ?? EMPTY;
+  return value ?? EMPTY;
 }
 
 export function displayIcao(icao: string | null | undefined): string {
-  return cleanField(icao)?.toUpperCase() ?? EMPTY;
+  return icao ? icao.toUpperCase() : EMPTY;
 }
 
 /** Callsign, else ICAO, else EMPTY. */
@@ -221,14 +212,13 @@ export function displayCallsign(source: {
   callsign?: string | null;
   icao?: string | null;
 }): string {
-  return cleanField(source.callsign) ?? displayIcao(source.icao);
+  return source.callsign ?? displayIcao(source.icao);
 }
 
 /** "Zone · rule" */
 export function formatZoneRule(zone?: string | null, rule?: string | null): string {
-  const zoneName = cleanField(zone) ?? 'Zone';
-  const ruleName = cleanField(rule);
-  return ruleName ? `${zoneName}${LIST_SEP}${ruleName}` : zoneName;
+  const zoneName = zone || 'Zone';
+  return rule ? `${zoneName}${LIST_SEP}${rule}` : zoneName;
 }
 
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {

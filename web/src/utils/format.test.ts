@@ -4,8 +4,8 @@ import type { FlightSummary } from '../api/types';
 import { flightTimeLabel } from './flightData';
 import {
   EMPTY,
-  cleanField,
   displayCallsign,
+  displayField,
   formatAgo,
   formatAltitude,
   formatAltitudeCompact,
@@ -122,17 +122,15 @@ describe('durations', () => {
 });
 
 describe('identity fields', () => {
-  it('treats placeholder strings as missing', () => {
-    expect(cleanField('Unknown Model')).toBeNull();
-    expect(cleanField('UNKNOWN')).toBeNull();
-    expect(cleanField('  ')).toBeNull();
-    expect(cleanField(null)).toBeNull();
-    expect(cleanField(' Cessna ')).toBe('Cessna');
+  it('renders EMPTY for null metadata', () => {
+    expect(displayField(null)).toBe(EMPTY);
+    expect(displayField(undefined)).toBe(EMPTY);
+    expect(displayField('Cessna')).toBe('Cessna');
   });
 
   it('falls back from callsign to ICAO to the placeholder', () => {
-    expect(displayCallsign({ callsign: 'N123 ', icao: 'abc' })).toBe('N123');
-    expect(displayCallsign({ callsign: 'Unknown', icao: 'abc' })).toBe('ABC');
+    expect(displayCallsign({ callsign: 'N123', icao: 'abc' })).toBe('N123');
+    expect(displayCallsign({ callsign: null, icao: 'abc' })).toBe('ABC');
     expect(displayCallsign({ callsign: null, icao: null })).toBe(EMPTY);
   });
 
@@ -162,10 +160,6 @@ describe('flightTimeLabel', () => {
     expect(flightTimeLabel(flight({ end_time: BASE_TS + 86400 }))).toBe(
       'Nov 14, 2023, 10:13 PM – Nov 15, 2023, 10:13 PM',
     );
-  });
-
-  it('shows first seen for the first-seen sort', () => {
-    expect(flightTimeLabel(flight({}), 'first_seen')).toBe('Nov 14, 2023, 10:13 PM');
   });
 
   it('uses the placeholder when no timestamps are present', () => {

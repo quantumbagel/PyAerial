@@ -18,6 +18,7 @@ from pyaerial.constants import (
     STORE_DISTANCE,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
+    STORE_INFO,
     STORE_LAT,
     STORE_LONG,
     STORE_RECV_DATA,
@@ -30,6 +31,7 @@ Resolver = Callable[[str], float | None]
 _RECV_FIELDS = {STORE_LAT, STORE_LONG, STORE_ALT, STORE_VERT_SPEED}
 _CALC_FIELDS = {STORE_HORIZ_SPEED, STORE_HEADING}
 _PROXIMITY_KEY = "_proximity"
+_INTEGRITY_KEY = "integrity"
 _HEADING_FIELDS = {STORE_HEADING, "heading", "direction"}
 
 _FIELD_ALIASES = {
@@ -50,7 +52,17 @@ _FIELD_ALIASES = {
     "distance": STORE_DISTANCE,
     "proximity": _PROXIMITY_KEY,
     "eta": ALERT_CAT_ETA,
+    "integrity": _INTEGRITY_KEY,
 }
+
+
+def integrity_score(plane: dict) -> float | None:
+    """Latest integrity score written by the integrity monitor, if any."""
+    doc = (plane.get(STORE_INFO) or {}).get(_INTEGRITY_KEY)
+    if not isinstance(doc, dict):
+        return None
+    score = doc.get("score")
+    return float(score) if isinstance(score, (int, float)) else None
 
 
 def _heading_in_range(value: float, minimum: float | None, maximum: float | None) -> bool:
@@ -97,6 +109,8 @@ def make_resolver(
             return geo.distance_to_polygon(polygon, position)
         if target_field == _PROXIMITY_KEY:
             return geo.distance_to_polygon(polygon, position) * 1000  # km -> m
+        if target_field == _INTEGRITY_KEY:
+            return integrity_score(plane)
         return None
 
     return resolve
@@ -183,6 +197,9 @@ def make_predicted_resolver(
 
         if target_field == _PROXIMITY_KEY:
             return geo.distance_to_polygon(polygon, predicted_pos) * 1000
+
+        if target_field == _INTEGRITY_KEY:
+            return integrity_score(plane)
 
         # For speed, heading, vert_speed, etc. use current values
         if target_field in _RECV_FIELDS:

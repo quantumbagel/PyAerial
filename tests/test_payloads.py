@@ -31,7 +31,7 @@ class _DB:
 
 
 def test_placeholders_become_null():
-    for value in ("Unknown Model", "Unknown Owner", "Unknown", "UNKNOWN", "", "  "):
+    for value in ("Unknown Model", "Unknown Owner", "UNKNOWN", "N/A", "None", "null", "", "  "):
         assert clean_text(value) is None
     assert clean_text(" N123AB ") == "N123AB"
     assert clean_text(None) is None

@@ -4,7 +4,6 @@ import { formatActiveAlerts, formatAlertHistory } from '../utils/alertData';
 import {
   EMPTY,
   LIST_SEP,
-  cleanField,
   displayCallsign,
   displayField,
   displayIcao,
@@ -21,6 +20,7 @@ import {
 import { FlightAlertBadges } from './AlertBadges';
 import { AlertTimeline } from './AlertTimeline';
 import { ExternalLinks } from './ExternalLinks';
+import { IntegritySection } from './IntegritySection';
 import { TelemetryTable } from './TelemetryTable';
 import { Button, Chip, StateView, Tab, TabList, TabPanel, useTabIds } from './ui';
 
@@ -44,7 +44,7 @@ interface DetailsDrawerProps {
   onSelectTelemetryPoint: (point: TelemetryPoint) => void;
   onClose: () => void;
   onSwitchTab: (tab: DrawerTab) => void;
-  onSelectAlert: (alert: Alert, episodeKey: string) => void;
+  onSelectAlert: (alert: Alert) => void;
 }
 
 /** Live flights: merge the fresher list summary over the fetched detail. */
@@ -60,6 +60,7 @@ function mergeDisplayFlight(detail: FlightDetail | null, summary: FlightSummary 
     altitude: summary.altitude ?? base.altitude,
     active_alerts: summary.active_alerts ?? base.active_alerts,
     alert_stats: summary.alert_stats ?? base.alert_stats,
+    integrity: summary.integrity ?? base.integrity,
   };
 }
 
@@ -212,7 +213,7 @@ export function DetailsDrawer({
   const isLoadingPlane = isLoading || (!flightDetail && !selectionError);
   const identity = flightDetail ?? flightSummary;
   const title = identity ? displayCallsign(identity) : EMPTY;
-  const icao = cleanField(identity?.icao);
+  const icao = identity?.icao ?? null;
   const photoUrl = safeHttpsUrl(flightDetail?.photo_url);
   const photoLink = safeHttpsUrl(flightDetail?.photo_link);
   const sortedAlerts = useMemo(
@@ -259,7 +260,7 @@ export function DetailsDrawer({
         <div className="drawer-header-label">Selected aircraft</div>
         <h2 id={headingId} className="drawer-title">
           <span>{title}</span>
-          {icao && cleanField(identity?.callsign) ? <Chip>{displayIcao(icao)}</Chip> : null}
+          {icao && identity?.callsign ? <Chip>{displayIcao(icao)}</Chip> : null}
           {displayFlight && (
             <FlightAlertBadges flight={displayFlight} zones={zones} alertColors={alertColors} />
           )}
@@ -288,7 +289,7 @@ export function DetailsDrawer({
                   <span>
                     Photo by{' '}
                     <span className="drawer-photo__credit">
-                      {cleanField(flightDetail?.photo_photographer) ?? 'Planespotters'}
+                      {flightDetail?.photo_photographer ?? 'Planespotters'}
                     </span>
                   </span>
                   {photoLink && (
@@ -321,6 +322,8 @@ export function DetailsDrawer({
                 <dd className={`ui-field-value ui-field-value--${alertTone}`}>{alertSummary}</dd>
               </dl>
             </section>
+
+            <IntegritySection integrity={displayFlight?.integrity} />
 
             <section className="info-section">
               <h3>{selectedTelemetryPoint ? 'Selected fix' : 'Latest readings'}</h3>

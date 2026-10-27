@@ -136,24 +136,24 @@
     background-color: var(--panel);
 }
 
-.leaflet-gl-layer,
-.leaflet-gl-layer .maplibregl-map {
+.map .maplibregl-map,
+.map .maplibregl-canvas,
+.map .maplibregl-canvas-container {
     width: 100%;
     height: 100%;
 }
 
-.map .maplibregl-ctrl-bottom-left,
-.map .maplibregl-ctrl-bottom-right {
+.map .maplibregl-ctrl-bottom-left {
     display: none;
 }
 
-.map .leaflet-control-attribution {
+.map .maplibregl-ctrl-attrib {
     background: var(--surface-overlay);
     color: var(--text-muted);
     font-size: var(--font-xs);
 }
 
-.map .leaflet-control-attribution a {
+.map .maplibregl-ctrl-attrib a {
     color: var(--text-secondary);
 }
 
@@ -178,21 +178,6 @@
 
 .map-controls__sidebar {
     display: none;
-}
-
-.plane-icon {
-    background: none;
-    border: none;
-}
-
-.plane-icon__wrap {
-    display: block;
-    line-height: 0;
-}
-
-.plane-icon__svg {
-    transform-origin: center;
-    transition: transform var(--duration-base) linear;
 }
 
 /* ── Details drawer ──────────────────────────────────────── */
@@ -414,9 +399,9 @@
     animation: banner-in var(--duration-slow) var(--ease-standard);
 }
 
-/* ── Leaflet tooltips (zone labels, path and marker hovers) ── */
+/* ── MapLibre popups (path and marker hovers) ── */
 
-.leaflet-tooltip {
+.map-tooltip .maplibregl-popup-content {
     background: var(--surface-overlay);
     color: var(--text);
     border: 1px solid var(--border);
@@ -427,28 +412,8 @@
     padding: var(--space-1) var(--space-2);
 }
 
-.leaflet-tooltip-top::before {
-    border-top-color: var(--border);
-}
-
-.leaflet-tooltip-bottom::before {
-    border-bottom-color: var(--border);
-}
-
-.leaflet-tooltip-left::before {
-    border-left-color: var(--border);
-}
-
-.leaflet-tooltip-right::before {
-    border-right-color: var(--border);
-}
-
-.leaflet-tooltip.zone-label {
-    background: color-mix(in srgb, var(--panel) 80%, transparent);
-    color: var(--text-secondary);
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    box-shadow: none;
+.map-tooltip .maplibregl-popup-tip {
+    border-top-color: var(--surface-overlay);
 }
 
 /* ── Responsive ──────────────────────────────────────────── */

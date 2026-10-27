@@ -5,11 +5,29 @@ export interface AlertStats {
 }
 
 export interface ActiveAlert {
-  alert_id?: string | null;
+  alert_id: string;
   zone: string;
   rule: string;
   activated_at?: number;
   eta?: number | null;
+}
+
+export type IntegrityStatus = 'ok' | 'suspect' | 'spoofed' | 'unknown';
+
+export interface IntegrityCheck {
+  status: 'pass' | 'warn' | 'fail';
+  detail: string;
+  value?: number;
+}
+
+/** Spoofing checks from the engine's integrity monitor (see CONFIGURATION.md). */
+export interface Integrity {
+  /** 0-1; 1 means consistent with every check that had evidence. */
+  score: number;
+  status: IntegrityStatus;
+  checks: Record<string, IntegrityCheck>;
+  /** Multilaterated transmitter location, for targets that fail TDOA. */
+  emitter?: { latitude: number; longitude: number; offset_km: number };
 }
 
 export interface FlightSummary {
@@ -33,6 +51,7 @@ export interface FlightSummary {
   status?: string;
   retained?: boolean;
   timestamp?: number | null;
+  integrity?: Integrity | null;
 }
 
 export interface FlightDetail extends FlightSummary {
@@ -52,6 +71,12 @@ export interface TelemetryPoint {
   flight_id?: string;
   icao?: string;
   active_alerts?: ActiveAlert[];
+  /** Receivers that heard this position, strongest copy first. */
+  receivers?: string[];
+  /** Integrity verdict in effect when the sample arrived. */
+  integrity_score?: number;
+  integrity_status?: string;
+  integrity_flags?: string[];
 }
 
 export interface Alert {
@@ -111,6 +136,8 @@ export interface RawFrame {
   hex: string;
   timestamp: number;
   receiver?: string;
+  /** Every receiver that heard this frame, strongest copy first. */
+  receivers?: string[];
   rssi?: number;
   clock?: number;
   df?: number;
@@ -129,6 +156,7 @@ export interface RawAntenna {
     host?: string;
     port?: number;
     format?: string;
+    position?: { latitude: number; longitude: number; altitude?: number };
   }>;
 }
 

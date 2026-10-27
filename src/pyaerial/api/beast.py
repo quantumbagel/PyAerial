@@ -1,8 +1,9 @@
-"""Dump1090-compatible Beast output for OpenSky Network and similar feeders.
+"""Dump1090-compatible Beast output and JSON raw-frame fan-out.
 
-Corrected Mode S frames (after dual-receiver merge) are re-encoded as Beast
-binary and fanned out over ``/ws/beast`` plus an optional TCP listener that
-speaks the same protocol dump1090 exposes on port 30005.
+Corrected Mode S frames (after dual-receiver merge) are published on Redis
+``live:raw``. This hub subscribes once and fans the same batch out as Beast
+binary on ``/ws/beast`` plus an optional TCP listener, and as JSON text on
+``/ws/raw``.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import Any
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
+from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.receivers.frames import encode_beast_messages
 import contextlib
 
@@ -25,7 +27,7 @@ _STOP_GRACE_SECONDS = 2.0
 
 
 class BeastHub:
-    """Subscribe to ``live:raw`` and stream Beast bytes to WS and TCP clients."""
+    """Subscribe to ``live:raw`` and stream Beast bytes plus JSON raw frames."""
 
     def __init__(
         self,
@@ -40,6 +42,7 @@ class BeastHub:
         self.port = port
         self.max_clients = max(1, int(max_clients))
         self._queues: set[asyncio.Queue] = set()
+        self._json_queues: set[asyncio.Queue] = set()
         self._raw_queue: asyncio.Queue | None = None
         self._raw_task: asyncio.Task | None = None
         self._server: asyncio.Server | None = None
@@ -111,6 +114,9 @@ class BeastHub:
         for queue in list(self._queues):
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(None)
+        for queue in list(self._json_queues):
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(None)
 
     def _enqueue_raw(
         self, loop: asyncio.AbstractEventLoop, payload: dict[str, Any]
@@ -135,23 +141,36 @@ class BeastHub:
             return
         while True:
             payload = await queue.get()
+            messages = payload.get("messages") or []
+            if not messages:
+                continue
             try:
-                messages = payload.get("messages") or []
-                if not messages:
-                    continue
                 data = encode_beast_messages(messages)
                 if data:
                     self._broadcast(data)
             except Exception:
                 log.exception("Beast encode/broadcast failed")
+            try:
+                self._broadcast_json(messages)
+            except Exception:
+                log.exception("Raw JSON broadcast failed")
 
     def _broadcast(self, data: bytes) -> None:
-        for queue in list(self._queues):
+        self._fanout(self._queues, data)
+
+    def _broadcast_json(self, messages: list[Any]) -> None:
+        if not self._json_queues:
+            return
+        self._fanout(self._json_queues, json_dumps({"type": "raw", "frames": messages}))
+
+    @staticmethod
+    def _fanout(queues: set[asyncio.Queue], item: Any) -> None:
+        for queue in list(queues):
             if queue.full():
                 with contextlib.suppress(asyncio.QueueEmpty):
                     queue.get_nowait()
             with contextlib.suppress(asyncio.QueueFull):
-                queue.put_nowait(data)
+                queue.put_nowait(item)
 
     def _attach(self) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
@@ -161,10 +180,25 @@ class BeastHub:
     def _detach(self, queue: asyncio.Queue) -> None:
         self._queues.discard(queue)
 
+    def _attach_json(self) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAX)
+        self._json_queues.add(queue)
+        return queue
+
+    def _detach_json(self, queue: asyncio.Queue) -> None:
+        self._json_queues.discard(queue)
+
     async def run_websocket(self, websocket: WebSocket) -> None:
+        await self._run_client(websocket, json_mode=False)
+
+    async def run_json_websocket(self, websocket: WebSocket) -> None:
+        await self._run_client(websocket, json_mode=True)
+
+    async def _run_client(self, websocket: WebSocket, *, json_mode: bool) -> None:
         await websocket.accept()
-        queue = self._attach()
-        writer = asyncio.create_task(self._ws_writer(websocket, queue))
+        queue = self._attach_json() if json_mode else self._attach()
+        writer = asyncio.create_task(self._ws_writer(websocket, queue, json_mode=json_mode))
+        label = "Raw WS" if json_mode else "Beast WS"
         try:
             while True:
                 message = await websocket.receive()
@@ -174,14 +208,21 @@ class BeastHub:
             pass
         except RuntimeError as exc:
             # receive() after the writer closed the socket on a send failure.
-            log.debug("Beast WS receive ended: %s", exc)
+            log.debug("%s receive ended: %s", label, exc)
         finally:
-            self._detach(queue)
+            if json_mode:
+                self._detach_json(queue)
+            else:
+                self._detach(queue)
             writer.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await writer
 
-    async def _ws_writer(self, websocket: WebSocket, queue: asyncio.Queue) -> None:
+    async def _ws_writer(
+        self, websocket: WebSocket, queue: asyncio.Queue, *, json_mode: bool = False
+    ) -> None:
+        label = "Raw WS" if json_mode else "Beast WS"
+        detach = self._detach_json if json_mode else self._detach
         try:
             while True:
                 chunk = await queue.get()
@@ -189,17 +230,20 @@ class BeastHub:
                     return
                 if websocket.client_state != WebSocketState.CONNECTED:
                     return
-                await websocket.send_bytes(chunk)
+                if json_mode:
+                    await websocket.send_text(chunk)
+                else:
+                    await websocket.send_bytes(chunk)
         except asyncio.CancelledError:
             raise
         except (WebSocketDisconnect, RuntimeError, OSError) as exc:
-            log.debug("Beast WS send failed (%s); detaching client", type(exc).__name__)
-            self._detach(queue)
+            log.debug("%s send failed (%s); detaching client", label, type(exc).__name__)
+            detach(queue)
             if websocket.client_state == WebSocketState.CONNECTED:
                 try:
                     await websocket.close()
                 except (RuntimeError, OSError) as close_exc:
-                    log.debug("Beast WS close failed: %s", type(close_exc).__name__)
+                    log.debug("%s close failed: %s", label, type(close_exc).__name__)
 
     async def _handle_tcp(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter

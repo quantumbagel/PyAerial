@@ -32,6 +32,9 @@ class RawFrame:
     ``timestamp`` is unix seconds (engine receive time). ``rssi`` is dBFS.
     ``clock`` is the dump1090 48-bit timestamp in 12 MHz ticks
     (1 tick = 1/12_000_000 s), when the transport provides it.
+    ``bearing`` / ``elevation`` are the measured angle of arrival in degrees
+    (true north / above horizon) and ``cfo`` the carrier frequency offset in
+    Hz, from receivers with a coherent antenna array.
     """
 
     hex: str
@@ -39,6 +42,9 @@ class RawFrame:
     receiver: str = ""
     rssi: float | None = None
     clock: int | None = None
+    bearing: float | None = None
+    elevation: float | None = None
+    cfo: float | None = None
 
 
 def frame_fields(hex_msg: str) -> dict[str, object]:
@@ -57,12 +63,17 @@ def frame_fields(hex_msg: str) -> dict[str, object]:
     return fields
 
 
-def raw_payload(frame: RawFrame) -> dict[str, object]:
+def raw_payload(
+    frame: RawFrame,
+    receivers: tuple[str, ...] | list[str] | None = None,
+) -> dict[str, object]:
     """JSON object for one raw frame on the live Redis ``live:raw`` channel."""
     item = frame_fields(frame.hex)
     item["timestamp"] = frame.timestamp
     if frame.receiver:
         item["receiver"] = frame.receiver
+    if receivers:
+        item["receivers"] = list(receivers)
     if frame.rssi is not None and math.isfinite(frame.rssi):
         item["rssi"] = round(frame.rssi, 1)
     if frame.clock is not None:
@@ -117,19 +128,36 @@ def correct_receiver_frames(
     (same DF/ICAO, Hamming distance ``<= max_hamming``) collapse to the
     stronger copy.
     """
+    merged = merge_receiver_frames(frames, window=window, max_hamming=max_hamming)
+    return [frame for frame, _heard in merged]
+
+
+def merge_receiver_frames(
+    frames: list[RawFrame],
+    *,
+    window: float = _CORRECT_WINDOW,
+    max_hamming: int = _CORRECT_HAMMING,
+) -> list[tuple[RawFrame, tuple[str, ...]]]:
+    """:func:`correct_receiver_frames`, plus every receiver that heard each kept
+    frame (the kept copy's receiver first)."""
     if not frames:
         return []
     by_hex: dict[str, RawFrame] = {}
+    heard_hex: dict[str, list[str]] = {}
     order: list[str] = []
     for frame in frames:
         prev = by_hex.get(frame.hex)
         if prev is None:
             by_hex[frame.hex] = frame
+            heard_hex[frame.hex] = []
             order.append(frame.hex)
         elif _better_copy(frame, prev):
             by_hex[frame.hex] = frame
+        if frame.receiver and frame.receiver not in heard_hex[frame.hex]:
+            heard_hex[frame.hex].append(frame.receiver)
     unique = [by_hex[hex_msg] for hex_msg in order]
     kept: list[RawFrame] = []
+    heard: list[list[str]] = []
     payloads: list[bytes] = []
     # Candidate index: (payload length, DF, ICAO) -> time bin -> kept indices.
     # Two frames within ``window`` seconds are at most one bin apart, so only
@@ -140,10 +168,12 @@ def correct_receiver_frames(
             payload = bytes.fromhex(frame.hex)
         except ValueError:
             kept.append(frame)
+            heard.append(list(heard_hex[frame.hex]))
             payloads.append(b"")
             continue
         if not payload:
             kept.append(frame)
+            heard.append(list(heard_hex[frame.hex]))
             payloads.append(payload)
             continue
         bins = buckets.setdefault((len(payload), *_frame_identity(frame.hex)), {})
@@ -162,6 +192,9 @@ def correct_receiver_frames(
                 continue
             if _hamming_bits(payload, payloads[index]) > max_hamming:
                 continue
+            heard[index].extend(
+                name for name in heard_hex[frame.hex] if name not in heard[index]
+            )
             if _better_copy(frame, other):
                 kept[index] = frame
                 payloads[index] = payload
@@ -174,8 +207,15 @@ def correct_receiver_frames(
         if not merged:
             bins.setdefault(time_bin, []).append(len(kept))
             kept.append(frame)
+            heard.append(list(heard_hex[frame.hex]))
             payloads.append(payload)
-    return kept
+    out: list[tuple[RawFrame, tuple[str, ...]]] = []
+    for frame, names in zip(kept, heard, strict=True):
+        if frame.receiver in names:
+            names.remove(frame.receiver)
+            names.insert(0, frame.receiver)
+        out.append((frame, tuple(names)))
+    return out
 
 
 def _time_bin(timestamp: float, window: float) -> int:
@@ -343,7 +383,7 @@ def beast_rssi_dbfs(level: int) -> float | None:
 
 
 def _read_unescaped(
-    data: bytes, start: int, count: int
+    data: bytes | bytearray, start: int, count: int
 ) -> tuple[bytes | None, int | None]:
     """Read *count* payload bytes from *start*, undoing Beast ``0x1a 0x1a`` escapes.
 
@@ -351,6 +391,10 @@ def _read_unescaped(
     buffer is incomplete. ``(None, resync_index)`` means a bare ``0x1a`` starts
     a new frame at *resync_index*; the caller should consume up to that ESC.
     """
+    end = start + count
+    # Fast path: most frames carry no ESC byte, so a plain slice is the payload.
+    if end <= len(data) and data.find(BEAST_ESC, start, end) < 0:
+        return bytes(data[start:end]), end
     out = bytearray()
     index = start
     while len(out) < count:
@@ -370,41 +414,42 @@ def _read_unescaped(
     return bytes(out), index
 
 
-def try_parse_beast(buffer: bytes) -> tuple[tuple[str, float | None, int] | None, int]:
-    """Pull one Beast frame from *buffer*.
+def try_parse_beast(
+    buffer: bytes | bytearray, offset: int = 0
+) -> tuple[tuple[str, float | None, int] | None, int]:
+    """Pull one Beast frame from *buffer* starting at *offset*.
 
-    Returns ``(frame, consumed)``. *consumed* is 0 when more data is needed.
-    *frame* is ``(hex, rssi, clock)`` or ``None`` when skipping garbage.
+    Returns ``(frame, consumed)``, *consumed* counted from *offset*. It is 0
+    when more data is needed. *frame* is ``(hex, rssi, clock)`` or ``None``
+    when skipping garbage.
     """
-    try:
-        start = buffer.index(BEAST_ESC)
-    except ValueError:
-        return None, len(buffer)
+    found = buffer.find(BEAST_ESC, offset)
+    if found < 0:
+        return None, len(buffer) - offset
+    start = found
 
     if start + 2 > len(buffer):
-        return None, start
+        return None, start - offset
 
     kind = buffer[start + 1]
     if kind == BEAST_ESC:
-        return None, start + 1
+        return None, start + 1 - offset
     msg_len = BEAST_MSG_LEN.get(kind)
     if msg_len is None:
-        return None, start + 1
+        return None, start + 1 - offset
 
     body, next_index = _read_unescaped(buffer, start + 2, 6 + 1 + msg_len)
     if body is None:
         if next_index is not None:
             resync = next_index
             if resync <= start:
-                return None, start + 1
-            return None, resync
-        if start:
-            return None, start
-        return None, 0
+                return None, start + 1 - offset
+            return None, resync - offset
+        return None, start - offset
     clock = int.from_bytes(body[:6], "big")
     rssi = beast_rssi_dbfs(body[6])
     hex_msg = body[7:].hex()
-    return (hex_msg, rssi, clock), next_index
+    return (hex_msg, rssi, clock), next_index - offset
 
 
 class BeastParser:
@@ -416,13 +461,17 @@ class BeastParser:
     def feed(self, chunk: bytes) -> list[tuple[str, float | None, int]]:
         self._buf.extend(chunk)
         frames: list[tuple[str, float | None, int]] = []
-        while self._buf:
-            frame, consumed = try_parse_beast(self._buf)
+        offset = 0
+        while offset < len(self._buf):
+            frame, consumed = try_parse_beast(self._buf, offset)
             if consumed == 0:
                 break
             if frame is not None:
                 frames.append(frame)
-            del self._buf[:consumed]
+            offset += consumed
+        # One trim per chunk instead of a memmove per frame.
+        if offset:
+            del self._buf[:offset]
         if len(self._buf) > _BEAST_BUF_MAX:
             self._buf.clear()
         return frames

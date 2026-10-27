@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type RefObject } from 'react';
 import * as api from '../api/client';
 import { describeError, errorCode } from '../api/errors';
 import type { Alert, FlightDetail, PortalView, TelemetryPoint } from '../api/types';
@@ -6,11 +6,10 @@ import { mergeAlertsByEpisode } from '../utils/alertData';
 import { SELECTED_POINT_CAP, insertByTimestamp, trimToCap } from '../utils/buffers';
 import type { DrawerTab } from '../components/DetailsDrawer';
 import type { MapViewHandle } from '../components/MapView';
-import { useLatestRef, useStableCallback } from './useStableCallback';
 
 interface UseFlightSelectionOptions {
   portalView: PortalView;
-  mapRef: React.RefObject<MapViewHandle>;
+  mapRef: RefObject<MapViewHandle | null>;
   /** Called when an alert is selected (e.g. to reveal the Alerts sidebar tab). */
   onAlertSelected?: () => void;
 }
@@ -39,12 +38,10 @@ export function useFlightSelection({
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Read synchronously by socket handlers between renders, so it is written
-  // where the selection changes rather than mirrored after commit.
+  // Written where the selection changes so socket handlers that run before the
+  // next render apply points to the flight that was just chosen.
   const activeFlightIdRef = useRef<string | null>(null);
   const selectionTokenRef = useRef(0);
-  const portalViewRef = useLatestRef(portalView);
-  const notifyAlertSelected = useStableCallback(() => onAlertSelected?.());
 
   const setActive = useCallback((flightId: string | null) => {
     activeFlightIdRef.current = flightId;
@@ -91,13 +88,13 @@ export function useFlightSelection({
     if (!flightId) return;
     const token = selectionTokenRef.current;
     try {
-      const points = await api.fetchTelemetry(flightId, portalViewRef.current);
+      const points = await api.fetchTelemetry(flightId, portalView);
       if (token !== selectionTokenRef.current) return;
       if (points.length) appendSelectedTelemetry(points);
     } catch {
       // the live stream will fill in
     }
-  }, [appendSelectedTelemetry, portalViewRef]);
+  }, [appendSelectedTelemetry, portalView]);
 
   const selectFlight = useCallback(
     async (
@@ -106,7 +103,7 @@ export function useFlightSelection({
       opts?: { follow?: boolean; panToLatest?: boolean; keepAlert?: boolean },
     ) => {
       const token = ++selectionTokenRef.current;
-      const view = portalViewRef.current;
+      const view = portalView;
       const follow = opts?.follow ?? true;
       const panToLatest = opts?.panToLatest ?? true;
       setSelectionError(null);
@@ -162,13 +159,13 @@ export function useFlightSelection({
         setSelectionError(message);
       }
     },
-    [mapRef, portalViewRef, setActive],
+    [mapRef, portalView, setActive],
   );
 
   const selectAlert = useCallback(
-    async (alert: Alert, episodeKey: string) => {
-      setActiveAlertId(episodeKey);
-      notifyAlertSelected();
+    async (alert: Alert) => {
+      setActiveAlertId(alert.alert_id);
+      onAlertSelected?.();
       if (alert.latitude != null && alert.longitude != null) {
         mapRef.current?.panToAlert(alert.latitude, alert.longitude);
       }
@@ -183,10 +180,10 @@ export function useFlightSelection({
         keepAlert: true,
       });
     },
-    [selectFlight, mapRef, notifyAlertSelected],
+    [selectFlight, mapRef, onAlertSelected],
   );
 
-  /** Clear the selection and close the drawer. Stable identity. */
+  /** Clear the selection and close the drawer. */
   const closeDrawer = useCallback(() => {
     selectionTokenRef.current += 1;
     setActive(null);
@@ -203,7 +200,6 @@ export function useFlightSelection({
 
   return {
     activeFlightId,
-    activeFlightIdRef,
     activeAlertId,
     flightDetail,
     flightAlerts,

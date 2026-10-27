@@ -1,41 +1,37 @@
 import { useCallback, useState } from 'react';
 import type { PortalView } from '../api/types';
+import {
+  defaultSortDirection,
+  loadSort,
+  saveSort,
+  type SortField,
+  type SortPreference,
+} from '../utils/sort';
 
-export type SortDirection = 'asc' | 'desc';
-
-interface SortPreference<F extends string> {
-  field: F;
-  direction: SortDirection;
-}
-
-interface SortPreferenceStore<F extends string> {
-  load: (view: PortalView) => SortPreference<F>;
-  save: (view: PortalView, field: F, direction: SortDirection) => void;
-  defaultDirection: (field: F) => SortDirection;
-}
-
-/** Per-view sort field/direction, persisted (safely) between sessions. */
-export function useSortPreference<F extends string>(
+/** Per-view sort field/direction, persisted between sessions. */
+export function useSortPreference<T, F extends string>(
   view: PortalView,
-  { load, save, defaultDirection }: SortPreferenceStore<F>,
+  storagePrefix: string,
+  fields: readonly SortField<T, F>[],
+  defaultField: F,
 ) {
   const [prefs, setPrefs] = useState<Record<PortalView, SortPreference<F>>>(() => ({
-    live: load('live'),
-    history: load('history'),
+    live: loadSort(`${storagePrefix}:live`, fields, defaultField),
+    history: loadSort(`${storagePrefix}:history`, fields, defaultField),
   }));
   const current = prefs[view];
 
   const commit = useCallback(
     (next: SortPreference<F>) => {
-      save(view, next.field, next.direction);
+      saveSort(`${storagePrefix}:${view}`, next.field, next.direction);
       setPrefs((prev) => ({ ...prev, [view]: next }));
     },
-    [save, view],
+    [storagePrefix, view],
   );
 
   const setField = useCallback(
-    (field: F) => commit({ field, direction: defaultDirection(field) }),
-    [commit, defaultDirection],
+    (field: F) => commit({ field, direction: defaultSortDirection(fields, field) }),
+    [commit, fields],
   );
 
   const toggleDirection = useCallback(

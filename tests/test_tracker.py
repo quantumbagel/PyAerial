@@ -12,6 +12,7 @@ from pyaerial.constants import (
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
     STORE_PACKET_TYPE,
+    STORE_POSITION_RECEIVERS,
     STORE_RECV_DATA,
     STORE_TOTAL_PACKETS,
 )
@@ -230,3 +231,51 @@ def test_one_bad_fix_does_not_freeze_the_plane_forever():
     lat = tracker.planes["40621D"][STORE_RECV_DATA][STORE_LAT][-1].value
     assert abs(lat - 52.2572) < 0.01
     assert "40621D" not in tracker._gate_rejects
+
+
+def test_short_mode_s_frames_skip_the_adsb_decoder(monkeypatch):
+    import pyaerial.tracker as tracker_mod
+
+    calls: list[str] = []
+    real = tracker_mod.classify
+
+    def spy(msg, *args, **kwargs):
+        calls.append(msg)
+        return real(msg, *args, **kwargs)
+
+    monkeypatch.setattr(tracker_mod, "classify", spy)
+    tracker = Tracker(make_config())
+    processed = tracker.ingest(
+        [
+            ("5d484fdea248f5", 1.0),  # DF11
+            ("20001838ca3e51", 1.0),  # DF4
+            ("8d4840d6202cc371c32ce0576098", 1.0),  # DF17 ident
+        ]
+    )
+    assert processed == 1
+    assert calls == ["8d4840d6202cc371c32ce0576098"]
+
+
+def test_first_fix_decodes_against_receiving_antenna():
+    from pyaerial.config.schema import ReceiverConfig, ReceiverPositionConfig
+    from pyaerial.receivers.positions import ReceiverPositions
+
+    # Reference airborne pair near 52.25N 3.92E (pyModeS docs). A home in
+    # North Carolina is far outside the 180 NM local-decode range; the antenna
+    # that heard the frame is not.
+    config = make_config(
+        receivers={
+            "nl": ReceiverConfig(
+                type="dump1090",
+                position=ReceiverPositionConfig(latitude=52.0, longitude=4.0),
+            )
+        }
+    )
+    tracker = Tracker(config, positions=ReceiverPositions(config, fetch=False))
+    msg = "8d40621d58c382d690c8ac2863a7"
+    tracker.ingest([(msg, 1.0)], receivers={msg: ("nl", "be")})
+    plane = tracker.planes["40621D"]
+    lat = plane[STORE_RECV_DATA][STORE_LAT][-1].value
+    assert abs(lat - 52.2572) < 0.01
+    assert plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS] == {1.0: ("nl", "be")}
+    assert plane[STORE_INFO]["receivers"] == ["nl", "be"]

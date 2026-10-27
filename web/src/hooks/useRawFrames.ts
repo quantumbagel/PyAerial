@@ -10,7 +10,7 @@ export const RAW_FLUSH_MS = 250;
 let seq = 0;
 
 /**
- * Decoded Beast frames, newest first. The Beast socket is only open while
+ * JSON raw frames, newest first. The `/ws/raw` socket is only open while
  * `enabled` is true, and incoming frames are batched so React re-renders at
  * most every RAW_FLUSH_MS no matter how busy the receiver is.
  */

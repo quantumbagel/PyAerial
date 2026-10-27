@@ -323,6 +323,37 @@ def test_engine_publishes_raw_frames(tmp_path):
         assert message["df"] == 17
         assert message["icao"] == "406b90"
         assert message["timestamp"] == 1.5
+        assert "receivers" not in message
+    finally:
+        engine.shutdown()
+
+
+def test_engine_publishes_receivers_from_heard_by(tmp_path):
+    from pyaerial.receivers.frames import RawFrame
+
+    engine = _engine(tmp_path)
+    try:
+        seen: list[dict] = []
+        engine.live_store.add_raw_listener(lambda payload: seen.append(payload))
+        hex_msg = "8d406b902015a678d4d220aa4bda"
+        now = time.time()
+        outgoing, _, heard_by = engine._outgoing_frames(
+            [
+                RawFrame(
+                    hex=hex_msg, timestamp=now, receiver="weak", rssi=-30.0, clock=1
+                ),
+                RawFrame(
+                    hex=hex_msg, timestamp=now, receiver="strong", rssi=-8.0, clock=2
+                ),
+            ]
+        )
+        engine._publish_raw(outgoing, heard_by)
+        assert len(seen) == 1
+        message = seen[0]["messages"][0]
+        assert message["receiver"] == "strong"
+        assert message["receivers"] == ["strong", "weak"]
+        assert message["rssi"] == -8.0
+        assert message["clock"] == 2
     finally:
         engine.shutdown()
 
@@ -334,7 +365,7 @@ def test_engine_outgoing_frames_prefer_stronger_receiver(tmp_path):
     try:
         hex_msg = "8d406b902015a678d4d220aa4bda"
         now = time.time()
-        outgoing, new_messages = engine._outgoing_frames(
+        outgoing, new_messages, heard_by = engine._outgoing_frames(
             [
                 RawFrame(
                     hex=hex_msg, timestamp=now, receiver="weak", rssi=-30.0, clock=1
@@ -348,9 +379,86 @@ def test_engine_outgoing_frames_prefer_stronger_receiver(tmp_path):
         assert outgoing[0].receiver == "strong"
         assert outgoing[0].clock == 2
         assert new_messages == [(hex_msg, now)]
-        again, _ = engine._outgoing_frames(
+        assert heard_by == {hex_msg: ("strong", "weak")}
+        again, _, _ = engine._outgoing_frames(
             [RawFrame(hex=hex_msg, timestamp=now + 0.1, receiver="weak", rssi=-4.0)]
         )
         assert again == []
     finally:
+        engine.shutdown()
+
+
+def test_engine_scores_integrity_into_live_flights(tmp_path):
+    from pyaerial.config.schema import ReceiverConfig, ReceiverPositionConfig
+
+    capture = tmp_path / "capture.txt"
+    capture.write_text(
+        "*8D40621D58C382D690C8AC2863A7;\n*8D40621D58C386435CC412692AD6;\n"
+    )
+    config = make_config(
+        receivers={
+            "nl": ReceiverConfig(
+                type="replay",
+                options={"path": str(capture), "interval": 0.05},
+                position=ReceiverPositionConfig(latitude=52.0, longitude=4.0),
+            )
+        }
+    )
+    engine = Engine(config, isolated=True, aircraft_db_path=str(tmp_path / "aircraft.db"))
+    runner = threading.Thread(target=engine.run, daemon=True)
+    runner.start()
+    try:
+        deadline = time.monotonic() + 5
+        doc = None
+        while time.monotonic() < deadline and doc is None:
+            flights = list(engine.live_store._mem.flights.values())
+            if flights and "integrity" in flights[0]["info"]:
+                doc = flights[0]
+            time.sleep(0.05)
+        assert doc is not None
+        assert doc["icao"] == "40621d"
+        assert doc["info"]["integrity"]["status"] in {"ok", "unknown"}
+        # Decoded against the antenna in the Netherlands, not North Carolina home.
+        lat = engine.tracker.planes["40621D"]["received_data"]["latitude"][-1].value
+        assert abs(lat - 52.26) < 0.05
+    finally:
+        engine._shutdown.set()
+        runner.join(timeout=5)
+
+
+def test_engine_archives_every_receiver_copy_when_raw_frames_enabled(tmp_path):
+    from pyaerial.config.schema import ArchiveConfig
+    from pyaerial.receivers.frames import RawFrame
+
+    class _Recorder:
+        def __init__(self):
+            self.frames: list = []
+            self.pruned: list = []
+
+        def write_frames(self, frames):
+            self.frames.extend(frames)
+            return True
+
+        def prune_frames(self, before):
+            self.pruned.append(before)
+            return 0
+
+    config = make_config(archive=ArchiveConfig(raw_frames=True, raw_frames_keep_hours=1))
+    engine = Engine(config, isolated=True, aircraft_db_path=str(tmp_path / "aircraft.db"))
+    real = engine.history_store
+    recorder = _Recorder()
+    engine.history_store = recorder
+    try:
+        hex_msg = "8d406b902015a678d4d220aa4bda"
+        copies = [
+            RawFrame(hex=hex_msg, timestamp=1.0, receiver="a", rssi=-30.0),
+            RawFrame(hex=hex_msg, timestamp=1.0, receiver="b", rssi=-8.0),
+        ]
+        engine._archive_frames(copies)
+        engine._archive_frames(copies)
+        assert recorder.frames == copies * 2
+        assert len(recorder.pruned) == 1  # pruning is rate limited
+        assert time.time() - 3600 - recorder.pruned[0] < 5
+    finally:
+        engine.history_store = real
         engine.shutdown()

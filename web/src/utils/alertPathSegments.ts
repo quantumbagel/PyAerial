@@ -1,5 +1,5 @@
 import type { Alert, TelemetryPoint } from '../api/types';
-import { alertSeverityRank, dedupeAlerts, isAlertActive } from './alertData';
+import { alertSeverityRank, isAlertActive } from './alertData';
 
 export interface AlertPathSegment {
   latlngs: [number, number][];
@@ -16,7 +16,7 @@ interface Episode {
 }
 
 function toEpisodes(alerts: Alert[], flightEnd: number): Episode[] {
-  return dedupeAlerts(alerts).map((alert) => {
+  return alerts.map((alert) => {
     const start = alert.activated_at ?? 0;
     // Active episodes run to the end of the flight; ended ones without a
     // timestamp collapse to their start.

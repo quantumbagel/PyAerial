@@ -22,11 +22,13 @@ FLIGHT_STATUS_LIVE = "live"
 
 #: Aircraft metadata fields shared by live and history flight payloads.
 TEXT_FIELDS = ("callsign", "model", "owner", "country", "aircraft_type", "registration")
-_PLACEHOLDERS = frozenset({"", "unknown", "unknown model", "unknown owner"})
+_PLACEHOLDERS = frozenset(
+    {"", "unknown", "unknown model", "unknown owner", "n/a", "none", "null"}
+)
 
 
 def clean_text(value: Any) -> Any:
-    """Map enrichment placeholders ('Unknown Model', 'UNKNOWN', '') to ``None``."""
+    """Map enrichment placeholders ('Unknown Model', 'N/A', '') to ``None``."""
     if isinstance(value, str):
         text = value.strip()
         return None if text.lower() in _PLACEHOLDERS else text
@@ -83,6 +85,8 @@ def antenna_payload(config: Config) -> dict[str, Any]:
             item["host"] = receiver.host
         if receiver.port is not None:
             item["port"] = receiver.port
+        if receiver.position is not None:
+            item["position"] = receiver.position.model_dump()
         fmt = receiver.format or receiver.options.get("format")
         if isinstance(fmt, str) and fmt:
             item["format"] = fmt.lower()
@@ -169,6 +173,15 @@ def enrich_from_aircraft_db(
     }
 
 
+# Per-sample receivers and integrity verdict (see models.sample_provenance).
+_PROVENANCE_FIELDS = (
+    "receivers",
+    "integrity_score",
+    "integrity_status",
+    "integrity_flags",
+)
+
+
 def telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
     point: dict[str, Any] = {
         "timestamp": doc["timestamp"],
@@ -179,6 +192,9 @@ def telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
     if "latitude" in doc and "longitude" in doc:
         point["latitude"] = doc["latitude"]
         point["longitude"] = doc["longitude"]
+    for key in _PROVENANCE_FIELDS:
+        if key in doc:
+            point[key] = doc[key]
     return point
 
 
@@ -347,6 +363,7 @@ def flight_summary(
         "altitude": alt,
         "speed": speed,
         "heading": heading,
+        "integrity": info.get("integrity"),
         "is_live": is_live,
         "status": doc.get("status", "completed"),
         "retained": doc.get("retained", False),

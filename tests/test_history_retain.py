@@ -18,7 +18,9 @@ from pyaerial.alerts.retain import should_retain
 from pyaerial.models import Datum
 from pyaerial.store.history import HistoryStore
 from helpers import make_config, make_rule
-from pyaerial.config.schema import ZoneConfig
+from pyaerial.config.schema import ArchiveConfig, ZoneConfig
+
+RULES_ONLY = ArchiveConfig(flights="rules")
 
 
 def _plane():
@@ -41,6 +43,7 @@ def _plane():
 
 def test_retain_false_is_honored_even_with_alerts():
     config = make_config(
+        archive=RULES_ONLY,
         zones={
             "pad": ZoneConfig(
                 coordinates=[
@@ -62,13 +65,14 @@ def test_retain_false_is_honored_even_with_alerts():
             "deactivated_at": 100.0,
         }
     ]
-    assert should_retain(_plane(), alerts, config, store.polygons) is False
+    assert should_retain(_plane(), alerts, config, store.polygons, positions=1) is False
 
 
 def test_retain_true_keeps_any_fired_episode():
     """Regression: an alert that fired (activation hold already met by the
     engine) used to be dropped when its episode was shorter than dwell."""
     config = make_config(
+        archive=RULES_ONLY,
         zones={
             "pad": ZoneConfig(
                 coordinates=[
@@ -98,18 +102,19 @@ def test_retain_true_keeps_any_fired_episode():
             "deactivated_at": 80.0,
         }
     ]
-    assert should_retain(_plane(), short, config, store.polygons) is True
-    assert should_retain(_plane(), long, config, store.polygons) is True
+    assert should_retain(_plane(), short, config, store.polygons, positions=1) is True
+    assert should_retain(_plane(), long, config, store.polygons, positions=1) is True
     never_fired = [{"zone": "pad", "rule": "warn", "activated_at": None}]
-    assert should_retain(_plane(), never_fired, config, store.polygons) is False
+    assert should_retain(_plane(), never_fired, config, store.polygons, positions=1) is False
     unknown_rule = [{"zone": "pad", "rule": "gone", "activated_at": 1.0}]
-    assert should_retain(_plane(), unknown_rule, config, store.polygons) is False
+    assert should_retain(_plane(), unknown_rule, config, store.polygons, positions=1) is False
 
 
 def test_retain_fallback_uses_matching_seconds_not_sample_count():
     from pyaerial.calc.geo import build_polygons
 
     config = make_config(
+        archive=RULES_ONLY,
         zones={
             "pad": ZoneConfig(
                 coordinates=[
@@ -131,13 +136,14 @@ def test_retain_fallback_uses_matching_seconds_not_sample_count():
     plane[STORE_CALC_DATA][STORE_HORIZ_SPEED] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
     plane[STORE_INTERNAL][STORE_FIRST_PACKET] = 1.0
     plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] = 70.0
-    assert should_retain(plane, [], config, polygons) is True
+    assert should_retain(plane, [], config, polygons, positions=1) is True
 
 
 def test_retain_does_not_credit_whole_flight_from_one_match():
     from pyaerial.calc.geo import build_polygons
 
     config = make_config(
+        archive=RULES_ONLY,
         zones={
             "pad": ZoneConfig(
                 coordinates=[
@@ -172,7 +178,32 @@ def test_retain_does_not_credit_whole_flight_from_one_match():
     plane[STORE_CALC_DATA][STORE_HORIZ_SPEED] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
     plane[STORE_INTERNAL][STORE_FIRST_PACKET] = 1.0
     plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] = 70.0
-    assert should_retain(plane, [], config, polygons) is False
+    assert should_retain(plane, [], config, polygons, positions=1) is False
+
+
+def test_archive_all_keeps_flights_without_any_rule_match():
+    config = make_config(zones={}, archive=ArchiveConfig(min_positions=2))
+    assert should_retain(_plane(), [], config, {}, positions=2) is True
+    assert should_retain(_plane(), [], config, {}, positions=1) is False
+
+
+def test_archive_all_still_keeps_retain_rule_alerts_below_min_positions():
+    config = make_config(
+        zones={
+            "pad": ZoneConfig(
+                coordinates=[
+                    [35.72, -78.70],
+                    [35.73, -78.70],
+                    [35.73, -78.69],
+                    [35.72, -78.69],
+                ],
+                rules=[make_rule(name="warn", retain=True, dwell_seconds=60)],
+            )
+        },
+        archive=ArchiveConfig(min_positions=5),
+    )
+    fired = [{"zone": "pad", "rule": "warn", "activated_at": 1.0}]
+    assert should_retain(_plane(), fired, config, {}, positions=1) is True
 
 
 def test_disabled_store_finalize_succeeds_without_sqlite():

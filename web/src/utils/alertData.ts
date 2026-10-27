@@ -8,11 +8,7 @@ import {
   EMPTY,
   LIST_SEP,
   RANGE_SEP,
-  cleanField,
-  displayCallsign,
-  displayIcao,
   formatAltitude,
-  formatAltitudeCompact,
   formatDateTime,
   formatDuration,
   formatEpisodeDuration,
@@ -23,13 +19,13 @@ import {
   isSameLocalDay,
   pluralize,
 } from './format';
-import { readStoredJson, writeStored } from './storage';
+import { sortBy, sortValueLabel, type SortDirection, type SortField } from './sort';
 import { alertColorFor, getAccessibleBadgeTextColor } from './zoneColors';
 
 // ── Episode identity & state ─────────────────────────────────
 
 type EpisodeLike = {
-  alert_id?: string | null;
+  alert_id: string;
   flight_id?: string | null;
   icao?: string | null;
   callsign?: string | null;
@@ -39,21 +35,6 @@ type EpisodeLike = {
   activated_at?: number | null;
   deactivated_at?: number | null;
 };
-
-/** Stable identity for an alert episode (unchanged when it goes from active to ended). */
-export function alertEpisodeIdentity(alert: EpisodeLike): string {
-  if (alert.alert_id) return alert.alert_id;
-  if (alert.flight_id && alert.zone && alert.rule) {
-    return `${alert.flight_id}:${alert.zone}:${alert.rule}`;
-  }
-  if (alert.activated_at != null) return `episode:${Math.round(alert.activated_at)}`;
-  return `episode:${alert.icao || alert.callsign || ''}:${alert.zone || ''}:${alert.rule || ''}`;
-}
-
-/** Row key for an alert episode. */
-export function alertEpisodeKey(alert: EpisodeLike): string {
-  return alertEpisodeIdentity(alert);
-}
 
 /** The one definition of "this episode is still active". */
 export function isAlertActive(alert: { active?: boolean; deactivated_at?: number | null }): boolean {
@@ -73,9 +54,6 @@ export function mergeEpisode<T extends EpisodeLike>(existing: T, update: T): T {
   return {
     ...existing,
     ...update,
-    alert_id: update.alert_id || existing.alert_id,
-    zone: update.zone || existing.zone,
-    rule: update.rule || existing.rule,
     activated_at: starts.length ? Math.min(...starts) : (update.activated_at ?? existing.activated_at),
     deactivated_at: deactivated_at ?? undefined,
     active: !ended,
@@ -96,36 +74,21 @@ function shallowEqual(a: object, b: object): boolean {
   return true;
 }
 
-/** Collapse duplicate snapshots of the same episode into one entry. */
-export function dedupeAlerts<T extends EpisodeLike>(alerts: T[]): T[] {
-  if (alerts.length < 2) return alerts;
-  const map = new Map<string, T>();
-  for (const alert of alerts) {
-    const key = alertEpisodeIdentity(alert);
-    const existing = map.get(key);
-    map.set(key, existing ? mergeEpisode(existing, alert) : alert);
-  }
-  return map.size === alerts.length ? alerts : Array.from(map.values());
-}
-
 /**
- * Fold `updates` into `existing` by episode. Existing order is kept, new
+ * Fold `updates` into `existing` by `alert_id`. Existing order is kept, new
  * episodes are appended, and unchanged entries keep their identity.
  */
 export function mergeAlertsByEpisode(existing: Alert[], updates: Alert[]): Alert[] {
-  if (updates.length === 0) return dedupeAlerts(existing);
+  if (updates.length === 0) return existing;
   const updateMap = new Map<string, Alert>();
   for (const alert of updates) {
-    const key = alertEpisodeIdentity(alert);
-    const prior = updateMap.get(key);
-    updateMap.set(key, prior ? mergeEpisode(prior, alert) : alert);
+    updateMap.set(alert.alert_id, alert);
   }
   const seen = new Set<string>();
   const merged: Alert[] = [];
-  for (const alert of dedupeAlerts(existing)) {
-    const key = alertEpisodeIdentity(alert);
-    seen.add(key);
-    const update = updateMap.get(key);
+  for (const alert of existing) {
+    seen.add(alert.alert_id);
+    const update = updateMap.get(alert.alert_id);
     if (!update) {
       merged.push(alert);
       continue;
@@ -133,8 +96,8 @@ export function mergeAlertsByEpisode(existing: Alert[], updates: Alert[]): Alert
     const next = mergeEpisode(alert, update);
     merged.push(shallowEqual(alert, next) ? alert : next);
   }
-  for (const [key, alert] of updateMap) {
-    if (!seen.has(key)) merged.push(alert);
+  for (const [id, alert] of updateMap) {
+    if (!seen.has(id)) merged.push(alert);
   }
   return merged;
 }
@@ -187,7 +150,7 @@ export function alertVisual(
   zones?: Zone[],
   alertColors?: Record<string, string>,
 ): AlertVisual {
-  const zone = cleanField(alert.zone) ?? 'zone';
+  const zone = alert.zone || 'zone';
   const { stroke } = alertColorFor(zone, alert.rule, zones, alertColors);
   return {
     color: stroke,
@@ -262,114 +225,68 @@ export function alertTooltip(alert: Alert, now = Date.now() / 1000): string {
 
 // ── Sorting ──────────────────────────────────────────────────
 
-export type AlertSortField = 'activated' | 'duration' | 'status' | 'zone' | 'callsign' | 'icao' | 'altitude';
+export type AlertSortField = 'activated' | 'duration' | 'zone' | 'callsign';
 
-export type SortDirection = 'asc' | 'desc';
-
-export const ALERT_SORT_OPTIONS: { value: AlertSortField; label: string }[] = [
-  { value: 'activated', label: 'Activated' },
-  { value: 'duration', label: 'Duration' },
-  { value: 'status', label: 'Status' },
-  { value: 'zone', label: 'Zone' },
-  { value: 'callsign', label: 'Callsign' },
-  { value: 'icao', label: 'ICAO' },
-  { value: 'altitude', label: 'Altitude' },
-];
-
-/** Fields that existed before and now map to a remaining option. */
-const LEGACY_ALERT_SORT: Record<string, AlertSortField> = { active: 'status', rule: 'zone' };
-
-export function defaultAlertSortDirection(field: AlertSortField): SortDirection {
-  return field === 'zone' || field === 'callsign' || field === 'icao' ? 'asc' : 'desc';
-}
-
-function alertDuration(alert: Alert, now = Date.now() / 1000): number {
-  if (!alert.activated_at) return 0;
-  const end = alert.deactivated_at ?? now;
+function alertDurationSeconds(alert: Alert): number | null {
+  if (!alert.activated_at) return null;
+  const end = alert.deactivated_at ?? Date.now() / 1000;
   return Math.max(0, end - alert.activated_at);
 }
 
-const textCompare = (a?: string | null, b?: string | null) =>
-  (a || '').localeCompare(b || '', undefined, { sensitivity: 'base' });
-
-function compareAlertsByField(a: Alert, b: Alert, field: AlertSortField): number {
-  switch (field) {
-    case 'activated':
-      return (a.activated_at ?? 0) - (b.activated_at ?? 0);
-    case 'duration':
-      return alertDuration(a) - alertDuration(b);
-    case 'status':
-      return Number(isAlertActive(a)) - Number(isAlertActive(b));
-    case 'zone':
-      return textCompare(a.zone, b.zone) || textCompare(a.rule, b.rule);
-    case 'callsign':
-      return textCompare(displayCallsign(a), displayCallsign(b));
-    case 'icao':
-      return textCompare(a.icao, b.icao);
-    case 'altitude':
-      return (a.altitude ?? -1) - (b.altitude ?? -1);
-    default:
-      return 0;
-  }
+function alertIdentity(alert: Alert): string | null {
+  const value = (alert.callsign || alert.icao || '').trim();
+  return value || null;
 }
 
-export function sortAlertsBy(alerts: Alert[], field: AlertSortField, direction: SortDirection): Alert[] {
-  const mult = direction === 'asc' ? 1 : -1;
-  return [...alerts].sort((a, b) => {
-    const cmp = compareAlertsByField(a, b, field);
-    if (cmp !== 0) return cmp * mult;
-    return compareAlertsByField(a, b, 'activated') * mult;
-  });
+function alertZoneKey(alert: Alert): string | null {
+  const zone = (alert.zone || '').trim();
+  if (!zone) return null;
+  return alert.rule ? `${zone}\t${alert.rule}` : zone;
 }
 
-export function loadAlertSort(view: 'live' | 'history'): {
-  field: AlertSortField;
-  direction: SortDirection;
-} {
-  const parsed = readStoredJson<{ field?: string; direction?: SortDirection }>(`alertSort:${view}`);
-  const raw = parsed?.field ?? '';
-  const field: AlertSortField = ALERT_SORT_OPTIONS.some((o) => o.value === raw)
-    ? (raw as AlertSortField)
-    : (LEGACY_ALERT_SORT[raw] ?? 'activated');
-  const direction =
-    parsed?.direction === 'asc' || parsed?.direction === 'desc'
-      ? parsed.direction
-      : defaultAlertSortDirection(field);
-  return { field, direction };
-}
+export const ALERT_SORT_FIELDS: readonly SortField<Alert, AlertSortField>[] = [
+  {
+    id: 'activated',
+    label: 'Activated',
+    defaultDirection: 'desc',
+    value: (alert) => alert.activated_at || null,
+    display: formatEpisodeSpan,
+  },
+  {
+    id: 'duration',
+    label: 'Duration',
+    defaultDirection: 'desc',
+    value: alertDurationSeconds,
+    display: (alert) => formatEpisodeDuration(alert.activated_at, alert.deactivated_at),
+  },
+  {
+    id: 'zone',
+    label: 'Zone',
+    defaultDirection: 'asc',
+    value: alertZoneKey,
+    display: formatEpisodeSpan,
+  },
+  {
+    id: 'callsign',
+    label: 'Callsign',
+    defaultDirection: 'asc',
+    value: alertIdentity,
+    display: formatEpisodeSpan,
+  },
+];
 
-export function saveAlertSort(
-  view: 'live' | 'history',
+export function sortAlertsBy(
+  alerts: Alert[],
   field: AlertSortField,
   direction: SortDirection,
-): void {
-  writeStored(`alertSort:${view}`, JSON.stringify({ field, direction }));
+): Alert[] {
+  return sortBy(alerts, ALERT_SORT_FIELDS, field, direction);
 }
-
-export const ALERT_SORT_STORE = {
-  load: loadAlertSort,
-  save: saveAlertSort,
-  defaultDirection: defaultAlertSortDirection,
-};
 
 /**
  * Trailing text in an alert row: the sorted-by value when it isn't already
  * visible in the row, otherwise the episode time span.
  */
 export function alertSortValueLabel(alert: Alert, sortField: AlertSortField): string {
-  switch (sortField) {
-    case 'duration':
-      return formatEpisodeDuration(alert.activated_at, alert.deactivated_at);
-    case 'status':
-      return isAlertActive(alert) ? 'Active' : 'Ended';
-    case 'icao':
-      return displayIcao(alert.icao);
-    case 'altitude':
-      return formatAltitudeCompact(alert.altitude);
-    case 'activated':
-    case 'zone':
-    case 'callsign':
-    default:
-      return formatEpisodeSpan(alert);
-  }
+  return sortValueLabel(ALERT_SORT_FIELDS, sortField, alert, formatEpisodeSpan(alert));
 }

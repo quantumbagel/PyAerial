@@ -32,6 +32,9 @@ class Emit(Protocol):
         *,
         rssi: float | None = None,
         clock: int | None = None,
+        bearing: float | None = None,
+        elevation: float | None = None,
+        cfo: float | None = None,
     ) -> None: ...
 
 _REGISTRY: dict[str, type["Receiver"]] = {}
@@ -103,6 +106,7 @@ def create_receiver(method: str, name: str, emit: Emit, arguments: dict) -> Rece
 
 def register_builtins() -> None:
     """Import built-in receivers so they register themselves."""
+    from pyaerial.receivers import aoa as _aoa  # noqa: F401
     from pyaerial.receivers import dump1090 as _dump1090  # noqa: F401
     from pyaerial.receivers import replay as _replay  # noqa: F401
 

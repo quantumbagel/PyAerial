@@ -74,12 +74,11 @@
     --sidebar-w: 360px;
     --drawer-w: min(420px, 42vw);
 
-    /* Elevation: Leaflet panes use up to 700 and its controls 1000. */
+    /* Elevation: MapLibre popups sit in the map; overlay chrome stays above. */
     --z-sidebar: 10;
     --z-map-controls: 1005;
     --z-drawer: 1010;
     --z-sidebar-overlay: 1020;
-    --z-menu: 1030;
 
     /* Motion */
     --duration-fast: 0.15s;

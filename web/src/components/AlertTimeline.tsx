@@ -1,12 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { Alert, Zone } from '../api/types';
-import {
-  alertEpisodeKey,
-  alertTooltip,
-  alertVisual,
-  formatEpisodeSpan,
-  isAlertActive,
-} from '../utils/alertData';
+import { alertTooltip, alertVisual, formatEpisodeSpan, isAlertActive } from '../utils/alertData';
 import { formatAltitude, formatEta } from '../utils/format';
 import { ZoneBadge } from './AlertBadges';
 import { StateView } from './ui';
@@ -16,7 +10,7 @@ interface AlertTimelineProps {
   activeAlertId: string | null;
   zones?: Zone[];
   alertColors?: Record<string, string>;
-  onSelectAlert: (alert: Alert, episodeKey: string) => void;
+  onSelectAlert: (alert: Alert) => void;
 }
 
 export function AlertTimeline({ alerts, activeAlertId, zones, alertColors, onSelectAlert }: AlertTimelineProps) {
@@ -27,19 +21,18 @@ export function AlertTimeline({ alerts, activeAlertId, zones, alertColors, onSel
   return (
     <div className="ui-display-list alert-timeline">
       {alerts.map((alert) => {
-        const episodeKey = alertEpisodeKey(alert);
         const isEpisodeActive = isAlertActive(alert);
-        const selected = episodeKey === activeAlertId;
+        const selected = alert.alert_id === activeAlertId;
         const { color } = alertVisual(alert, zones, alertColors);
         return (
           <button
             type="button"
-            key={episodeKey}
-            data-alert-episode-key={episodeKey}
+            key={alert.alert_id}
+            data-alert-episode-key={alert.alert_id}
             className={`ui-display${!isEpisodeActive ? ' ui-display--muted' : ''}${selected ? ' is-active' : ''}`}
             style={{ '--tone': color } as CSSProperties}
             title={alertTooltip(alert)}
-            onClick={() => onSelectAlert(alert, episodeKey)}
+            onClick={() => onSelectAlert(alert)}
             aria-current={selected ? 'true' : undefined}
           >
             <div className="ui-row__line">

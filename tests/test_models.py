@@ -9,10 +9,12 @@ from pyaerial.constants import (
     STORE_FIRST_PACKET,
     STORE_ICAO,
     STORE_INFO,
+    STORE_INTEGRITY_LOG,
     STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
     STORE_MOST_RECENT_PACKET,
+    STORE_POSITION_RECEIVERS,
     STORE_RECV_DATA,
 )
 from pyaerial.models import (
@@ -21,9 +23,11 @@ from pyaerial.models import (
     flight_id_for_plane,
     get_latest,
     icao_of,
+    Verdict,
     iter_telemetry_samples,
     last_update,
     nearest_datum,
+    sample_provenance,
 )
 
 
@@ -153,3 +157,22 @@ def test_datum_equality_is_by_value_and_unhashable():
     assert Datum(1.0, 2.0) != (1.0, 2.0)
     with pytest.raises(TypeError):
         hash(Datum(1.0, 2.0))
+
+
+def test_sample_provenance_uses_verdict_in_effect_when_sample_arrived():
+    plane = _plane()
+    plane[STORE_INTERNAL] = {
+        STORE_POSITION_RECEIVERS: {2.0: ("nl", "be")},
+        STORE_INTEGRITY_LOG: [
+            Verdict(1.5, 0.9, "ok", ()),
+            Verdict(3.0, 0.3, "spoofed", ("aoa",)),
+        ],
+    }
+    assert sample_provenance(plane, 1.0) == {}
+    assert sample_provenance(plane, 2.0) == {
+        "receivers": ["nl", "be"],
+        "integrity_score": 0.9,
+        "integrity_status": "ok",
+        "integrity_flags": [],
+    }
+    assert sample_provenance(plane, 3.0)["integrity_flags"] == ["aoa"]

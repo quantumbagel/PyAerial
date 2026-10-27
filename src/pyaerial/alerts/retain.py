@@ -1,4 +1,9 @@
-"""Evaluate flight retention against active alert episodes and reconstructed trajectory dwell thresholds."""
+"""Decide which completed flights the SQLite archive keeps.
+
+``archive.flights: all`` keeps every flight with enough position samples;
+``rules`` keeps only flights a ``retain: true`` zone rule matched. A flight a
+``retain: true`` rule alerted on is kept under either policy.
+"""
 
 from __future__ import annotations
 
@@ -29,8 +34,10 @@ def should_retain(
     alerts: list[dict[str, Any]],
     config: Config,
     polygons: dict[str, Polygon],
+    *,
+    positions: int,
 ) -> bool:
-    """Return True if aircraft meets retention criteria for SQLite archival."""
+    """Return True if the archive keeps this flight. *positions* is its sample count."""
     rules_by_key: dict[tuple[str, str], Any] = {}
     for zone_name, zone in config.zones.items():
         for rule in zone.rules:
@@ -44,6 +51,9 @@ def should_retain(
         rule = rules_by_key.get((alert.get("zone", ""), alert.get("rule", "")))
         if rule is not None and rule.retain and alert.get("activated_at") is not None:
             return True
+
+    if config.archive.flights == "all":
+        return positions >= config.archive.min_positions
 
     recv = plane.get(STORE_RECV_DATA, {})
     calc = plane.get(STORE_CALC_DATA, {})

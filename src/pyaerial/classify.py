@@ -70,6 +70,8 @@ def classify(
     *,
     jump_deg: float = MAX_CPR_JUMP_DEG,
     on_implausible: Callable[[], None] | None = None,
+    icao: str | None = None,
+    reference: tuple[float, float] | None = None,
 ) -> ClassifiedMessage | None:
     """
     Classify a single ADS-B message.
@@ -78,6 +80,10 @@ def classify(
     be ignored (invalid ICAO, unsupported typecode, etc.). A position further
     than ``jump_deg`` from ``last_position`` is dropped and ``on_implausible``
     is called so the caller can count consecutive rejections.
+
+    *icao* skips re-deriving the address when the caller already has it.
+    *reference* is the CPR reference when there is no last position (the
+    receiving antenna); ``home`` otherwise.
     """
     try:
         typecode = pms_typecode(msg)
@@ -88,10 +94,11 @@ def classify(
     if typecode is None or typecode == -1:
         return None
 
-    try:
-        icao = pms_icao(msg)
-    except Exception:
-        return None
+    if icao is None:
+        try:
+            icao = pms_icao(msg)
+        except Exception:
+            return None
     if not _valid_icao(icao):
         return None
 
@@ -119,7 +126,7 @@ def classify(
         category = CAT_IDENT
 
     elif 5 <= typecode <= 8:
-        ref = last_position or (home.latitude, home.longitude)
+        ref = last_position or reference or (home.latitude, home.longitude)
         try:
             decoded = pms.decode(msg, surface_ref=ref)
         except Exception:
@@ -144,7 +151,7 @@ def classify(
         category = CAT_SURFACE
 
     elif 9 <= typecode <= 18 or 20 <= typecode <= 22:
-        ref = last_position or (home.latitude, home.longitude)
+        ref = last_position or reference or (home.latitude, home.longitude)
         try:
             decoded = pms.decode(msg, reference=ref)
         except Exception:

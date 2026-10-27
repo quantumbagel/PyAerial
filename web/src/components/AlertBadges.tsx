@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
-import type { AlertStats, ActiveAlert, Zone } from '../api/types';
+import type { AlertStats, ActiveAlert, Integrity, Zone } from '../api/types';
 import { alertVisual } from '../utils/alertData';
+import { integrityLabel, isFlagged } from '../utils/integrity';
 import { pluralize } from '../utils/format';
 import { Badge, BadgeGroup } from './ui';
 
@@ -46,7 +47,7 @@ export function FlightAlertBadges({ flight, zones, alertColors }: FlightAlertBad
       <BadgeGroup>
         {active.map((alert) => (
           <ZoneBadge
-            key={alert.alert_id || `${alert.zone}|${alert.rule}`}
+            key={alert.alert_id}
             zone={alert.zone}
             rule={alert.rule}
             active
@@ -62,4 +63,19 @@ export function FlightAlertBadges({ flight, zones, alertColors }: FlightAlertBad
     return <Badge variant="neutral">{pluralize(past, 'past alert')}</Badge>;
   }
   return null;
+}
+
+/** "Suspect" / "Likely spoofed" when the integrity checks disagree with the track. */
+export function IntegrityBadge({ integrity }: { integrity?: Integrity | null }) {
+  if (!isFlagged(integrity)) return null;
+  const spoofed = integrity?.status === 'spoofed';
+  const tone = spoofed ? 'var(--alert)' : 'var(--warn)';
+  return (
+    <Badge
+      variant="zone"
+      style={{ '--tone': tone, '--tone-text': tone } as CSSProperties}
+    >
+      {integrityLabel(integrity)}
+    </Badge>
+  );
 }
