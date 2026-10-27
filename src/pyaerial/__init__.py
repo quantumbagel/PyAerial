@@ -4,4 +4,4 @@ ADS-B receiver network: integrity-checked tracking, a labelled research archive,
 (c) 2024 Julian Reder (quantumbagel)
 """
 
-__version__ = "0.21.0"
+__version__ = "0.22.0"
