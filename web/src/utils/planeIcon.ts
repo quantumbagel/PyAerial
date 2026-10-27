@@ -1,4 +1,3 @@
-import * as L from 'leaflet';
 import type { ActiveAlert, Integrity, Zone } from '../api/types';
 import { alertVisual, primaryAlert } from './alertData';
 import { PALETTE } from './colors';
@@ -9,6 +8,18 @@ export interface PlaneStyle {
   stroke: string;
   opacity: number;
   glow: string | null;
+}
+
+export interface PathStyle {
+  color: string;
+  weight: number;
+  opacity: number;
+}
+
+export interface PlaneImage {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
 }
 
 interface PlaneLike {
@@ -61,51 +72,60 @@ export function planeStyleKey(style: PlaneStyle): string {
   return `${style.size}|${style.fill}|${style.stroke}|${style.opacity}|${style.glow ?? ''}`;
 }
 
-function rotation(heading: number | null | undefined): string {
-  return `rotate(${Number.isFinite(heading) ? heading : 0}deg)`;
+/** Sprite id for a plane style. Heading is applied with `icon-rotate`, not the image. */
+export function planeIconId(style: PlaneStyle): string {
+  return `plane-${planeStyleKey(style).replace(/[^a-zA-Z0-9-]/g, '_')}`;
+}
+
+export function planeHeading(heading: number | null | undefined): number {
+  return Number.isFinite(heading) ? (heading as number) : 0;
 }
 
 const PLANE_PATH =
   'M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L14 19v-5.5L21 16z';
 
-/**
- * Build a plane marker icon. Heading changes afterwards should go through
- * setPlaneHeading so the existing element rotates (and animates) in place.
- */
-export function createPlaneIcon(style: PlaneStyle, heading: number | null | undefined): L.DivIcon {
-  const svgNs = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(svgNs, 'svg');
-  svg.setAttribute('class', 'plane-icon__svg');
-  svg.setAttribute('width', String(style.size));
-  svg.setAttribute('height', String(style.size));
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', style.fill);
-  svg.setAttribute('stroke', style.stroke);
-  svg.setAttribute('stroke-width', '1');
-  svg.setAttribute('aria-hidden', 'true');
-  svg.style.opacity = String(style.opacity);
-  svg.style.transform = rotation(heading);
-  if (style.glow) {
-    svg.style.filter = `drop-shadow(0 0 4px ${style.glow}) drop-shadow(0 0 9px color-mix(in srgb, ${style.glow} 55%, transparent))`;
-  }
-  const path = document.createElementNS(svgNs, 'path');
-  path.setAttribute('d', PLANE_PATH);
-  svg.appendChild(path);
-  const wrap = document.createElement('span');
-  wrap.className = 'plane-icon__wrap';
-  wrap.appendChild(svg);
-  return L.divIcon({
-    html: wrap,
-    className: 'plane-icon',
-    iconSize: [style.size, style.size],
-    iconAnchor: [style.size / 2, style.size / 2],
-  });
+function emptyImage(width: number, height: number): PlaneImage {
+  return { width, height, data: new Uint8ClampedArray(width * height * 4) };
 }
 
-/** Rotate an existing plane marker without replacing its DOM (keeps the CSS transition). */
-export function setPlaneHeading(marker: L.Marker, heading: number | null | undefined): void {
-  const svg = marker.getElement()?.querySelector<SVGElement>('.plane-icon__svg');
-  if (svg) svg.style.transform = rotation(heading);
+/**
+ * Rasterise a plane icon for MapLibre `addImage`. Heading is not baked in:
+ * the symbol layer rotates the same sprite with `icon-rotate`.
+ */
+export function renderPlaneIcon(style: PlaneStyle, pixelRatio = 1): PlaneImage {
+  const pad = style.glow ? 6 : 1;
+  const cssSize = Math.max(1, Math.round(style.size));
+  const width = Math.max(1, Math.round((cssSize + pad * 2) * pixelRatio));
+  const height = width;
+  if (typeof document === 'undefined' || typeof Path2D === 'undefined') {
+    return emptyImage(width, height);
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return emptyImage(width, height);
+
+  ctx.translate(pad * pixelRatio, pad * pixelRatio);
+  const scale = (cssSize / 24) * pixelRatio;
+  ctx.scale(scale, scale);
+  if (style.glow) {
+    ctx.shadowColor = style.glow;
+    ctx.shadowBlur = 8 / scale;
+  }
+  ctx.globalAlpha = style.opacity;
+  ctx.fillStyle = style.fill;
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = 1;
+  ctx.lineJoin = 'round';
+  const path = new Path2D(PLANE_PATH);
+  ctx.fill(path);
+  ctx.stroke(path);
+  try {
+    return ctx.getImageData(0, 0, width, height);
+  } catch {
+    return emptyImage(width, height);
+  }
 }
 
 export function pathStyleForFlight(
@@ -113,7 +133,7 @@ export function pathStyleForFlight(
   isSelected: boolean,
   zones?: Zone[],
   alertColors?: Record<string, string>,
-): L.PolylineOptions {
+): PathStyle {
   const primary = primaryAlert(flight?.active_alerts);
   let color: string = PALETTE.neutral;
   if (isSelected) color = PALETTE.accent;

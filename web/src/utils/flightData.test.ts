@@ -55,12 +55,21 @@ describe('sortFlightsBy alerts', () => {
     expect(sorted.map((f) => f.flight_id)).toEqual(['live_2', 'live_1']);
   });
 
-  it('ties sort by last seen when alert counts are equal', () => {
+  it('keeps original order when alert counts are equal', () => {
     const older = flight({ flight_id: 'old', start_time: 100, end_time: 200, timestamp: 200 });
     const newer = flight({ flight_id: 'new', start_time: 150, end_time: 250, timestamp: 250 });
 
     const sorted = sortFlightsBy([older, newer], 'alerts', 'desc');
-    expect(sorted.map((f) => f.flight_id)).toEqual(['new', 'old']);
+    expect(sorted.map((f) => f.flight_id)).toEqual(['old', 'new']);
+  });
+
+  it('ranks by integrity score and puts flights without a score last', () => {
+    const low = flight({ flight_id: 'low', integrity: { score: 0.2, status: 'spoofed', checks: {} } });
+    const high = flight({ flight_id: 'high', integrity: { score: 0.9, status: 'ok', checks: {} } });
+    const missing = flight({ flight_id: 'none' });
+
+    const sorted = sortFlightsBy([missing, low, high], 'integrity', 'desc');
+    expect(sorted.map((f) => f.flight_id)).toEqual(['high', 'low', 'none']);
   });
 });
 

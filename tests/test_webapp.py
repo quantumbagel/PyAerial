@@ -47,11 +47,13 @@ def test_health_and_api(monkeypatch):
         body = spec.json()
         assert body["websocket"] == "/ws/live"
         assert body["beast_websocket"] == "/ws/beast"
+        assert body["raw_websocket"] == "/ws/raw"
         assert "raw" not in body["streams"]
         assert "flights" in body["streams"]
         assert "fetchFlights" in body["actions"]
         assert "Beast" in body["beast"]["format"]
         assert "/ws/beast" in body["connect"]
+        assert "/ws/raw" in body["connect"]
         assert "?streams=" in body["connect"]
         assert "auth" not in body
         assert client.get("/api/flights").status_code == 404
@@ -137,6 +139,33 @@ def test_websocket_beast_endpoint_and_publish():
             assert len(frames) == 1
             assert frames[0][0] == hex_msg
             assert frames[0][2] == 12_000_000
+
+
+def test_websocket_raw_endpoint_and_publish():
+    from fastapi.testclient import TestClient
+
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    app = create_app(
+        config=make_config(), history=None, live_store=store, aircraft_db=None
+    )
+    hex_msg = "8d406b902015a678d4d220aa4bda"
+    frame = {
+        "hex": hex_msg,
+        "timestamp": 1.5,
+        "receiver": "strong",
+        "receivers": ["strong", "weak"],
+        "rssi": -8.0,
+        "clock": 12,
+        "df": 17,
+        "icao": "406b90",
+    }
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/raw") as raw_ws:
+            with client.websocket_connect("/ws/beast") as beast_ws:
+                store.publish_raw([frame])
+                message = raw_ws.receive_json()
+                assert message == {"type": "raw", "frames": [frame]}
+                assert beast_ws.receive_bytes()
 
 
 def test_websocket_live_ignores_beast_stream():

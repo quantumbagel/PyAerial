@@ -4,7 +4,6 @@ import { formatActiveAlerts, formatAlertHistory } from '../utils/alertData';
 import {
   EMPTY,
   LIST_SEP,
-  cleanField,
   displayCallsign,
   displayField,
   displayIcao,
@@ -45,7 +44,7 @@ interface DetailsDrawerProps {
   onSelectTelemetryPoint: (point: TelemetryPoint) => void;
   onClose: () => void;
   onSwitchTab: (tab: DrawerTab) => void;
-  onSelectAlert: (alert: Alert, episodeKey: string) => void;
+  onSelectAlert: (alert: Alert) => void;
 }
 
 /** Live flights: merge the fresher list summary over the fetched detail. */
@@ -214,7 +213,7 @@ export function DetailsDrawer({
   const isLoadingPlane = isLoading || (!flightDetail && !selectionError);
   const identity = flightDetail ?? flightSummary;
   const title = identity ? displayCallsign(identity) : EMPTY;
-  const icao = cleanField(identity?.icao);
+  const icao = identity?.icao ?? null;
   const photoUrl = safeHttpsUrl(flightDetail?.photo_url);
   const photoLink = safeHttpsUrl(flightDetail?.photo_link);
   const sortedAlerts = useMemo(
@@ -261,7 +260,7 @@ export function DetailsDrawer({
         <div className="drawer-header-label">Selected aircraft</div>
         <h2 id={headingId} className="drawer-title">
           <span>{title}</span>
-          {icao && cleanField(identity?.callsign) ? <Chip>{displayIcao(icao)}</Chip> : null}
+          {icao && identity?.callsign ? <Chip>{displayIcao(icao)}</Chip> : null}
           {displayFlight && (
             <FlightAlertBadges flight={displayFlight} zones={zones} alertColors={alertColors} />
           )}
@@ -290,7 +289,7 @@ export function DetailsDrawer({
                   <span>
                     Photo by{' '}
                     <span className="drawer-photo__credit">
-                      {cleanField(flightDetail?.photo_photographer) ?? 'Planespotters'}
+                      {flightDetail?.photo_photographer ?? 'Planespotters'}
                     </span>
                   </span>
                   {photoLink && (

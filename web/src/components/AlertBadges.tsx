@@ -47,7 +47,7 @@ export function FlightAlertBadges({ flight, zones, alertColors }: FlightAlertBad
       <BadgeGroup>
         {active.map((alert) => (
           <ZoneBadge
-            key={alert.alert_id || `${alert.zone}|${alert.rule}`}
+            key={alert.alert_id}
             zone={alert.zone}
             rule={alert.rule}
             active

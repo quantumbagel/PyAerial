@@ -374,7 +374,7 @@ _ORIGIN_RE = re.compile(r"^https?://[^/?#@\s]+$", re.IGNORECASE)
 
 
 class WebConfig(_Strict):
-    # Browser origins allowed to open /ws/live and /ws/beast in addition to the
+    # Browser origins allowed to open /ws/live, /ws/raw and /ws/beast besides the
     # portal's own origin (Origin matching the Host header). Entries are exact
     # ``scheme://host[:port]`` strings; ``"*"`` allows any origin.
     origins: list[str] = Field(default_factory=list)
@@ -388,7 +388,7 @@ class WebConfig(_Strict):
     beast_host: str = "127.0.0.1"
     beast_port: int | None = Field(default=30005, ge=0, le=65535)
     beast_max_clients: int = Field(default=16, ge=1)
-    # /ws/live + /ws/beast connection caps and per-connection request limits.
+    # /ws/live + /ws/raw + /ws/beast connection caps and per-connection request limits.
     ws_max_connections: int = Field(default=256, ge=1)
     ws_max_connections_per_ip: int = Field(default=32, ge=1)
     # Reverse proxies whose X-Forwarded-For is trusted for the client IP

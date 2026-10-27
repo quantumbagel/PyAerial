@@ -377,9 +377,19 @@ def create_app(
         finally:
             limiter.release(ip)
 
+    async def ws_raw(websocket: WebSocket):
+        ip = await _admit(websocket)
+        if ip is None:
+            return
+        try:
+            await beast_hub.run_json_websocket(websocket)
+        finally:
+            limiter.release(ip)
+
     app.add_api_websocket_route("/ws/live", ws_live)
     app.add_api_websocket_route("/ws", ws_live)
     app.add_api_websocket_route("/ws/beast", ws_beast)
+    app.add_api_websocket_route("/ws/raw", ws_raw)
 
     mount_spa(app)
     return app

@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import type { BufferedRawFrame } from '../api/types';
 import { EMPTY, LIST_SEP, displayIcao, formatTime } from '../utils/format';
-import { formatRawDf, formatRawRssi } from '../utils/rawFrames';
+import { formatRawDf, formatRawRssi, rawReceiverNames } from '../utils/rawFrames';
 import { Chip } from './ui';
 
 interface RawListItemProps {
@@ -14,7 +14,8 @@ export const RawListItem = memo(function RawListItem({ frame, selectable, onSele
   const icao = frame.icao ? displayIcao(frame.icao) : null;
   const rssi = formatRawRssi(frame.rssi);
   const time = formatTime(frame.timestamp, { withSeconds: true });
-  const source = frame.receiver || (frame.clock != null ? `clock ${frame.clock}` : null);
+  const names = rawReceiverNames(frame);
+  const source = names.length ? names.join(LIST_SEP) : frame.clock != null ? `clock ${frame.clock}` : null;
   const title = [icao ?? 'No ICAO', formatRawDf(frame.df), source, rssi, frame.hex]
     .filter(Boolean)
     .join(LIST_SEP);

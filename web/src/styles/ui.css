@@ -93,23 +93,6 @@
     font-weight: 600;
 }
 
-.ui-btn--subtle {
-    width: 100%;
-    justify-content: space-between;
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--input-border);
-    background-color: var(--input-bg);
-    color: var(--text);
-    font-size: var(--font-meta);
-    text-align: left;
-    font-weight: 400;
-}
-
-.ui-btn--subtle:hover:not(:disabled),
-.ui-btn--subtle:focus-visible {
-    border-color: var(--accent);
-}
-
 .ui-btn--link {
     padding: var(--space-2) var(--space-1);
     border-radius: var(--radius-md);
@@ -292,52 +275,6 @@
 
 .ui-input:focus-visible {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
-}
-
-/* ── Menus ───────────────────────────────────────────────── */
-
-.ui-menu {
-    position: absolute;
-    top: calc(100% + var(--space-1));
-    left: 0;
-    right: 0;
-    z-index: var(--z-menu);
-    background-color: var(--panel-raised);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-popup);
-    list-style: none;
-    padding: var(--space-1) 0;
-    max-height: 220px;
-    overflow-y: auto;
-}
-
-.ui-menu-item {
-    padding: var(--space-1) var(--space-3);
-    font-size: var(--font-meta);
-    color: var(--text);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    transition: background-color var(--duration-fast) ease;
-}
-
-.ui-menu-item:hover,
-.ui-menu-item:focus-visible {
-    background-color: var(--panel-hover);
-    outline-offset: -2px;
-}
-
-.ui-menu-item.is-selected {
-    color: var(--accent);
-    font-weight: 600;
-    background-color: var(--accent-active-bg);
-}
-
-.ui-chevron {
-    font-size: var(--font-xs);
-    color: var(--text-secondary);
 }
 
 /* ── List rows (sidebar lists) ───────────────────────────── */
@@ -585,10 +522,10 @@
     white-space: nowrap;
 }
 
-.ui-sort-dropdown {
-    position: relative;
+.ui-sort-select {
     flex: 1;
     min-width: 0;
+    cursor: pointer;
 }
 
 /* ── Button group / toolbar ──────────────────────────────── */

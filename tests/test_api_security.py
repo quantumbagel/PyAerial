@@ -229,6 +229,17 @@ def test_ws_requests_over_rate_are_delayed_not_dropped():
             assert time.monotonic() - started >= 0.12
 
 
+def test_ws_raw_rejects_disallowed_origin():
+    app = create_app(config=make_config(), history=None, live_store=None, aircraft_db=None)
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            with client.websocket_connect(
+                "/ws/raw", headers={"Origin": "https://evil.example"}
+            ) as ws:
+                ws.receive_text()
+        assert excinfo.value.code == 1008
+
+
 def test_per_ip_ws_cap_rejects_extra_connections():
     config = make_config()
     config.web.ws_max_connections_per_ip = 1

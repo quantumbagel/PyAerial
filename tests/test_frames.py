@@ -56,12 +56,20 @@ def test_raw_payload_includes_df_icao_rssi():
     assert payload["rssi"] == -12.3
     assert payload["clock"] == 99
     assert payload["receiver"] == "main"
+    assert "receivers" not in payload
+
+    with_heard = raw_payload(frame, receivers=("main", "north"))
+    assert with_heard["receiver"] == "main"
+    assert with_heard["receivers"] == ["main", "north"]
 
 
 def test_raw_payload_omits_missing_rssi():
     payload = raw_payload(RawFrame(hex="8d406b90", timestamp=1.0, receiver="r"))
     assert "rssi" not in payload
     assert "clock" not in payload
+    assert "receivers" not in raw_payload(
+        RawFrame(hex="8d406b90", timestamp=1.0, receiver="r"), receivers=()
+    )
 
 
 def _beast_frame(hex_msg: str, *, clock: int = 1, signal: int = 128) -> bytes:

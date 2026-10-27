@@ -7,13 +7,14 @@ PyAerial exposes real-time aircraft tracking, spatial alert notifications, histo
 | Endpoint | Subprotocol | Push streams | RPC actions | Description |
 |----------|-------------|--------------|-------------|-------------|
 | `ws://<host>:<port>/ws/live` | `pyaerial.live` | `flights`, `alerts`, `telemetry`, `stats`, `ping` | Supported | Main real-time application feed (alias `/ws`) |
+| `ws://<host>:<port>/ws/raw` | JSON | Mode S frames | Not supported | JSON raw frames for the portal Raw tab (no handshake) |
 | `ws://<host>:<port>/ws/beast` | binary Beast | Mode S frames | Not supported | dump1090 Beast binary (no JSON handshake) |
 | `tcp://<host>:<beast_port>` | Beast TCP | Mode S frames | Not supported | Same bytes as `/ws/beast`; default port `30005` for OpenSky Network |
 | `http://<host>:<port>/api` | HTTP (JSON) | None | None | Machine-readable API discovery specification |
 
 **Origin validation**
 
-Browser connections to `/ws/live` and `/ws/beast` must present an allowed `Origin`:
+Browser connections to `/ws/live`, `/ws/raw`, and `/ws/beast` must present an allowed `Origin`:
 
 - **Same origin** (the portal's own page): the `Origin` host and port equal the request `Host` header. Always allowed.
 - **`web.origins`**: exact `scheme://host[:port]` matches (`https://portal.example` does not match `http://portal.example` or `https://portal.example:8443`). Default `[]`; `["*"]` accepts any origin.
@@ -25,7 +26,7 @@ Native clients that omit `Origin` connect unconditionally. Unauthorized origins 
 
 | Limit | Default | Config key | Behaviour when exceeded |
 |-------|---------|------------|-------------------------|
-| WebSocket connections (`/ws/live` + `/ws/beast`) | 256 | `web.ws_max_connections` | Close `1013` (`server connection limit reached`) |
+| WebSocket connections (`/ws/live` + `/ws/raw` + `/ws/beast`) | 256 | `web.ws_max_connections` | Close `1013` (`server connection limit reached`) |
 | Connections per client IP | 32 | `web.ws_max_connections_per_ip` | Close `1013` (`per-client connection limit reached`) |
 | In-flight RPC requests per connection | 2 | `web.ws_max_inflight` | Server stops reading the socket until one finishes (back-pressure, no error) |
 | Request rate per connection | 50/s, burst 100 | `web.ws_rate_limit`, `web.ws_rate_burst` | Requests are delayed to the rate; one that would wait over 1 s gets `code: "rate_limited"` |
@@ -260,6 +261,30 @@ Failed server reply:
 | `fetchStats` | None | Object containing flight and alert counts, storage health, and engine heartbeat | `engine_live` is `false` and live counts are 0 when the engine heartbeat is stale; `engine_seen_at` is `null` if no heartbeat was ever written. |
 | `fetchZones` | None | Object containing station `home` coordinates, polygon geometries, and `alert_colors` | Returns empty arrays if no geofence zones are configured in YAML. |
 | `fetchConfig` | None | Object containing station coordinates, `remember_planes`, configured `receivers`, and Beast bind details | Exposes non-sensitive runtime parameters needed for frontend coordinate rendering. |
+
+**Raw JSON stream (`/ws/raw`)**
+
+The portal Raw tab opens `/ws/raw` (JSON text, no `hello`, no RPC, no ping) and receives the same corrected Mode S batches the engine publishes on Redis `live:raw`. Each message is:
+
+```json
+{
+  "type": "raw",
+  "frames": [
+    {
+      "hex": "8d406b902015a678d4d220aa4bda",
+      "timestamp": 1730000000.125,
+      "receiver": "strong",
+      "receivers": ["strong", "weak"],
+      "rssi": -8.0,
+      "clock": 12,
+      "df": 17,
+      "icao": "406b90"
+    }
+  ]
+}
+```
+
+`timestamp` is engine receive time (unix seconds). `receiver` is the strongest copy; `receivers` lists every station that heard the frame, strongest first. Browser origins and WebSocket connection caps are the same as `/ws/live`.
 
 **Beast sensor stream (`/ws/beast` and TCP)**
 

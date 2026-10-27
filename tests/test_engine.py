@@ -323,6 +323,37 @@ def test_engine_publishes_raw_frames(tmp_path):
         assert message["df"] == 17
         assert message["icao"] == "406b90"
         assert message["timestamp"] == 1.5
+        assert "receivers" not in message
+    finally:
+        engine.shutdown()
+
+
+def test_engine_publishes_receivers_from_heard_by(tmp_path):
+    from pyaerial.receivers.frames import RawFrame
+
+    engine = _engine(tmp_path)
+    try:
+        seen: list[dict] = []
+        engine.live_store.add_raw_listener(lambda payload: seen.append(payload))
+        hex_msg = "8d406b902015a678d4d220aa4bda"
+        now = time.time()
+        outgoing, _, heard_by = engine._outgoing_frames(
+            [
+                RawFrame(
+                    hex=hex_msg, timestamp=now, receiver="weak", rssi=-30.0, clock=1
+                ),
+                RawFrame(
+                    hex=hex_msg, timestamp=now, receiver="strong", rssi=-8.0, clock=2
+                ),
+            ]
+        )
+        engine._publish_raw(outgoing, heard_by)
+        assert len(seen) == 1
+        message = seen[0]["messages"][0]
+        assert message["receiver"] == "strong"
+        assert message["receivers"] == ["strong", "weak"]
+        assert message["rssi"] == -8.0
+        assert message["clock"] == 2
     finally:
         engine.shutdown()
 

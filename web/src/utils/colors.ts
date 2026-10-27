@@ -1,5 +1,5 @@
 /**
- * Single source for the colours shared by CSS and the map (Leaflet/SVG).
+ * Single source for the colours shared by CSS and the map.
  *
  * `applyPaletteTokens` writes these onto :root as custom properties at
  * startup, so styles/tokens.css and the map can never drift apart. CSS-only

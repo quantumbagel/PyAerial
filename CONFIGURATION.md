@@ -64,7 +64,7 @@ alert_colors:
 #   beast_host: "127.0.0.1"    # 0.0.0.0 to accept Beast feeders from other hosts
 #   beast_port: 30005          # dump1090-compatible Beast TCP (OpenSky). null disables.
 #   beast_max_clients: 16
-#   ws_max_connections: 256    # /ws/live + /ws/beast, all clients
+#   ws_max_connections: 256    # /ws/live + /ws/raw + /ws/beast, all clients
 #   ws_max_connections_per_ip: 32
 #   trusted_proxies: []        # reverse proxy IPs/CIDRs whose X-Forwarded-For is trusted
 #   ws_max_inflight: 2         # concurrent RPC requests per connection
@@ -156,14 +156,14 @@ zones:
 
 | Key | Default | Env override | Function |
 |-----|---------|--------------|----------|
-| `origins` | `[]` | `PYAERIAL_WEB_ORIGINS` (comma-separated) | Browser origins allowed on `/ws/live` and `/ws/beast` besides the portal's own (same-origin is allowed for IP-address and `localhost` hosts, and for hostnames listed in `allowed_hosts`). Entries must be exact `scheme://host[:port]`; bare hostnames are rejected at load time. `["*"]` allows any origin |
+| `origins` | `[]` | `PYAERIAL_WEB_ORIGINS` (comma-separated) | Browser origins allowed on `/ws/live`, `/ws/raw` and `/ws/beast` besides the portal's own (same-origin is allowed for IP-address and `localhost` hosts, and for hostnames listed in `allowed_hosts`). Entries must be exact `scheme://host[:port]`; bare hostnames are rejected at load time. `["*"]` allows any origin |
 | `allow_localhost_origins` | `false` | | Also allow any `http(s)://localhost`, `127.0.0.1` or `[::1]` origin, for dev servers on other ports |
 | `allowed_hosts` | `[]` | `PYAERIAL_WEB_ALLOWED_HOSTS` (comma-separated) | Accepted `Host` header values (`["tracker.example", "*.lan"]`); other hosts get HTTP 400, except `localhost` and `127.0.0.1`, which always stay reachable (healthchecks, local access). Add a LAN IP here too if you also browse by IP. Required for same-origin WebSockets when the portal is served under a hostname rather than an IP address or `localhost` |
 | `enable_docs` | `false` | | Serve FastAPI's `/docs`, `/redoc` and `/openapi.json` |
 | `beast_host` | `127.0.0.1` | `PYAERIAL_BEAST_HOST` | Beast TCP bind address. Use `0.0.0.0` for feeders on other hosts or in other containers |
 | `beast_port` | `30005` | `PYAERIAL_BEAST_PORT` (`off` disables) | Beast TCP port; `null` disables TCP (`/ws/beast` still serves) |
 | `beast_max_clients` | `16` | | Concurrent Beast TCP feeders; extra connections are closed |
-| `ws_max_connections` | `256` | | Concurrent `/ws/live` + `/ws/beast` connections |
+| `ws_max_connections` | `256` | | Concurrent `/ws/live` + `/ws/raw` + `/ws/beast` connections |
 | `ws_max_connections_per_ip` | `32` | | Concurrent WebSocket connections per client IP. Behind a reverse proxy, list it in `trusted_proxies` or every client shares the proxy's IP |
 | `trusted_proxies` | `[]` | | Proxy addresses (IPs or CIDRs) whose `X-Forwarded-For` gives the real client IP; empty trusts only `127.0.0.1` |
 | `ws_max_inflight` | `2` | | RPC requests processed concurrently per connection (1 to 16) |
@@ -278,7 +278,7 @@ Redis maintains active flight buffers, live telemetry trails, and active alert e
 | `live:active_alerts` | Set | Global set of active alert episode IDs |
 | `live:alert_episodes` | Hash | Global episode index mapping episode ID to state JSON |
 | `live:engine` | String | Engine heartbeat timestamp; expires via TTL if engine halts |
-| `live:raw` | Pub/Sub channel | Corrected receiver frames; the web process re-encodes them as Beast for `/ws/beast` and optional TCP |
+| `live:raw` | Pub/Sub channel | Corrected receiver frames (with every receiver that heard each one); the web process serves them as JSON on `/ws/raw` and re-encodes them as Beast for `/ws/beast` and optional TCP |
 
 **Research archive (SQLite)**
 

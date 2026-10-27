@@ -1,15 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { Alert, FlightSummary, PortalView, RawAntenna, ServerStats, Zone } from '../api/types';
-import {
-  ALERT_SORT_OPTIONS,
-  alertEpisodeKey,
-  isAlertActive,
-  sortAlertsBy,
-  type AlertSortField,
-  type SortDirection,
-} from '../utils/alertData';
+import { ALERT_SORT_FIELDS, isAlertActive, sortAlertsBy, type AlertSortField } from '../utils/alertData';
 import { emptyAlertsMessage, emptyFlightsMessage } from '../utils/emptyStates';
-import { FLIGHT_SORT_OPTIONS, type FlightSortField } from '../utils/flightData';
+import { FLIGHT_SORT_FIELDS, type FlightSortField } from '../utils/flightData';
+import type { SortDirection } from '../utils/sort';
 import { formatNumber } from '../utils/format';
 import { AlertListItem } from './AlertListItem';
 import { FlightListItem } from './FlightListItem';
@@ -70,7 +64,7 @@ interface SidebarProps {
   onHistorySinceChange?: (value: string) => void;
   onHistoryUntilChange?: (value: string) => void;
   onSelectFlight: (flightId: string) => void;
-  onSelectAlert: (alert: Alert, episodeKey: string) => void;
+  onSelectAlert: (alert: Alert) => void;
   onLoadMoreAlerts?: () => void;
   onLoadMoreFlights?: () => void;
   zones?: Zone[];
@@ -288,7 +282,7 @@ export function Sidebar({
       >
         <SortControl
           noun="flights"
-          options={FLIGHT_SORT_OPTIONS}
+          fields={FLIGHT_SORT_FIELDS}
           value={flightSortField}
           direction={flightSortDirection}
           onChange={onFlightSortChange}
@@ -330,7 +324,7 @@ export function Sidebar({
       >
         <SortControl
           noun="alerts"
-          options={ALERT_SORT_OPTIONS}
+          fields={ALERT_SORT_FIELDS}
           value={alertSortField}
           direction={alertSortDirection}
           onChange={onAlertSortChange}
@@ -354,21 +348,17 @@ export function Sidebar({
               {emptyAlertsMessage({ view: portalView, hasFilters, stats: serverStats ?? null })}
             </StateView>
           ) : (
-            sortedAlerts.map((alert) => {
-              const episodeKey = alertEpisodeKey(alert);
-              return (
-                <AlertListItem
-                  key={episodeKey}
-                  episodeKey={episodeKey}
-                  alert={alert}
-                  active={episodeKey === activeAlertId}
-                  sortField={alertSortField}
-                  zones={zones}
-                  alertColors={alertColors}
-                  onSelect={onSelectAlert}
-                />
-              );
-            })
+            sortedAlerts.map((alert) => (
+              <AlertListItem
+                key={alert.alert_id}
+                alert={alert}
+                active={alert.alert_id === activeAlertId}
+                sortField={alertSortField}
+                zones={zones}
+                alertColors={alertColors}
+                onSelect={onSelectAlert}
+              />
+            ))
           )}
         </ul>
       </TabPanel>

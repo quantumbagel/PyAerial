@@ -27,7 +27,7 @@ interface RawPanelProps {
 }
 
 /**
- * The Raw tab body. Mounted only while the tab is shown; owns the Beast feed so
+ * The Raw tab body. Mounted only while the tab is shown; owns the raw feed so
  * the rest of the app never re-renders for raw frames.
  */
 export function RawPanel({ searchQuery, flights, antenna, stats, onSelectIcao }: RawPanelProps) {
@@ -57,7 +57,7 @@ export function RawPanel({ searchQuery, flights, antenna, stats, onSelectIcao }:
       <ul className="sidebar-list">
         {filtered.length === 0 && (status === 'connecting' || status === 'reconnecting') ? (
           <StateView as="li" kind="loading">
-            {status === 'reconnecting' ? 'Reconnecting to the Beast stream…' : 'Connecting to the Beast stream…'}
+            {status === 'reconnecting' ? 'Reconnecting to the raw stream…' : 'Connecting to the raw stream…'}
           </StateView>
         ) : filtered.length === 0 ? (
           <StateView as="li" kind={status === 'rejected' ? 'error' : 'empty'}>

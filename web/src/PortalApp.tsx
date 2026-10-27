@@ -40,9 +40,9 @@ export function PortalApp() {
     [selectFlight],
   );
   const selectAlertFromList = useCallback(
-    (alert: Alert, key: string) => {
+    (alert: Alert) => {
       setSidebarOpen(false);
-      void selectAlert(alert, key);
+      void selectAlert(alert);
     },
     [selectAlert],
   );

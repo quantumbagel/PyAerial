@@ -1,6 +1,5 @@
 import { useId } from 'react';
 import type { FlightDetail } from '../api/types';
-import { cleanField } from '../utils/format';
 import { Button } from './ui';
 
 interface ExternalLinksProps {
@@ -15,9 +14,9 @@ export function externalTrackerLinks(
   flightDetail: Pick<FlightDetail, 'callsign' | 'registration'> | null,
   icao: string | null,
 ): { label: string; href: string }[] {
-  const callsign = cleanField(flightDetail?.callsign);
-  const registration = cleanField(flightDetail?.registration);
-  const hex = cleanField(icao)?.toLowerCase() ?? null;
+  const callsign = flightDetail?.callsign ?? null;
+  const registration = flightDetail?.registration ?? null;
+  const hex = icao?.toLowerCase() ?? null;
   const links: { label: string; href: string }[] = [];
   if (callsign) {
     links.push({ label: 'FlightAware', href: `https://flightaware.com/live/flight/${path(callsign)}` });

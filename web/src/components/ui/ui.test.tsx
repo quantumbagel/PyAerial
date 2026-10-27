@@ -3,17 +3,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { SortControl } from './SortControl';
 import { Tab, TabList, TabPanel, useTabIds } from './Tabs';
 
-const options = [
-  { value: 'a', label: 'Alpha' },
-  { value: 'b', label: 'Beta' },
-  { value: 'c', label: 'Gamma' },
+const fields = [
+  { id: 'a', label: 'Alpha' },
+  { id: 'b', label: 'Beta' },
+  { id: 'c', label: 'Gamma' },
 ] as const;
 
 function Sorter({ onChange = vi.fn() }: { onChange?: (v: string) => void }) {
   return (
     <SortControl
       noun="flights"
-      options={[...options]}
+      fields={fields}
       value="b"
       direction="desc"
       onChange={onChange}
@@ -23,41 +23,20 @@ function Sorter({ onChange = vi.fn() }: { onChange?: (v: string) => void }) {
 }
 
 describe('SortControl', () => {
-  it('has a labelled button and moves focus into the list on open', () => {
+  it('labels the native field select', () => {
     render(<Sorter />);
-    const button = screen.getByRole('button', { name: /sort flights by.*beta/i });
-    fireEvent.click(button);
-    const selected = screen.getByRole('option', { name: 'Beta' });
-    expect(document.activeElement).toBe(selected);
-    expect(selected).toHaveAttribute('tabindex', '0');
-    expect(screen.getByRole('option', { name: 'Alpha' })).toHaveAttribute('tabindex', '-1');
+    const select = screen.getByRole('combobox', { name: /sort flights by/i });
+    expect(select).toHaveValue('b');
+    expect(screen.getByRole('option', { name: 'Beta' })).toBeInTheDocument();
   });
 
-  it('moves a roving tabindex with arrows and picks with Enter', () => {
+  it('changes field via the native select', () => {
     const onChange = vi.fn();
     render(<Sorter onChange={onChange} />);
-    fireEvent.click(screen.getByRole('button', { name: /sort flights by/i }));
-    const list = screen.getByRole('listbox');
-    fireEvent.keyDown(list, { key: 'ArrowDown' });
-    expect(document.activeElement).toBe(screen.getByRole('option', { name: 'Gamma' }));
-    fireEvent.keyDown(list, { key: 'ArrowDown' });
-    expect(document.activeElement).toBe(screen.getByRole('option', { name: 'Alpha' }));
-    fireEvent.keyDown(list, { key: 'Enter' });
+    fireEvent.change(screen.getByRole('combobox', { name: /sort flights by/i }), {
+      target: { value: 'a' },
+    });
     expect(onChange).toHaveBeenCalledWith('a');
-    expect(screen.queryByRole('listbox')).toBeNull();
-  });
-
-  it('consumes Escape so the drawer does not also close', () => {
-    const windowListener = vi.fn();
-    window.addEventListener('keydown', windowListener);
-    render(<Sorter />);
-    const button = screen.getByRole('button', { name: /sort flights by/i });
-    fireEvent.click(button);
-    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
-    expect(screen.queryByRole('listbox')).toBeNull();
-    expect(document.activeElement).toBe(button);
-    expect(windowListener).not.toHaveBeenCalled();
-    window.removeEventListener('keydown', windowListener);
   });
 
   it('hides decorative arrows from assistive tech', () => {

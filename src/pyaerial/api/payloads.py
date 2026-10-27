@@ -22,11 +22,13 @@ FLIGHT_STATUS_LIVE = "live"
 
 #: Aircraft metadata fields shared by live and history flight payloads.
 TEXT_FIELDS = ("callsign", "model", "owner", "country", "aircraft_type", "registration")
-_PLACEHOLDERS = frozenset({"", "unknown", "unknown model", "unknown owner"})
+_PLACEHOLDERS = frozenset(
+    {"", "unknown", "unknown model", "unknown owner", "n/a", "none", "null"}
+)
 
 
 def clean_text(value: Any) -> Any:
-    """Map enrichment placeholders ('Unknown Model', 'UNKNOWN', '') to ``None``."""
+    """Map enrichment placeholders ('Unknown Model', 'N/A', '') to ``None``."""
     if isinstance(value, str):
         text = value.strip()
         return None if text.lower() in _PLACEHOLDERS else text

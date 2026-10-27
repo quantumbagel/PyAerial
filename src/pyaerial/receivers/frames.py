@@ -63,12 +63,17 @@ def frame_fields(hex_msg: str) -> dict[str, object]:
     return fields
 
 
-def raw_payload(frame: RawFrame) -> dict[str, object]:
+def raw_payload(
+    frame: RawFrame,
+    receivers: tuple[str, ...] | list[str] | None = None,
+) -> dict[str, object]:
     """JSON object for one raw frame on the live Redis ``live:raw`` channel."""
     item = frame_fields(frame.hex)
     item["timestamp"] = frame.timestamp
     if frame.receiver:
         item["receiver"] = frame.receiver
+    if receivers:
+        item["receivers"] = list(receivers)
     if frame.rssi is not None and math.isfinite(frame.rssi):
         item["rssi"] = round(frame.rssi, 1)
     if frame.clock is not None:

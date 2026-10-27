@@ -5,7 +5,7 @@ export interface AlertStats {
 }
 
 export interface ActiveAlert {
-  alert_id?: string | null;
+  alert_id: string;
   zone: string;
   rule: string;
   activated_at?: number;
@@ -136,6 +136,8 @@ export interface RawFrame {
   hex: string;
   timestamp: number;
   receiver?: string;
+  /** Every receiver that heard this frame, strongest copy first. */
+  receivers?: string[];
   rssi?: number;
   clock?: number;
   df?: number;

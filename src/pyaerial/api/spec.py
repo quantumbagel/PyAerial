@@ -8,6 +8,7 @@ WS_PROTOCOL = "pyaerial.live"
 WS_VERSION = 1
 WS_PATH = "/ws/live"
 WS_BEAST_PATH = "/ws/beast"
+WS_RAW_PATH = "/ws/raw"
 WS_ALIASES = ("/ws",)
 WS_STREAMS = ("flights", "alerts", "telemetry", "stats")
 #: Pushed alert snapshots carry at least this many episodes (all active ones
@@ -59,16 +60,18 @@ def websocket_api_spec(
         "version": WS_VERSION,
         "websocket": WS_PATH,
         "beast_websocket": WS_BEAST_PATH,
+        "raw_websocket": WS_RAW_PATH,
         "aliases": list(WS_ALIASES),
         "connect": (
             "Open /ws/live, read the hello + snapshot (flights, alerts, stats), "
             "then either listen for pushed streams or send type=request messages. "
             "Optional /ws/live?streams=flights,alerts limits the initial set. "
-            "Corrected Mode S frames are re-encoded as dump1090 Beast binary on "
-            "/ws/beast (binary WebSocket, no JSON handshake) and, when "
+            "Corrected Mode S frames are pushed as JSON on /ws/raw "
+            "({\"type\": \"raw\", \"frames\": [...]}, no handshake) and re-encoded "
+            "as dump1090 Beast binary on /ws/beast (binary WebSocket) and, when "
             "web.beast_port is set, a TCP listener compatible with OpenSky "
             "Network's feeder (BEASTHOST/BEASTPORT, default dump1090 port 30005). "
-            "Beast is not a /ws/live subscribe stream."
+            "Raw and Beast are not /ws/live subscribe streams."
         ),
         "streams": {
             "flights": "Full live flight list whenever positions or alerts change.",
@@ -84,6 +87,14 @@ def websocket_api_spec(
                 "plus redis / history booleans, engine_seen_at (unix seconds, or null "
                 "if the tracking engine is not writing a heartbeat) and engine_live "
                 "(server-side heartbeat freshness check)."
+            ),
+        },
+        "raw": {
+            "websocket": WS_RAW_PATH,
+            "format": (
+                "JSON text {\"type\": \"raw\", \"frames\": [...]} using the live:raw "
+                "payload dicts as-is (hex, timestamp, receiver, receivers, rssi, "
+                "clock, df, icao). No handshake, RPC, or ping."
             ),
         },
         "beast": {
@@ -108,8 +119,8 @@ def websocket_api_spec(
                 "notes": (
                     "Limit which /ws/live streams this connection receives. Omit or "
                     "pass [] for the default set (flights, alerts, telemetry, stats). "
-                    "Beast frames are not a live stream; connect to /ws/beast or the "
-                    "Beast TCP port instead."
+                    "Raw frames are not a live stream; connect to /ws/raw (JSON) or "
+                    "/ws/beast / the Beast TCP port (dump1090 binary) instead."
                 ),
             },
             "fetchFlights": {

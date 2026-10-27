@@ -1,7 +1,7 @@
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 import { cn } from './cn';
 
-type ButtonVariant = 'primary' | 'ghost' | 'toggle' | 'icon' | 'subtle' | 'link';
+type ButtonVariant = 'primary' | 'ghost' | 'toggle' | 'icon' | 'link';
 type ButtonSize = 'sm' | 'md';
 
 type SharedProps = {

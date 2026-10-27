@@ -6,14 +6,12 @@ import {
   alertSortValueLabel,
   alertVisual,
   isAlertActive,
-  loadAlertSort,
   mergeAlertsByEpisode,
   mergeEpisode,
   primaryAlert,
 } from './alertData';
 import { buildAlertPathSegments } from './alertPathSegments';
 import { pathStyleForFlight, planeStyle } from './planeIcon';
-import { writeStored } from './storage';
 
 const zones: Zone[] = [
   {
@@ -57,7 +55,7 @@ describe('alertVisual', () => {
   });
 
   it('drives plane and path colours instead of rule-name keywords', () => {
-    const flight = { is_live: true, active_alerts: [{ zone: 'RDU', rule: 'warn' }] };
+    const flight = { is_live: true, active_alerts: [{ alert_id: 'x', zone: 'RDU', rule: 'warn' }] };
     expect(planeStyle(flight, false, zones).fill).toBe('#ff00aa');
     expect(pathStyleForFlight(flight, false, zones).color).toBe('#ff00aa');
   });
@@ -83,14 +81,7 @@ describe('alert path segments', () => {
   });
 });
 
-describe('alert sort options', () => {
-  it('maps removed duplicate options onto the remaining ones', () => {
-    writeStored('alertSort:live', JSON.stringify({ field: 'active', direction: 'asc' }));
-    expect(loadAlertSort('live')).toEqual({ field: 'status', direction: 'asc' });
-    writeStored('alertSort:history', JSON.stringify({ field: 'rule' }));
-    expect(loadAlertSort('history').field).toBe('zone');
-  });
-
+describe('alert sort labels', () => {
   it("doesn't repeat the zone badge in the trailing label", () => {
     const label = alertSortValueLabel({ alert_id: 'a', zone: 'RDU', rule: 'warn', activated_at: 0 }, 'zone');
     expect(label).not.toContain('RDU');

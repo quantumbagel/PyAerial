@@ -11,7 +11,7 @@
 | `pyaerial validate` | Syntax, schema, and filesystem cross-reference verification |
 | `pyaerial reset` | Archive purger (`--yes`; optional single ICAO; clears Redis only when engine is stopped). Also recreates an archive file from an incompatible schema version |
 
-The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias). Corrected Mode S frames are re-encoded as dump1090 Beast binary on `/ws/beast` and, when `web.beast_port` is set, on a TCP listener for OpenSky Network. Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).
+The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias). Corrected Mode S frames are pushed as JSON on `/ws/raw` (portal Raw tab) and re-encoded as dump1090 Beast binary on `/ws/beast` and, when `web.beast_port` is set, on a TCP listener for OpenSky Network. Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).
 
 **Command execution**
 

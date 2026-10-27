@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
 import type { Alert, FlightSummary, PortalView, TelemetryPoint } from '../api/types';
 import { mergeAlertsByEpisode } from '../utils/alertData';
@@ -9,9 +9,8 @@ import {
   insertByTimestamp,
   trimToCap,
 } from '../utils/buffers';
-import { useLatestRef } from './useStableCallback';
 
-const MAX_PATH_FETCHES = 4;
+export const MAX_PATH_FETCHES = 4;
 
 type LatLng = [number, number];
 
@@ -43,6 +42,16 @@ function sameCoord(a: LatLng | undefined, b: LatLng): boolean {
   return !!a && a[0] === b[0] && a[1] === b[1];
 }
 
+function pruneToKeep<T>(prev: Record<string, T>, keep: Set<string>): Record<string, T> {
+  let changed = false;
+  const next: Record<string, T> = {};
+  for (const [id, value] of Object.entries(prev)) {
+    if (keep.has(id)) next[id] = value;
+    else changed = true;
+  }
+  return changed ? next : prev;
+}
+
 /**
  * Map path data for the selected flight (or every visible flight when the
  * "Paths" toggle is on): coordinates, the telemetry behind them (for alert
@@ -58,72 +67,60 @@ export function useFlightPaths(
   const [pathCoords, setPathCoords] = useState<Record<string, LatLng[]>>({});
   const [pathTelemetry, setPathTelemetry] = useState<Record<string, TelemetryPoint[]>>({});
   const [pathAlerts, setPathAlerts] = useState<Record<string, Alert[]>>({});
+  // Bumped when a fetch fails so the queue can start the next id without
+  // waiting for pathCoords to change.
+  const [fetchWave, setFetchWave] = useState(0);
 
   const pendingPathFetches = useRef(new Set<string>());
   const failedPathFetches = useRef(new Set<string>());
-  const showAllPathsRef = useLatestRef(showAllPaths);
-  const pathCoordsRef = useLatestRef(pathCoords);
-  const filteredFlightsRef = useLatestRef(filteredFlights);
-  const portalViewRef = useLatestRef(portalView);
-  const activeFlightIdRef = useLatestRef(activeFlightId);
+  // Latest view/selection for in-flight fetches: after await we must discard
+  // results that no longer belong, not apply the values from the starting render.
+  const wantRef = useRef({ portalView, showAllPaths, activeFlightId });
+  useLayoutEffect(() => {
+    wantRef.current = { portalView, showAllPaths, activeFlightId };
+  });
 
   const isTracked = useCallback(
-    (flightId: string) => showAllPathsRef.current || flightId === activeFlightIdRef.current,
-    [showAllPathsRef, activeFlightIdRef],
+    (flightId: string) => showAllPaths || flightId === activeFlightId,
+    [showAllPaths, activeFlightId],
   );
   const capFor = useCallback(
-    (flightId: string) =>
-      flightId === activeFlightIdRef.current ? SELECTED_POINT_CAP : OVERLAY_POINT_CAP,
-    [activeFlightIdRef],
+    (flightId: string) => (flightId === activeFlightId ? SELECTED_POINT_CAP : OVERLAY_POINT_CAP),
+    [activeFlightId],
   );
 
-  const fetchAndSetPath = useCallback(
-    async (flightId: string, view: PortalView, force = false) => {
-      if (pendingPathFetches.current.has(flightId)) return;
-      pendingPathFetches.current.add(flightId);
-      try {
-        const [telemetry, alerts] = await Promise.all([
-          api.fetchTelemetry(flightId, view),
-          api.fetchAlerts(view, { flightId, activeOnly: false }),
-        ]);
-        if (portalViewRef.current !== view) return;
-        if (!isTracked(flightId)) return;
-        const cap = capFor(flightId);
-        const valid = trimToCap(
-          telemetry.filter(hasFix).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)),
-          cap,
-        );
-        const latlngs = valid.map((p) => [p.latitude!, p.longitude!] as LatLng);
-        setPathCoords((prev) => ({ ...prev, [flightId]: latlngs }));
-        setPathTelemetry((prev) => ({
-          ...prev,
-          // Keep live points that arrived during the fetch.
-          [flightId]: force ? valid : insertByTimestamp(valid, prev[flightId] ?? [], cap),
-        }));
-        setPathAlerts((prev) => ({ ...prev, [flightId]: alerts }));
-      } catch (err) {
-        console.error('Failed to fetch flight path', err);
-        failedPathFetches.current.add(flightId);
-      } finally {
-        pendingPathFetches.current.delete(flightId);
-        if (showAllPathsRef.current && portalViewRef.current === view) {
-          const missing = filteredFlightsRef.current.filter((f) =>
-            pathNeedsFetch(
-              f.flight_id,
-              pathCoordsRef.current,
-              pendingPathFetches.current,
-              failedPathFetches.current,
-            ),
-          );
-          const room = Math.max(0, MAX_PATH_FETCHES - pendingPathFetches.current.size);
-          missing.slice(0, room).forEach((f) => {
-            void fetchAndSetPath(f.flight_id, view);
-          });
-        }
-      }
-    },
-    [capFor, filteredFlightsRef, isTracked, pathCoordsRef, portalViewRef, showAllPathsRef],
-  );
+  const fetchAndSetPath = useCallback(async (flightId: string, view: PortalView, force = false) => {
+    if (pendingPathFetches.current.has(flightId)) return;
+    pendingPathFetches.current.add(flightId);
+    try {
+      const [telemetry, alerts] = await Promise.all([
+        api.fetchTelemetry(flightId, view),
+        api.fetchAlerts(view, { flightId, activeOnly: false }),
+      ]);
+      const want = wantRef.current;
+      if (want.portalView !== view) return;
+      if (!(want.showAllPaths || flightId === want.activeFlightId)) return;
+      const cap = flightId === want.activeFlightId ? SELECTED_POINT_CAP : OVERLAY_POINT_CAP;
+      const valid = trimToCap(
+        telemetry.filter(hasFix).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)),
+        cap,
+      );
+      const latlngs = valid.map((p) => [p.latitude!, p.longitude!] as LatLng);
+      setPathCoords((prev) => ({ ...prev, [flightId]: latlngs }));
+      setPathTelemetry((prev) => ({
+        ...prev,
+        // Keep live points that arrived during the fetch.
+        [flightId]: force ? valid : insertByTimestamp(valid, prev[flightId] ?? [], cap),
+      }));
+      setPathAlerts((prev) => ({ ...prev, [flightId]: alerts }));
+    } catch (err) {
+      console.error('Failed to fetch flight path', err);
+      failedPathFetches.current.add(flightId);
+      setFetchWave((n) => n + 1);
+    } finally {
+      pendingPathFetches.current.delete(flightId);
+    }
+  }, []);
 
   const clearAll = useCallback(() => {
     setPathCoords({});
@@ -150,29 +147,28 @@ export function useFlightPaths(
     if (!showAllPaths) return;
     const keep = new Set(filteredFlights.map((f) => f.flight_id));
     if (activeFlightId) keep.add(activeFlightId);
-    const pruneIfNeeded = <T,>(prev: Record<string, T>) => {
-      let changed = false;
-      const next: Record<string, T> = {};
-      for (const [id, value] of Object.entries(prev)) {
-        if (keep.has(id)) next[id] = value;
-        else changed = true;
-      }
-      return changed ? next : prev;
-    };
-    setPathCoords(pruneIfNeeded);
-    setPathTelemetry(pruneIfNeeded);
-    setPathAlerts(pruneIfNeeded);
+    setPathCoords((prev) => pruneToKeep(prev, keep));
+    setPathTelemetry((prev) => pruneToKeep(prev, keep));
+    setPathAlerts((prev) => pruneToKeep(prev, keep));
     const candidates = activeFlightId
       ? [activeFlightId, ...filteredFlights.map((f) => f.flight_id)]
       : filteredFlights.map((f) => f.flight_id);
     const missing = candidates.filter((id) =>
-      pathNeedsFetch(id, pathCoordsRef.current, pendingPathFetches.current, failedPathFetches.current),
+      pathNeedsFetch(id, pathCoords, pendingPathFetches.current, failedPathFetches.current),
     );
     const room = Math.max(0, MAX_PATH_FETCHES - pendingPathFetches.current.size);
     missing.slice(0, room).forEach((id) => {
       void fetchAndSetPath(id, portalView);
     });
-  }, [showAllPaths, filteredFlights, portalView, fetchAndSetPath, activeFlightId, pathCoordsRef]);
+  }, [
+    showAllPaths,
+    filteredFlights,
+    portalView,
+    fetchAndSetPath,
+    activeFlightId,
+    pathCoords,
+    fetchWave,
+  ]);
 
   /** Extend tracked paths from a live flights snapshot. */
   const appendFlightPositions = useCallback(
@@ -264,9 +260,8 @@ export function useFlightPaths(
 
   /** Re-read the selected flight's path (after a reconnect). */
   const refetchActivePath = useCallback(() => {
-    const id = activeFlightIdRef.current;
-    if (id) void fetchAndSetPath(id, portalViewRef.current, true);
-  }, [activeFlightIdRef, fetchAndSetPath, portalViewRef]);
+    if (activeFlightId) void fetchAndSetPath(activeFlightId, portalView, true);
+  }, [activeFlightId, fetchAndSetPath, portalView]);
 
   return {
     showAllPaths,

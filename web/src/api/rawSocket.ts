@@ -1,51 +1,74 @@
-import { BeastParser } from '../utils/beast';
 import { ReconnectingSocket, socketUrl } from './reconnectingSocket';
 import type { RawFrame } from './types';
 
-export type BeastSocketHandlers = {
+export type RawSocketHandlers = {
   onFrames: (frames: RawFrame[]) => void;
   onOpen?: () => void;
   onClose?: (code?: number, reason?: string) => void;
 };
 
-const handlersSet = new Set<BeastSocketHandlers>();
-const parser = new BeastParser();
+const handlersSet = new Set<RawSocketHandlers>();
 
-// The Beast stream is raw bytes with no keepalive, and a quiet receiver is
-// legitimate, so there is no idle timeout here.
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function asRawFrame(item: unknown): RawFrame | null {
+  if (!item || typeof item !== 'object') return null;
+  const row = item as Record<string, unknown>;
+  if (typeof row.hex !== 'string' || !row.hex || !isFiniteNumber(row.timestamp)) {
+    return null;
+  }
+  const frame: RawFrame = { hex: row.hex, timestamp: row.timestamp };
+  if (typeof row.receiver === 'string') frame.receiver = row.receiver;
+  if (Array.isArray(row.receivers)) {
+    frame.receivers = row.receivers.filter((name): name is string => typeof name === 'string');
+  }
+  if (isFiniteNumber(row.rssi)) frame.rssi = row.rssi;
+  if (isFiniteNumber(row.clock)) frame.clock = row.clock;
+  if (isFiniteNumber(row.df)) frame.df = row.df;
+  if (typeof row.icao === 'string') frame.icao = row.icao;
+  return frame;
+}
+
+/** Parse one `/ws/raw` text frame into engine-stamped RawFrame rows. */
+export function parseRawMessage(data: unknown): RawFrame[] {
+  if (typeof data !== 'string') return [];
+  try {
+    const parsed = JSON.parse(data) as { type?: unknown; frames?: unknown };
+    if (parsed?.type !== 'raw' || !Array.isArray(parsed.frames)) return [];
+    const frames: RawFrame[] = [];
+    for (const item of parsed.frames) {
+      const frame = asRawFrame(item);
+      if (frame) frames.push(frame);
+    }
+    return frames;
+  } catch {
+    return [];
+  }
+}
+
+// Quiet receivers are legitimate, so there is no idle timeout here.
 const socket = new ReconnectingSocket({
-  url: () => socketUrl('/ws/beast'),
-  binaryType: 'arraybuffer',
+  url: () => socketUrl('/ws/raw'),
   onOpen: () => {
-    parser.reset();
     handlersSet.forEach((h) => h.onOpen?.());
   },
   onMessage: (event) => {
-    if (!(event.data instanceof ArrayBuffer)) return;
-    const decoded = parser.feed(new Uint8Array(event.data));
-    if (!decoded.length) return;
-    const now = Date.now() / 1000;
-    const frames: RawFrame[] = decoded.map((frame) => ({
-      hex: frame.hex,
-      timestamp: now,
-      rssi: frame.rssi,
-      clock: frame.clock,
-      df: frame.df,
-      icao: frame.icao,
-    }));
+    const frames = parseRawMessage(event.data);
+    if (!frames.length) return;
     handlersSet.forEach((h) => h.onFrames(frames));
   },
   onClose: (code, reason) => {
-    parser.reset();
     handlersSet.forEach((h) => h.onClose?.(code, reason));
   },
 });
 
 /**
- * Subscribe to decoded Beast frames. The socket is only open while at least
- * one subscriber exists, so closing the Raw panel stops the byte stream.
+ * Subscribe to JSON raw frames. The socket is only open while at least
+ * one subscriber exists, so closing the Raw panel stops the stream.
  */
-export function connectRawSocket(handlers: BeastSocketHandlers): () => void {
+export function connectRawSocket(handlers: RawSocketHandlers): () => void {
   handlersSet.add(handlers);
   if (socket.isReady) {
     handlers.onOpen?.();
@@ -56,7 +79,6 @@ export function connectRawSocket(handlers: BeastSocketHandlers): () => void {
     handlersSet.delete(handlers);
     if (handlersSet.size === 0) {
       socket.stop();
-      parser.reset();
     }
   };
 }

@@ -60,6 +60,17 @@ describe('rawFrameMatches', () => {
     expect(rawFrameMatches(row, 'df17')).toBe(true);
     expect(rawFrameMatches(row, 'zzz')).toBe(false);
   });
+
+  it('matches any entry of receivers, falling back to receiver', () => {
+    const dual = frame({ receiver: 'strong', receivers: ['strong', 'weak'] });
+    expect(rawFrameMatches(dual, 'weak')).toBe(true);
+    expect(rawFrameMatches(dual, 'strong')).toBe(true);
+    expect(rawFrameMatches(frame({ receiver: 'north' }), 'north')).toBe(true);
+    expect(rawFrameMatches(frame({ receiver: 'north', receivers: [] }), 'north')).toBe(true);
+    expect(rawFrameMatches(frame({ receiver: undefined, receivers: ['south'] }), 'south')).toBe(
+      true,
+    );
+  });
 });
 
 describe('filterRawFrames', () => {
@@ -105,6 +116,6 @@ describe('emptyRawMessage', () => {
     ).toMatch(/pyaerial run/);
     expect(
       emptyRawMessage({ hasFilters: false, stats: stats(), rawStatus: 'connected' }),
-    ).toMatch(/No Beast frames yet/);
+    ).toMatch(/No raw frames yet/);
   });
 });

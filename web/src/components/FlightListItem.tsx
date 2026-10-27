@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import type { FlightSummary, Zone } from '../api/types';
 import { flightSortValueLabel, type FlightSortField } from '../utils/flightData';
-import { cleanField, displayCallsign, displayField, displayIcao } from '../utils/format';
+import { displayCallsign, displayField, displayIcao } from '../utils/format';
 import { FlightAlertBadges, IntegrityBadge } from './AlertBadges';
 import { Chip } from './ui';
 
@@ -38,7 +38,7 @@ export const FlightListItem = memo(function FlightListItem({
             <FlightAlertBadges flight={flight} zones={zones} alertColors={alertColors} />
             <IntegrityBadge integrity={flight.integrity} />
           </span>
-          {cleanField(flight.callsign) ? <Chip>{icao}</Chip> : null}
+          {flight.callsign ? <Chip>{icao}</Chip> : null}
         </div>
         <div className="ui-row__line">
           <span className="ui-row__secondary">{displayField(flight.model)}</span>

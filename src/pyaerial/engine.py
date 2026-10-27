@@ -320,11 +320,18 @@ class Engine:
             self._last_frame_prune = now
             self.history_store.prune_frames(time.time() - keep * 3600)
 
-    def _publish_raw(self, frames: list[RawFrame]) -> None:
+    def _publish_raw(
+        self,
+        frames: list[RawFrame],
+        heard_by: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
         """Fan raw sensor frames out to the live store (Redis pub/sub)."""
         if not frames:
             return
-        payloads = [raw_payload(frame) for frame in frames]
+        payloads = [
+            raw_payload(frame, receivers=(heard_by or {}).get(frame.hex))
+            for frame in frames
+        ]
         for offset in range(0, len(payloads), _RAW_PUBLISH_BATCH):
             self.live_store.publish_raw(payloads[offset : offset + _RAW_PUBLISH_BATCH])
 
@@ -366,7 +373,7 @@ class Engine:
                 self.integrity.observe_frames(raw)
                 self._archive_frames(raw)
                 outgoing, new_messages, heard_by = self._outgoing_frames(raw)
-                self._publish_raw(outgoing)
+                self._publish_raw(outgoing, heard_by)
                 processed = self.tracker.ingest(new_messages, receivers=heard_by)
 
                 self.integrity.evaluate(self.tracker.planes)
