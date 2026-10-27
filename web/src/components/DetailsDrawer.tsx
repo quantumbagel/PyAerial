@@ -21,6 +21,7 @@ import {
 import { FlightAlertBadges } from './AlertBadges';
 import { AlertTimeline } from './AlertTimeline';
 import { ExternalLinks } from './ExternalLinks';
+import { IntegritySection } from './IntegritySection';
 import { TelemetryTable } from './TelemetryTable';
 import { Button, Chip, StateView, Tab, TabList, TabPanel, useTabIds } from './ui';
 
@@ -60,6 +61,7 @@ function mergeDisplayFlight(detail: FlightDetail | null, summary: FlightSummary 
     altitude: summary.altitude ?? base.altitude,
     active_alerts: summary.active_alerts ?? base.active_alerts,
     alert_stats: summary.alert_stats ?? base.alert_stats,
+    integrity: summary.integrity ?? base.integrity,
   };
 }
 
@@ -321,6 +323,8 @@ export function DetailsDrawer({
                 <dd className={`ui-field-value ui-field-value--${alertTone}`}>{alertSummary}</dd>
               </dl>
             </section>
+
+            <IntegritySection integrity={displayFlight?.integrity} />
 
             <section className="info-section">
               <h3>{selectedTelemetryPoint ? 'Selected fix' : 'Latest readings'}</h3>

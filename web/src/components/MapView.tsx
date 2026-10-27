@@ -12,6 +12,7 @@ import {
   formatSpeedCompact,
   formatZoneRule,
 } from '../utils/format';
+import { integrityLabel, isFlagged } from '../utils/integrity';
 import {
   createPlaneIcon,
   pathStyleForFlight,
@@ -102,7 +103,8 @@ function markerLabel(flight: FlightSummary): string {
     : flight.is_live
       ? 'live'
       : 'archived';
-  return `${displayCallsign(flight)}${LIST_SEP}${status}`;
+  const integrity = isFlagged(flight.integrity) ? `${LIST_SEP}${integrityLabel(flight.integrity)}` : '';
+  return `${displayCallsign(flight)}${LIST_SEP}${status}${integrity}`;
 }
 
 function applyMarkerLabel(marker: L.Marker, label: string) {
@@ -326,6 +328,20 @@ export function MapView({
       zoneLayers.current.push(homeMarker);
     }
 
+    for (const receiver of appConfig?.receivers ?? []) {
+      const at = receiver.position;
+      if (at?.latitude == null || at?.longitude == null) continue;
+      const marker = L.circleMarker([at.latitude, at.longitude], {
+        radius: 5,
+        color: PALETTE.home,
+        fillColor: PALETTE.home,
+        fillOpacity: 0.2,
+        weight: 2,
+      }).addTo(map);
+      marker.bindTooltip(tooltipContent([`Receiver ${receiver.name}`]));
+      zoneLayers.current.push(marker);
+    }
+
     (zonesData.zones || []).forEach((zone) => {
       const colors = zoneColorFor(zone.name, zonesData.zones);
       const polygon = L.polygon(zone.coordinates, {
@@ -342,7 +358,41 @@ export function MapView({
       });
       zoneLayers.current.push(polygon);
     });
-  }, [zonesVisible, zonesData]);
+  }, [zonesVisible, zonesData, appConfig]);
+
+  // Where multilateration puts the real transmitter of a selected spoofed target.
+  const activeFlight = activeFlightId ? flights.find((f) => f.flight_id === activeFlightId) : undefined;
+  const emitter = activeFlight?.integrity?.emitter;
+  const emitterLat = emitter?.latitude;
+  const emitterLon = emitter?.longitude;
+  const claimedLat = activeFlight?.latitude;
+  const claimedLon = activeFlight?.longitude;
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || emitterLat == null || emitterLon == null) return;
+    const layers: L.Layer[] = [];
+    const marker = L.circleMarker([emitterLat, emitterLon], {
+      radius: 7,
+      color: PALETTE.alert,
+      fillColor: PALETTE.alertDark,
+      fillOpacity: 0.9,
+      weight: 2,
+    }).addTo(map);
+    marker.bindTooltip(tooltipContent(['Estimated transmitter (multilateration)']));
+    layers.push(marker);
+    if (claimedLat != null && claimedLon != null) {
+      layers.push(
+        L.polyline(
+          [
+            [emitterLat, emitterLon],
+            [claimedLat, claimedLon],
+          ],
+          { color: PALETTE.alert, weight: 1.5, dashArray: '4 6', opacity: 0.8 },
+        ).addTo(map),
+      );
+    }
+    return () => layers.forEach((layer) => layer.remove());
+  }, [emitterLat, emitterLon, claimedLat, claimedLon]);
 
   // Plane markers: diffed per flight; heading-only changes rotate in place.
   useEffect(() => {

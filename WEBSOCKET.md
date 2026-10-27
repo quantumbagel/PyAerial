@@ -68,7 +68,7 @@ Server handshake message:
 }
 ```
 
-Aircraft flight list broadcast (`type: "flights"`), pushed whenever positions, velocities, or alert states update. Live and history summaries share the metadata fields `callsign`, `model`, `owner`, `country`, `aircraft_type` and `registration`; unknown values are `null` (placeholders such as `"Unknown Model"`, `"UNKNOWN"` or `""` are never sent). Every `active_alerts[].alert_id` is non-empty (`<flight_id>:<zone>:<rule>` when the store has no id):
+Aircraft flight list broadcast (`type: "flights"`), pushed whenever positions, velocities, or alert states update. Live and history summaries share the metadata fields `callsign`, `model`, `owner`, `country`, `aircraft_type` and `registration`; unknown values are `null` (placeholders such as `"Unknown Model"`, `"UNKNOWN"` or `""` are never sent). `integrity` is the spoofing assessment described in [CONFIGURATION.md](CONFIGURATION.md#configuration), or `null` before the engine has scored the aircraft. Every `active_alerts[].alert_id` is non-empty (`<flight_id>:<zone>:<rule>` when the store has no id):
 
 ```json
 {
@@ -92,6 +92,13 @@ Aircraft flight list broadcast (`type: "flights"`), pushed whenever positions, v
       "status": "live",
       "retained": false,
       "timestamp": 1721832015.2,
+      "integrity": {
+        "score": 1.0,
+        "status": "ok",
+        "checks": {
+          "radio_horizon": {"status": "pass", "detail": "main: 42 km, radio horizon 441 km", "value": 0.1}
+        }
+      },
       "active_alerts": [
         {
           "alert_id": "a1b2c3-1721832000:airport_approach:low_altitude_warning",

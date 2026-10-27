@@ -354,3 +354,41 @@ def test_engine_outgoing_frames_prefer_stronger_receiver(tmp_path):
         assert again == []
     finally:
         engine.shutdown()
+
+
+def test_engine_scores_integrity_into_live_flights(tmp_path):
+    from pyaerial.config.schema import ReceiverConfig, ReceiverPositionConfig
+
+    capture = tmp_path / "capture.txt"
+    capture.write_text(
+        "*8D40621D58C382D690C8AC2863A7;\n*8D40621D58C386435CC412692AD6;\n"
+    )
+    config = make_config(
+        receivers={
+            "nl": ReceiverConfig(
+                type="replay",
+                options={"path": str(capture), "interval": 0.05},
+                position=ReceiverPositionConfig(latitude=52.0, longitude=4.0),
+            )
+        }
+    )
+    engine = Engine(config, isolated=True, aircraft_db_path=str(tmp_path / "aircraft.db"))
+    runner = threading.Thread(target=engine.run, daemon=True)
+    runner.start()
+    try:
+        deadline = time.monotonic() + 5
+        doc = None
+        while time.monotonic() < deadline and doc is None:
+            flights = list(engine.live_store._mem.flights.values())
+            if flights and "integrity" in flights[0]["info"]:
+                doc = flights[0]
+            time.sleep(0.05)
+        assert doc is not None
+        assert doc["icao"] == "40621d"
+        assert doc["info"]["integrity"]["status"] in {"ok", "unknown"}
+        # Decoded against the antenna in the Netherlands, not North Carolina home.
+        lat = engine.tracker.planes["40621D"]["received_data"]["latitude"][-1].value
+        assert abs(lat - 52.26) < 0.05
+    finally:
+        engine._shutdown.set()
+        runner.join(timeout=5)

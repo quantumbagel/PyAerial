@@ -156,3 +156,17 @@ def test_get_alerts_memory_and_redis_agree(fake, kwargs):
     from_mem = [a["alert_id"] for a in mem.get_alerts(**kwargs)]
     assert from_redis == from_mem
     assert from_redis
+
+
+def test_unchanged_flights_are_not_rewritten(fake):
+    store = RedisLiveStore(URI, writer=True)
+    planes = {f"p{n}": _plane(f"a{n:05x}", t=1000.0) for n in range(5)}
+    store.write_live_planes(planes)
+    assert fake.calls.count("execute") == 1  # one round trip for all five
+    fake.calls.clear()
+    store.write_live_planes(planes)
+    assert fake.calls.count("execute") == 0
+    planes["p0"][STORE_INFO]["callsign"] = "NEW1"
+    store.write_live_planes(planes)
+    assert fake.calls.count("execute") == 1
+    assert '"NEW1"' in fake.kv["live:flight:a00000-1000"]

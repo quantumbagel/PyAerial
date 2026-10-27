@@ -1,5 +1,5 @@
 import * as L from 'leaflet';
-import type { ActiveAlert, Zone } from '../api/types';
+import type { ActiveAlert, Integrity, Zone } from '../api/types';
 import { alertVisual, primaryAlert } from './alertData';
 import { PALETTE } from './colors';
 
@@ -14,6 +14,7 @@ export interface PlaneStyle {
 interface PlaneLike {
   is_live?: boolean;
   active_alerts?: ActiveAlert[] | null;
+  integrity?: Integrity | null;
 }
 
 /** Marker look for a flight; alerting planes use their alert's configured colour. */
@@ -32,6 +33,19 @@ export function planeStyle(
       stroke: visual.dark,
       opacity: 1,
       glow: isSelected ? visual.color : null,
+    };
+  }
+  // Flagged tracks keep the live size but read as "not trusted": dark fill,
+  // status-coloured outline.
+  const status = flight.integrity?.status;
+  if (status === 'spoofed' || status === 'suspect') {
+    const tone = status === 'spoofed' ? PALETTE.alert : PALETTE.warn;
+    return {
+      size: isSelected ? 30 : 24,
+      fill: status === 'spoofed' ? PALETTE.alertDark : PALETTE.warnDark,
+      stroke: tone,
+      opacity: 1,
+      glow: isSelected ? tone : null,
     };
   }
   if (isSelected) {

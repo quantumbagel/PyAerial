@@ -259,6 +259,7 @@ def get_flight_detail(
             "heading": last_point.get("heading"),
             "timestamp": last_point.get("timestamp") or flight_end,
             **merge_text_fields(doc, info),
+            "integrity": info.get("integrity"),
             "is_live": False,
             "status": doc.get("status", "completed"),
         },

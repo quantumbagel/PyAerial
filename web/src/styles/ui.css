@@ -494,6 +494,10 @@
     color: var(--warn);
 }
 
+.ui-field-value--alert {
+    color: var(--alert);
+}
+
 .ui-field-value--muted {
     color: var(--text-muted);
 }

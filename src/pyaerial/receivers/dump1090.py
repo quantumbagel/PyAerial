@@ -14,7 +14,7 @@ from pyaerial.receivers.frames import (
     receive_times,
 )
 
-_RECV_BUFFER = 4096
+_RECV_BUFFER = 65_536
 _SOCKET_TIMEOUT = 1.0
 _AVR_FORMATS = {"avr", "raw"}
 _BEAST_FORMATS = {"beast", "binary"}
@@ -38,10 +38,12 @@ class Dump1090Receiver(Receiver):
                     "Unknown dump1090 format %r; using AVR. Valid: avr, beast",
                     fmt,
                 )
-        elif port is not None and int(port) == 30005:
-            self.format = "beast"
-        else:
+        elif port is not None and int(port) == 30002:
             self.format = "avr"
+        else:
+            # Beast carries the 12 MHz clock and signal level that the
+            # integrity checks need; AVR text carries neither.
+            self.format = "beast"
         if port is not None:
             self.port = int(port)
         else:

@@ -18,10 +18,12 @@ from pyaerial.calc.geo import build_polygons
 from pyaerial.calc.plane import PlaneCalculator
 from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
+from pyaerial.integrity import IntegrityMonitor
 from pyaerial.logging_setup import setup_logging
 from pyaerial.models import flight_id_for_plane
 from pyaerial.receivers import RawFrame, Receiver, available_receivers, create_receiver
 from pyaerial.receivers.frames import correct_receiver_frames, raw_payload
+from pyaerial.receivers.positions import ReceiverPositions
 from pyaerial.store import HistoryStore, RedisLiveStore
 from pyaerial.tracker import Tracker
 
@@ -69,7 +71,9 @@ class Engine:
     ):
         self.config = config
         self._isolated = isolated
-        self.tracker = Tracker(config)
+        self.positions = ReceiverPositions(config, fetch=not isolated)
+        self.tracker = Tracker(config, positions=self.positions)
+        self.integrity = IntegrityMonitor(config, self.positions)
         self.polygons: dict[str, Polygon] = build_polygons(config.zones)
         self.aircraft_db = AircraftDB(aircraft_db_path)
         self.live_store = RedisLiveStore(
@@ -137,8 +141,20 @@ class Engine:
             *,
             rssi: float | None = None,
             clock: int | None = None,
+            bearing: float | None = None,
+            elevation: float | None = None,
+            cfo: float | None = None,
         ) -> None:
-            self._enqueue_message(msg_hex, timestamp, name, rssi=rssi, clock=clock)
+            self._enqueue_message(
+                msg_hex,
+                timestamp,
+                name,
+                rssi=rssi,
+                clock=clock,
+                bearing=bearing,
+                elevation=elevation,
+                cfo=cfo,
+            )
 
         try:
             receiver = create_receiver(method, name, emit, arguments)
@@ -171,6 +187,9 @@ class Engine:
         *,
         rssi: float | None = None,
         clock: int | None = None,
+        bearing: float | None = None,
+        elevation: float | None = None,
+        cfo: float | None = None,
     ) -> None:
         """Push a raw frame onto the bounded queue, dropping the oldest if full."""
         item = RawFrame(
@@ -179,6 +198,9 @@ class Engine:
             receiver=receiver_name,
             rssi=rssi,
             clock=clock,
+            bearing=bearing,
+            elevation=elevation,
+            cfo=cfo,
         )
         try:
             self._message_queue.put_nowait(item)
@@ -287,6 +309,8 @@ class Engine:
         """Blocking main loop."""
         self._running = True
         self._install_signal_handlers()
+        self.positions.start()
+        self.integrity.start()
         self.start_receivers()
 
         hz = self.config.tracking.hz
@@ -314,6 +338,9 @@ class Engine:
                 self._restart_dead_receivers()
 
                 raw = self._drain_messages()
+                # Integrity sees every copy before merge/de-dup: per-receiver
+                # copies drive TDOA, exact repeats reveal replay.
+                self.integrity.observe_frames(raw)
                 outgoing, new_messages = self._outgoing_frames(raw)
                 self._publish_raw(outgoing)
                 receivers = {
@@ -323,6 +350,7 @@ class Engine:
                 }
                 processed = self.tracker.ingest(new_messages, receivers=receivers)
 
+                self.integrity.evaluate(self.tracker.planes)
                 self.calculator.calculate_all(self.tracker.planes)
                 self.live_store.write_live_planes(self.tracker.planes)
                 self.live_store.touch_engine()
@@ -333,6 +361,8 @@ class Engine:
                     removed = self.tracker.remove_planes(expired)
                     for plane in removed:
                         self._finalize_plane(plane)
+                    for icao in expired:
+                        self.integrity.forget(icao)
                     log.debug("Expired %d plane(s): %s", len(expired), expired)
                 self._retry_pending_finalizes()
                 self._retry_orphan_live_flights()
@@ -379,6 +409,8 @@ class Engine:
         self._shutdown.set()
         log.info("Shutting down...")
 
+        self.positions.stop()
+        self.integrity.stop()
         for handle in self._receivers.values():
             handle.receiver.stop()
         for handle in self._receivers.values():

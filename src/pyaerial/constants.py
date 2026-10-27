@@ -100,6 +100,8 @@ WHEN_FIELDS = frozenset(
         "dist",
         "proximity",
         ALERT_CAT_ETA,
+        # Integrity score 0-1 (1 = consistent with every check); see integrity/.
+        "integrity",
     }
 )
 # At least one of these is required; there is no implicit inside-polygon test.

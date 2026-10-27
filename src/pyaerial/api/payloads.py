@@ -83,6 +83,8 @@ def antenna_payload(config: Config) -> dict[str, Any]:
             item["host"] = receiver.host
         if receiver.port is not None:
             item["port"] = receiver.port
+        if receiver.position is not None:
+            item["position"] = receiver.position.model_dump()
         fmt = receiver.format or receiver.options.get("format")
         if isinstance(fmt, str) and fmt:
             item["format"] = fmt.lower()
@@ -347,6 +349,7 @@ def flight_summary(
         "altitude": alt,
         "speed": speed,
         "heading": heading,
+        "integrity": info.get("integrity"),
         "is_live": is_live,
         "status": doc.get("status", "completed"),
         "retained": doc.get("retained", False),

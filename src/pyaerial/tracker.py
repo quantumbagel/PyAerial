@@ -5,8 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-
-from pyModeS.util import icao as pms_icao
+from typing import TYPE_CHECKING
 
 from pyaerial.classify import ClassifiedMessage, classify, max_jump_deg
 from pyaerial.config.schema import Config
@@ -24,18 +23,48 @@ from pyaerial.constants import (
 )
 from pyaerial.models import Datum, Plane
 
+if TYPE_CHECKING:
+    from pyaerial.receivers.positions import ReceiverPositions
+
 log = logging.getLogger("pyaerial.tracker")
+
+# Internal counter of position fixes the CPR jump gate rejected (evidence of
+# two transmitters sharing an ICAO address).
+STORE_GATE_REJECTS = "gate_rejects"
 
 # After this many consecutive position fixes fail the jump gate, the last
 # accepted fix is presumed bad and the gate is reset (decode from home).
 _GATE_RESET_AFTER = 5
 
 
+def es_icao(msg_hex: str) -> str | None:
+    """ICAO of a DF17/18 extended squitter, or ``None`` for any other frame.
+
+    Reads the DF from the first byte so short Mode S replies never reach the
+    CRC-based address recovery or the ADS-B decoder.
+    """
+    if len(msg_hex) != 28:
+        return None
+    try:
+        df = int(msg_hex[:2], 16) >> 3
+    except ValueError:
+        return None
+    if df not in (17, 18):
+        return None
+    return msg_hex[2:8].upper()
+
+
 class Tracker:
     """In-memory plane store with message deduplication."""
 
-    def __init__(self, config: Config):
+    def __init__(
+        self,
+        config: Config,
+        *,
+        positions: ReceiverPositions | None = None,
+    ):
         self.config = config
+        self.positions = positions
         self.planes: dict[str, Plane] = {}
         # full frame hex -> most recent timestamp we have seen for that exact frame
         self._recent: dict[str, float] = {}
@@ -50,8 +79,12 @@ class Tracker:
     ) -> int:
         """Classify and merge ``messages`` into the plane store. Returns count processed."""
         processed = 0
+        receivers = receivers or {}
         for msg_hex, timestamp in messages:
-            icao, last_fix = self._last_fix(msg_hex)
+            icao = es_icao(msg_hex)
+            if icao is None:
+                continue
+            last_fix = self._fix_for(icao)
             last_position: tuple[float, float] | None = None
             jump = max_jump_deg(None)
             if last_fix is not None and icao is not None:
@@ -66,10 +99,18 @@ class Tracker:
                     last_position = (last_fix[0], last_fix[1])
                     jump = max_jump_deg(timestamp - last_fix[2])
 
-            def _rejected(icao: str | None = icao) -> None:
-                if icao is not None:
-                    self._gate_rejects[icao] = self._gate_rejects.get(icao, 0) + 1
+            def _rejected(icao: str = icao) -> None:
+                self._gate_rejects[icao] = self._gate_rejects.get(icao, 0) + 1
+                plane = self.planes.get(icao)
+                if plane is not None:
+                    internal = plane.setdefault(STORE_INTERNAL, {})
+                    internal[STORE_GATE_REJECTS] = internal.get(STORE_GATE_REJECTS, 0) + 1
 
+            receiver = receivers.get(msg_hex)
+            reference = None
+            if self.positions is not None:
+                antenna = self.positions.get(receiver)
+                reference = (antenna.latitude, antenna.longitude)
             try:
                 classified = classify(
                     msg_hex,
@@ -77,15 +118,16 @@ class Tracker:
                     last_position=last_position,
                     jump_deg=jump,
                     on_implausible=_rejected,
+                    icao=icao,
+                    reference=reference,
                 )
             except (ValueError, KeyError, IndexError, TypeError) as exc:
                 log.debug("Could not classify message %s: %s", msg_hex, exc)
                 continue
             if classified is None:
                 continue
-            if icao is not None and STORE_LAT in classified.data.get(STORE_RECV_DATA, {}):
+            if STORE_LAT in classified.data.get(STORE_RECV_DATA, {}):
                 self._gate_rejects.pop(icao, None)
-            receiver = (receivers or {}).get(msg_hex)
             self._merge(classified, timestamp, receiver=receiver)
             processed += 1
         return processed
@@ -242,26 +284,19 @@ class Tracker:
         # the archive source for SQLite on expire, so it is not clipped here.
 
     def _last_position(self, msg_hex: str) -> tuple[float, float] | None:
-        _icao, fix = self._last_fix(msg_hex)
+        icao = es_icao(msg_hex)
+        fix = self._fix_for(icao) if icao is not None else None
         return (fix[0], fix[1]) if fix is not None else None
 
-    def _last_fix(
-        self, msg_hex: str
-    ) -> tuple[str | None, tuple[float, float, float] | None]:
-        """``(icao, (lat, lon, time))`` of the aircraft's newest position, if any."""
-        try:
-            icao = pms_icao(msg_hex)
-        except Exception:
-            return None, None
-        if not isinstance(icao, str):
-            return None, None
+    def _fix_for(self, icao: str) -> tuple[float, float, float] | None:
+        """``(lat, lon, time)`` of the aircraft's newest position, if any."""
         plane = self.planes.get(icao) or self.planes.get(icao.lower())
         if plane is None:
-            return icao, None
+            return None
         recv = plane.get(STORE_RECV_DATA) or {}
         lat_series = recv.get(STORE_LAT) or []
         lon_series = recv.get(STORE_LONG) or []
         if not lat_series or not lon_series:
-            return icao, None
+            return None
         lat = lat_series[-1]
-        return icao, (lat.value, lon_series[-1].value, lat.time)
+        return (lat.value, lon_series[-1].value, lat.time)

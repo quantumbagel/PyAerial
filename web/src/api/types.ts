@@ -12,6 +12,24 @@ export interface ActiveAlert {
   eta?: number | null;
 }
 
+export type IntegrityStatus = 'ok' | 'suspect' | 'spoofed' | 'unknown';
+
+export interface IntegrityCheck {
+  status: 'pass' | 'warn' | 'fail';
+  detail: string;
+  value?: number;
+}
+
+/** Spoofing checks from the engine's integrity monitor (see CONFIGURATION.md). */
+export interface Integrity {
+  /** 0-1; 1 means consistent with every check that had evidence. */
+  score: number;
+  status: IntegrityStatus;
+  checks: Record<string, IntegrityCheck>;
+  /** Multilaterated transmitter location, for targets that fail TDOA. */
+  emitter?: { latitude: number; longitude: number; offset_km: number };
+}
+
 export interface FlightSummary {
   flight_id: string;
   icao: string;
@@ -33,6 +51,7 @@ export interface FlightSummary {
   status?: string;
   retained?: boolean;
   timestamp?: number | null;
+  integrity?: Integrity | null;
 }
 
 export interface FlightDetail extends FlightSummary {
@@ -129,6 +148,7 @@ export interface RawAntenna {
     host?: string;
     port?: number;
     format?: string;
+    position?: { latitude: number; longitude: number; altitude?: number };
   }>;
 }
 

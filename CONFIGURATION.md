@@ -12,10 +12,11 @@ String values support environment variable interpolation via `${VAR}` and `${VAR
 | `tracking` | Evaluation loop frequency, in-memory deduplication, kinematics smoothing, and telemetry retention windows |
 | `logging` | Log level severity (`debug`, `info`, `warning`, `error`) and optional file destination |
 | `home` | Receiver coordinates used as reference point for ADS-B CPR position decoding (not geofence centers) |
-| `receivers` | Named transport inputs (`dump1090`, `replay`) |
+| `receivers` | Named transport inputs (`dump1090`, `aoa`, `replay`) and where each antenna is |
 | `zones` | Named polygonal geofences and associated rule arrays |
 | `alert_colors` | Hex color overrides mapped to rule names for map rendering |
 | `web` | Browser origin policy, WebSocket limits, Beast TCP bind and client cap, API docs toggle |
+| `integrity` | Spoofing checks: weights, thresholds, opt-in public-network comparison |
 
 **Annotated configuration**
 
@@ -64,12 +65,45 @@ alert_colors:
 #   ws_rate_burst: 100         # ...with this burst allowance
 #   ws_request_workers: 4      # threads serving RPC requests
 
+# integrity:                   # all optional; defaults shown
+#   enabled: true
+#   ok_score: 0.8              # score >= ok_score: ok; < spoofed_score: spoofed
+#   spoofed_score: 0.5
+#   weights: {}                # per-check overrides, e.g. {timing: 0.2}
+#   disabled_checks: []        # e.g. [appearance]
+#   window_seconds: 120        # evidence kept per aircraft
+#   horizon_margin: 1.25       # radio horizon multiplier (refraction, ducting)
+#   max_range_km: 500
+#   rssi_excess_db: 15         # signal this much stronger than predicted fails
+#   aoa_tolerance_deg: 15
+#   tdoa_tolerance_m: 3000
+#   mode_s_altitude_tolerance_m: 100
+#   cross_network:             # sends ICAO addresses to the URL below
+#     enabled: false
+#     url: "https://api.adsb.lol/v2/hex/{icao}"
+#     min_interval_seconds: 2
+#     recheck_seconds: 120
+#     max_distance_km: 10
+
 receivers:
   main:
     type: dump1090
     host: localhost
-    port: 30002          # AVR text (*8D...;). Use 30005 + format: beast for RSSI.
-    # format: beast      # Beast binary stream
+    port: 30005          # Beast binary (default): signal level + 12 MHz clock.
+    # port: 30002        # AVR text (*8D...;): no signal level or clock, so most
+    #                    # integrity checks cannot run.
+    # position:          # Antenna location. Omit to read it from dump1090's
+    #   latitude: 35.7275  # receiver.json, falling back to `home`.
+    #   longitude: -78.6959
+    #   altitude: 95      # metres above mean sea level
+    # antenna_height: 10  # metres above ground (radio-horizon check)
+  # array:
+  #   type: aoa           # angle-of-arrival sidecar (see "Angle of arrival")
+  #   host: localhost
+  #   port: 30010
+  #   options:
+  #     bearing_offset: 0 # degrees added to every bearing; omit to learn it
+  #     # array_axis: 90  # linear arrays: bearings are mirror-ambiguous about this axis
   # recorded:
   #   type: replay
   #   options:
@@ -159,6 +193,7 @@ Rules execute independently and trigger only when every condition defined in the
 | `proximity` | m | `distance` converted to metres |
 | `heading` / `direction` | ° | Track direction; circular ranges spanning 360° (e.g. `{min: 350, max: 10}`) are handled natively |
 | `eta` | s | Travel time along projected ground track to perimeter intercept (`0` when inside) |
+| `integrity` | 0-1 | Integrity score from the spoofing checks (`1` = consistent with every check). Combine with a spatial field, e.g. `integrity: {max: 0.5}` with `distance: {max: 50}` |
 
 **Rule execution and retention controls**
 
@@ -173,7 +208,46 @@ Polygon boundaries are declared as closed `[latitude, longitude]` coordinate rin
 
 **Receiver configurations**
 
-TCP receivers connect to dump1090 using either `avr` (port 30002) or `beast` binary encoding (port 30005). Beast input populates `rssi` and the 12 MHz sample clock used when PyAerial re-encodes corrected frames for `/ws/beast` and the optional Beast TCP output. Configuring port 30005 selects Beast format automatically unless overridden by explicit `format: avr` settings.
+TCP receivers connect to dump1090 using either `beast` binary encoding (port 30005, the default) or `avr` (port 30002). Beast input populates `rssi` and the 12 MHz sample clock that the integrity checks and the re-encoded `/ws/beast` / Beast TCP output use. Port 30002 selects AVR automatically unless overridden by explicit `format: beast`.
+
+Every receiver has an antenna position, used as its CPR decode reference and for all geometry in the integrity checks. In priority order it comes from `position` in the config, from the receiver's own `receiver.json` (dump1090-fa and readsb publish their configured location at `http://<host>:8080/data/receiver.json`; override with `position_url`), or from `home`. Fetched positions refresh every 60 s, so a receiver on a vehicle keeps working. Positions from `receiver.json` carry no altitude, so set `position.altitude` when receivers sit at very different heights.
+
+**Angle of arrival (`type: aoa`)**
+
+dump1090 has no phase information, so bearings need a coherent multi-channel SDR (KrakenSDR, bladeRF 2.0, USRP B210/N310) running its own DSP. The `aoa` receiver connects to that sidecar over TCP and reads one JSON object per line:
+
+```json
+{"hex": "8d4840d6202cc371c32ce0576098", "bearing": 213.4, "elevation": 4.1, "cfo": -18250.0, "rssi": -12.5, "clock": 123456789}
+```
+
+`hex` is required; `bearing` is degrees clockwise from true north at the antenna, `elevation` degrees above the horizon, `cfo` the carrier frequency offset in Hz, `rssi` dBFS and `clock` 12 MHz ticks. Frames from the sidecar are tracked like any other receiver's. Set `options.bearing_offset` to the array's orientation error, or leave it out and PyAerial learns it from aircraft that pass the other checks. For a linear (two-element) array, set `options.array_axis` so bearings mirrored about that axis are accepted.
+
+**Integrity (anti-spoofing)**
+
+Each live aircraft gets `info.integrity`: a `score` from 0 to 1, a `status` (`ok`, `suspect`, `spoofed`, or `unknown` when no check has evidence yet), the result of every check that had evidence (`pass`, `warn` or `fail`, with a reason), and, for a target that fails TDOA with three or more receivers, the multilaterated `emitter` location. Each failing check multiplies the score by `1 - weight` (half that for `warn`). Checks are re-run every 5 s per aircraft; evidence accumulates continuously. A transition to `spoofed` is logged at WARNING with the failing checks.
+
+Station-wide references are calibrated only on aircraft that currently score `ok`: the signal-strength model per receiver, AoA bias, and receiver clock offsets.
+
+| Check | Needs | Fails when |
+|-------|-------|------------|
+| `aoa` | `aoa` receiver | Measured bearing (or elevation) disagrees with the bearing to the claimed position |
+| `tdoa` | 2+ Beast receivers | Arrival-time differences between receivers disagree with the claimed position. Receiver clocks are synchronised continuously from trusted aircraft; no GPS clock is needed |
+| `mode_s_altitude` | Mode S replies (DF0/4/16/20) | The aircraft's interrogation replies report a different altitude than its ADS-B |
+| `radio_horizon` | Altitude | A receiver hears it from beyond line of sight (`max_range_km` or 4/3-earth horizon × `horizon_margin`) |
+| `duplicate_icao` | | Positions for the address keep landing far off its track (two transmitters, one address) |
+| `cross_network` | `cross_network.enabled` | A public aggregator places the address more than `max_distance_km` away |
+| `rssi_range` | Beast, 8+ aircraft | Signal is `rssi_excess_db` stronger than the station's free-space model predicts for the claimed range (a nearby transmitter faking a distant target) |
+| `rssi_trend` | Beast | Signal stays flat while the claimed range changes by 2.5x or more |
+| `kinematics` | | Movement between positions disagrees with reported speed, track or climb rate |
+| `timing` | Beast clock | Position squitters are not randomly spaced 0.4 to 0.6 s apart, or stop alternating even/odd |
+| `replay` | | The same airborne position frame is received twice within 5 s while the aircraft moves |
+| `emitter_cluster` | Beast or `aoa` | Several aircraft share one carrier offset, one signal level that is too strong, or one bearing |
+| `mode_s_corroboration` | Mode S replies | No replies for this address while at least half the other aircraft send them (only applies under radar coverage) |
+| `message_mix` | | Airborne positions without velocity or identification messages |
+| `appearance` | | First seen less than 20 km away at altitude (aircraft normally enter at the edge of coverage) |
+| `identity` | | An N-number callsign or registration disagrees with the FAA-assigned address |
+
+`cross_network` sends ICAO addresses to the configured URL. If this station feeds that aggregator, its own data (spoofed or not) comes back, so point it at a network you do not feed.
 
 Replay receivers simulate live traffic from recorded capture files using configurable timing parameters:
 

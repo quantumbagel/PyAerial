@@ -57,6 +57,7 @@ graph TD
 
 - Ingests raw frames from dump1090 TCP sockets (AVR or Beast binary) and recorded capture files simultaneously, delegating radio DSP decoding to external daemons.
 - Decodes position, altitude, ground speed, vertical velocity, heading, callsign, and aircraft category via [`pyModeS`](https://github.com/junzis/pymodes).
+- Scores every aircraft for spoofing using each receiver's antenna position: angle of arrival, TDOA between receivers (with automatic clock sync and multilateration of the real transmitter), signal strength vs. range, radio horizon, Mode S reply cross-checks, transmit timing, kinematics, replay and identity checks.
 - Evaluates polygon geofences from inline coordinates or `.kml`, `.kmz`, and `.geojson` geometries against altitude, speed, distance, and projected track ETA.
 - Dispatches alert notifications to console logs and authenticated Discord, Slack, or generic JSON webhooks across activation, steady-state, and deactivation lifecycles.
 - Maintains active flight buffers and alert episodes in Redis, while committing qualifying flights and high-resolution tracks to SQLite using Write-Ahead Logging.
@@ -82,7 +83,7 @@ The engine connects to dump1090 via `DUMP1090_HOST` (defaulting to a feeder on t
 # Ingest from a USB RTL-SDR via the dump1090 compose service
 DUMP1090_HOST=dump1090 docker compose --profile sdr up --build
 
-# Ingest from an existing dump1090 daemon listening on host port 30002
+# Ingest from an existing dump1090 daemon (Beast output, host port 30005)
 docker compose up --build
 ```
 

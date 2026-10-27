@@ -115,6 +115,8 @@ class RedisLiveStore:
         self.client: redis.Redis | None = None
         self._conn_lock = threading.RLock()
         self._last_telemetry_ts: dict[str, float] = {}
+        # flight_id -> JSON last SET in Redis, so unchanged flights are skipped.
+        self._written_docs: dict[str, str] = {}
         self._mem = MemoryLiveBuffer()
         self._last_connect_attempt = 0.0
         self._last_ping_ok = 0.0
@@ -182,6 +184,8 @@ class RedisLiveStore:
             if current is None or (client is not None and client is not current):
                 return
             self.client = None
+            # Reconnect backfill rewrites flights; forget what was sent.
+            self._written_docs.clear()
             try:
                 current.close()
             except Exception as close_exc:
@@ -425,8 +429,19 @@ class RedisLiveStore:
             return
         if not self.writer and not self.memory_only:
             return
+        # One round trip per tick for every flight and telemetry write.
+        client = self._redis() if self.writer else None
+        pipe = client.pipeline(transaction=False) if client is not None else None
+        queued = False
         for plane in planes.values():
-            self._upsert_live_flight(plane)
+            queued = self._upsert_live_flight(plane, pipe) or queued
+        if pipe is None or not queued:
+            return
+        try:
+            pipe.execute()
+        except RedisError as exc:
+            log.error("Failed to write %d live flight(s): %s", len(planes), exc)
+            self._mark_disconnected(exc, client)
 
     def record_alert_episode(
         self,
@@ -829,6 +844,7 @@ class RedisLiveStore:
         mem_alerts = self._mem.alerts.pop(flight_id, [])
         self._mem.telemetry.pop(flight_id, None)
         self._last_telemetry_ts.pop(flight_id, None)
+        self._written_docs.pop(flight_id, None)
         self._mem.alert_episodes = [
             a for a in self._mem.alert_episodes if a.get("flight_id") != flight_id
         ]
@@ -1112,7 +1128,12 @@ class RedisLiveStore:
             except Exception as exc:
                 log.debug("Error closing Redis client: %s", exc)
 
-    def _upsert_live_flight(self, plane: dict) -> None:
+    def _upsert_live_flight(self, plane: dict, pipe: Any = None) -> bool:
+        """Update one live flight; queue Redis writes on *pipe*.
+
+        Returns whether anything was queued. Without *pipe* (and with a
+        writable Redis), the writes are executed immediately.
+        """
         info = plane.get(STORE_INFO, {})
         internal = plane.get(STORE_INTERNAL, {})
         flight_id = flight_id_for_plane(plane)
@@ -1136,32 +1157,39 @@ class RedisLiveStore:
             "info": {str(k): v for k, v in dict(info).items()},
         }
         self._mem.flights[flight_id] = flight_doc
-        self._write_telemetry_points(plane, flight_id, icao)
 
-        if not self.writer:
-            return
-        client = self._redis()
-        if client is None:
-            return
-        encoded = json_dumps(flight_doc)
-        try:
-            pipe = client.pipeline()
-            pipe.sadd(_KEY_FLIGHTS, flight_id)
-            pipe.set(_KEY_FLIGHT.format(flight_id=flight_id), encoded)
-            pipe.execute()
-        except RedisError as exc:
-            log.error("Failed to upsert live flight %s: %s", flight_id, exc)
-            self._mark_disconnected(exc, client)
+        client = None
+        own_pipe = pipe is None
+        if own_pipe and self.writer:
+            client = self._redis()
+            pipe = client.pipeline() if client is not None else None
+        queued = self._write_telemetry_points(plane, flight_id, icao, pipe)
 
-    def _write_telemetry_points(self, plane: dict, flight_id: str, icao: str) -> None:
+        if self.writer and pipe is not None:
+            encoded = json_dumps(flight_doc)
+            if self._written_docs.get(flight_id) != encoded:
+                pipe.sadd(_KEY_FLIGHTS, flight_id)
+                pipe.set(_KEY_FLIGHT.format(flight_id=flight_id), encoded)
+                self._written_docs[flight_id] = encoded
+                queued = True
+        if own_pipe and pipe is not None and queued:
+            try:
+                pipe.execute()
+            except RedisError as exc:
+                log.error("Failed to upsert live flight %s: %s", flight_id, exc)
+                self._mark_disconnected(exc, client)
+        return queued
+
+    def _write_telemetry_points(
+        self, plane: dict, flight_id: str, icao: str, pipe: Any = None
+    ) -> bool:
+        """Append new samples to memory and queue them on *pipe*. Returns queued."""
         last_written = self._last_telemetry_ts.get(flight_id, 0.0)
         samples = list(iter_telemetry_samples(plane, since=last_written))
         if not samples:
-            return
+            return False
 
-        client = self._redis() if self.writer else None
-        pipe = client.pipeline() if client is not None else None
-        key = _KEY_TELEMETRY.format(flight_id=flight_id) if pipe else None
+        key = _KEY_TELEMETRY.format(flight_id=flight_id) if pipe is not None else None
 
         for timestamp, lat, lon, alt, speed, heading in samples:
             point: dict[str, Any] = {
@@ -1178,7 +1206,7 @@ class RedisLiveStore:
                 point["heading"] = heading
 
             self._mem.telemetry[flight_id].append(point)
-            if pipe and key:
+            if pipe is not None and key:
                 pipe.zadd(key, {json_dumps(point): timestamp})
             last_written = max(last_written, timestamp)
 
@@ -1192,7 +1220,7 @@ class RedisLiveStore:
             points = self._mem.telemetry[flight_id]
             trimmed = [point for point in points if point["timestamp"] >= cutoff]
             self._mem.telemetry[flight_id] = trimmed or points[-1:]
-            if pipe and key:
+            if pipe is not None and key:
                 pipe.zremrangebyscore(key, "-inf", cutoff)
                 kept = self._mem.telemetry[flight_id]
                 if kept:
@@ -1200,12 +1228,7 @@ class RedisLiveStore:
                     last_ts = last_point.get("timestamp")
                     if isinstance(last_ts, (int, float)) and last_ts < cutoff:
                         pipe.zadd(key, {json_dumps(last_point): last_ts})
-        if pipe:
-            try:
-                pipe.execute()
-            except RedisError as exc:
-                log.error("Failed to write live telemetry for %s: %s", flight_id, exc)
-                self._mark_disconnected(exc, client)
+        return pipe is not None
 
     def _backfill_redis_from_mem(self) -> None:
         """Replay in-memory flights/telemetry/alerts after a Redis reconnect."""
