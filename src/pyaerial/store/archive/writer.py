@@ -3,6 +3,7 @@ the schema, writes finished flights and raw frames, prunes and deletes."""
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import sqlite3
@@ -131,7 +132,14 @@ def _bind_reason(reason: Any) -> str | None:
 
 
 def _json_list(value: Any) -> str | None:
-    return json_dumps(list(value)) if value else None
+    if not value:
+        return None
+    items = list(value)
+    # Receiver names and check names: strings need no NaN sanitizing (same
+    # output as json_dumps, a fraction of the cost per telemetry row).
+    if all(type(item) is str for item in items):
+        return json.dumps(items, separators=(",", ":"))
+    return json_dumps(items)
 
 
 def _finite(value: float | None) -> float | None:
@@ -151,7 +159,11 @@ def _telemetry_row(doc: dict[str, Any]) -> tuple:
         _json_list(doc.get("receivers")),
         doc.get("integrity_score"),
         doc.get("integrity_status"),
-        json_dumps(doc["integrity_flags"]) if "integrity_flags" in doc else None,
+        (
+            _json_list(doc["integrity_flags"]) or "[]"
+            if "integrity_flags" in doc
+            else None
+        ),
         doc.get("gnss_height"),
     )
 

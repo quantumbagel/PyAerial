@@ -8,7 +8,7 @@ activation and deactivation through it, in the order it notifies.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any, Protocol
 
 from pyaerial.models import Plane
@@ -135,11 +135,18 @@ class EpisodeRecorder:
 
     # -- archive side --------------------------------------------------------
 
-    def checkpoint_episodes(self) -> list[EpisodeEntry]:
-        """Outbox entries, then the latest state of every open episode."""
+    def checkpoint_episodes(
+        self, flight_ids: Collection[str] | None = None
+    ) -> list[EpisodeEntry]:
+        """Outbox entries, then the latest state of the open episodes (on
+        *flight_ids*, the flights being checkpointed; None: all)."""
         return [
             *self._outbox.values(),
-            *((flight_row(plane), doc) for plane, doc in self._open.values()),
+            *(
+                (flight_row(plane), doc)
+                for plane, doc in self._open.values()
+                if flight_ids is None or doc.get("flight_id") in flight_ids
+            ),
         ]
 
     def written(self, entries: Sequence[EpisodeEntry]) -> None:

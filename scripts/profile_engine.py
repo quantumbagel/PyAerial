@@ -8,10 +8,14 @@ replies, light-time and per-antenna 12 MHz clocks), then drives
 on a simulated clock: each tick advances ``time.time()`` by ``1 / hz``.
 
 Reports per-stage time per tick, whether the tick budget holds, and the
-cProfile hotspots. Run from the project root::
+cProfile hotspots. ``--archive PATH`` adds a real SQLite archive at *PATH*
+(a new file): live flights are checkpointed every ``CHECKPOINT_SECONDS`` of
+simulated time and finished ones finalized, and the checkpoint latency is
+reported. Run from the project root::
 
     .venv/bin/python scripts/profile_engine.py
     .venv/bin/python scripts/profile_engine.py --aircraft 500 --seconds 120
+    .venv/bin/python scripts/profile_engine.py --archive /tmp/p.db --no-profile
 """
 
 from __future__ import annotations
@@ -255,12 +259,21 @@ def main() -> int:
         "--sort", default="tottime", help="pstats sort key, e.g. tottime, cumulative"
     )
     parser.add_argument("--no-profile", action="store_true", help="timings only")
+    parser.add_argument(
+        "--archive",
+        type=Path,
+        help="write a real SQLite archive to this new file and time checkpoints",
+    )
     args = parser.parse_args()
+    if args.archive is not None and args.archive.exists():
+        parser.error(f"--archive {args.archive} exists; give a new file")
 
     import requests
 
     import pyaerial.enrich.aircraft_db as aircraft_db_mod
     from pyaerial.engine import Engine
+    from pyaerial.engine.archiver import CHECKPOINT_SECONDS
+    from pyaerial.store import ArchiveWriter
 
     def _offline(*_a, **_k):
         raise requests.ConnectionError("profiling: network disabled")
@@ -280,10 +293,35 @@ def main() -> int:
 
     tmp = tempfile.TemporaryDirectory()
     engine = Engine(
-        config, isolated=True, aircraft_db_path=str(Path(tmp.name) / "a.db")
+        config,
+        isolated=True,
+        aircraft_db_path=str(Path(tmp.name) / "a.db"),
+        history_store=ArchiveWriter(args.archive) if args.archive else None,
     )
     timings: dict[str, list[float]] = defaultdict(list)
     current = _instrument(engine, timings)
+    # Each tick's checkpoint slice: (seconds, flights, samples).
+    checkpoints: list[tuple[float, int, int]] = []
+    real_checkpoint = engine.archiver.checkpoint
+    real_write = engine.history_store.checkpoint
+    written: list[tuple[int, int]] = []
+
+    def counted_write(flights, episodes=(), *, now):
+        flights = list(flights)
+        written.append((len(flights), sum(len(item.telemetry) for item in flights)))
+        return real_write(flights, episodes, now=now)
+
+    def timed_checkpoint(now=None, *, force=False):
+        written.clear()
+        start = time.perf_counter()
+        done = real_checkpoint(now, force=force)
+        if written:
+            checkpoints.append((time.perf_counter() - start, *written[-1]))
+        return done
+
+    if args.archive:
+        engine.history_store.checkpoint = counted_write  # type: ignore[method-assign]
+        engine.archiver.checkpoint = timed_checkpoint  # type: ignore[method-assign]
     totals: list[float] = []
     dropped = 0
     frames_in = 0
@@ -355,6 +393,24 @@ def main() -> int:
         f"{'TOTAL tick':32} {mean_total * 1e3:9.1f} {p95_total * 1e3:9.1f} "
         f"{max(steady) * 1e3:9.1f}"
     )
+    if args.archive:
+        # Steady state: after the first full round (every flight checkpointed
+        # once; the first slices carry no settled samples yet).
+        first_round = int((CHECKPOINT_SECONDS + 10) * args.hz)
+        steady_cps = checkpoints[first_round:] or checkpoints
+        if steady_cps:
+            secs = sorted(cp[0] for cp in steady_cps)
+            p50 = secs[len(secs) // 2]
+            p95 = secs[int(0.95 * (len(secs) - 1))]
+            print(
+                f"\nArchive checkpoint slices (each flight every "
+                f"{CHECKPOINT_SECONDS:g} s, spread over the ticks; "
+                f"{len(steady_cps)} steady of {len(checkpoints)}): "
+                f"p50 {p50 * 1e3:.1f} ms, p95 {p95 * 1e3:.1f} ms, "
+                f"max {secs[-1] * 1e3:.1f} ms; "
+                f"{statistics.fmean(cp[1] for cp in steady_cps):,.0f} flights and "
+                f"{statistics.fmean(cp[2] for cp in steady_cps):,.0f} samples each"
+            )
     over = sum(1 for value in steady if value > tick)
     print(
         f"\nBudget {tick * 1e3:.0f} ms/tick: "

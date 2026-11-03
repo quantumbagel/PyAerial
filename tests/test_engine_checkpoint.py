@@ -136,3 +136,26 @@ def test_split_starts_a_new_live_row_linked_to_the_segment(engine):
         engine,
         "SELECT flight_id, status, previous_flight_id FROM flights ORDER BY start_time",
     ) == [(old_id, "completed", None), (plane.flight_id, "live", old_id)]
+
+
+def test_checkpoints_are_spread_over_the_ticks(engine):
+    """At 2 Hz each tick writes the most overdue tenth of the flights, so every
+    flight is checkpointed every CHECKPOINT_SECONDS without one big burst."""
+    now = time.time()
+    for n in range(20):
+        engine.tracker.planes[f"A{n:05d}"] = track_plane(
+            f"a{n:05d}", first=now - 30, samples=30
+        )
+    ticks = round(archiver_mod.CHECKPOINT_SECONDS * engine.config.tracking.hz)
+    assert ticks == 10
+    sizes = []
+    for tick in range(ticks):
+        before = len(_rows(engine, "SELECT flight_id FROM flights"))
+        assert engine.archiver.checkpoint(now + tick * 0.5)
+        sizes.append(len(_rows(engine, "SELECT flight_id FROM flights")) - before)
+    assert sizes == [2] * 10
+    # Nothing is due again until CHECKPOINT_SECONDS after its last one.
+    assert not engine.archiver.checkpoint(now + 4.9)
+    assert engine.archiver.checkpoint(now + archiver_mod.CHECKPOINT_SECONDS)
+    first = engine.tracker.planes["A00000"].track.checkpoint_at
+    assert first == now + archiver_mod.CHECKPOINT_SECONDS
