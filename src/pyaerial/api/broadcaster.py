@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -354,6 +354,8 @@ class LiveBroadcaster:
         self._state_lock = asyncio.Lock()
         self._budget = _Budget(_SERVER_QUEUE_BYTES)
         self._loop: asyncio.AbstractEventLoop | None = None
+        #: Clients disconnected for backpressure, by reason (for /metrics).
+        self._dropped: Counter[str] = Counter()
 
     @property
     def client_count(self) -> int:
@@ -369,6 +371,11 @@ class LiveBroadcaster:
     def queued_bytes(self) -> int:
         """Server-wide bytes of per-client messages queued or being sent."""
         return self._budget.used
+
+    @property
+    def dropped_clients(self) -> dict[str, int]:
+        """Clients disconnected for backpressure since start, by reason."""
+        return dict(self._dropped)
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -447,8 +454,9 @@ class LiveBroadcaster:
         caller holds the request's in-flight slot until then, so a client that
         does not read cannot pile up responses.
         """
-        loop = asyncio.get_running_loop()
-        return self._put(websocket, _Queued("response", text, loop.create_future()))
+        done = asyncio.get_running_loop().create_future()
+        queued = self._put(websocket, _Queued("response", text, done))
+        return done if queued is not None else None
 
     def _put(self, websocket: WebSocket, item: _Queued) -> asyncio.Future | bool | None:
         client = self._clients.get(websocket)
@@ -462,6 +470,7 @@ class LiveBroadcaster:
         item.resolve(False)
         if item.kind == "response":
             log.warning("WebSocket client is not reading responses; disconnecting it")
+            self._dropped["client_too_slow"] += 1
             self._drop(websocket, "client too slow")
         return None
 
@@ -480,6 +489,7 @@ class LiveBroadcaster:
                 self._budget.used,
                 self._budget.limit,
             )
+            self._dropped["server_budget"] += 1
             self._drop(victim, "server send budget exceeded")
             if victim is websocket:
                 item.resolve(False)

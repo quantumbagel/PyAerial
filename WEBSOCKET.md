@@ -13,9 +13,19 @@
 | `GET /api` | JSON | Discovery document, including the active `limits` |
 | `GET /health` | JSON | Liveness: `{"status": "ok"}` |
 | `GET /ready` | JSON | `status`, `redis`, `history`, `engine`; HTTP 503 while Redis is unreachable |
+| `GET /metrics` | Prometheus text 0.0.4 | Engine and portal metrics (below); off with `web.metrics: false` |
 | `/docs`, `/redoc`, `/openapi.json` | HTML / JSON | Only with `web.enable_docs: true` |
 
 `/ws/raw`, `/ws/beast` and Beast TCP send no `hello`, accept no RPC and send no `ping`.
+
+**Metrics**
+
+`/metrics` costs one Redis GET (the `live:engine` heartbeat) plus the `/ready` checks. Point Prometheus at it directly (e.g. `http://127.0.0.1:10090/metrics`).
+
+- Portal: `pyaerial_build_info{version}` (always 1), `pyaerial_redis_up`, `pyaerial_archive_up` (as in `/ready`), `pyaerial_websocket_connections{endpoint}` (`/ws/live`, including `/ws`; `/ws/raw`; `/ws/beast`), `pyaerial_beast_tcp_clients`, `pyaerial_websocket_queued_bytes` (`/ws/live` responses and telemetry waiting to be sent), `pyaerial_websocket_rate_limited_total` (requests answered `rate_limited`), `pyaerial_websocket_clients_dropped_total{reason}` (closes with `1013`: `client_too_slow` and `server_budget` on `/ws/live`, `feed_behind` on `/ws/raw` and `/ws/beast`) and `pyaerial_beast_tcp_clients_dropped_total{reason}` (`feed_behind`, `not_reading`).
+- Engine, from the heartbeat: `pyaerial_engine_up` (1 while the heartbeat is fresh). Only while it is 1: `pyaerial_engine_start_time_seconds`, `pyaerial_engine_planes_tracked`, `pyaerial_engine_history_up`, `pyaerial_engine_history_pending`, and the counters `pyaerial_engine_frames_received_total`, `_frames_dropped_total`, `_messages_processed_total`, `_pending_evicted_total`, `_receiver_restarts_total{receiver}` and `_stage_errors_total{stage}`. Counters restart from 0 with the engine.
+
+Labels carry receiver names, never hosts, ports or credentials. `web.allowed_hosts` applies as on every route; a request with a browser `Origin` must pass the WebSocket origin rules, else HTTP 403.
 
 **Origins**
 

@@ -465,6 +465,9 @@ class WebConfig(_Strict):
     allowed_hosts: list[str] = Field(default_factory=list)
     # Serve FastAPI's /docs, /redoc and /openapi.json.
     enable_docs: bool = False
+    # Serve Prometheus /metrics (engine and portal counters, no hosts or
+    # secrets). Turn off if the portal is public and they should not be.
+    metrics: bool = True
     beast_host: str = "127.0.0.1"
     # Not 30005: that is dump1090's Beast port, which the engine reads by
     # default; re-serving there would feed the engine its own output.

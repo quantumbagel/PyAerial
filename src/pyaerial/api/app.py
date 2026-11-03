@@ -20,6 +20,7 @@ from pyaerial.api.broadcaster import _CLIENT_QUEUE_BYTES as CLIENT_QUEUE_BYTES
 from pyaerial.api.broadcaster import LiveBroadcaster
 from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.api.payloads import OfflineAircraftDB
+from pyaerial.api.metrics import WebSocketStats, add_metrics_route
 from pyaerial.api.queries import engine_is_live
 from pyaerial.api.security import (
     ConnectionLimiter,
@@ -133,6 +134,7 @@ def create_app(
     # client could otherwise multiply the per-connection rate by opening more).
     # Kept after disconnect until refilled, so reconnecting resets nothing.
     ip_buckets = BucketRegistry(web.ws_rate_limit_per_ip, web.ws_rate_burst_per_ip)
+    websockets = WebSocketStats()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -356,6 +358,7 @@ def create_app(
                 delay = bucket.reserve(_MAX_THROTTLE_SECONDS)
                 ip_delay = ip_bucket.reserve(_MAX_THROTTLE_SECONDS)
                 if delay is None or ip_delay is None:
+                    websockets.rate_limited += 1
                     broadcaster.send(
                         websocket, _error(req_id, "rate_limited", "Rate limit exceeded")
                     )
@@ -420,10 +423,19 @@ def create_app(
         finally:
             limiter.release(ip)
 
-    app.add_api_websocket_route("/ws/live", ws_live)
-    app.add_api_websocket_route("/ws", ws_live)
-    app.add_api_websocket_route("/ws/beast", ws_beast)
-    app.add_api_websocket_route("/ws/raw", ws_raw)
+    app.add_api_websocket_route("/ws/live", websockets.track("/ws/live", ws_live))
+    app.add_api_websocket_route("/ws", websockets.track("/ws/live", ws_live))
+    app.add_api_websocket_route("/ws/beast", websockets.track("/ws/beast", ws_beast))
+    app.add_api_websocket_route("/ws/raw", websockets.track("/ws/raw", ws_raw))
+    add_metrics_route(
+        app,
+        config=config,
+        history=history,
+        live_store=live_store,
+        broadcaster=broadcaster,
+        beast_hub=beast_hub,
+        websockets=websockets,
+    )
 
     mount_spa(app)
     return app

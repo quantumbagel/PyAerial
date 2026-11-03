@@ -13,6 +13,7 @@ import logging
 import socket
 import time
 from collections import Counter
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import WebSocket
@@ -93,10 +94,23 @@ class BeastHub:
         self._server: asyncio.Server | None = None
         #: Live TCP connections: writer -> handler task.
         self._tcp_clients: dict[asyncio.StreamWriter, asyncio.Task] = {}
+        #: Clients dropped for falling behind or not reading (for /metrics).
+        self._ws_dropped: Counter[str] = Counter()
+        self._tcp_dropped: Counter[str] = Counter()
 
     @property
     def tcp_client_count(self) -> int:
         return len(self._tcp_clients)
+
+    @property
+    def websocket_drops(self) -> dict[str, int]:
+        """/ws/raw and /ws/beast clients dropped since start, by reason."""
+        return dict(self._ws_dropped)
+
+    @property
+    def tcp_drops(self) -> dict[str, int]:
+        """Beast TCP feeders dropped since start, by reason."""
+        return dict(self._tcp_dropped)
 
     async def start(self) -> None:
         store = self.live_store
@@ -121,7 +135,7 @@ class BeastHub:
             self._server = None
             self.port = None
             return
-        sockets = self._server.sockets or []
+        sockets: Sequence[socket.socket] = self._server.sockets or []
         if sockets:
             self.port = int(sockets[0].getsockname()[1])
         log.info("Beast TCP listening on %s:%s (dump1090-compatible)", self.host, self.port)
@@ -284,6 +298,7 @@ class BeastHub:
                 chunk = await queue.get()
                 if chunk is None:
                     if queue.cut_off:
+                        self._ws_dropped["feed_behind"] += 1
                         detach(queue)
                         await _close_websocket(websocket, label)
                     return
@@ -370,6 +385,8 @@ class BeastHub:
                 chunk = await queue.get()
                 if chunk is None:
                     stuck = queue.cut_off
+                    if stuck:
+                        self._tcp_dropped["feed_behind"] += 1
                     break
                 writer.write(chunk)
                 # A feeder that stops reading would otherwise block here (and
@@ -379,6 +396,7 @@ class BeastHub:
             raise
         except TimeoutError:
             stuck = True
+            self._tcp_dropped["not_reading"] += 1
             log.info(
                 "Beast TCP client %s stopped reading; dropping it",
                 writer.get_extra_info("peername"),
