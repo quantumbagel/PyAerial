@@ -402,6 +402,21 @@ class LiveWriter(LiveQueries):
             log.warning("Failed to drop archived episodes from Redis: %s", exc)
             self._mark_disconnected(exc, client)
 
+    def replace_outbox(self, entries: Mapping[str, Any]) -> None:
+        """Make the Redis outbox exactly *entries* (unreadable ones dropped)."""
+        client = self._redis() if self.writer else None
+        if client is None:
+            return
+        try:
+            pipe = client.pipeline()
+            pipe.delete(KEY_EPISODE_OUTBOX)
+            for alert_id, entry in entries.items():
+                pipe.hset(KEY_EPISODE_OUTBOX, alert_id, json_dumps(entry))
+            pipe.execute()
+        except RedisError as exc:
+            log.error("Failed to rewrite the unarchived episode outbox: %s", exc)
+            self._mark_disconnected(exc, client)
+
     def load_outbox(self) -> list[Any]:
         """Episodes a previous engine could not archive, as saved."""
         client = self._redis()

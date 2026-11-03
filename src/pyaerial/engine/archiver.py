@@ -177,7 +177,7 @@ class EpisodeLog(Protocol):
         self, entries: Sequence[tuple[dict[str, Any], dict[str, Any]]]
     ) -> None: ...
 
-    def drain(self) -> bool: ...
+    def drain(self, flight_id: str | None = None) -> bool: ...
 
     def restore_outbox(self) -> int: ...
 
@@ -323,7 +323,8 @@ class FlightArchiver:
             if store.disabled:
                 # Writes nothing: skip the policy work.
                 return store.finalize_plane(plane, alerts=[], retained=True)
-            if self._episodes is not None and not self._episodes.drain():
+            # Only this flight's unarchived episodes must be in first.
+            if self._episodes is not None and not self._episodes.drain(flight_id):
                 return False
             alerts = [_closed_alert(doc) for doc in store.flight_alerts(flight_id)]
             retained = self.retain(plane, [*alerts, *self._carried.get(flight_id, ())])
@@ -464,6 +465,11 @@ class FlightArchiver:
         if archive.disabled:
             return False
         if not force and not self._history_retry_due():
+            return False
+        # Unarchived episodes first, in their own transactions: one the
+        # archive rejects must never fail the checkpoint.
+        if self._episodes is not None and not self._episodes.drain():
+            self.back_off()
             return False
         now = time.time() if now is None else now
         until = now - SETTLE_SECONDS

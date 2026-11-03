@@ -17,6 +17,7 @@ from pyaerial.receivers.frames import RawFrame, frame_fields
 from pyaerial.store.archive._conn import (
     ArchiveConnection,
     HistoryUnavailable,
+    RowRejected,
     unavailable,
 )
 from pyaerial.store.archive.rows import (
@@ -101,6 +102,19 @@ _ALERT_UPSERT = """
         start_flight_id = COALESCE(alerts.start_flight_id, excluded.start_flight_id)
     WHERE NOT (alerts.active = 0 AND excluded.active = 1)
 """
+
+
+# Errors caused by what is written, not by the archive's state (an outage is
+# an OperationalError: locked, disk full, I/O, or HistoryUnavailable).
+_CONTENT_ERRORS = (
+    sqlite3.IntegrityError,
+    sqlite3.InterfaceError,
+    sqlite3.ProgrammingError,
+    sqlite3.DataError,
+    KeyError,
+    TypeError,
+    ValueError,
+)
 
 
 class FlightCheckpoint(NamedTuple):
@@ -469,6 +483,8 @@ class ArchiveWriter(ArchiveConnection):
         The flight's ``live`` row is written first (created if this is its
         first write), so an episode never exists without its flight. False
         when the archive is unavailable (the caller keeps them for retry).
+        Raises :class:`RowRejected` (nothing written) when an item cannot be
+        written because of its content.
         """
         if self.disabled or not episodes:
             return True
@@ -478,6 +494,8 @@ class ArchiveWriter(ArchiveConnection):
             with self._session("alert episodes") as conn, conn:
                 conn.execute("BEGIN IMMEDIATE")
                 self._write_episodes(conn, episodes)
+        except _CONTENT_ERRORS as exc:
+            raise RowRejected(f"{type(exc).__name__}: {exc}") from exc
         except (sqlite3.Error, HistoryUnavailable) as exc:
             log.error("Failed to record alert episodes: %s", exc)
             self._last_error = f"archive write failed: {exc}"

@@ -57,6 +57,9 @@ class NullLiveWriter:
     def load_outbox(self) -> list[Any]:
         return []
 
+    def replace_outbox(self, entries: Mapping[str, Any]) -> None:
+        pass
+
     def clear_cache(self) -> int:
         return 0
 

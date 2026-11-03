@@ -236,3 +236,135 @@ def test_crash_during_an_outage_replays_the_outbox_and_closes_once(
     assert alerts == [("A1", 0)]
     assert flights == [("interrupted",)]  # a retain rule alerted on it
     assert not fake.hashes.get("live:episode_outbox")
+
+
+# --- A bad outbox entry never wedges the archive -----------------------------
+
+
+def test_poisoned_redis_outbox_entry_is_dropped_at_restore(fake, tmp_path, caplog):
+    """A flight row without start_time used to fail every checkpoint, recovery
+    and finalize for good (the reviewer's probe)."""
+    from helpers import pad_config
+    from pyaerial.store.codec import flight_row
+
+    config = pad_config(tmp_path)
+    plane = track_plane(first=time.time() - 600, samples=30)
+    bad_row = flight_row(plane)
+    del bad_row["start_time"]
+    doc = {
+        "alert_id": "BAD",
+        "flight_id": plane.flight_id,
+        "icao": "abc123",
+        "zone": "pad",
+        "rule": "warn",
+        "active": True,
+        "activated_at": 1.0,
+        "last_updated": 2.0,
+    }
+    import json
+
+    fake.hashes["live:episode_outbox"] = {"BAD": json.dumps([bad_row, doc])}
+    engine = Engine(config, aircraft_db_path=str(tmp_path / "a.db"))
+    try:
+        assert engine.episodes.outbox == {}
+        assert engine.episodes.dropped == 1
+        assert engine._counters()["episodes_dropped"] == 1
+        assert not fake.hashes.get("live:episode_outbox")
+        assert engine.archiver._recovered
+        mine = track_plane(first=time.time() - 60, samples=30)
+        mine.info.icao = "def456"
+        engine.tracker.planes["DEF456"] = mine
+        engine.tick()
+        assert _rows(engine, "SELECT status FROM flights") == [("live",)]
+        engine.tracker.planes.clear()
+        assert engine.archiver.finalize(mine)
+        assert _rows(engine, "SELECT status FROM flights") == [("completed",)]
+    finally:
+        engine.shutdown()
+
+
+def test_rejected_entry_is_retried_alone_then_quarantined(engine, monkeypatch, caplog):
+    from pyaerial.store import recorder as recorder_mod
+    from pyaerial.store.archive import RowRejected
+
+    good = _plane(engine)
+    other = track_plane(first=time.time() - 30, samples=30)
+    other.info.icao = "def456"
+    rec = engine.episodes
+    down = [True]
+    real = engine.history_store.upsert_episodes
+
+    def upsert(entries):
+        if down[0]:
+            return False
+        if any(doc["alert_id"] == "BAD" for _flight, doc in entries):
+            raise RowRejected("IntegrityError: bad row")
+        return real(entries)
+
+    monkeypatch.setattr(engine.history_store, "upsert_episodes", upsert)
+    rec.record_alert_episode(good, _META, {}, alert_id="A1", activated_at=100.0)
+    rec.record_alert_episode(other, _META, {}, alert_id="BAD", activated_at=100.0)
+    assert list(rec.outbox) == ["A1", "BAD"]
+    assert rec.drain() is False  # an outage: nothing counted against them
+    assert rec.dropped == 0 and list(rec.outbox) == ["A1", "BAD"]
+    down[0] = False
+    # The checkpoint writes the good entry and carries on (BAD's flight is
+    # not tracked, so no refresh supersedes its entry).
+    assert engine.archiver.checkpoint()
+    assert list(rec.outbox) == ["BAD"]
+    assert _rows(engine, "SELECT alert_id FROM alerts") == [("A1",)]
+    with caplog.at_level("ERROR", logger="pyaerial.store"):
+        for _ in range(recorder_mod.QUARANTINE_AFTER):
+            rec.drain()
+    assert rec.outbox == {} and rec.dropped == 1
+    assert "rejected it 3 times" in caplog.text
+
+
+def test_finalize_waits_only_for_its_own_unarchived_episodes(engine, monkeypatch):
+    from pyaerial.store.archive import RowRejected
+
+    plane = _plane(engine)
+    other = track_plane(first=time.time() - 30, samples=30)
+    other.info.icao = "def456"
+    real = engine.history_store.upsert_episodes
+    calls: list[set[str]] = []
+
+    def upsert(entries):
+        calls.append({doc["flight_id"] for _flight, doc in entries})
+        if any(doc["flight_id"] == other.flight_id for _flight, doc in entries):
+            raise RowRejected("bad")
+        return real(entries)
+
+    monkeypatch.setattr(engine.history_store, "upsert_episodes", upsert)
+    engine.episodes.record_alert_episode(
+        other, _META, {}, alert_id="B1", activated_at=100.0
+    )
+    calls.clear()
+    engine.tracker.remove_planes(["ABC123"])
+    assert engine.archiver.finalize(plane)
+    assert all(other.flight_id not in flights for flights in calls)
+    assert "B1" in engine.episodes.outbox
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda f, d: f.pop("start_time"),
+        lambda f, d: f.update(start_time="soon"),
+        lambda f, d: d.pop("alert_id"),
+        lambda f, d: d.update(flight_id="other-1"),
+        lambda f, d: d.update(active="yes"),
+        lambda f, d: d.update(activated_at=None),
+        lambda f, d: f.update(info={"not": "json text"}),
+    ],
+)
+def test_valid_entry_rejects_incomplete_entries(mutate):
+    from pyaerial.store.codec import alert_episode_doc, flight_row
+    from pyaerial.store.recorder import valid_entry
+
+    plane = track_plane(first=100.0, samples=3)
+    flight = flight_row(plane)
+    doc = alert_episode_doc(plane, _META, {}, alert_id="A1", activated_at=101.0, active=True)
+    assert valid_entry([dict(flight), dict(doc)]) is not None
+    mutate(flight, doc)
+    assert valid_entry([flight, doc]) is None

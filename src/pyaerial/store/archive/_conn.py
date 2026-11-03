@@ -23,6 +23,11 @@ class HistoryUnavailable(RuntimeError):
     """Configured SQLite archive cannot be read."""
 
 
+class RowRejected(ValueError):
+    """The archive is up but refuses a row because of its content (a missing
+    key, a wrong type, a constraint): retrying the same row cannot help."""
+
+
 def unavailable(action: str, exc: sqlite3.Error | None = None) -> HistoryUnavailable:
     if exc is not None:
         log.warning("History database unavailable for %s: %s", action, exc)

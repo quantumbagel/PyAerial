@@ -371,7 +371,7 @@ These keys are internal (see Compatibility in the [README](README.md)). They are
 | `seen_at`, `token` | Last write (unix seconds); the owning engine's ID |
 | `history` | Archive health: `ok`, `down` or `disabled` |
 | `history_error`, `history_pending` | Last archive error; flights waiting to be archived |
-| `counters` | Since `counters.since` (engine start): `frames_received` (taken off the intake queue), `frames_dropped` (intake queue full), `messages_processed`, `pending_evicted` (deferred flights dropped from memory while the archive was down; their checkpointed part is kept as interrupted), `episodes_dropped` (alert episodes dropped from a full outbox while the archive was down), `receiver_restarts` (per receiver), `stage_errors` (per engine stage). Plus `planes_tracked`, the current count |
+| `counters` | Since `counters.since` (engine start): `frames_received` (taken off the intake queue), `frames_dropped` (intake queue full), `messages_processed`, `pending_evicted` (deferred flights dropped from memory while the archive was down; their checkpointed part is kept as interrupted), `episodes_dropped` (alert episodes dropped from the unarchived outbox: it was full, or the archive rejected an entry 3 times, or a restored entry was unreadable; logged at ERROR), `receiver_restarts` (per receiver), `stage_errors` (per engine stage). Plus `planes_tracked`, the current count |
 
 **Research archive (SQLite)**
 

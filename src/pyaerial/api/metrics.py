@@ -56,7 +56,7 @@ _ENGINE_COUNTERS = (
     ),
     (
         "episodes_dropped",
-        "Alert episodes dropped from a full outbox while the archive was down.",
+        "Alert episodes dropped from the unarchived outbox (full, or rejected).",
     ),
 )
 
