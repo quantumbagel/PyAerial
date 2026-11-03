@@ -18,7 +18,7 @@ from pyaerial.api.payloads import (
 )
 from pyaerial.constants import LIVE_ENGINE_TTL_SECONDS
 from pyaerial.enrich.aircraft_db import AircraftDB
-from pyaerial.store.history import HistoryStore, HistoryUnavailable
+from pyaerial.store.archive import ArchiveReader, HistoryUnavailable
 from pyaerial.store.live import LiveStore
 from pyaerial.store.redis_live import LiveUnavailable
 
@@ -52,7 +52,7 @@ def _normalize_q(q: str | None) -> str | None:
     return text or None
 
 
-def _history_available(history: HistoryStore | None) -> bool:
+def _history_available(history: ArchiveReader | None) -> bool:
     return bool(history is not None and history.ping())
 
 
@@ -91,7 +91,7 @@ def engine_is_live(live_store: Any | None, now: float | None = None) -> bool:
     return stamp - seen < LIVE_ENGINE_TTL_SECONDS
 
 
-def _require_history(history: HistoryStore | None) -> HistoryStore | None:
+def _require_history(history: ArchiveReader | None) -> ArchiveReader | None:
     """Return the archive, or raise if it is configured but unreadable.
 
     ``None`` means no archive is attached (empty result is correct). A store
@@ -116,7 +116,7 @@ def get_live_flights(
 
 
 def get_history_flights(
-    history: HistoryStore | None,
+    history: ArchiveReader | None,
     aircraft_db: AircraftDB | None,
     *,
     skip: int = 0,
@@ -218,7 +218,7 @@ def get_flight_detail(
     view: str,
     *,
     live_store: LiveStore | None,
-    history: HistoryStore | None,
+    history: ArchiveReader | None,
     aircraft_db: AircraftDB | None,
 ) -> dict[str, Any] | None:
     if view == "live":
@@ -291,7 +291,7 @@ def get_telemetry(
     since: float,
     *,
     live_store: LiveStore | None,
-    history: HistoryStore | None,
+    history: ArchiveReader | None,
     limit: int | None = None,
 ) -> TelemetryPoints:
     # Cap one request so a long flight cannot produce a multi-MB response.
@@ -341,7 +341,7 @@ def get_alerts(
     limit: int = 0,
     skip: int = 0,
     live_store: LiveStore | None,
-    history: HistoryStore | None,
+    history: ArchiveReader | None,
     active_only: bool | None = None,
 ) -> list[dict[str, Any]]:
     if view == "live":
@@ -376,7 +376,7 @@ def get_alerts(
 
 def get_stats(
     live_store: LiveStore | None,
-    history: HistoryStore | None,
+    history: ArchiveReader | None,
 ) -> dict[str, Any]:
     live_flights = 0
     active_alerts = 0

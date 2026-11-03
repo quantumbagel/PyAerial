@@ -35,7 +35,7 @@ from pyaerial.models import (
     Verdict,
     sample_provenance,
 )
-from pyaerial.store.history import build_telemetry_docs
+from pyaerial.store.codec import build_telemetry_docs
 from pyaerial.store.redis_live import LiveUnavailable, RedisLiveStore
 from pyaerial.urls import redact_uri
 

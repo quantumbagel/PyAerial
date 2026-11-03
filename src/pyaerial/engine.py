@@ -30,9 +30,9 @@ from pyaerial.pipeline import PlaneCalculator
 from pyaerial.receivers import RawFrame, Receiver, available_receivers, create_receiver
 from pyaerial.receivers.frames import es_crc_ok, merge_receiver_frames, raw_payload
 from pyaerial.receivers.positions import ReceiverPositions
-from pyaerial.store import HistoryStore, RedisLiveStore
+from pyaerial.store import ArchiveWriter, RedisLiveStore
+from pyaerial.store.archive.writer import FRAME_PRUNE_BATCH
 from pyaerial.store.codec import plane_from_alert_docs
-from pyaerial.store.history import FRAME_PRUNE_BATCH
 from pyaerial.store.redis_live import LiveUnavailable
 from pyaerial.tracker import Tracker
 
@@ -193,7 +193,7 @@ class Engine:
         self._last_status_log = 0.0
         # -inf, not 0: monotonic() can be under the interval on a fresh boot.
         self._last_frame_prune = float("-inf")
-        self.history_store = HistoryStore(config.database.path, disabled=isolated)
+        self.history_store = ArchiveWriter(config.database.path, disabled=isolated)
         self.calculator = PlaneCalculator(
             config, self.polygons, self.aircraft_db, self.live_store
         )

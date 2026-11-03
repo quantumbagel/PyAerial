@@ -3,6 +3,7 @@ restarts and crashes, ICAO reuse, orphan sweeps and flight handovers."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -32,6 +33,7 @@ from pyaerial.constants import (
 from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 from pyaerial.pipeline import PlaneCalculator
+from pyaerial.store.archive import ArchiveReader
 from pyaerial.store.redis_live import LiveUnavailable, RedisLiveStore
 
 # --- Engine restarts and crashes ---------------------------------------------
@@ -594,7 +596,8 @@ def test_startup_closes_active_alerts_of_flights_that_never_went_live(
         assert "a1" not in fake.hashes.get("live:active_alerts", {})
         assert f"live:alerts:{fid}" not in fake.hashes
         # The completed episode is archived with its flight.
-        archived = engine.history_store.get_alerts(flight_id=fid)
+        with contextlib.closing(ArchiveReader(engine.history_store.path)) as archive:
+            archived = archive.get_alerts(flight_id=fid)
         assert [a["alert_id"] for a in archived] == ["a1"]
         assert archived[0]["active"] is False and archived[0]["deactivated_at"]
     finally:
@@ -646,9 +649,8 @@ def test_restart_archives_every_episode_of_a_leftover_flight(fake, tmp_path):
     }
     engine = Engine(pad_config(tmp_path), aircraft_db_path=str(tmp_path / "a.db"))
     try:
-        archived = {
-            a["alert_id"]: a for a in engine.history_store.get_alerts(flight_id=fid)
-        }
+        with contextlib.closing(ArchiveReader(engine.history_store.path)) as archive:
+            archived = {a["alert_id"]: a for a in archive.get_alerts(flight_id=fid)}
         assert set(archived) == {"earlier", "current"}
         assert archived["current"]["active"] is False
     finally:
@@ -668,7 +670,8 @@ def test_persist_defers_when_alerts_cannot_be_read(fake, tmp_path, monkeypatch):
             engine._persist(fid, fine_track_plane("abc123", 1_700_000_000.0), from_snapshot=True)
             is False
         )
-        assert engine.history_store.get_flight(fid) is None
+        with contextlib.closing(ArchiveReader(engine.history_store.path)) as archive:
+            assert archive.get_flight(fid) is None
     finally:
         monkeypatch.undo()
         engine.shutdown()

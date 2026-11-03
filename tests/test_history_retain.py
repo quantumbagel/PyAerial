@@ -14,7 +14,7 @@ from pyaerial.constants import (
     STORE_LONG,
 )
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState, Verdict
-from pyaerial.store.history import HistoryStore
+from pyaerial.store.archive import ArchiveWriter
 
 RULES_ONLY = ArchiveConfig(flights="rules")
 
@@ -250,7 +250,7 @@ def test_archive_all_still_keeps_retain_rule_alerts_below_min_positions():
 
 
 def test_disabled_store_finalize_succeeds_without_sqlite():
-    store = HistoryStore(":memory:", disabled=True)
+    store = ArchiveWriter(":memory:", disabled=True)
     assert store.finalize_plane(_plane(), alerts=[]) is True
 
 

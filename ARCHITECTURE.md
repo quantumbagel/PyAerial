@@ -61,7 +61,12 @@ A finished flight is written to the archive before its Redis copy is popped (`_f
 - `_retry_orphan_live_flights`: each tick, archives Redis flights nobody tracks.
 - `RedisLiveStore.retry_pending_pops`: retries failed Redis deletes.
 
-Archive schema upgrades (`store/history.py`) run in one transaction.
+The archive package `store/archive/`:
+
+- `schema.py`: DDL, `SCHEMA_VERSION`, migrations and inspection helpers (functions over a `sqlite3` connection). An upgrade runs in one transaction.
+- `writer.py`: `ArchiveWriter`, for the engine and `pyaerial reset`. Creates and upgrades the schema, finalizes flights (a re-archive wins only with a longer time span, decided under `BEGIN IMMEDIATE`), writes and prunes raw frames, reports `health()`.
+- `reader.py`: `ArchiveReader`, for the portal. Opens the file `mode=ro`, never runs DDL, and reports `missing`, `needs_upgrade`, `incompatible` or `down` in `state`.
+- `_conn.py`: the connection, lock and reconnect backoff they share. Plane-to-row conversion is in `store/codec.py`.
 
 **Adding a receiver or alerter**
 

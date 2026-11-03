@@ -6,7 +6,7 @@ import sys
 from typing import Any, Literal
 
 from pyaerial.config import load_config
-from pyaerial.store.history import HistoryStore, HistoryUnavailable
+from pyaerial.store.archive import ArchiveWriter, HistoryUnavailable
 from pyaerial.store.live import engine_is_live
 from pyaerial.view.store import open_live_session
 
@@ -36,7 +36,7 @@ def run_reset(
     force: bool = False,
 ) -> None:
     config = load_config(config_path)
-    history = HistoryStore(config.database.path)
+    history = ArchiveWriter(config.database.path)
     live_store = open_live_session(config)
     try:
         code = _reset(history, live_store, icao=icao, yes=yes, force=force)
@@ -48,7 +48,7 @@ def run_reset(
 
 
 def reset_history(
-    history: HistoryStore | None,
+    history: ArchiveWriter | None,
     live_store: Any = None,
     *,
     icao: str | None = None,
@@ -85,7 +85,7 @@ def _confirm(prompt: str, yes: bool) -> bool:
 
 
 def _reset(
-    history: HistoryStore | None,
+    history: ArchiveWriter | None,
     live_store: Any,
     *,
     icao: str | None,
@@ -127,7 +127,7 @@ def _history_error(exc: HistoryUnavailable) -> int:
 
 
 def _reset_all(
-    history: HistoryStore | None, live_store: Any, state: EngineState
+    history: ArchiveWriter | None, live_store: Any, state: EngineState
 ) -> int:
     if state == "live":
         print(
@@ -159,7 +159,7 @@ def _reset_all(
 
 
 def _reset_icao(
-    history: HistoryStore | None, live_store: Any, target: str, state: EngineState
+    history: ArchiveWriter | None, live_store: Any, target: str, state: EngineState
 ) -> int:
     if state == "live":
         live_ids = [

@@ -29,7 +29,7 @@ from helpers import (
 from pyaerial.config.schema import ArchiveConfig
 from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState, Verdict
-from pyaerial.store.history import FRAME_PRUNE_BATCH
+from pyaerial.store.archive.writer import FRAME_PRUNE_BATCH
 from pyaerial.store.redis_live import RedisLiveStore
 
 # --- Main loop stage isolation ----------------------------------------------

@@ -18,7 +18,7 @@ from pyaerial.api.queries import (
 )
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.config.schema import Config
-from pyaerial.store.history import HistoryStore
+from pyaerial.store.archive import ArchiveReader
 from pyaerial.store.live import LiveStore
 
 _MAX_LIMIT = 200
@@ -79,7 +79,7 @@ def handle_ws_request(
     params: dict[str, Any],
     *,
     config: Config,
-    history: HistoryStore | None,
+    history: ArchiveReader | None,
     live_store: LiveStore | None,
     aircraft_db: AircraftDB | None,
 ) -> Any:

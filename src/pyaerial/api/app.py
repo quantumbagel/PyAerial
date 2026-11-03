@@ -36,7 +36,7 @@ from pyaerial.api.static import mount_spa
 from pyaerial.api.ws import BadRequest, handle_ws_request
 from pyaerial.config.schema import Config
 from pyaerial.enrich.aircraft_db import AircraftDB
-from pyaerial.store.history import HistoryStore, HistoryUnavailable
+from pyaerial.store.archive import ArchiveReader, HistoryUnavailable
 from pyaerial.store.live import LiveStore
 from pyaerial.store.redis_live import LiveUnavailable
 
@@ -103,7 +103,7 @@ def _error(req_id: Any, code: str, message: str) -> dict[str, Any]:
 def create_app(
     *,
     config: Config,
-    history: HistoryStore | None = None,
+    history: ArchiveReader | None = None,
     live_store: LiveStore | None = None,
     aircraft_db: AircraftDB | None = None,
 ) -> FastAPI:

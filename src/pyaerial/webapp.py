@@ -15,7 +15,7 @@ from pyaerial.api.static import FRONTEND_HINT, STATIC_DIR
 from pyaerial.config.schema import Config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB
 from pyaerial.enrich.aircraft_db import AircraftDB
-from pyaerial.store.history import HistoryStore
+from pyaerial.store.archive import ArchiveReader
 from pyaerial.store.redis_live import RedisLiveStore
 
 log = logging.getLogger("pyaerial.webapp")
@@ -108,7 +108,7 @@ def uvicorn_options(
 
 def _open_stores(
     config_path: str, config: Config | None
-) -> tuple[Config, HistoryStore, RedisLiveStore]:
+) -> tuple[Config, ArchiveReader, RedisLiveStore]:
     if config is None:
         return connect_stores(config_path)
     # Caller already loaded (and validated) the config; don't parse it twice.

@@ -12,7 +12,7 @@ from pyaerial.api.queries import (
     get_stats,
     get_telemetry,
 )
-from pyaerial.store.history import HistoryUnavailable
+from pyaerial.store.archive import HistoryUnavailable
 from pyaerial.store.redis_live import LiveUnavailable, RedisLiveStore
 
 
@@ -256,7 +256,7 @@ def test_tracked_alerts_scale_linearly():
 
 
 class _History:
-    """Mimics HistoryStore.get_telemetry paging semantics."""
+    """Mimics ArchiveReader.get_telemetry paging semantics."""
 
     def __init__(self, count: int):
         self.count = count

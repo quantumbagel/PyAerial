@@ -22,7 +22,7 @@ from pyaerial.api.security import (
     content_security_policy,
     origin_allowed,
 )
-from pyaerial.store.history import HistoryUnavailable
+from pyaerial.store.archive import HistoryUnavailable
 from pyaerial.store.redis_live import RedisLiveStore
 from pyaerial.webapp import uvicorn_options
 

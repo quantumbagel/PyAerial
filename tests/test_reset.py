@@ -201,7 +201,7 @@ def test_force_never_overrides_a_running_engine(capsys):
 
 
 def test_reset_reports_locked_database_cleanly(capsys):
-    from pyaerial.store.history import HistoryUnavailable
+    from pyaerial.store.archive import HistoryUnavailable
 
     class _History:
         def reset_all(self):

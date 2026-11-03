@@ -96,7 +96,7 @@ type = "layers"
 # independent of each other. `lint-imports` checks it (CI python job).
 # - alerts sits above store: the alert engine records episodes in the live
 #   store; the store depends on no domain logic (the archive policy is
-#   decided by the engine and passed to HistoryStore.finalize_plane).
+#   decided by the engine and passed to ArchiveWriter.finalize_plane).
 # - config.loader sits above the domain layers it validates against
 #   (receiver/alerter registries, zone polygons via calc) and below the
 #   entry points that load the config; config.schema is near the bottom.
@@ -115,6 +115,16 @@ layers = [
     "pyaerial.config.schema | pyaerial.config.geofence_file",
     "pyaerial.models | pyaerial.logging_setup",
     "pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls | pyaerial.plugins",
+]
+
+[[tool.importlinter.contracts]]
+name = "Archive reader and writer are independent"
+type = "independence"
+# The portal's read-only ArchiveReader never imports the writer (and so
+# never its write paths); both share store.archive._conn and .schema.
+modules = [
+    "pyaerial.store.archive.reader",
+    "pyaerial.store.archive.writer",
 ]
 
 [tool.mypy]
