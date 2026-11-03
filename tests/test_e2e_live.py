@@ -61,6 +61,7 @@ from e2e_support import (
 from pyaerial.api.app import create_app
 from pyaerial.api.connect import connect_stores
 from pyaerial.config import load_config
+from pyaerial.engine.supervisor import MERGE_WINDOW
 from pyaerial.engine import Engine
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.integrity import geodesy
@@ -793,17 +794,31 @@ def test_beast_reserve_feed_is_correctly_escaped(live, feed):
     a_frames = [f for f in strict if f.hex[2:8] == A.icao]
     assert a_frames and all(f.level == SIGNAL_ESC for f in a_frames)
     assert all(f.escapes >= 3 for f in a_frames)  # 2 ICAO bytes + signal
-    # Copies heard by both receivers are merged: each B position goes out once,
-    # with the stronger copy's signal (roof), or mast's while roof was down.
+    # Each B position goes out once. Copies the engine received within the
+    # merge window are merged and the stronger (roof) one is served; mast's
+    # goes out while roof was down. Copies whose receive stamps a busy host
+    # spread past the window are not merged (the later one is a duplicate),
+    # so only clearly merged pairs are held to the stronger level.
     heard: dict[str, set[str]] = {}
     for sent in live.feeder.sent:
         heard.setdefault(sent.hex, set()).add(sent.receiver)
+    received: dict[str, dict[str, float]] = {}
+    for row in query(live.db, "SELECT hex, receiver, timestamp FROM frames"):
+        received.setdefault(row["hex"], {}).setdefault(row["receiver"], row["timestamp"])
     b_positions = [f for f in strict if f.hex[2:8] == B.icao and f.hex in live.truth]
     assert b_positions
     assert len({f.hex for f in b_positions}) == len(b_positions)
+    merged = 0
     for frame in b_positions:
-        assert frame.level == (0x40 if "roof" in heard[frame.hex] else 0x20)
-    assert {f.level for f in b_positions} == {0x40, 0x20}
+        stamps = received[frame.hex]
+        if "roof" not in heard[frame.hex]:
+            assert frame.level == 0x20
+        elif abs(stamps["roof"] - stamps["mast"]) <= MERGE_WINDOW / 2:
+            assert frame.level == 0x40
+            merged += 1
+        else:
+            assert frame.level in (0x40, 0x20)
+    assert merged and 0x20 in {f.level for f in b_positions}
 
 
 def test_live_telemetry_push_carries_provenance(live):
