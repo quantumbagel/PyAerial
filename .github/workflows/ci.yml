@@ -32,6 +32,9 @@ jobs:
           mypy==2.4.1
       - name: Tests
         run: pytest
+      # web/src/api/schema.json and generated.ts match pyaerial.api.models.
+      - name: Generated wire types
+        run: python scripts/gen_types.py --check
       - name: Ruff
         run: ruff check src tests
       # Package layering ([tool.importlinter] in pyproject.toml).

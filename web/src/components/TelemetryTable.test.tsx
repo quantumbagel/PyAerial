@@ -3,11 +3,13 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { TelemetryPoint } from '../api/types';
 import { setFormatLocale } from '../utils/format';
 import { TelemetryTable, telemetryRowKeys } from './TelemetryTable';
+import { makePoint } from '../test/fixtures';
 
 beforeAll(() => setFormatLocale('en-US'));
 afterAll(() => setFormatLocale(undefined));
 
 const point = (timestamp: number, extra: Partial<TelemetryPoint> = {}): TelemetryPoint => ({
+  ...makePoint(),
   timestamp,
   latitude: 35,
   longitude: -78,

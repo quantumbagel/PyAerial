@@ -23,6 +23,7 @@ import {
   safeHttpsUrl,
   setFormatLocale,
 } from './format';
+import { makeFlight } from '../test/fixtures';
 
 // 2023-11-14 22:13:20 UTC
 const BASE_TS = 1700000000;
@@ -32,6 +33,7 @@ afterAll(() => setFormatLocale(undefined));
 
 function flight(overrides: Partial<FlightSummary>): FlightSummary {
   return {
+    ...makeFlight(),
     flight_id: 'f1',
     icao: 'A1B2C3',
     callsign: null,

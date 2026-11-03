@@ -5,6 +5,7 @@ import type { LiveSocketHandlers } from '../api/liveSocket';
 import type { FlightDetail, TelemetryPoint } from '../api/types';
 import type { MapViewHandle } from '../components/MapView';
 import { useFlightSelection } from './useFlightSelection';
+import { makeFlightDetail, makePoint } from '../test/fixtures';
 
 const api = vi.hoisted(() => ({
   fetchFlight: vi.fn(),
@@ -25,8 +26,8 @@ vi.mock('../api/liveSocket', () => ({
   isLiveSocketOpen: () => socket.open,
 }));
 
-const detail: FlightDetail = { flight_id: 'f1', icao: 'abc123', is_live: true };
-const points: TelemetryPoint[] = [{ timestamp: 1, latitude: 35, longitude: -78 }];
+const detail: FlightDetail = makeFlightDetail({ flight_id: 'f1', icao: 'abc123', is_live: true });
+const points: TelemetryPoint[] = [makePoint({ timestamp: 1, latitude: 35, longitude: -78 })];
 const mapRef = { current: { panToAlert: vi.fn(), focusOn: vi.fn() } as MapViewHandle };
 
 function reconnect() {

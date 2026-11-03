@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pyaerial.api.models import HelloMessage, dump
+
 WS_PROTOCOL = "pyaerial.live"
 WS_VERSION = 1
 WS_PATH = "/ws/live"
@@ -40,13 +42,16 @@ def available_streams() -> list[str]:
 
 
 def websocket_hello() -> dict[str, Any]:
-    return {
-        "type": "hello",
-        "protocol": WS_PROTOCOL,
-        "version": WS_VERSION,
-        "streams": available_streams(),
-        "actions": list(WS_ACTIONS),
-    }
+    hello = HelloMessage.model_validate(
+        {
+            "type": "hello",
+            "protocol": WS_PROTOCOL,
+            "version": WS_VERSION,
+            "streams": available_streams(),
+            "actions": list(WS_ACTIONS),
+        }
+    )
+    return dump(hello)
 
 
 def websocket_api_spec(

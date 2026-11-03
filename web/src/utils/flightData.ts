@@ -132,15 +132,18 @@ export function mergeLiveFlights(existing: FlightSummary[], incoming: FlightSumm
 function withTelemetryPoint(flight: FlightSummary | undefined, point: TelemetryPoint): FlightSummary | null {
   if (!flight) {
     if (point.latitude == null || point.longitude == null) return null;
+    // Placeholder until the next flights snapshot; the point carries no metadata.
     return {
-      flight_id: point.flight_id!,
+      flight_id: point.flight_id,
       icao: point.icao || '',
       callsign: null,
       model: null,
       aircraft_type: null,
       owner: null,
       country: null,
-      active_alerts: point.active_alerts || [],
+      registration: null,
+      integrity: null,
+      active_alerts: [],
       start_time: point.timestamp,
       end_time: point.timestamp,
       timestamp: point.timestamp,
@@ -150,6 +153,8 @@ function withTelemetryPoint(flight: FlightSummary | undefined, point: TelemetryP
       altitude: point.altitude,
       speed: point.speed,
       is_live: true,
+      status: 'live',
+      retained: false,
     };
   }
   const pointTime = point.timestamp ?? 0;
@@ -163,7 +168,6 @@ function withTelemetryPoint(flight: FlightSummary | undefined, point: TelemetryP
     heading: point.heading ?? flight.heading,
     timestamp: point.timestamp ?? flight.timestamp,
     end_time: point.timestamp ?? flight.end_time,
-    active_alerts: point.active_alerts ?? flight.active_alerts,
     is_live: true,
   };
 }

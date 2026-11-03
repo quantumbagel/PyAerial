@@ -62,6 +62,8 @@ On connect the server sends `hello`, then snapshots of the subscribed `flights`,
  "actions": ["subscribe", "fetchFlights", "fetchFlight", "fetchTelemetry", "fetchAlerts", "fetchStats", "fetchZones", "fetchConfig"]}
 ```
 
+The exact message shapes (which keys are always sent, which may be `null`, which are left out) are the pydantic models in `src/pyaerial/api/models.py`, published as JSON Schema in [`web/src/api/schema.json`](web/src/api/schema.json).
+
 Clients must ignore unknown fields and message types; `version` changes only when something is removed or retyped (see Compatibility in the [README](README.md)).
 
 All four streams are on by default; choose with `/ws/live?streams=flights,alerts` or `subscribe`. `ping` is not a stream. While Redis is unreachable, `flights` and `alerts` are not sent and `stats.redis` is `false`.

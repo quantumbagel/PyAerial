@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlightSummary } from '../api/types';
 import { MapView, type MapViewHandle } from './MapView';
 import { FALLBACK_STYLE, SRC } from './mapLibreEngine';
+import { makeFlight } from '../test/fixtures';
 
 type SourceStub = {
   data: { type: string; features: Array<{ properties: Record<string, unknown> }> };
@@ -192,6 +193,7 @@ beforeEach(() => {
 });
 
 const flight = (overrides: Partial<FlightSummary> = {}): FlightSummary => ({
+  ...makeFlight(),
   flight_id: 'f1',
   icao: 'abc123',
   callsign: '<img src=x onerror=alert(1)>',
@@ -277,6 +279,7 @@ describe('MapView markers', () => {
         {...props([], {
           zonesData: {
             home: { latitude: 35, longitude: -78 },
+            alert_colors: {},
             zones: [
               {
                 name: '<b>evil</b>',

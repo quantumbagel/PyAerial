@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { FlightSummary } from '../api/types';
 import { applyTelemetryPoint, flightSortValueLabel, mergeLiveFlights, sortFlightsBy } from './flightData';
+import { makeActiveAlert, makeFlight, makePoint } from '../test/fixtures';
 
 function flight(overrides: Partial<FlightSummary>): FlightSummary {
   return {
+    ...makeFlight(),
     flight_id: 'f1',
     icao: 'A1B2C3',
     callsign: null,
@@ -41,14 +43,14 @@ describe('sortFlightsBy alerts', () => {
       flight_id: 'live_2',
       is_live: true,
       active_alerts: [
-        { zone: 'z', rule: 'warn', alert_id: 'a' },
-        { zone: 'z', rule: 'alert', alert_id: 'b' },
+        makeActiveAlert({ zone: 'z', rule: 'warn', alert_id: 'a' }),
+        makeActiveAlert({ zone: 'z', rule: 'alert', alert_id: 'b' }),
       ],
     });
     const oneAlert = flight({
       flight_id: 'live_1',
       is_live: true,
-      active_alerts: [{ zone: 'z', rule: 'warn', alert_id: 'c' }],
+      active_alerts: [makeActiveAlert({ zone: 'z', rule: 'warn', alert_id: 'c' })],
     });
 
     const sorted = sortFlightsBy([oneAlert, twoAlerts], 'alerts', 'desc');
@@ -84,12 +86,12 @@ describe('applyTelemetryPoint', () => {
       speed: 180,
       heading: 90,
     });
-    const next = applyTelemetryPoint([existing], {
+    const next = applyTelemetryPoint([existing], makePoint({
       flight_id: 'live_1',
       timestamp: 300,
       latitude: 35.71,
       longitude: -78.71,
-    });
+    }));
     expect(next[0].altitude).toBe(400);
     expect(next[0].speed).toBe(180);
     expect(next[0].heading).toBe(90);
@@ -106,12 +108,12 @@ describe('applyTelemetryPoint', () => {
       heading: 90,
       timestamp: 200,
     });
-    const next = applyTelemetryPoint([existing], {
+    const next = applyTelemetryPoint([existing], makePoint({
       flight_id: 'live_1',
       timestamp: 300,
       speed: 210,
       heading: 95,
-    });
+    }));
     expect(next[0].latitude).toBe(35.7);
     expect(next[0].speed).toBe(210);
     expect(next[0].heading).toBe(95);
@@ -126,13 +128,13 @@ describe('applyTelemetryPoint', () => {
       speed: 180,
       timestamp: 400,
     });
-    const next = applyTelemetryPoint([existing], {
+    const next = applyTelemetryPoint([existing], makePoint({
       flight_id: 'live_1',
       timestamp: 300,
       speed: 10,
       latitude: 1,
       longitude: 1,
-    });
+    }));
     expect(next[0].speed).toBe(180);
     expect(next[0].latitude).toBe(35.7);
   });
@@ -140,13 +142,13 @@ describe('applyTelemetryPoint', () => {
 
 describe('mergeLiveFlights', () => {
   it('takes the integrity verdict from each new snapshot', () => {
-    const base: FlightSummary = {
+    const base: FlightSummary = makeFlight({
       flight_id: 'f1',
       icao: 'abc123',
       is_live: true,
       timestamp: 100,
       integrity: { score: 1, status: 'ok', checks: {} },
-    };
+    });
     const next: FlightSummary = {
       ...base,
       timestamp: 101,

@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlightSummary, TelemetryPoint } from '../api/types';
 import { MAX_PATH_FETCHES, pathNeedsFetch, useFlightPaths } from './useFlightPaths';
+import { makeFlight, makePoint } from '../test/fixtures';
 
 const api = vi.hoisted(() => ({
   fetchTelemetry: vi.fn(),
@@ -20,6 +21,7 @@ function deferred<T>() {
 }
 
 const flight = (id: string, lat = 35, lon = -78): FlightSummary => ({
+  ...makeFlight(),
   flight_id: id,
   icao: id,
   latitude: lat,
@@ -27,6 +29,7 @@ const flight = (id: string, lat = 35, lon = -78): FlightSummary => ({
 });
 
 const point = (id: string, ts: number, lat: number, lon: number): TelemetryPoint => ({
+  ...makePoint(),
   flight_id: id,
   timestamp: ts,
   latitude: lat,

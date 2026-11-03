@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlightSummary } from '../api/types';
 import { HISTORY_PAGE_LIMIT, mergeFirstPage, useHistoryFeed, type HistoryFilter } from './useHistoryFeed';
+import { makeFlight } from '../test/fixtures';
 
 const api = vi.hoisted(() => ({
   fetchFlights: vi.fn(),
@@ -20,7 +21,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const flight = (id: string): FlightSummary => ({ flight_id: id, icao: id });
+const flight = (id: string): FlightSummary => makeFlight({ flight_id: id, icao: id });
 const noFilter: HistoryFilter = { q: '', since: null, until: null };
 
 beforeEach(() => {

@@ -12,6 +12,7 @@ import {
 } from './alertData';
 import { buildAlertPathSegments } from './alertPathSegments';
 import { pathStyleForFlight, planeStyle } from './planeIcon';
+import { makeActiveAlert, makeAlert, makePoint } from '../test/fixtures';
 
 const zones: Zone[] = [
   {
@@ -32,15 +33,15 @@ describe('episode state', () => {
   });
 
   it('treats ended as terminal when merging snapshots', () => {
-    const ended: Alert = { alert_id: 'a', active: false, activated_at: 5, deactivated_at: 9 };
-    const stale: Alert = { alert_id: 'a', active: true, activated_at: 5 };
+    const ended: Alert = makeAlert({ alert_id: 'a', active: false, activated_at: 5, deactivated_at: 9 });
+    const stale: Alert = makeAlert({ alert_id: 'a', active: true, activated_at: 5 });
     const merged = mergeEpisode(ended, stale);
     expect(merged.active).toBe(false);
     expect(merged.deactivated_at).toBe(9);
   });
 
   it('keeps object identity for unchanged episodes', () => {
-    const a = { alert_id: 'a', zone: 'RDU', rule: 'warn', active: true, activated_at: 1 };
+    const a = makeAlert({ alert_id: 'a', zone: 'RDU', rule: 'warn', active: true, activated_at: 1 });
     const existing = [a];
     const merged = mergeAlertsByEpisode(existing, [{ ...a }]);
     expect(merged[0]).toBe(a);
@@ -55,7 +56,7 @@ describe('alertVisual', () => {
   });
 
   it('drives plane and path colours instead of rule-name keywords', () => {
-    const flight = { is_live: true, active_alerts: [{ alert_id: 'x', zone: 'RDU', rule: 'warn' }] };
+    const flight = { is_live: true, active_alerts: [makeActiveAlert({ alert_id: 'x', zone: 'RDU', rule: 'warn' })] };
     expect(planeStyle(flight, false, zones).fill).toBe('#ff00aa');
     expect(pathStyleForFlight(flight, false, zones).color).toBe('#ff00aa');
   });
@@ -67,10 +68,10 @@ describe('alertVisual', () => {
 
 describe('alert path segments', () => {
   it('colours stretches flown during an episode', () => {
-    const telemetry = [0, 10, 20, 30].map((t) => ({ timestamp: t, latitude: t, longitude: t }));
+    const telemetry = [0, 10, 20, 30].map((t) => makePoint({ timestamp: t, latitude: t, longitude: t }));
     const segments = buildAlertPathSegments(
       telemetry,
-      [{ alert_id: 'x', zone: 'RDU', rule: 'warn', activated_at: 10, deactivated_at: 20, active: false }],
+      [makeAlert({ alert_id: 'x', zone: 'RDU', rule: 'warn', activated_at: 10, deactivated_at: 20, active: false })],
       30,
     );
     expect(segments).toHaveLength(1);
@@ -83,7 +84,7 @@ describe('alert path segments', () => {
 
 describe('alert sort labels', () => {
   it("doesn't repeat the zone badge in the trailing label", () => {
-    const label = alertSortValueLabel({ alert_id: 'a', zone: 'RDU', rule: 'warn', activated_at: 0 }, 'zone');
+    const label = alertSortValueLabel(makeAlert({ alert_id: 'a', zone: 'RDU', rule: 'warn', activated_at: 0 }), 'zone');
     expect(label).not.toContain('RDU');
   });
 });

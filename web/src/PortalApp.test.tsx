@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlightSummary, LiveMessage } from './api/types';
+import { makeAlert, makeFlight, makePoint } from './test/fixtures';
 
 const NOW = Math.floor(Date.now() / 1000);
 
 const flights: FlightSummary[] = [
-  {
+  makeFlight({
     flight_id: 'f1',
     icao: 'abc123',
     callsign: 'TEST1',
@@ -19,7 +20,7 @@ const flights: FlightSummary[] = [
     start_time: NOW - 600,
     timestamp: NOW,
     active_alerts: [],
-  },
+  }),
 ];
 
 const TELEMETRY = [
@@ -105,7 +106,7 @@ describe('PortalApp', () => {
         h.onMessage?.({
           type: 'telemetry',
           timestamp: NOW + 1,
-          telemetry: [{ flight_id: 'f2', icao: 'def456', timestamp: NOW + 1, latitude: 36, longitude: -79 }],
+          telemetry: [makePoint({ flight_id: 'f2', icao: 'def456', timestamp: NOW + 1, latitude: 36, longitude: -79 })],
         }),
       );
     });
@@ -126,7 +127,7 @@ describe('PortalApp', () => {
     render(<PortalApp />);
     await screen.findByRole('button', { name: /TEST1/ });
 
-    const alert = {
+    const alert = makeAlert({
       alert_id: 'a1',
       flight_id: 'f1',
       icao: 'abc123',
@@ -135,7 +136,7 @@ describe('PortalApp', () => {
       rule: 'low',
       active: true,
       activated_at: NOW,
-    };
+    });
     act(() => {
       socket.handlers.forEach((h) => h.onMessage?.({ type: 'alerts', alerts: [alert] }));
     });

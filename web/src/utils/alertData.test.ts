@@ -1,19 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { Alert } from '../api/types';
 import { alertTooltip, endedByLabel, mergeAlertsByEpisode } from './alertData';
+import { makeAlert } from '../test/fixtures';
 
 describe('mergeAlertsByEpisode', () => {
   it('merges an ended snapshot over the live episode with the same alert_id', () => {
-    const activeAlert: Alert = {
+    const activeAlert: Alert = makeAlert({
       alert_id: 'flight_1:zone_a:warn',
       flight_id: 'flight_1',
       zone: 'zone_a',
       rule: 'warn',
       active: true,
       activated_at: 1700000000,
-    };
+    });
 
-    const finishedAlert: Alert = {
+    const finishedAlert: Alert = makeAlert({
       alert_id: 'flight_1:zone_a:warn',
       flight_id: 'flight_1',
       zone: 'zone_a',
@@ -21,7 +22,7 @@ describe('mergeAlertsByEpisode', () => {
       active: false,
       activated_at: 1700000000,
       deactivated_at: 1700000100,
-    };
+    });
 
     const merged = mergeAlertsByEpisode([activeAlert], [finishedAlert]);
     expect(merged).toHaveLength(1);
@@ -30,7 +31,7 @@ describe('mergeAlertsByEpisode', () => {
   });
 
   it('keeps a re-activated episode separate from a previously ended one', () => {
-    const firstEpisode: Alert = {
+    const firstEpisode: Alert = makeAlert({
       alert_id: 'flight_1:zone_a:warn:1700000000',
       flight_id: 'flight_1',
       zone: 'zone_a',
@@ -38,15 +39,15 @@ describe('mergeAlertsByEpisode', () => {
       active: false,
       activated_at: 1700000000,
       deactivated_at: 1700000100,
-    };
-    const reactivatedEpisode: Alert = {
+    });
+    const reactivatedEpisode: Alert = makeAlert({
       alert_id: 'flight_1:zone_a:warn:1700000300',
       flight_id: 'flight_1',
       zone: 'zone_a',
       rule: 'warn',
       active: true,
       activated_at: 1700000300,
-    };
+    });
 
     const merged = mergeAlertsByEpisode([firstEpisode], [reactivatedEpisode]);
     expect(merged).toHaveLength(2);
@@ -54,35 +55,37 @@ describe('mergeAlertsByEpisode', () => {
   });
 
   it('appends episodes that are not already in state', () => {
-    const existing: Alert = {
+    const existing: Alert = makeAlert({
       alert_id: 'a',
       flight_id: 'f',
       zone: 'z',
       rule: 'warn',
       active: true,
       activated_at: 1,
-    };
-    const incoming: Alert = {
+    });
+    const incoming: Alert = makeAlert({
       alert_id: 'b',
       flight_id: 'f',
       zone: 'z',
       rule: 'alert',
       active: true,
       activated_at: 2,
-    };
+    });
     const merged = mergeAlertsByEpisode([existing], [incoming]);
     expect(merged.map((a) => a.alert_id)).toEqual(['a', 'b']);
   });
 });
 
 describe('endedByLabel', () => {
-  const ended = (ended_by?: string | null): Alert => ({
-    alert_id: 'a',
-    active: false,
-    activated_at: 100,
-    deactivated_at: 200,
-    ended_by,
-  });
+  // `undefined` is not a wire value (the server sends null); kept to check robustness.
+  const ended = (ended_by?: string | null): Alert =>
+    makeAlert({
+      alert_id: 'a',
+      active: false,
+      activated_at: 100,
+      deactivated_at: 200,
+      ended_by: ended_by as string | null,
+    });
 
   it('labels each deactivation reason', () => {
     expect(endedByLabel(ended('cleared'))).toBe('left zone / conditions cleared');

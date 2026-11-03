@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveSocketHandlers } from '../api/liveSocket';
 import type { Alert, FlightSummary, ServerStats } from '../api/types';
 import { HIDDEN_PAUSE_MS, HIDDEN_STREAMS, IDLE_STREAMS, useLiveFeed } from './useLiveFeed';
+import { makeAlert, makeFlight } from '../test/fixtures';
 
 const api = vi.hoisted(() => ({
   fetchFlights: vi.fn(),
@@ -34,6 +35,7 @@ function deferred<T>() {
 }
 
 const flight = (id: string, overrides: Partial<FlightSummary> = {}): FlightSummary => ({
+  ...makeFlight(),
   flight_id: id,
   icao: id,
   is_live: true,
@@ -122,8 +124,8 @@ describe('useLiveFeed', () => {
     await act(async () => {
       flightsReq.resolve([flight('kept'), flight('gone')]);
       alertsReq.resolve([
-        { alert_id: 'k', flight_id: 'kept', active: true, activated_at: 90 },
-        { alert_id: 'g', flight_id: 'gone', active: true, activated_at: 90 },
+        makeAlert({ alert_id: 'k', flight_id: 'kept', active: true, activated_at: 90 }),
+        makeAlert({ alert_id: 'g', flight_id: 'gone', active: true, activated_at: 90 }),
       ]);
       await flightsReq.promise;
       await alertsReq.promise;

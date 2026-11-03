@@ -87,7 +87,6 @@ export function useFlightSelection({
         altitude: latestPoint.altitude ?? prev.altitude,
         speed: latestPoint.speed ?? prev.speed,
         heading: latestPoint.heading ?? prev.heading,
-        active_alerts: latestPoint.active_alerts ?? prev.active_alerts,
       };
     });
   }, []);

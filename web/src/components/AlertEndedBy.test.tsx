@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { Alert } from '../api/types';
 import { AlertListItem } from './AlertListItem';
 import { AlertTimeline } from './AlertTimeline';
+import { makeAlert } from '../test/fixtures';
 
-const ended: Alert = {
+const ended: Alert = makeAlert({
   alert_id: 'f1:rdu:low',
   flight_id: 'f1',
   icao: 'abc123',
@@ -15,7 +16,7 @@ const ended: Alert = {
   activated_at: 1700000000,
   deactivated_at: 1700000300,
   ended_by: 'lost',
-};
+});
 
 describe('alert end reasons', () => {
   it('shows why an episode ended in the drawer timeline', () => {
@@ -35,7 +36,7 @@ describe('alert end reasons', () => {
     render(
       <ul>
         <AlertListItem
-          alert={{ ...ended, ended_by: undefined }}
+          alert={{ ...ended, ended_by: null }}
           active={false}
           sortField="activated"
           onSelect={() => {}}

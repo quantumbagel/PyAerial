@@ -25,6 +25,7 @@ function buffered(id: string, overrides: Partial<RawFrame> = {}): BufferedRawFra
 }
 
 function stats(overrides: Partial<ServerStats> = {}): ServerStats {
+  // No engine_live unless given: the fallback for servers that did not send it.
   return {
     live_flights: 0,
     active_alerts: 0,
@@ -34,7 +35,7 @@ function stats(overrides: Partial<ServerStats> = {}): ServerStats {
     history: true,
     engine_seen_at: Date.now() / 1000 - 1,
     ...overrides,
-  };
+  } as ServerStats;
 }
 
 describe('prependRawFrames', () => {

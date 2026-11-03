@@ -1,139 +1,32 @@
-export interface AlertStats {
-  episode_count: number;
-  total_seconds: number;
-  active_count?: number;
-}
+// Wire types are generated from the server's pydantic models
+// (src/pyaerial/api/models.py) by `python scripts/gen_types.py`; see
+// generated.ts. Only portal-side types and the /ws/raw frames live here.
+import type { AppConfig, Integrity } from './generated';
 
-export interface ActiveAlert {
-  alert_id: string;
-  zone: string;
-  rule: string;
-  activated_at?: number;
-  eta?: number | null;
-}
+export type {
+  ActiveAlert,
+  Alert,
+  AlertStats,
+  AppConfig,
+  ErrorResponse,
+  FetchTelemetryResponse,
+  FlightDetail,
+  FlightSummary,
+  HelloMessage,
+  Integrity,
+  IntegrityCheck,
+  LiveMessage,
+  ReceiverInfo,
+  ServerStats,
+  TelemetryPoint,
+  Zone,
+  ZoneRule,
+  ZonesData,
+} from './generated';
 
-export type IntegrityStatus = 'ok' | 'suspect' | 'spoofed' | 'unknown';
-
-export interface IntegrityCheck {
-  status: 'pass' | 'warn' | 'fail';
-  detail: string;
-  value?: number;
-}
-
-/** Spoofing checks from the engine's integrity monitor (see CONFIGURATION.md). */
-export interface Integrity {
-  /** 0-1; 1 means consistent with every check that had evidence. Null when `unknown`. */
-  score: number | null;
-  status: IntegrityStatus;
-  checks: Record<string, IntegrityCheck>;
-  /** Multilaterated transmitter location, for targets that fail TDOA. */
-  emitter?: { latitude: number; longitude: number; offset_km: number };
-  /** Only ground rebroadcasts (TIS-B/ADS-R) heard lately: receiver RF checks don't apply. */
-  rebroadcast?: boolean;
-}
-
-export interface FlightSummary {
-  flight_id: string;
-  icao: string;
-  active_alerts?: ActiveAlert[];
-  alert_stats?: AlertStats;
-  start_time?: number;
-  end_time?: number;
-  callsign?: string | null;
-  model?: string | null;
-  owner?: string | null;
-  country?: string | null;
-  aircraft_type?: string | null;
-  registration?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  altitude?: number | null;
-  speed?: number | null;
-  heading?: number | null;
-  is_live?: boolean;
-  status?: string;
-  retained?: boolean;
-  timestamp?: number | null;
-  integrity?: Integrity | null;
-}
-
-export interface FlightDetail extends FlightSummary {
-  photo_url?: string | null;
-  photo_photographer?: string | null;
-  photo_link?: string | null;
-}
-
-export interface TelemetryPoint {
-  timestamp: number;
-  latitude?: number | null;
-  longitude?: number | null;
-  altitude?: number | null;
-  /** Metres above the WGS84 ellipsoid (GNSS, TC 20-22 only); `altitude` is barometric. */
-  gnss_height?: number | null;
-  speed?: number | null;
-  heading?: number | null;
-  flight_id?: string;
-  icao?: string;
-  active_alerts?: ActiveAlert[];
-  /** Receivers that heard this position, strongest copy first. */
-  receivers?: string[];
-  /** Integrity verdict in effect when the sample arrived. */
-  integrity_score?: number | null;
-  integrity_status?: string;
-  integrity_flags?: string[];
-}
-
-export interface Alert {
-  alert_id: string;
-  flight_id?: string | null;
-  icao?: string | null;
-  callsign?: string | null;
-  zone?: string;
-  rule?: string;
-  active?: boolean;
-  activated_at?: number;
-  deactivated_at?: number | null;
-  /** Why an ended episode ended: cleared | lost | shutdown | restart (absent if active or older). */
-  ended_by?: string | null;
-  eta?: number | null;
-  altitude?: number | null;
-  latitude?: number | null;
-  longitude?: number | null;
-}
-
-export interface ZoneRule {
-  name: string;
-  color?: string;
-  when: Record<string, { min?: number; max?: number }>;
-  dwell_seconds: number;
-}
-
-export interface Zone {
-  name: string;
-  color?: string;
-  coordinates: [number, number][];
-  rules: ZoneRule[];
-}
-
-export interface ZonesData {
-  home: { latitude: number; longitude: number };
-  zones: Zone[];
-  alert_colors?: Record<string, string>;
-}
+export type IntegrityStatus = Integrity['status'];
 
 export type PortalView = 'live' | 'history';
-
-export interface ServerStats {
-  live_flights: number;
-  active_alerts: number;
-  retained_flights: number;
-  historical_alerts: number;
-  redis?: boolean;
-  history?: boolean;
-  engine_seen_at?: number | null;
-  /** Server-computed engine heartbeat freshness (newer servers). */
-  engine_live?: boolean;
-}
 
 /** `busy`: the server closed us at its connection cap (1013); we keep retrying. */
 export type WsStatus = 'connecting' | 'connected' | 'reconnecting' | 'busy' | 'rejected';
@@ -154,31 +47,5 @@ export interface BufferedRawFrame extends RawFrame {
   id: string;
 }
 
-export interface RawAntenna {
-  home: { latitude: number; longitude: number };
-  receivers: Array<{
-    name: string;
-    type: string;
-    host?: string;
-    port?: number;
-    format?: string;
-    position?: { latitude: number; longitude: number; altitude?: number };
-  }>;
-}
-
-export type LiveMessage =
-  | { type: 'hello'; protocol: string; version: number; streams: string[]; actions: string[] }
-  | { type: 'ping'; timestamp?: number }
-  | { type: 'flights'; flights: FlightSummary[] }
-  | { type: 'telemetry'; telemetry: TelemetryPoint[]; timestamp: number }
-  | { type: 'alerts'; alerts: Alert[] }
-  | { type: 'stats'; stats: ServerStats };
-
-export interface AppConfig {
-  home: { latitude: number; longitude: number };
-  remember_planes: number;
-  receivers?: RawAntenna['receivers'];
-  beast_websocket?: string;
-  beast_host?: string;
-  beast_port?: number;
-}
+/** Station and receivers shown on the Raw tab (from `fetchConfig`). */
+export type RawAntenna = Pick<AppConfig, 'home' | 'receivers'>;
