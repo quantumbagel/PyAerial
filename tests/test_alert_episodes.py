@@ -1,5 +1,5 @@
 """Alert episodes: every activate gets exactly one deactivate, across engine
-restarts and crashes, ICAO reuse, orphan sweeps and flight handovers."""
+restarts and crashes, and flight handovers."""
 
 from __future__ import annotations
 
@@ -30,7 +30,6 @@ from pyaerial.constants import (
 )
 from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
-from pyaerial.pipeline import PlaneCalculator
 from pyaerial.store.archive import ArchiveReader, HistoryUnavailable
 from pyaerial.store.live import LiveWriter
 
@@ -285,7 +284,7 @@ def test_graceful_shutdown_deactivates_once_and_restart_adds_nothing(
 
 
 # --- Flight identity ---------------------------------------------------------
-# Alert state belongs to a flight: ICAO reuse, late finalizes and segment
+# Alert state belongs to a flight: segment
 # handovers.
 
 
@@ -355,73 +354,6 @@ def _alert_engine(config, store=None) -> AlertEngine:
 def _tick(engine, plane, clock, position=_INSIDE, seconds=1.0):
     engine.check(plane, position, _MOTION, "N1")
     clock[0] += seconds
-
-
-# --- ICAO collision: an older flight is finalized while a newer one is live -
-
-
-def test_orphan_of_old_flight_leaves_live_flight_alert_alone(fake, clock):
-    _IDENTITY_EVENTS.clear()
-    cache = LiveWriter(LOCAL_REDIS_URI)
-    engine = _alert_engine(_identity_config(), episode_recorder(cache))
-    try:
-        live = _identity_plane(first=time.time() - 30)
-        for _ in range(3):
-            _tick(engine, live, clock)
-        (state,) = engine._alert_state.values()
-        orphan = _identity_plane(first=1_700_000_000.0, last=1_700_000_500.0)
-        assert engine.deactivate(orphan) is False
-        assert list(engine._alert_state.values()) == [state]
-        assert live.active_alerts  # the live plane's list is untouched
-        for _ in range(3):
-            _tick(engine, live, clock)
-        cache.write_live_planes({"ABC123": live})
-        live_alerts = cache.get_alerts(flight_id=live.flight_id)
-        assert [a["alert_id"] for a in live_alerts] == [state["alert_id"]]
-    finally:
-        engine.close()
-        cache.close()
-    assert [e["hook"] for e in _IDENTITY_EVENTS] == ["activate"]  # no lost, no re-activate
-
-
-def test_calculator_keeps_motion_and_lookups_for_live_flight(clock):
-    config = _identity_config()
-    calc = PlaneCalculator(config, build_polygons(config.zones))
-    try:
-        live = _identity_plane(first=time.time() - 30)
-        calc.calculate_plane(live)
-        clock[0] += 2
-        calc.calculate_plane(live)
-        assert "abc123" in calc._kalman_filters
-        assert calc._pending_match or calc._alert_state
-        calc._lookup_failures["abc123"] = 2
-        calc.deactivate_plane(_identity_plane(first=1_700_000_000.0, last=1_700_000_500.0))
-        assert "abc123" in calc._kalman_filters
-        assert calc._pending_match or calc._alert_state
-        assert calc._lookup_failures["abc123"] == 2
-        # The live flight's own expiry still clears everything.
-        calc.deactivate_plane(live)
-        assert "abc123" not in calc._kalman_filters
-        assert not calc._pending_match and not calc._alert_state
-        assert "abc123" not in calc._lookup_failures
-    finally:
-        calc.close()
-
-
-def test_pending_match_survives_orphan_sweep(clock):
-    config = _identity_config()
-    config.zones["pad"].rules[0].dwell_seconds = 5
-    engine = _alert_engine(config)
-    try:
-        live = _identity_plane(first=time.time() - 30)
-        _tick(engine, live, clock, seconds=3)  # t=0: first match
-        _tick(engine, live, clock, seconds=3)  # t=3
-        engine.deactivate(_identity_plane(first=1_700_000_000.0, last=1_700_000_500.0))
-        _tick(engine, live, clock)  # t=6
-        # Dwell measured from t=0, not restarted by the sweep at t=3.
-        assert engine._alert_state
-    finally:
-        engine.close()
 
 
 # --- segmentation handover ---------------------------------------------------

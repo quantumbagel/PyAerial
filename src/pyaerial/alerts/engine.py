@@ -87,11 +87,8 @@ def _last_position(plane: Plane) -> tuple[float, float] | None:
 
 def _plane_as_flight(plane: Plane, flight_id: str) -> Plane | None:
     """*plane* as seen by the stores under *flight_id* (``{icao}-{start}``)."""
-    try:
-        if plane.flight_id == flight_id:
-            return plane
-    except (TypeError, ValueError):
-        pass
+    if plane.flight_id == flight_id:
+        return plane
     icao, _, start = flight_id.rpartition("-")
     try:
         first_packet = float(int(start))
@@ -471,49 +468,26 @@ class AlertEngine:
                 active=True,
             )
 
-    def deactivate(self, plane: Plane, ended_by: str | None = None) -> bool:
+    def deactivate(self, plane: Plane, ended_by: str | None = None) -> None:
         """Close every alert of a flight being removed, with one deactivate each.
 
         Covers the alerts this process raised (a previous process's are closed
         by :meth:`close_restored`).
         ``ended_by`` defaults to ``lost`` for a plane silent for longer than
         ``remember_planes`` (expiry) and ``shutdown`` otherwise: the engine
-        only removes a still-fresh plane when it is stopping.
-
-        Only state of *plane*'s own flight is touched. When a different
-        flight of the same ICAO is live (an older flight finalized late, e.g.
-        a deferred segment, while the aircraft is tracked again), its alerts and
-        pending matches are left alone and False is returned so callers keep
-        per-ICAO state (motion, lookups) too. True otherwise.
+        only removes a still-fresh plane when it is stopping. The engine
+        calls it only for the aircraft's tracked flight, so every alert state
+        and pending match of the ICAO goes.
         """
         icao = plane.icao
-        try:
-            flight_id: str | None = plane.flight_id
-        except (TypeError, ValueError):
-            flight_id = None
-        live_flight = self._live_flight.get(icao)
-        other_flight_live = (
-            live_flight is not None
-            and flight_id is not None
-            and live_flight != flight_id
-        )
-        if not other_flight_live:
-            self._live_flight.pop(icao, None)
-            self._pending_match = {
-                key: ts for key, ts in self._pending_match.items() if key[0] != icao
-            }
-            self._pending_unmatch = {
-                key: ts for key, ts in self._pending_unmatch.items() if key[0] != icao
-            }
-        stale_keys = [
-            k
-            for k, state in self._alert_state.items()
-            if k[0] == icao
-            and (
-                flight_id is None
-                or state.get("flight_id", live_flight or flight_id) == flight_id
-            )
-        ]
+        self._live_flight.pop(icao, None)
+        self._pending_match = {
+            key: ts for key, ts in self._pending_match.items() if key[0] != icao
+        }
+        self._pending_unmatch = {
+            key: ts for key, ts in self._pending_unmatch.items() if key[0] != icao
+        }
+        stale_keys = [k for k in self._alert_state if k[0] == icao]
         now = time.time()
         if ended_by is None:
             silent = (
@@ -559,9 +533,7 @@ class AlertEngine:
                     deactivated_at=now,
                     active=False,
                 )
-        if not other_flight_live:
-            plane.active_alerts = []
-        return not other_flight_live
+        plane.active_alerts = []
 
     def _find_rule(self, zone_name: str, rule_name: str) -> RuleConfig | None:
         zone = self.config.zones.get(zone_name)

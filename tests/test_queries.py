@@ -62,7 +62,7 @@ def test_live_queries_hide_flights_when_engine_heartbeat_is_stale(fake):
 def test_claim_engine_succeeds_without_a_rival(fake):
     store = LiveWriter(LOCAL_REDIS_URI)
     assert store.claim_engine() is True
-    assert store.other_engine_is_live() is False
+    assert store.ensure_writer() is True
 
 
 def test_claim_engine_nx_refuses_foreign_token(fake):

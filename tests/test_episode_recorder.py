@@ -150,7 +150,7 @@ def test_handover_rerecord_keeps_last_updated(engine):
     rec.record_alert_episode(plane, _META, {}, alert_id="A1", activated_at=100.0)
     (entry,) = rec.checkpoint_episodes()
     assert entry[1]["last_updated"] == 150.0
-    assert rec.open_on("A1") == plane.flight_id
+    assert [doc["alert_id"] for doc in rec.open_docs(plane.flight_id)] == ["A1"]
 
 
 # --- Outbox: bounded, copied to Redis while the archive is down --------------

@@ -168,7 +168,7 @@ def test_queries_survive_close_between_check_and_use(tmp_path):
         lambda: archive.get_telemetry("abc123-1"),
         archive.get_alerts,
         archive.count_flights,
-        archive.distinct_icaos,
+        archive.count_alerts,
     ):
         archive.close()  # another thread wins the race here
         archive._last_connect_attempt = time.monotonic()  # no instant reconnect

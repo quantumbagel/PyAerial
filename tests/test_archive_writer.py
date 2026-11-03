@@ -159,8 +159,8 @@ def test_reset_and_delete_icao(tmp_path):
     store.finalize_plane(_plane(), alerts=alerts)
     store.finalize_plane(_plane(icao="def456", callsign="DAL99"), alerts=alerts)
     store.delete_icao("abc123")
-    assert archive.has_icao("abc123") is False
-    assert archive.has_icao("def456") is True
+    icaos = {row[0] for row in sqlite3.connect(store.path).execute("SELECT icao FROM flights")}
+    assert icaos == {"def456"}
     store.reset_all()
     assert archive.list_flights() == []
     assert archive.count_alerts() == 0

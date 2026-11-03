@@ -288,11 +288,6 @@ class EpisodeRecorder:
                 self._rejected(entry)
         return True
 
-    def open_on(self, alert_id: str) -> str | None:
-        """The flight an open episode is on now (None: not open)."""
-        entry = self._open.get(alert_id)
-        return entry[1].get("flight_id") if entry else None
-
     def open_docs(self, flight_id: str) -> list[dict[str, Any]]:
         """Copies of the open episodes on *flight_id*."""
         return [

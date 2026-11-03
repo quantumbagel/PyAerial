@@ -143,15 +143,10 @@ class PlaneCalculator:
         self.alerts.check(plane, update.alert_position, update.motion, callsign)
 
     def deactivate_plane(self, plane: Plane) -> None:
-        """Deactivate alerts and drop motion state for an expired plane.
-
-        Per-ICAO state (motion, lookups) is kept when another flight of the
-        same aircraft is live (an older flight of an aircraft that is being
-        tracked again).
-        """
+        """Deactivate alerts and drop motion and lookup state for a plane the
+        engine stops tracking."""
         icao = plane.info.icao
-        if not self.alerts.deactivate(plane):
-            return
+        self.alerts.deactivate(plane)
         if icao:
             self._failing.discard(icao)
             self.kinematics.forget(icao.lower())

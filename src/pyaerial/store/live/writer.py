@@ -120,21 +120,6 @@ class LiveWriter(LiveQueries):
             log.error("Failed to write engine heartbeat: %s", exc)
             self._mark_disconnected(exc, client)
 
-    def other_engine_is_live(self) -> bool:
-        """True when another process holds a fresh live:engine heartbeat."""
-        client = self._redis()
-        if client is None:
-            return False
-        try:
-            raw = client.get(KEY_ENGINE)
-        except RedisError as exc:
-            log.debug("Could not read engine heartbeat: %s", exc)
-            return False
-        doc = safe_json_loads(raw) if raw else None
-        if self._owns_heartbeat(doc):
-            return False
-        return heartbeat_is_fresh(doc)
-
     def ensure_writer(self) -> bool:
         """True if this process may write live Redis keys.
 

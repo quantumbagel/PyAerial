@@ -19,7 +19,6 @@ from pyaerial.store.archive.rows import (
     telemetry_from_row,
 )
 from pyaerial.store.archive.schema import (
-    FLIGHT_STATUS_COMPLETED,
     FLIGHT_STATUS_LIVE,
     HistorySchemaMismatch,
     detect_version,
@@ -293,78 +292,3 @@ class ArchiveReader(ArchiveConnection):
             return int(row["n"] if row else 0)
         except (sqlite3.Error, HistoryUnavailable):
             return 0
-
-    def distinct_icaos(self) -> list[str]:
-        try:
-            with self._session("query") as conn:
-                rows = conn.execute(
-                    "SELECT DISTINCT icao FROM flights ORDER BY icao"
-                ).fetchall()
-            return [row["icao"] for row in rows if row["icao"]]
-        except (sqlite3.Error, HistoryUnavailable):
-            return []
-
-    def flights_for_icao(self, icao: str) -> list[dict[str, Any]]:
-        try:
-            with self._session("query") as conn:
-                rows = conn.execute(
-                    "SELECT * FROM flights WHERE icao = ? ORDER BY start_time",
-                    (icao.lower(),),
-                ).fetchall()
-            return [flight_from_row(row) for row in rows]
-        except (sqlite3.Error, HistoryUnavailable):
-            return []
-
-    def has_icao(self, icao: str) -> bool:
-        try:
-            with self._session("query") as conn:
-                row = conn.execute(
-                    "SELECT 1 FROM flights WHERE icao = ? LIMIT 1",
-                    (icao.lower(),),
-                ).fetchone()
-            return row is not None
-        except (sqlite3.Error, HistoryUnavailable):
-            return False
-
-    def has_flight(self, icao: str, flight_id: str) -> bool:
-        try:
-            with self._session("query") as conn:
-                row = conn.execute(
-                    "SELECT 1 FROM flights WHERE icao = ? AND flight_id = ? LIMIT 1",
-                    (icao.lower(), flight_id),
-                ).fetchone()
-            return row is not None
-        except (sqlite3.Error, HistoryUnavailable):
-            return False
-
-    def telemetry_count(self, flight_id: str) -> int:
-        try:
-            with self._session("query") as conn:
-                row = conn.execute(
-                    "SELECT COUNT(*) AS n FROM telemetry WHERE flight_id = ?",
-                    (flight_id,),
-                ).fetchone()
-            return int(row["n"] if row is not None else 0)
-        except (sqlite3.Error, HistoryUnavailable):
-            return 0
-
-    def has_completed_flight(self, flight_id: str) -> bool:
-        try:
-            with self._session("query") as conn:
-                row = conn.execute(
-                    "SELECT 1 FROM flights WHERE flight_id = ? AND status = ? LIMIT 1",
-                    (flight_id, FLIGHT_STATUS_COMPLETED),
-                ).fetchone()
-            return row is not None
-        except (sqlite3.Error, HistoryUnavailable):
-            return False
-
-    def data_size(self) -> int:
-        total = 0
-        for suffix in ("", "-wal", "-shm"):
-            path = Path(self.path + suffix)
-            try:
-                total += path.stat().st_size
-            except OSError:
-                continue
-        return total
