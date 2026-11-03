@@ -111,6 +111,9 @@ class ArchiveWriter(ArchiveConnection):
 
     def __init__(self, path: str | Path, *, disabled: bool = False):
         self._dropping_frames = False
+        #: Schema version the file had when this process first opened it (0:
+        #: created now; None: not opened yet). Upgrade notes key off it.
+        self.schema_found: int | None = None
         super().__init__(path, disabled=disabled)
 
     def _connect(self, *, recreate: bool = False) -> None:
@@ -126,7 +129,9 @@ class ArchiveWriter(ArchiveConnection):
                     drop_tables(conn)
                 # Schema first: a newer or foreign file is refused before
                 # anything (even its journal mode) is changed.
-                ensure_schema(conn, self.path)
+                found = ensure_schema(conn, self.path)
+                if self.schema_found is None:
+                    self.schema_found = found
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA synchronous=NORMAL")
                 conn.execute("PRAGMA foreign_keys=ON")

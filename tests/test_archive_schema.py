@@ -96,7 +96,7 @@ def test_v1_archive_is_migrated_without_losing_flights(tmp_path):
     archive.close()
     store.close()
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == schema.SCHEMA_VERSION
     conn.close()
 
 
@@ -165,7 +165,7 @@ def test_v2_archive_is_migrated_to_v3_keeping_data(tmp_path):
     archive = ArchiveReader(store.path)
     assert store.ping() is True
     version, cols = _columns(path)
-    assert version == 3 and "gnss_height" in cols
+    assert version == schema.SCHEMA_VERSION and "gnss_height" in cols
     old = archive.get_telemetry("old222-5")
     assert old[0]["altitude"] == 3000.0 and old[0]["integrity_status"] == "ok"
     assert "gnss_height" not in old[0]  # unknown for pre-v3 samples
@@ -183,7 +183,7 @@ def test_v1_archive_is_migrated_straight_to_v3(tmp_path):
     store = ArchiveWriter(path)
     archive = ArchiveReader(store.path)
     version, cols = _columns(path)
-    assert version == 3
+    assert version == schema.SCHEMA_VERSION
     assert {"receivers", "integrity_status", "gnss_height"} <= cols
     assert archive.get_flight("old111-5")["callsign"] == "OLD1"
     assert store.finalize_plane(gnss_then_baro_plane(100.0), alerts=[]) is True
@@ -198,7 +198,7 @@ def test_v2_archive_missing_only_later_columns_is_upgraded(tmp_path):
     store = ArchiveWriter(path)
     assert store.ping() is True
     version, cols = _columns(path)
-    assert version == 3 and {"receivers", "gnss_height"} <= cols
+    assert version == schema.SCHEMA_VERSION and {"receivers", "gnss_height"} <= cols
     store.close()
 
 
@@ -293,7 +293,7 @@ def test_not_null_integrity_score_is_rebuilt_keeping_rows_and_indexes(
     store = ArchiveWriter(path)
     assert store.ping() is True
     new_version, notnull, rows, indexes = _integrity_info(path)
-    assert new_version == 3
+    assert new_version == schema.SCHEMA_VERSION
     assert notnull["score"] == 0 and notnull["status"] == 1
     assert rows == [
         ("old222-5", 6.0, 0.3, "spoofed", '["aoa"]'),
@@ -375,7 +375,7 @@ def test_unversioned_013_archive_is_migrated(tmp_path):
     assert archive.get_flight("old013-5")["callsign"] == "OLD13"
     assert store.finalize_plane(fine_track_plane("new333", 1_790_000_000.0), alerts=[]) is True
     version, tables = _version_and_tables(path)
-    assert version == 3 and {"integrity", "frames"} <= tables
+    assert version == schema.SCHEMA_VERSION and {"integrity", "frames"} <= tables
     archive.close()
     store.close()
 
@@ -508,7 +508,7 @@ def test_stamped_archive_missing_later_columns_is_upgraded(
         version_now = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
     assert {"receivers", "integrity_status", "gnss_height"} <= telemetry
-    assert "registration" in flights and version_now == 3
+    assert "registration" in flights and version_now == schema.SCHEMA_VERSION
     assert store.finalize_plane(pad_plane(1_790_000_000.0, samples=3), alerts=[]) is True
     archive.close()
     store.close()
@@ -524,3 +524,171 @@ def test_portal_reports_missing_columns_as_needing_upgrade(tmp_path):
     portal = ArchiveReader(path)
     assert portal.state == "needs_upgrade"
     portal.close()
+
+
+# --- v3 -> v4 (incremental archiving) ---------------------------------------
+
+# The schema 0.22 / pre-lifecycle 1.0 builds wrote (SCHEMA_VERSION 3).
+_V3_SCHEMA = """
+CREATE TABLE IF NOT EXISTS flights (
+    flight_id TEXT PRIMARY KEY,
+    icao TEXT NOT NULL,
+    status TEXT NOT NULL,
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    retained INTEGER NOT NULL DEFAULT 1,
+    callsign TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    owner TEXT NOT NULL DEFAULT '',
+    country TEXT NOT NULL DEFAULT '',
+    aircraft_type TEXT NOT NULL DEFAULT '',
+    registration TEXT NOT NULL DEFAULT '',
+    info TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_flights_end_time ON flights(end_time DESC);
+CREATE INDEX IF NOT EXISTS idx_flights_icao ON flights(icao);
+CREATE INDEX IF NOT EXISTS idx_flights_callsign ON flights(callsign);
+CREATE TABLE IF NOT EXISTS telemetry (
+    flight_id TEXT NOT NULL,
+    timestamp REAL NOT NULL,
+    icao TEXT NOT NULL,
+    latitude REAL,
+    longitude REAL,
+    altitude REAL,
+    speed REAL,
+    heading REAL,
+    receivers TEXT,
+    integrity_score REAL,
+    integrity_status TEXT,
+    integrity_flags TEXT,
+    gnss_height REAL,
+    PRIMARY KEY (flight_id, timestamp)
+);
+CREATE INDEX IF NOT EXISTS idx_telemetry_icao_ts ON telemetry(icao, timestamp);
+
+CREATE TABLE IF NOT EXISTS integrity (
+    flight_id TEXT NOT NULL,
+    timestamp REAL NOT NULL,
+    icao TEXT NOT NULL,
+    score REAL,
+    status TEXT NOT NULL,
+    flags TEXT NOT NULL DEFAULT '[]',
+    checks TEXT,
+    PRIMARY KEY (flight_id, timestamp)
+);
+CREATE INDEX IF NOT EXISTS idx_integrity_icao_ts ON integrity(icao, timestamp);
+CREATE TABLE IF NOT EXISTS frames (
+    timestamp REAL NOT NULL,
+    receiver TEXT NOT NULL DEFAULT '',
+    hex TEXT NOT NULL,
+    df INTEGER,
+    icao TEXT,
+    rssi REAL,
+    clock INTEGER,
+    bearing REAL,
+    elevation REAL,
+    cfo REAL
+);
+CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(timestamp);
+CREATE INDEX IF NOT EXISTS idx_frames_icao_ts ON frames(icao, timestamp);
+CREATE TABLE IF NOT EXISTS alerts (
+    alert_id TEXT PRIMARY KEY,
+    flight_id TEXT NOT NULL,
+    icao TEXT,
+    callsign TEXT,
+    zone TEXT,
+    rule TEXT,
+    active INTEGER,
+    activated_at REAL,
+    deactivated_at REAL,
+    eta REAL,
+    reason TEXT,
+    last_updated REAL,
+    latitude REAL,
+    longitude REAL,
+    altitude REAL
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_flight ON alerts(flight_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_activated ON alerts(activated_at DESC);
+
+INSERT INTO flights (flight_id, icao, status, start_time, end_time, info)
+VALUES ('abc123-100', 'abc123', 'completed', 100.0, 200.0, '{}');
+INSERT INTO telemetry (flight_id, timestamp, icao, latitude, longitude)
+VALUES ('abc123-100', 150.0, 'abc123', 35.0, -78.0);
+INSERT INTO alerts (alert_id, flight_id, icao, zone, rule, active, activated_at)
+VALUES ('abc123-100:home:near:1', 'abc123-100', 'abc123', 'home', 'near', 0, 120.0);
+PRAGMA user_version = 3;
+"""
+
+
+def _indexes(path) -> set[str]:
+    with sqlite3.connect(path) as conn:
+        names = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+        }
+    conn.close()
+    return names
+
+
+def test_v3_archive_is_upgraded_to_v4_keeping_rows(tmp_path):
+    path = tmp_path / "pyaerial.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(_V3_SCHEMA)
+    conn.close()
+
+    store = ArchiveWriter(path)
+    assert store.ping() is True
+    assert store.schema_found == 3
+    store.close()
+    version, cols = _columns(path)
+    assert version == schema.SCHEMA_VERSION == 4
+    with sqlite3.connect(path) as conn:
+        flights = {r[1] for r in conn.execute("PRAGMA table_info(flights)")}
+        alerts = {r[1] for r in conn.execute("PRAGMA table_info(alerts)")}
+        row = conn.execute(
+            "SELECT status, checkpoint_at, previous_flight_id FROM flights"
+        ).fetchone()
+        alert = conn.execute("SELECT flight_id, start_flight_id FROM alerts").fetchone()
+        samples = conn.execute("SELECT COUNT(*) FROM telemetry").fetchone()[0]
+    conn.close()
+    assert {"checkpoint_at", "previous_flight_id"} <= flights
+    assert "start_flight_id" in alerts
+    assert row == ("completed", None, None)
+    assert alert == ("abc123-100", None)
+    assert samples == 1
+    assert {"idx_flights_live", "idx_alerts_active"} <= _indexes(path)
+    reader = ArchiveReader(path)
+    assert reader.state == "ok"
+    assert [f["flight_id"] for f in reader.list_flights()] == ["abc123-100"]
+    reader.close()
+
+
+@pytest.mark.parametrize("script", ["v1", "v3"])
+def test_older_archives_reach_v4_in_one_transaction(tmp_path, monkeypatch, script):
+    """A failure while adding the v4 columns leaves the file as it was."""
+    path = tmp_path / "pyaerial.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(_V1_SCHEMA if script == "v1" else _V3_SCHEMA)
+    conn.close()
+    real = schema._ADDED_COLUMNS
+    broken = {**real, 4: (*real[4], ("flights", "bogus", "NOT A TYPE ("))}
+    monkeypatch.setattr(schema, "_ADDED_COLUMNS", broken)
+    store = ArchiveWriter(path)
+    assert store.state == "down"
+    store.close()
+    version, _cols = _columns(path)
+    assert version == (1 if script == "v1" else 3)
+    with sqlite3.connect(path) as conn:
+        flights = {r[1] for r in conn.execute("PRAGMA table_info(flights)")}
+    conn.close()
+    assert "checkpoint_at" not in flights
+
+
+def test_new_archive_reports_schema_found_zero(tmp_path):
+    store = ArchiveWriter(tmp_path / "new.db")
+    assert store.schema_found == 0
+    store.close()
+    again = ArchiveWriter(tmp_path / "new.db")
+    assert again.schema_found == schema.SCHEMA_VERSION
+    again.close()

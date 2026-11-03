@@ -13,9 +13,13 @@ import sqlite3
 
 log = logging.getLogger("pyaerial.store")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+# flights.status: ``live`` while tracked (checkpointed, hidden from history),
+# ``completed`` once finalized, ``interrupted`` when the engine stopped
+# without finalizing it (end_time is then the last checkpointed sample).
 FLIGHT_STATUS_COMPLETED = "completed"
 FLIGHT_STATUS_LIVE = "live"
+FLIGHT_STATUS_INTERRUPTED = "interrupted"
 # Columns a schema 1 (PyAerial 0.12-0.21) archive must have to be upgraded.
 _V1_COLUMNS = {
     "flights": {
@@ -73,6 +77,13 @@ _ADDED_COLUMNS: dict[int, tuple[tuple[str, str, str], ...]] = {
     # Metres above the WGS84 ellipsoid from TC 20-22 positions; altitude is
     # barometric only.
     3: (("telemetry", "gnss_height", "REAL"),),
+    # Incremental archiving: the last checkpoint of a live flight, the
+    # segment a split continued, and the segment where an episode began.
+    4: (
+        ("flights", "checkpoint_at", "REAL"),
+        ("flights", "previous_flight_id", "TEXT"),
+        ("alerts", "start_flight_id", "TEXT"),
+    ),
 }
 # Every integrity verdict change; checks is the full JSON result. score is
 # NULL for an ``unknown`` verdict (no check had evidence). v2 declared it
@@ -116,11 +127,16 @@ _SCHEMA_DDL = (
         country TEXT NOT NULL DEFAULT '',
         aircraft_type TEXT NOT NULL DEFAULT '',
         registration TEXT NOT NULL DEFAULT '',
-        info TEXT NOT NULL DEFAULT '{}'
+        info TEXT NOT NULL DEFAULT '{}',
+        checkpoint_at REAL,
+        previous_flight_id TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_flights_end_time ON flights(end_time DESC)",
     "CREATE INDEX IF NOT EXISTS idx_flights_icao ON flights(icao)",
     "CREATE INDEX IF NOT EXISTS idx_flights_callsign ON flights(callsign)",
+    # Startup recovery reads the (few) live flights and active episodes.
+    "CREATE INDEX IF NOT EXISTS idx_flights_live ON flights(flight_id) "
+    "WHERE status = 'live'",
     # receivers / integrity_flags are JSON arrays; integrity_* is the verdict
     # in effect when the sample arrived (NULL before the first, score NULL for
     # unknown). altitude is barometric; gnss_height is metres above the WGS84
@@ -174,9 +190,12 @@ _SCHEMA_DDL = (
         last_updated REAL,
         latitude REAL,
         longitude REAL,
-        altitude REAL
+        altitude REAL,
+        start_flight_id TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_alerts_flight ON alerts(flight_id)",
+    "CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(flight_id) "
+    "WHERE active = 1",
     "CREATE INDEX IF NOT EXISTS idx_alerts_activated ON alerts(activated_at DESC)",
 )
 _SCHEMA_TABLES = ("flights", "telemetry", "integrity", "frames", "alerts")
@@ -271,20 +290,23 @@ def integrity_score_required(conn: sqlite3.Connection) -> bool:
     )
 
 
-def ensure_schema(conn: sqlite3.Connection, path: str) -> None:
+def ensure_schema(conn: sqlite3.Connection, path: str) -> int:
+    """Create or upgrade the schema; returns the version the file had."""
     # A current archive needs no DDL, so opening it never queues behind
     # the engine's write lock (it took ~5 s with busy_timeout before).
     if not schema_current(conn, path):
-        upgrade(conn, path)
+        return upgrade(conn, path)
+    return SCHEMA_VERSION
 
 
-def upgrade(conn: sqlite3.Connection, path: str) -> None:
+def upgrade(conn: sqlite3.Connection, path: str) -> int:
     """Create a new archive or upgrade an older one in place, keeping every flight.
 
     Each version since 1 added columns and tables. Samples archived before
     a column existed read back without that field: no receivers or verdict
     before v2, no GNSS height before v3. v3 also lets ``integrity.score``
-    be NULL, which needs a table rebuild. One transaction, version stamped
+    be NULL, which needs a table rebuild; v4 adds the checkpoint and segment
+    columns (NULL on older rows). Returns the version found (0: new file). One transaction, version stamped
     last: a file that is not a PyAerial archive is refused and left
     untouched, and a failure part way leaves the file as it was.
     """
@@ -311,6 +333,7 @@ def upgrade(conn: sqlite3.Connection, path: str) -> None:
             version,
             SCHEMA_VERSION,
         )
+    return version
 
 
 def add_columns(conn: sqlite3.Connection, path: str, version: int) -> None:
