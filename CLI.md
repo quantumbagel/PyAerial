@@ -1,66 +1,62 @@
 # CLI
 
-`pyaerial` operates the tracking pipeline, configuration validator, historical database purger, and real-time web portal.
+**Commands**
 
-**Subcommands**
+| Command | Role |
+|---------|------|
+| `pyaerial run` | Engine: ingests receivers, scores integrity, alerts, writes Redis live state and the SQLite archive |
+| `pyaerial web` | Read-only portal and API server (reads Redis and SQLite; does not track). Endpoints: [WEBSOCKET.md](WEBSOCKET.md) |
+| `pyaerial validate` | Checks syntax, schema and referenced files without starting anything |
+| `pyaerial reset [icao]` | Deletes archived history: everything, or one aircraft |
+| `pyaerial --version` | Prints the version |
 
-| Subcommand | Process role |
-|------------|--------------|
-| `pyaerial run` | Tracking engine (ingests frames, writes Redis live state and SQLite history) |
-| `pyaerial web` | Read-only API server and web portal (reads Redis and SQLite; does not track) |
-| `pyaerial validate` | Syntax, schema, and filesystem cross-reference verification |
-| `pyaerial reset` | Archive purger (`--yes`; optional single ICAO; clears Redis only when engine is stopped). Also recreates an archive file from an incompatible schema version |
+**Options**
 
-The web portal serves `GET /health`, `GET /ready`, and `GET /api` schema endpoints alongside WebSocket telemetry feeds. Live flight state broadcasts over `ws://<host>:<port>/ws/live` (with `/ws` supported as an alias). Corrected Mode S frames are pushed as JSON on `/ws/raw` (portal Raw tab) and re-encoded as dump1090 Beast binary on `/ws/beast` and, when `web.beast_port` is set, on a TCP listener for OpenSky Network. Comprehensive message schemas, RPC actions, and client integration libraries are detailed in [WEBSOCKET.md](WEBSOCKET.md).
+| Option | Commands | Meaning |
+|--------|----------|---------|
+| `-c`, `--config PATH` | all | Config file (default `$PYAERIAL_CONFIG`, else `config.yaml`) |
+| `--aircraft-db PATH` | `run`, `web` | HexDB / Planespotters cache (default `$PYAERIAL_AIRCRAFT_DB`, else `aircraft.db` in the working directory) |
+| `--host ADDR` | `web` | Bind address (default `127.0.0.1`; `0.0.0.0` for containers or other interfaces) |
+| `-p`, `--port PORT` | `web` | Port, 1-65535 (default `10090`) |
+| `icao` | `reset` | Delete only this aircraft (6 hex digits, e.g. `a1b2c3`) |
+| `-y`, `--yes` | `reset` | Skip the confirmation prompt (required when stdin is not a terminal) |
+| `--force` | `reset` | Proceed when Redis is unreachable and the engine state is unknown; Redis is then not cleared. Never overrides a running engine |
 
-**Command execution**
+`reset` refuses while the engine heartbeat is fresh; with an `icao`, only while that aircraft is live. With the engine stopped it also clears the matching Redis live state. A full reset also recreates an archive it cannot open (newer schema, or not a PyAerial archive).
 
 ```bash
-# Start tracking engine with custom config and aircraft metadata cache
-pyaerial run -c /path/to/config.yaml --aircraft-db /path/to/aircraft.db
-
-# Validate configuration syntax and referenced geometries without starting services
-pyaerial validate -c config.yaml
-
-# Start web portal bound to all network interfaces
-pyaerial web -c config.yaml --host 0.0.0.0 --port 10090
-
-# Purge all archived flights, telemetry, integrity verdicts, raw frames, and alerts
-pyaerial reset --yes
-
-# Purge history for a single ICAO target
-pyaerial reset --yes abc123
-
-# Stream recorded hex capture through engine (paths resolve relative to replay.yaml)
-pyaerial run -c src/pyaerial/examples/replay.yaml
+pyaerial reset --yes              # delete all flights, telemetry, verdicts, raw frames and alerts
+pyaerial reset --yes a1b2c3       # one aircraft
+pyaerial reset --yes --force      # Redis down; make sure `pyaerial run` is stopped first
 ```
 
-**Environment overrides**
+**Exit codes**
 
-Runtime settings accept environment variable overrides; explicit `-c` flags take precedence over `PYAERIAL_CONFIG`.
+Commands and these codes are stable within 1.x; log text is not (see Compatibility in the [README](README.md)).
 
-| Variable | Target configuration key | Behavior |
-|----------|--------------------------|----------|
-| `PYAERIAL_CONFIG` | Config path | Default path when `-c` is omitted |
-| `PYAERIAL_HISTORY` | `database.path` | SQLite history database file path |
-| `PYAERIAL_AIRCRAFT_DB` | `--aircraft-db` default | HexDB / Planespotters cache path (`aircraft.db`) |
-| `PYAERIAL_REDIS` | `database.redis_uri` | Redis connection URI |
-| `PYAERIAL_LOG_LEVEL` | `logging.level` | Logging severity (`debug`, `info`, `warning`, `error`) |
-| `PYAERIAL_LOG_FILE` | `logging.file` | Destination log file path |
-| `PYAERIAL_HZ` | `tracking.hz` | Engine evaluation frequency in Hz |
-| `PYAERIAL_WEB_ORIGINS` | `web.origins` | Extra allowed browser origins, comma-separated exact `scheme://host[:port]` entries (default none; `*` permits all) |
-| `PYAERIAL_WEB_ALLOWED_HOSTS` | `web.allowed_hosts` | Comma-separated hostnames the portal is served on (DNS-rebinding guard; loopback always allowed) |
-| `PYAERIAL_BEAST_HOST` | `web.beast_host` | Bind address for dump1090-compatible Beast TCP (`127.0.0.1`; Compose sets `0.0.0.0` inside the container and publishes it on host loopback) |
-| `PYAERIAL_BEAST_PORT` | `web.beast_port` | Beast TCP port (`30005`; `off` disables TCP; `/ws/beast` still serves) |
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Invalid configuration (`validate` prints `INVALID`), engine startup error, or `reset` refused, aborted or failed |
+| `2` | Usage error: no command, unknown option, or invalid argument (port, ICAO) |
 
-Configuration strings support `${VAR}` and `${VAR:-default}` environment interpolation, but referenced variables without defaults must be set in the host environment or startup validation fails.
+**Environment variables**
 
-```yaml
-on_activate:
-  - method: webhook
-    options:
-      url: "${PYAERIAL_WEBHOOK_URL}"
-      format: discord
-```
+These replace the corresponding config values. An invalid value is reported with the variable's name. `-c` and `--aircraft-db` take precedence over `PYAERIAL_CONFIG` and `PYAERIAL_AIRCRAFT_DB`.
 
-The full YAML schema is in [CONFIGURATION.md](CONFIGURATION.md).
+| Variable | Sets | Notes |
+|----------|------|-------|
+| `PYAERIAL_CONFIG` | Config path | Default for `-c` |
+| `PYAERIAL_AIRCRAFT_DB` | Aircraft cache path | Default for `--aircraft-db` |
+| `PYAERIAL_HISTORY` | `database.path` | |
+| `PYAERIAL_REDIS` | `database.redis_uri` | |
+| `PYAERIAL_REDIS_PASSWORD_FILE` | `database.redis_password_file` | The URI must not contain a password then |
+| `PYAERIAL_LOG_LEVEL` | `logging.level` | |
+| `PYAERIAL_LOG_FILE` | `logging.file` | |
+| `PYAERIAL_HZ` | `tracking.hz` | |
+| `PYAERIAL_WEB_ORIGINS` | `web.origins` | Comma-separated |
+| `PYAERIAL_WEB_ALLOWED_HOSTS` | `web.allowed_hosts` | Comma-separated |
+| `PYAERIAL_BEAST_HOST` | `web.beast_host` | |
+| `PYAERIAL_BEAST_PORT` | `web.beast_port` | `off`, `none`, `disable`, `disabled` or empty disables Beast TCP |
+
+The Docker image's default command also starts dump1090 in the container unless `PYAERIAL_START_DUMP1090=0`. Compose settings such as `REDIS_PASSWORD` and `DUMP1090_HOST` are explained in [`.env.example`](.env.example). For `${VAR}` and `${file:...}` inside the config file, see [CONFIGURATION.md](CONFIGURATION.md).
