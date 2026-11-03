@@ -191,7 +191,7 @@ def _activate_in_pad(engine, plane, first):
         "flight_id": old,
         "eta": 0.0,
     }
-    engine.live_store.record_alert_episode(
+    engine.episodes.record_alert_episode(
         plane,
         {STORE_ICAO: "abc123", "zone": "pad", "type": "warn"},
         {},
@@ -254,7 +254,7 @@ def test_segment_is_archived_when_trimming_the_live_plane_fails(tmp_path, monkey
         cleanup()
 
 
-# --- M2: carried episodes are archived with the old segment too ----------------
+# --- M2: carried episodes keep their retain evidence and their start ----------
 
 
 def test_old_segment_keeps_the_episode_and_its_retain_evidence(tmp_path, monkeypatch):
@@ -266,7 +266,15 @@ def test_old_segment_keeps_the_episode_and_its_retain_evidence(tmp_path, monkeyp
         old = _activate_in_pad(engine, plane, first)
         engine.archiver.split_long_flights()
         assert reader.get_flight(old) is not None
-        assert [a["alert_id"] for a in reader.get_alerts(flight_id=old)] == ["A1"]
+        # One row per episode: it moved on with the open episode, and keeps
+        # the segment where it began (a discarded continuation returns it).
+        new = engine.tracker.planes["ABC123"].flight_id
+        rows = (
+            sqlite3.connect(reader.path)
+            .execute("SELECT alert_id, flight_id, start_flight_id, active FROM alerts")
+            .fetchall()
+        )
+        assert rows == [("A1", new, old, 1)]
         # The live episode continues on the new flight, start time unchanged.
         new = engine.tracker.planes["ABC123"].flight_id
         active = engine.live_store.get_alerts(active_only=True)

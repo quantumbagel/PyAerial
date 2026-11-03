@@ -132,6 +132,18 @@ class _EpisodeCloser(Protocol):
     def deactivate(self, plane: Plane, ended_by: str | None = None) -> bool: ...
 
 
+class EpisodeLog(Protocol):
+    """The archive side of :class:`~pyaerial.store.recorder.EpisodeRecorder`."""
+
+    def checkpoint_episodes(self) -> list[tuple[dict[str, Any], dict[str, Any]]]: ...
+
+    def written(
+        self, entries: Sequence[tuple[dict[str, Any], dict[str, Any]]]
+    ) -> None: ...
+
+    def open_on(self, alert_id: str) -> str | None: ...
+
+
 class AlertHooks(Protocol):
     """What the archiver needs from the pipeline (``PlaneCalculator``)."""
 
@@ -171,6 +183,7 @@ class FlightArchiver:
         live: LiveWriteStore,
         alerts: AlertHooks,
         tracked: Callable[[], Mapping[str, Plane]],
+        episodes: EpisodeLog | None = None,
     ):
         self.config = config
         self.polygons = polygons
@@ -179,6 +192,7 @@ class FlightArchiver:
         self._live = live
         self._alerts = alerts
         self._tracked = tracked
+        self._episodes = episodes
         # Insertion-ordered: the first key is the oldest deferred flight.
         self._pending: dict[str, Plane] = {}
         # Evictions since history was last writable (logged once each way).
@@ -251,16 +265,16 @@ class FlightArchiver:
         with the engine.
         """
         try:
-            alerts = [
-                _closed_alert(alert)
-                for alert in self._live.get_alerts(
-                    flight_id=flight_id, active_only=False
-                )
-            ]
+            docs = self._live.get_alerts(flight_id=flight_id, active_only=False)
+            # Episodes a segment split carried on to the next flight stay
+            # open there (the archive row already moved): they count for
+            # this segment's retention but are not closed onto it.
+            carried = [doc for doc in docs if self._carried(doc, flight_id)]
+            alerts = [_closed_alert(doc) for doc in docs if doc not in carried]
             store = self._archive
             # A disabled archive writes nothing: skip the policy work.
             retained = getattr(store, "disabled", False) or self.retain(
-                plane, alerts, from_snapshot=from_snapshot
+                plane, [*alerts, *carried], from_snapshot=from_snapshot
             )
             return store.finalize_plane(plane, alerts=alerts, retained=retained)
         except LiveUnavailable as exc:
@@ -275,8 +289,9 @@ class FlightArchiver:
     # -- checkpoints ---------------------------------------------------------
 
     def checkpoint(self, now: float | None = None, *, force: bool = False) -> bool:
-        """Write tracked flights' settled samples and new verdicts (one
-        transaction), at most every CHECKPOINT_SECONDS unless *force*.
+        """Write tracked flights' settled samples and new verdicts, and the
+        open alert episodes' latest state (one transaction), at most every
+        CHECKPOINT_SECONDS unless *force*.
 
         Each flight with a position gets a ``live`` row; the cursors on its
         :class:`~pyaerial.models.TrackState` advance only once the write
@@ -308,11 +323,14 @@ class FlightArchiver:
                     integrity_rows(plane, flight_id, icao, after=track.verdicts_through),
                 )
             )
-        if not items:
+        episodes = self._episodes.checkpoint_episodes() if self._episodes else []
+        if not items and not episodes:
             return False
-        if not archive.checkpoint(items, now=now):
+        if not archive.checkpoint(items, episodes, now=now):
             self.back_off()
             return False
+        if self._episodes is not None:
+            self._episodes.written(episodes)
         for item in items:
             track = item.plane.track
             track.checkpoint_at = now
@@ -321,6 +339,12 @@ class FlightArchiver:
             if item.integrity:
                 track.verdicts_through = item.integrity[-1][1]
         return True
+
+    def _carried(self, doc: Mapping[str, Any], flight_id: str) -> bool:
+        if self._episodes is None or not doc.get("active"):
+            return False
+        open_on = self._episodes.open_on(str(doc.get("alert_id") or ""))
+        return open_on is not None and open_on != flight_id
 
     def retain(self, plane: Plane, alerts: list[dict], *, from_snapshot: bool) -> bool:
         """Whether the archive keeps this flight (``archive.flights`` policy).

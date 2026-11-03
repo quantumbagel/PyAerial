@@ -34,6 +34,7 @@ from pyaerial.receivers import RawFrame, available_receivers
 from pyaerial.receivers.positions import ReceiverPositions
 from pyaerial.store import ArchiveWriter
 from pyaerial.store.live import LiveWriter, LiveWriteStore
+from pyaerial.store.recorder import EpisodeRecorder
 from pyaerial.tracker import Tracker
 
 log = logging.getLogger("pyaerial.engine")
@@ -84,8 +85,10 @@ class Engine:
             if history_store is None
             else history_store
         )
+        # Alert episodes go to the archive (the record) and the live cache.
+        self.episodes = EpisodeRecorder(self.history_store, self.live_store)
         self.calculator = PlaneCalculator(
-            config, self.polygons, self.aircraft_db, self.live_store
+            config, self.polygons, self.aircraft_db, self.episodes
         )
         self._running = False
         self._shutdown = threading.Event()
@@ -115,6 +118,7 @@ class Engine:
             live=self.live_store,
             alerts=self.calculator,
             tracked=lambda: self.tracker.planes,
+            episodes=self.episodes,
         )
         if not isolated:
             if not self.live_store.ping():

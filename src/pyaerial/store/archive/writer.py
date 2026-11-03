@@ -306,10 +306,10 @@ class ArchiveWriter(ArchiveConnection):
         icao = plane.icao
         if not retained:
             log.debug("Discarded flight %s (archive policy)", flight_id)
-            # A checkpointed flight has a live row (and samples) to delete.
-            if plane.track.checkpoint_at is not None and not self.discard_flight(
-                flight_id
-            ):
+            # A checkpointed flight, or one with alert episodes, has a live
+            # row (and samples, episodes) to delete.
+            written = plane.track.checkpoint_at is not None or bool(alert_docs)
+            if written and not self.discard_flight(flight_id):
                 return False
             if not alert_docs:
                 return True

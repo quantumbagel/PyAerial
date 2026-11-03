@@ -17,10 +17,16 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pyaerial.constants import (
+    ALERT_CAT_ETA,
+    ALERT_CAT_REASON,
+    ALERT_CAT_TYPE,
+    ALERT_CAT_ZONE,
     STORE_ALT,
+    STORE_CALLSIGN,
     STORE_GNSS_HEIGHT,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
+    STORE_ICAO,
     STORE_LAT,
     STORE_LONG,
 )
@@ -303,6 +309,42 @@ def plane_from_alert_docs(
             STORE_LONG: [Datum(coords[0], last)],
         }
     return plane
+
+
+def alert_episode_doc(
+    plane: Plane,
+    meta: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    *,
+    alert_id: str,
+    activated_at: float,
+    active: bool,
+    deactivated_at: float | None = None,
+) -> dict[str, Any]:
+    """One alert episode (live ``live:alerts:*`` member, archive ``alerts`` row).
+
+    *meta* and *payload* are the alert engine's notification fields; only
+    named keys are copied.
+    """
+    return {
+        "alert_id": alert_id,
+        "flight_id": plane.flight_id,
+        "icao": meta[STORE_ICAO].lower(),
+        "callsign": meta.get(STORE_CALLSIGN) or "",
+        "zone": meta.get(ALERT_CAT_ZONE, ""),
+        "rule": meta.get(ALERT_CAT_TYPE, ""),
+        "active": active,
+        "activated_at": activated_at,
+        "deactivated_at": deactivated_at,
+        "eta": meta.get(ALERT_CAT_ETA),
+        "reason": meta.get(ALERT_CAT_REASON),
+        "last_updated": deactivated_at or activated_at,
+        "position": {
+            "type": "Point",
+            "coordinates": [payload.get(STORE_LONG), payload.get(STORE_LAT)],
+        },
+        "altitude": payload.get(STORE_ALT),
+    }
 
 
 # --- archive ---------------------------------------------------------------

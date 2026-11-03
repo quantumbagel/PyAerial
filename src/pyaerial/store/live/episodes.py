@@ -14,19 +14,9 @@ from typing import Any, cast
 
 from redis.exceptions import RedisError
 
-from pyaerial.constants import (
-    ALERT_CAT_ETA,
-    ALERT_CAT_REASON,
-    ALERT_CAT_TYPE,
-    ALERT_CAT_ZONE,
-    STORE_ALT,
-    STORE_CALLSIGN,
-    STORE_ICAO,
-    STORE_LAT,
-    STORE_LONG,
-)
 from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.models import Plane
+from pyaerial.store.codec import alert_episode_doc
 from pyaerial.store.live._conn import LiveUnavailable
 from pyaerial.store.live._mirror import MirroredStore
 from pyaerial.store.live._reads import alerts_by_id, filter_alerts, read_alerts
@@ -274,26 +264,15 @@ class EpisodesMixin(MirroredStore):
         active: bool,
         deactivated_at: float | None = None,
     ) -> dict[str, Any]:
-        flight_id = plane.flight_id
-        return {
-            "alert_id": alert_id,
-            "flight_id": flight_id,
-            "icao": meta[STORE_ICAO].lower(),
-            "callsign": meta.get(STORE_CALLSIGN) or "",
-            "zone": meta.get(ALERT_CAT_ZONE, ""),
-            "rule": meta.get(ALERT_CAT_TYPE, ""),
-            "active": active,
-            "activated_at": activated_at,
-            "deactivated_at": deactivated_at,
-            "eta": meta.get(ALERT_CAT_ETA),
-            "reason": meta.get(ALERT_CAT_REASON),
-            "last_updated": deactivated_at or activated_at,
-            "position": {
-                "type": "Point",
-                "coordinates": [payload.get(STORE_LONG), payload.get(STORE_LAT)],
-            },
-            "altitude": payload.get(STORE_ALT),
-        }
+        return alert_episode_doc(
+            plane,
+            meta,
+            payload,
+            alert_id=alert_id,
+            activated_at=activated_at,
+            active=active,
+            deactivated_at=deactivated_at,
+        )
 
     def get_alerts(
         self,

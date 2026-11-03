@@ -28,6 +28,13 @@ from pyaerial.store.archive.schema import (
 
 log = logging.getLogger("pyaerial.store")
 
+# History shows finalized flights only: a live flight's row, and the alert
+# episodes recorded on it while it is tracked, appear once it is finalized.
+_NOT_LIVE_ALERT = (
+    f"NOT EXISTS (SELECT 1 FROM flights f WHERE f.flight_id = alerts.flight_id "
+    f"AND f.status = '{FLIGHT_STATUS_LIVE}')"
+)
+
 
 def _contains_pattern(query: str) -> str:
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -135,7 +142,9 @@ class ArchiveReader(ArchiveConnection):
         try:
             with self._session("flight") as conn:
                 row = conn.execute(
-                    "SELECT * FROM flights WHERE flight_id = ?", (flight_id,)
+                    "SELECT * FROM flights WHERE flight_id = ? "
+                    "AND status != ? AND retained = 1",
+                    (flight_id, FLIGHT_STATUS_LIVE),
                 ).fetchone()
             return flight_from_row(row) if row else None
         except sqlite3.Error as exc:
@@ -211,7 +220,7 @@ class ArchiveReader(ArchiveConnection):
         limit: int = 0,
         skip: int = 0,
     ) -> list[dict[str, Any]]:
-        clauses: list[str] = []
+        clauses: list[str] = [_NOT_LIVE_ALERT]
         params: list[Any] = []
         if since:
             clauses.append("activated_at >= ?")
@@ -233,9 +242,7 @@ class ArchiveReader(ArchiveConnection):
                 "OR flight_id LIKE ? ESCAPE '\\')"
             )
             params.extend([pattern, pattern, pattern, pattern, pattern])
-        sql = "SELECT * FROM alerts"
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
+        sql = "SELECT * FROM alerts WHERE " + " AND ".join(clauses)
         sql += " ORDER BY activated_at DESC"
         if skip:
             sql += " LIMIT ? OFFSET ?"
@@ -257,7 +264,8 @@ class ArchiveReader(ArchiveConnection):
         try:
             with self._session("alert stats") as conn:
                 rows = conn.execute(
-                    f"SELECT * FROM alerts WHERE flight_id IN ({placeholders})",
+                    f"SELECT * FROM alerts WHERE flight_id IN ({placeholders}) "
+                    f"AND {_NOT_LIVE_ALERT}",
                     flight_ids,
                 ).fetchall()
             return [alert_from_row(row) for row in rows]
@@ -279,7 +287,9 @@ class ArchiveReader(ArchiveConnection):
     def count_alerts(self) -> int:
         try:
             with self._session("query") as conn:
-                row = conn.execute("SELECT COUNT(*) AS n FROM alerts").fetchone()
+                row = conn.execute(
+                    f"SELECT COUNT(*) AS n FROM alerts WHERE {_NOT_LIVE_ALERT}"
+                ).fetchone()
             return int(row["n"] if row else 0)
         except (sqlite3.Error, HistoryUnavailable):
             return 0
