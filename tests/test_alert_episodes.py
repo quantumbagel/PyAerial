@@ -242,6 +242,9 @@ def test_crash_then_restart_deactivates_and_clears_live_state(
     # Crash: no shutdown(); the heartbeat key expires on its TTL.
     first.calculator.alerts._dispatcher.close(timeout=1.0)
     fake.delete("live:engine")
+    with sqlite3.connect(tmp_path / "history.db") as conn:  # its lease expires too
+        conn.execute("UPDATE engine_lease SET renewed_at = renewed_at - 60")
+    conn.close()
 
     second = _restart_engine(tmp_path)
     try:

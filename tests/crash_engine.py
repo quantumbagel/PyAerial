@@ -8,7 +8,10 @@ the episode is recorded (the engine's order), as a webhook consumer would
 see it. SIGTERM stops it gracefully; the test kills it with SIGKILL.
 
 The checkpoint constants are scaled down (1 s, 2 s settle) so that runs of
-a few seconds exercise checkpoints and recovery.
+a few seconds exercise checkpoints and recovery. A loop iteration that
+stalls (scheduling, a slow disk flush) leaves a real gap in the samples; it
+is appended to ``READY_FILE.stalls`` as ``start end`` so the test can tell
+it from a sample the archive lost.
 
 Usage: ``python tests/crash_engine.py ARCHIVE CAPTURE READY_FILE``
 """
@@ -38,11 +41,16 @@ from pyaerial.engine import Engine  # noqa: E402
 from pyaerial.engine import archiver as archiver_mod  # noqa: E402
 from pyaerial.receivers.frames import RawFrame  # noqa: E402
 from pyaerial.store import ArchiveWriter  # noqa: E402
+from pyaerial.store.archive import writer as archive_writer  # noqa: E402
 
 archiver_mod.CHECKPOINT_SECONDS = 1.0
 archiver_mod.SETTLE_SECONDS = 2.0
+# A killed engine's archive lease expires after this (the real 10 s would make
+# every restart wait).
+archive_writer.LEASE_TTL_SECONDS = 1.0
 
 HZ = 10.0
+STALL_SECONDS = 0.5
 AIRCRAFT = 8
 SPEED_MPS = 150.0
 WEST, EAST, LAT = -78.705, -78.685, 35.725  # the pad spans -78.70 .. -78.69
@@ -122,9 +130,15 @@ def main() -> int:
         out.write(f"{time.time()}\n")
     odd = 0
     tick = 0
+    last: float | None = None
+    stalls = Path(ready + ".stalls")
     try:
         while not engine.stop_requested:
             now = time.time()
+            if last is not None and now - last > STALL_SECONDS:
+                with stalls.open("a") as out:
+                    out.write(f"{last - 0.2} {now - 0.2}\n")  # frame stamps
+            last = now
             stamp = now - 0.2  # older than the supervisor's merge window
             odd ^= 1
             for n in range(AIRCRAFT):

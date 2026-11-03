@@ -8,7 +8,7 @@ alert episodes, and (optionally) every raw receiver frame.
 - :mod:`~pyaerial.store.archive.schema`: DDL, version detection, migrations.
 """
 
-from pyaerial.store.archive._conn import HistoryUnavailable, RowRejected
+from pyaerial.store.archive._conn import HistoryUnavailable, LeaseLost, RowRejected
 from pyaerial.store.archive.reader import ArchiveReader
 from pyaerial.store.archive.schema import SCHEMA_VERSION, HistorySchemaMismatch
 from pyaerial.store.archive.writer import ArchiveWriter
@@ -19,5 +19,6 @@ __all__ = [
     "ArchiveWriter",
     "HistorySchemaMismatch",
     "HistoryUnavailable",
+    "LeaseLost",
     "RowRejected",
 ]

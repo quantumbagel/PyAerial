@@ -7,16 +7,19 @@ import json
 import logging
 import math
 import sqlite3
-from collections.abc import Iterable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from pyaerial.constants import LIVE_ENGINE_TTL_SECONDS
 from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.models import Plane
 from pyaerial.receivers.frames import RawFrame, frame_fields
 from pyaerial.store.archive._conn import (
     ArchiveConnection,
     HistoryUnavailable,
+    LeaseLost,
     RowRejected,
     unavailable,
 )
@@ -43,6 +46,10 @@ from pyaerial.store.codec import (
 
 log = logging.getLogger("pyaerial.store")
 
+# A tracking engine's archive lease expires this long after its last renewal
+# (each tick): the Redis heartbeat's TTL, so a crashed engine's archive can
+# be taken over as soon as its heartbeat lets another engine start.
+LEASE_TTL_SECONDS = float(LIVE_ENGINE_TTL_SECONDS)
 # Rows deleted per prune_frames call, so one prune never stalls the engine tick.
 # The engine prunes again on the next tick while a call returns a full batch.
 FRAME_PRUNE_BATCH = 20_000
@@ -258,6 +265,12 @@ class ArchiveWriter(ArchiveConnection):
 
     def __init__(self, path: str | Path, *, disabled: bool = False):
         self._dropping_frames = False
+        # The engine's archive lease (take_lease): its token, whether this
+        # process holds it, and whether another engine has taken it since.
+        self._lease_token: str | None = None
+        self._lease_renewed = float("-inf")
+        self.lease_held = False
+        self.lease_lost = False
         #: Schema version the file had when this process first opened it (0:
         #: created now; None: not opened yet). Upgrade notes key off it.
         self.schema_found: int | None = None
@@ -367,6 +380,7 @@ class ArchiveWriter(ArchiveConnection):
             with self._session("persist") as conn:
                 with conn:
                     conn.execute("BEGIN IMMEDIATE")
+                    self._fence(conn)
                     conn.execute(
                         """
                         INSERT INTO flights (
@@ -429,6 +443,143 @@ class ArchiveWriter(ArchiveConnection):
             self._last_error = f"archive write failed: {exc}"
             return False
 
+    # -- the engine's lease ---------------------------------------------------
+
+    def take_lease(
+        self,
+        token: str | None = None,
+        *,
+        wait: float = 0.0,
+        keep_alive: Callable[[], None] | None = None,
+    ) -> bool:
+        """Take the archive for the tracking engine *token* (one per process).
+
+        A lease another engine renewed within LEASE_TTL_SECONDS is live: this
+        waits up to *wait* seconds for it to expire (calling *keep_alive*,
+        e.g. the Redis heartbeat, meanwhile) and raises :class:`LeaseLost`
+        if it is still renewed. An expired lease (a killed or stalled
+        engine) is taken over: that engine's later writes are refused.
+
+        From then on every write transaction of this writer checks the lease
+        is still *token*'s, and raises :class:`LeaseLost` (``lease_lost``)
+        once another engine has taken over. Without a token (``pyaerial
+        reset``, tools) writes are not fenced. *token* defaults to the last
+        one given (a retry after the archive was down). False when the
+        archive is unavailable.
+        """
+        token = token or self._lease_token
+        if self.disabled or token is None:
+            return True
+        self._lease_token = token
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                age = self._try_lease(token)
+            except (sqlite3.Error, HistoryUnavailable) as exc:
+                log.warning("Could not take the archive lease: %s", exc)
+                return False
+            if age is None:
+                self.lease_held = True
+                self.lease_lost = False
+                self._lease_renewed = time.monotonic()
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._lost()
+                raise LeaseLost(
+                    f"another tracking engine renewed the archive lease {age:.1f} s "
+                    "ago"
+                )
+            if keep_alive is not None:
+                keep_alive()
+            time.sleep(min(remaining, max(0.05, LEASE_TTL_SECONDS - age), 1.0))
+
+    def _try_lease(self, token: str) -> float | None:
+        """Take the lease unless another engine holds a live one; then its age."""
+        now = time.time()
+        with self._session("lease") as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT token, renewed_at FROM engine_lease WHERE id = 1"
+            ).fetchone()
+            if row is not None and row["token"] != token:
+                age = now - row["renewed_at"]
+                if 0 <= age < LEASE_TTL_SECONDS:
+                    return age
+                log.warning(
+                    "Taking the archive over from an engine that stopped renewing "
+                    "its lease %.0f s ago; it can no longer write",
+                    age,
+                )
+            conn.execute(
+                "INSERT OR REPLACE INTO engine_lease (id, token, renewed_at) "
+                "VALUES (1, ?, ?)",
+                (token, now),
+            )
+        return None
+
+    def renew_lease(self, *, every: float = 0.0) -> bool:
+        """Refresh the lease's ``renewed_at`` (at most every *every* seconds);
+        notices a takeover even while nothing else is written. False when
+        lost (``lease_lost``) or the archive is down."""
+        if self.disabled or self._lease_token is None or not self.lease_held:
+            return not self.lease_lost
+        mono = time.monotonic()
+        if mono - self._lease_renewed < every:
+            return True
+        self._lease_renewed = mono
+        try:
+            with self._session("lease") as conn, conn:
+                cursor = conn.execute(
+                    "UPDATE engine_lease SET renewed_at = ? WHERE id = 1 AND token = ?",
+                    (time.time(), self._lease_token),
+                )
+                if cursor.rowcount == 0:
+                    self._lost()
+                    return False
+        except (sqlite3.Error, HistoryUnavailable) as exc:
+            log.debug("Could not renew the archive lease: %s", exc)
+            return False
+        return True
+
+    def release_lease(self) -> None:
+        """Give the lease up (graceful shutdown); only if still ours."""
+        if self.disabled or self._lease_token is None or not self.lease_held:
+            return
+        try:
+            with self._session("lease") as conn, conn:
+                conn.execute(
+                    "DELETE FROM engine_lease WHERE id = 1 AND token = ?",
+                    (self._lease_token,),
+                )
+        except (sqlite3.Error, HistoryUnavailable) as exc:
+            log.debug("Could not release the archive lease: %s", exc)
+        self.lease_held = False
+
+    def _fence(self, conn: sqlite3.Connection) -> None:
+        """Inside a write transaction: refuse unless this engine holds the
+        lease (no-op for an unfenced writer)."""
+        token = self._lease_token
+        if token is None:
+            return
+        if self.lease_lost:
+            raise LeaseLost("another engine took the archive over")
+        if not self.lease_held:
+            raise HistoryUnavailable("archive lease not taken yet")
+        row = conn.execute("SELECT token FROM engine_lease WHERE id = 1").fetchone()
+        if row is None or row[0] != token:
+            self._lost()
+            raise LeaseLost("another engine took the archive over")
+
+    def _lost(self) -> None:
+        if not self.lease_lost:
+            log.error(
+                "Another tracking engine took the archive over; this engine "
+                "stops writing it"
+            )
+        self.lease_held = False
+        self.lease_lost = True
+
     # -- incremental (live) writes ------------------------------------------
 
     def checkpoint(
@@ -453,6 +604,7 @@ class ArchiveWriter(ArchiveConnection):
         try:
             with self._session("checkpoint") as conn, conn:
                 conn.execute("BEGIN IMMEDIATE")
+                self._fence(conn)
                 for item in flights:
                     conn.execute(
                         _FLIGHT_UPSERT_LIVE,
@@ -493,6 +645,7 @@ class ArchiveWriter(ArchiveConnection):
         try:
             with self._session("alert episodes") as conn, conn:
                 conn.execute("BEGIN IMMEDIATE")
+                self._fence(conn)
                 self._write_episodes(conn, episodes)
         except _CONTENT_ERRORS as exc:
             raise RowRejected(f"{type(exc).__name__}: {exc}") from exc
@@ -572,6 +725,8 @@ class ArchiveWriter(ArchiveConnection):
             return True
         try:
             with self._session("interrupt") as conn, conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._fence(conn)
                 conn.execute(
                     f"""
                     UPDATE flights SET status = '{FLIGHT_STATUS_INTERRUPTED}',
@@ -618,6 +773,7 @@ class ArchiveWriter(ArchiveConnection):
         try:
             with self._session("discard") as conn, conn:
                 conn.execute("BEGIN IMMEDIATE")
+                self._fence(conn)
                 if conn.execute(
                     "SELECT 1 FROM alerts WHERE flight_id = ? AND active = 1 LIMIT 1",
                     (flight_id,),
@@ -677,6 +833,8 @@ class ArchiveWriter(ArchiveConnection):
             )
         try:
             with self._session("frames") as conn, conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._fence(conn)
                 conn.executemany(
                     """
                     INSERT INTO frames (

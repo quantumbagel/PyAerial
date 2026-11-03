@@ -4,7 +4,7 @@ Internals for contributors. Users start at the [README](README.md).
 
 **Processes**
 
-- `pyaerial run` (engine, `engine/`) is the only writer of Redis and the SQLite archive. At start it claims the `live:engine` heartbeat; a second engine refuses to start, and an engine that loses the heartbeat yields.
+- `pyaerial run` (engine, `engine/`) is the only writer of Redis and the SQLite archive. At start it claims the `live:engine` heartbeat and the archive's `engine_lease`; a second engine refuses to start, and an engine that loses either yields.
 - `pyaerial web` (portal, `webapp.py` and `api/`) reads Redis and opens the archive read-only. It never tracks.
 
 **Pipeline**
@@ -65,7 +65,8 @@ The archive is the record; Redis is a cache of what the engine tracks.
 
 - A tracked flight gets a `live` row with its first checkpoint (`FlightArchiver.checkpoint`, each flight every `CHECKPOINT_SECONDS` = 5 s, spread over the ticks): samples older than `SETTLE_SECONDS` = 10 s, and new integrity verdicts. Alert episodes are written at activation and deactivation (`store/recorder.py`, `EpisodeRecorder`: notify, then record), their while-active refreshes with the checkpoint.
 - Finalize rewrites the whole flight as `completed`, or deletes it by the archive policy (`discard_flight`; an episode carried over a segment split moves back to the segment where it began). Failed writes wait in memory (`retry_pending`, 1 GiB budget, overflow counted as `pending_evicted`); refused episodes wait in a bounded outbox that is copied to Redis (`live:episode_outbox`) until the archive accepts them.
-- Startup (`recover_on_startup`, retried by the tick while the archive is down): replay the episode outbox, close every open episode of another process with one `ended_by: restart` deactivate (`AlertEngine.close_restored`), keep each leftover `live` flight as `interrupted` or delete it by the policy, then clear the Redis cache.
+- Startup (`recover_on_startup`, retried by the tick while the archive is down): replay the episode outbox, close every open episode of another process with one `ended_by: restart` deactivate (`AlertEngine.close_restored`), keep each leftover `live` flight as `interrupted` or delete it by the policy (a flight whose episode could not be closed stays `live` for the next start), then clear the Redis cache.
+- Fencing (`ArchiveWriter.take_lease`): the `engine_lease` row holds the running engine's token and is renewed every tick; it expires after 10 s, the heartbeat's TTL. A new engine waits out a live lease (refusing to start if it stays renewed) and takes over an expired one, before recovery. Every engine write transaction (checkpoint, episodes, finalize, discard, interrupt, raw frames) first checks the token, so an engine that stalled and was replaced writes nothing more (`LeaseLost`); it checks the lease before each tick and yields. Residual window: alert notifications of the tick during which the stalled engine wakes up, before its next lease check, can duplicate the new engine's restart deactivates; nothing reaches the archive. An engine that yields Redis but still holds its archive lease (the other engine uses another archive) finalizes its flights there.
 
 The archive package `store/archive/`:
 

@@ -141,14 +141,22 @@ def test_kill_9_loop_keeps_the_archive_and_notifications_consistent(tmp_path):
     interrupted = [f for f in flights if f[2] == "interrupted"]
     assert interrupted
     alerted = {flight_id for _a, flight_id, _active in alerts}
+    stalls_file = tmp_path / "ready.stalls"
+    stalls = [
+        tuple(map(float, line.split()))
+        for line in (stalls_file.read_text().splitlines() if stalls_file.exists() else [])
+    ]
     for flight_id, *_rest in interrupted:
         stamps = samples[flight_id]
         if not stamps:
             # Killed before a sample settled: kept only for its retain alert.
             assert flight_id in alerted, flight_id
             continue
-        gaps = [b - a for a, b in zip(stamps, stamps[1:], strict=False)]
-        assert max(gaps, default=0.0) <= MAX_SAMPLE_GAP, flight_id
+        for a, b in zip(stamps, stamps[1:], strict=False):
+            # A gap is a lost sample unless the driver itself stalled then.
+            assert b - a <= MAX_SAMPLE_GAP or any(
+                start - 0.2 <= a and b <= end + 0.2 for start, end in stalls
+            ), (flight_id, a, b - a, stalls)
     checked = 0
     for ready, killed_at in runs:
         if ready is None or killed_at - ready < SETTLED_RUN:

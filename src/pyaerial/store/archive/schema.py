@@ -200,8 +200,22 @@ _SCHEMA_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(flight_id) "
     "WHERE active = 1",
     "CREATE INDEX IF NOT EXISTS idx_alerts_activated ON alerts(activated_at DESC)",
+    # The tracking engine that owns the archive (one row): its process token
+    # and when it last renewed the lease (ArchiveWriter.acquire_lease).
+    """CREATE TABLE IF NOT EXISTS engine_lease (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        token TEXT NOT NULL,
+        renewed_at REAL NOT NULL
+    )""",
 )
-_SCHEMA_TABLES = ("flights", "telemetry", "integrity", "frames", "alerts")
+_SCHEMA_TABLES = (
+    "flights",
+    "telemetry",
+    "integrity",
+    "frames",
+    "alerts",
+    "engine_lease",
+)
 
 
 class HistorySchemaMismatch(RuntimeError):
@@ -382,6 +396,13 @@ def rebuild_integrity(conn: sqlite3.Connection) -> None:
 
 def drop_tables(conn: sqlite3.Connection) -> None:
     with conn:
-        for table in ("alerts", "frames", "integrity", "telemetry", "flights"):
+        for table in (
+            "engine_lease",
+            "alerts",
+            "frames",
+            "integrity",
+            "telemetry",
+            "flights",
+        ):
             conn.execute(f"DROP TABLE IF EXISTS {table}")
         conn.execute("PRAGMA user_version = 0")

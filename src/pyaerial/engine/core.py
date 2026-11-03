@@ -13,6 +13,7 @@ import logging
 import signal
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from types import FrameType
 from typing import Any
@@ -33,6 +34,8 @@ from pyaerial.pipeline import PlaneCalculator
 from pyaerial.receivers import RawFrame, available_receivers
 from pyaerial.receivers.positions import ReceiverPositions
 from pyaerial.store import ArchiveWriter
+from pyaerial.store.archive import LeaseLost
+from pyaerial.store.archive import writer as archive_writer
 from pyaerial.store.live import LiveWriter, LiveWriteStore, NullLiveWriter
 from pyaerial.store.recorder import EpisodeRecorder
 from pyaerial.tracker import Tracker
@@ -68,6 +71,8 @@ class Engine:
     ):
         self.config = config
         self._isolated = isolated
+        # This process's identity on the archive lease (fencing).
+        self.run_token = uuid.uuid4().hex
         self.positions = ReceiverPositions(config, fetch=not isolated)
         self.tracker = Tracker(config, positions=self.positions)
         self.integrity = IntegrityMonitor(config, self.positions)
@@ -135,6 +140,21 @@ class Engine:
                     "Another tracking engine is already running (fresh live Redis "
                     "heartbeat). Stop the other `pyaerial run` process first."
                 )
+        # The archive is written by one engine at a time: wait out a live
+        # lease (an engine still running), take over an expired one (a killed
+        # or stalled engine, whose later writes are then refused).
+        try:
+            self.history_store.take_lease(
+                self.run_token,
+                wait=archive_writer.LEASE_TTL_SECONDS,
+                keep_alive=self.live_store.touch_engine,
+            )
+        except LeaseLost as exc:
+            raise RuntimeError(
+                "Another tracking engine is writing the archive "
+                f"{config.database.path} ({exc}). Stop the other `pyaerial run` "
+                "process first."
+            ) from exc
         # Closes what a previous engine left open in the archive (a no-op
         # without one), then drops its live cache.
         self.archiver.recover_on_startup()
@@ -178,6 +198,12 @@ class Engine:
                     )
                     self.yielded_writer = True
                     break
+                if not self._owns_archive():
+                    log.error(
+                        "Another tracking engine took the archive over; yielding"
+                    )
+                    self.yielded_writer = True
+                    break
                 processed = self.tick()
                 with self._guard("status"):
                     self.log_status(processed)
@@ -199,6 +225,22 @@ class Engine:
         finally:
             self.shutdown()
             self._restore_signal_handlers()
+
+    def _owns_archive(self) -> bool:
+        """Renew the archive lease (or take it, if the archive was down at
+        startup); False once another engine has taken the archive over.
+
+        Checked before every tick, so an engine that stalled past the lease
+        (and was replaced) notices before alerting or writing again.
+        """
+        store = self.history_store
+        with self._guard("archive lease"):
+            if store.lease_held:
+                store.renew_lease()
+            elif not store.lease_lost:
+                with contextlib.suppress(LeaseLost):
+                    store.take_lease()
+        return not store.lease_lost
 
     def tick(self) -> int:
         """Run one pass of the pipeline. Returns the number of messages ingested.
@@ -365,12 +407,21 @@ class Engine:
             with self._guard("flush frames"):
                 self.process_frames(self.supervisor.flush())
 
-        if self.yielded_writer:
+        if self.yielded_writer and not self.history_store.lease_held:
             log.info(
-                "Yielded live writer; leaving Redis and in-flight archive "
-                "to the other engine"
+                "Yielded to another engine; leaving Redis and the in-flight "
+                "flights (it recovered them from the archive) to it"
             )
             self.tracker.planes.clear()
+        elif self.yielded_writer:
+            # Another engine took Redis but not this archive: archive the
+            # flights (and close their alerts) here; Redis is not ours.
+            log.info("Yielded the live writer; archiving in-flight flights")
+            for plane in list(self.tracker.planes.values()):
+                with self._guard("finalize"):
+                    self.archiver.finalize(plane)
+            self.tracker.planes.clear()
+            self.archiver.shutdown()
         else:
             for plane in list(self.tracker.planes.values()):
                 with self._guard("finalize"):
@@ -383,6 +434,8 @@ class Engine:
             with self._guard("heartbeat"):
                 self.live_store.clear_engine()
 
+        with self._guard("archive lease"):
+            self.history_store.release_lease()
         for name, close in (
             ("calculator", self.calculator.close),
             ("live store", self.live_store.close),

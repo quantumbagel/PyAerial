@@ -23,6 +23,11 @@ class HistoryUnavailable(RuntimeError):
     """Configured SQLite archive cannot be read."""
 
 
+class LeaseLost(HistoryUnavailable):
+    """Another tracking engine took the archive over: this one must stop
+    writing it (and yield)."""
+
+
 class RowRejected(ValueError):
     """The archive is up but refuses a row because of its content (a missing
     key, a wrong type, a constraint): retrying the same row cannot help."""

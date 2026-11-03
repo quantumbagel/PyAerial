@@ -413,6 +413,7 @@ The database runs in WAL mode; the portal opens it read-only. For backups, upgra
 | `integrity` | `(flight_id, timestamp)`; `(icao, timestamp)` | Verdict log: every status change, plus score or check changes at most every 30 s. `score` (`NULL` for `unknown`), `status`, `flags` (JSON array of checks that did not pass), `checks` (full JSON) |
 | `frames` | `timestamp`; `(icao, timestamp)` | With `raw_frames: true`, one row per receiver copy, before merging: `receiver`, `hex`, `df`, `icao` (DF17/18 only), `rssi`, `clock` (12 MHz ticks), `bearing`, `elevation`, `cfo` |
 | `alerts` | `alert_id`; `flight_id`, `activated_at`, active episodes | Alert episodes, one row each, written from activation on; `reason` (JSON) has `ended_by` once closed; `start_flight_id` is the segment where it began |
+| `engine_lease` | one row | The running engine's `token` and `renewed_at`; fences out an engine that stalled and was replaced. Internal |
 
 Telemetry provenance columns:
 
