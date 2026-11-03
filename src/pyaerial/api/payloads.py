@@ -20,6 +20,18 @@ def sanitize_for_json(data: Any) -> Any:
 
 
 FLIGHT_STATUS_LIVE = "live"
+# Archive status of a flight the engine never finalized (crash, kill). On the
+# wire it is a completed flight marked ``interrupted: true``.
+FLIGHT_STATUS_INTERRUPTED = "interrupted"
+
+
+def flight_status_fields(doc: dict[str, Any]) -> dict[str, Any]:
+    """``status`` (live / completed) and, for an interrupted flight,
+    ``interrupted: true``."""
+    status = doc.get("status") or "completed"
+    if status == FLIGHT_STATUS_INTERRUPTED:
+        return {"status": "completed", "interrupted": True}
+    return {"status": status}
 
 #: Aircraft metadata fields shared by live and history flight payloads.
 TEXT_FIELDS = ("callsign", "model", "owner", "country", "aircraft_type", "registration")
@@ -425,7 +437,7 @@ def flight_summary(
         "heading": heading,
         "integrity": info.get("integrity"),
         "is_live": is_live,
-        "status": doc.get("status", "completed"),
+        **flight_status_fields(doc),
         "retained": doc.get("retained", False),
         "timestamp": timestamp,
     }

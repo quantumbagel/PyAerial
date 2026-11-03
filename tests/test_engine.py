@@ -172,7 +172,6 @@ def test_pending_finalize_is_capped(tmp_path, monkeypatch, caplog):
         monkeypatch.setattr(
             engine.live_store, "pop_flight", lambda flight_id: popped.append(flight_id)
         )
-        monkeypatch.setattr(engine.live_store, "get_alerts", lambda **k: [])
         monkeypatch.setattr(engine.calculator, "deactivate_plane", lambda plane: None)
         monkeypatch.setattr(
             archiver_mod,
@@ -188,7 +187,7 @@ def test_pending_finalize_is_capped(tmp_path, monkeypatch, caplog):
         assert list(engine.archiver.pending) == ["ccc-1", "ddd-1"]
         assert engine.archiver.counters()["pending_evicted"] == 2
         assert caplog.text.count("memory budget") == 1
-        # Evicted flights keep their live copy for the orphan sweep.
+        # Nothing was archived, so no live copy was popped.
         assert popped == []
         # Re-enqueueing a pending flight updates it in place (no eviction).
         engine.archiver.defer("ddd-1", _plane("ddd", 1.0))
@@ -202,16 +201,14 @@ def test_retries_wait_while_history_is_down(tmp_path, monkeypatch):
     try:
         monkeypatch.setattr(engine.history_store, "disabled", False)
         monkeypatch.setattr(engine.history_store, "ping", lambda: False)
-        monkeypatch.setattr(engine.live_store, "flight_ids", lambda: {"zzz-1"})
 
         def _boom(*_args, **_kwargs):
             raise AssertionError("must not retry archive while history is down")
 
-        monkeypatch.setattr(engine.live_store, "plane_for_finalize", _boom)
         monkeypatch.setattr(engine.history_store, "finalize_plane", _boom)
+        monkeypatch.setattr(engine.history_store, "checkpoint", _boom)
         engine.archiver.defer("aaa-1", _plane("aaa", 1.0))
         engine.archiver.retry_pending()
-        engine.archiver.sweep_orphans()
         assert list(engine.archiver.pending) == ["aaa-1"]
         engine.archiver.clear_pending()
     finally:
@@ -223,7 +220,6 @@ def test_pending_finalize_retries_then_clears(tmp_path, monkeypatch):
     engine = make_engine(tmp_path)
     try:
         monkeypatch.setattr(engine.calculator, "deactivate_plane", lambda plane: None)
-        monkeypatch.setattr(engine.live_store, "get_alerts", lambda **k: [])
         popped: list[str] = []
         monkeypatch.setattr(
             engine.live_store, "pop_flight", lambda flight_id: popped.append(flight_id)
@@ -278,10 +274,12 @@ def test_finalize_closes_active_alerts(tmp_path, monkeypatch):
     engine = make_engine(tmp_path)
     try:
         monkeypatch.setattr(engine.calculator, "deactivate_plane", lambda plane: None)
+        # A deactivation that never reached the archive (an alerter bug).
+        monkeypatch.setattr(engine.history_store, "disabled", False)
         monkeypatch.setattr(
-            engine.live_store,
-            "get_alerts",
-            lambda **k: [
+            engine.history_store,
+            "flight_alerts",
+            lambda flight_id: [
                 {
                     "alert_id": "abc123-1:pad:warn",
                     "active": True,

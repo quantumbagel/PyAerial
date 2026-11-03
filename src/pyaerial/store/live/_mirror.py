@@ -68,8 +68,6 @@ class MirroredStore(RawFeed):
         # Held while changing ``_mem`` and while copying it for the reconnect
         # backfill (which may run on another thread). Never held across I/O.
         self._mem_lock = threading.RLock()
-        # Insertion-ordered set of flight ids whose live doc cannot be used.
-        self._unreadable_flights: dict[str, None] = {}
         self._pending_pops: set[str] = set()
         # alert_id -> (flight_id, doc): active alert refreshes queued for the
         # tick's write_live_planes pipeline (guarded by _mem_lock).

@@ -150,6 +150,12 @@ export interface FlightDetail {
   icao: string;
   /** Null until the engine scores the aircraft. */
   integrity: Integrity | null;
+  /**
+   * Sent (`true`) only for a completed flight the engine did not
+   * finalize (it was killed or crashed): the track ends at its last archive
+   * checkpoint, up to ~15 s before the engine stopped.
+   */
+  interrupted?: boolean;
   is_live: boolean;
   latitude?: number | null;
   longitude?: number | null;
@@ -181,6 +187,12 @@ export interface FlightSummary {
   icao: string;
   /** Null until the engine scores the aircraft. */
   integrity: Integrity | null;
+  /**
+   * Sent (`true`) only for a completed flight the engine did not
+   * finalize (it was killed or crashed): the track ends at its last archive
+   * checkpoint, up to ~15 s before the engine stopped.
+   */
+  interrupted?: boolean;
   is_live: boolean;
   latitude: number | null;
   longitude: number | null;

@@ -14,6 +14,9 @@ import sqlite3
 log = logging.getLogger("pyaerial.store")
 
 SCHEMA_VERSION = 4
+# The first schema whose archive records live flights and episodes as they
+# happen; older versions kept crash leftovers in Redis only.
+LIFECYCLE_SCHEMA_VERSION = 4
 # flights.status: ``live`` while tracked (checkpointed, hidden from history),
 # ``completed`` once finalized, ``interrupted`` when the engine stopped
 # without finalizing it (end_time is then the last checkpointed sample).

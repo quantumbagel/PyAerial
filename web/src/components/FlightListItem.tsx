@@ -3,7 +3,7 @@ import type { FlightSummary, Zone } from '../api/types';
 import { flightSortValueLabel, type FlightSortField } from '../utils/flightData';
 import { displayCallsign, displayField, displayIcao } from '../utils/format';
 import { FlightAlertBadges, IntegrityBadge } from './AlertBadges';
-import { Chip } from './ui';
+import { Badge, Chip } from './ui';
 
 interface FlightListItemProps {
   flight: FlightSummary;
@@ -37,6 +37,7 @@ export const FlightListItem = memo(function FlightListItem({
             {title}
             <FlightAlertBadges flight={flight} zones={zones} alertColors={alertColors} />
             <IntegrityBadge integrity={flight.integrity} />
+            {flight.interrupted ? <Badge variant="neutral">Interrupted</Badge> : null}
           </span>
           {flight.callsign ? <Chip>{icao}</Chip> : null}
         </div>

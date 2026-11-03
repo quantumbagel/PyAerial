@@ -139,17 +139,15 @@ def test_finalize_upgrades_when_incoming_telemetry_is_longer(tmp_path):
     store.close()
 
 
-def test_snapshot_finalize_keeps_uninteresting_track(tmp_path):
-    # The policy is the engine's: a crash snapshot with a position is kept
-    # even when archive.flights: rules would drop it.
+def test_retention_is_the_engines_decision(tmp_path):
+    # The policy is the engine's; the store writes what it is told.
     engine = Engine(
         make_config(archive=ArchiveConfig(flights="rules")),
         isolated=True,
         aircraft_db_path=str(tmp_path / "aircraft.db"),
     )
     try:
-        assert engine.archiver.retain(_plane(), [], from_snapshot=False) is False
-        assert engine.archiver.retain(_plane(), [], from_snapshot=True) is True
+        assert engine.archiver.retain(_plane(), []) is False
     finally:
         engine.shutdown()
     store = _store(tmp_path)

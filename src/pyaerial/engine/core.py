@@ -131,7 +131,9 @@ class Engine:
                     "Another tracking engine is already running (fresh live Redis "
                     "heartbeat). Stop the other `pyaerial run` process first."
                 )
-            self.archiver.recover_on_startup()
+        # Closes what a previous engine left open in the archive (a no-op
+        # without one), then drops its live cache.
+        self.archiver.recover_on_startup()
 
     def start_receivers(self) -> None:
         self.supervisor.start()

@@ -2,9 +2,8 @@
 
 The in-memory :class:`~pyaerial.models.Plane` becomes the live Redis flight
 document and its telemetry points, the archive's flight row, telemetry rows
-and integrity rows; a live document (plus its telemetry points), an archived
-flight row (plus its telemetry), or a set of stray alert documents becomes a
-``Plane`` again for archiving. Field names
+and integrity rows; an archived flight row (plus its telemetry) becomes a
+``Plane`` again for decisions on an interrupted flight. Field names
 and value encodings here are wire formats: changing one is a contract change.
 """
 
@@ -156,32 +155,6 @@ def live_telemetry_point(plane: Plane, sample: Sample, icao: str) -> dict[str, A
     return point
 
 
-def live_doc_icao(doc: Mapping[str, Any]) -> str:
-    """Lowercased ICAO of a live flight document ('' when it has none)."""
-    info = doc.get("info")
-    raw_icao = info.get("icao") if isinstance(info, dict) else None
-    return str(doc.get("icao") or raw_icao or "").lower()
-
-
-def plane_from_live(
-    doc: Mapping[str, Any], icao: str, points: Sequence[Mapping[str, Any]]
-) -> Plane:
-    """A plane rebuilt from its live document and telemetry points, to archive.
-
-    The series are those of the points (clipped to the live window); receivers
-    and verdicts come from each point's provenance fields.
-    """
-    raw_info = doc.get("info")
-    info = info_from_doc(raw_info if isinstance(raw_info, dict) else {}, icao)
-    return _plane_from_points(
-        info,
-        doc.get("start_time"),
-        doc.get("end_time"),
-        points,
-        doc.get("active_alerts") or [],
-    )
-
-
 def plane_from_rows(
     flight: Mapping[str, Any], points: Sequence[Mapping[str, Any]]
 ) -> Plane:
@@ -265,50 +238,6 @@ def _plane_from_points(
         calculated_data=calc,
         active_alerts=active_alerts,
     )
-
-
-def plane_from_alert_docs(
-    flight_id: str, docs: Sequence[Mapping[str, Any]]
-) -> Plane | None:
-    """Minimal plane for alerts whose flight never reached ``live:flights``.
-
-    Rebuilt from the alert docs alone: ICAO and first packet come from the
-    flight id (``{icao}-{first_packet}``) so ``Plane.flight_id`` matches,
-    the position from the last alert update.
-    """
-    icao, _, first_text = flight_id.rpartition("-")
-    try:
-        first = float(int(first_text))
-    except ValueError:
-        return None
-    if not icao:
-        return None
-    stamps = [
-        value
-        for doc in docs
-        for value in (doc.get("activated_at"), doc.get("last_updated"))
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
-    ]
-    last = max([first, *stamps])
-    plane = Plane(
-        info=AircraftInfo(
-            icao=icao,
-            callsign=next((d["callsign"] for d in docs if d.get("callsign")), ""),
-        ),
-        track=TrackState(first_packet=first, last_update=last),
-    )
-    newest = max(
-        docs, key=lambda d: d.get("last_updated") or d.get("activated_at") or 0
-    )
-    coords = (newest.get("position") or {}).get("coordinates") or []
-    if len(coords) >= 2 and all(
-        isinstance(c, (int, float)) and math.isfinite(c) for c in coords[:2]
-    ):
-        plane.received_data = {
-            STORE_LAT: [Datum(coords[1], last)],
-            STORE_LONG: [Datum(coords[0], last)],
-        }
-    return plane
 
 
 def alert_episode_doc(

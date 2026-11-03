@@ -162,6 +162,14 @@ class EpisodeRecorder:
         entry = self._open.get(alert_id)
         return entry[1].get("flight_id") if entry else None
 
+    def open_docs(self, flight_id: str) -> list[dict[str, Any]]:
+        """Copies of the open episodes on *flight_id*."""
+        return [
+            dict(doc)
+            for _plane, doc in self._open.values()
+            if doc.get("flight_id") == flight_id
+        ]
+
     @property
     def outbox(self) -> Mapping[str, EpisodeEntry]:
         return self._outbox

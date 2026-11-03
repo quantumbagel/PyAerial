@@ -4,7 +4,6 @@ restarts and crashes, ICAO reuse, orphan sweeps and flight handovers."""
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import sqlite3
 import time
@@ -12,19 +11,16 @@ import time
 import pytest
 
 from helpers import (
-    LOCAL_REDIS_URI,
     InlineDispatcher,
-    alert_doc,
     fine_track_plane,
     make_config,
-    make_rule,
     pad_config,
 )
 from pyaerial.alerters import Alerter, register_alerter
 from pyaerial.alerts.engine import AlertEngine
 from pyaerial.calc.geo import build_polygons
 from pyaerial.calc.motion import ResolvedMotion
-from pyaerial.config.schema import AlertActionConfig, WhileActiveConfig, ZoneConfig
+from pyaerial.config.schema import AlertActionConfig, WhileActiveConfig
 from pyaerial.constants import (
     STORE_ALT,
     STORE_LAT,
@@ -33,8 +29,8 @@ from pyaerial.constants import (
 from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 from pyaerial.pipeline import PlaneCalculator
-from pyaerial.store.archive import ArchiveReader
-from pyaerial.store.live import LiveUnavailable, LiveWriter
+from pyaerial.store.archive import ArchiveReader, HistoryUnavailable
+from pyaerial.store.live import LiveWriter
 
 # --- Engine restarts and crashes ---------------------------------------------
 # Episodes left active by a crashed or stopped engine are closed exactly once.
@@ -132,8 +128,7 @@ def test_alert_left_active_by_crashed_engine_is_deactivated_once():
     store = _RestartStore([_orphan()])
     engine = AlertEngine(_restart_config(), build_polygons(_restart_config().zones), store)  # type: ignore[arg-type]
     try:
-        engine.deactivate(_restart_plane(last=1_700_000_160.0))
-        engine.deactivate(_restart_plane(last=1_700_000_160.0))  # orphan sweep runs again
+        engine.close_restored(_restart_plane(last=1_700_000_160.0), _orphan())
         _drain(engine)
     finally:
         engine.close()
@@ -152,7 +147,9 @@ def test_orphan_of_removed_rule_is_closed_without_notification(caplog):
     engine = AlertEngine(config, build_polygons(config.zones), store)  # type: ignore[arg-type]
     try:
         with caplog.at_level(logging.WARNING, logger="pyaerial.alerts"):
-            engine.deactivate(_restart_plane(last=1_700_000_160.0))
+            engine.close_restored(
+                _restart_plane(last=1_700_000_160.0), _orphan(rule="gone")
+            )
         _drain(engine)
     finally:
         engine.close()
@@ -283,7 +280,7 @@ def test_graceful_shutdown_deactivates_once_and_restart_adds_nothing(
 
 
 # --- Flight identity ---------------------------------------------------------
-# Alert state belongs to a flight: ICAO reuse, orphan sweeps and segment
+# Alert state belongs to a flight: ICAO reuse, late finalizes and segment
 # handovers.
 
 
@@ -355,7 +352,7 @@ def _tick(engine, plane, clock, position=_INSIDE, seconds=1.0):
     clock[0] += seconds
 
 
-# --- ICAO collision: orphan sweep archives an old live copy ------------------
+# --- ICAO collision: an older flight is finalized while a newer one is live -
 
 
 def test_orphan_of_old_flight_leaves_live_flight_alert_alone(clock):
@@ -379,31 +376,6 @@ def test_orphan_of_old_flight_leaves_live_flight_alert_alone(clock):
         engine.close()
         store.close()
     assert [e["hook"] for e in _IDENTITY_EVENTS] == ["activate"]  # no lost, no re-activate
-
-
-def test_orphan_still_closes_its_own_leftover_episode(clock):
-    _IDENTITY_EVENTS.clear()
-    store = LiveWriter("redis://localhost:1/0", memory_only=True)
-    engine = _alert_engine(_identity_config(), store)
-    try:
-        orphan = _identity_plane(first=1_700_000_000.0, last=1_700_000_500.0)
-        # Left active by a previous engine process.
-        engine.check(orphan, _INSIDE, _MOTION, "N1")
-        clock[0] += 2
-        engine.check(orphan, _INSIDE, _MOTION, "N1")
-        old_id = next(iter(engine._alert_state.values()))["alert_id"]
-        engine._alert_state.clear()
-        engine._live_flight.clear()
-        _IDENTITY_EVENTS.clear()
-        live = _identity_plane(first=time.time() - 30)
-        _tick(engine, live, clock)
-        assert engine.deactivate(orphan) is False
-    finally:
-        engine.close()
-        store.close()
-    assert [(e["hook"], e["alert_id"], e["ended_by"]) for e in _IDENTITY_EVENTS] == [
-        ("deactivate", old_id, "restart")
-    ]
 
 
 def test_calculator_keeps_motion_and_lookups_for_live_flight(clock):
@@ -528,133 +500,7 @@ def test_handover_without_alerts_or_store_is_harmless(clock):
         engine.close()
 
 
-# --- Active alerts whose flight never reached live:flights -------------------
-
-
-def _alerting_config(tmp_path):
-    rule = make_rule(name="warn", retain=True, dwell_seconds=1)
-    rule.on_deactivate = [AlertActionConfig(method="print")]
-    config = make_config(
-        zones={
-            "pad": ZoneConfig(
-                coordinates=[
-                    [35.72, -78.70],
-                    [35.73, -78.70],
-                    [35.73, -78.69],
-                    [35.72, -78.69],
-                    [35.72, -78.70],
-                ],
-                rules=[rule],
-            )
-        }
-    )
-    config.database.path = str(tmp_path / "pyaerial.db")
-    return config
-
-
-def _stray_alert(alert_id: str, flight_id: str, icao: str) -> str:
-    return json.dumps(
-        {
-            "alert_id": alert_id,
-            "flight_id": flight_id,
-            "icao": icao,
-            "callsign": "SWA1",
-            "zone": "pad",
-            "rule": "warn",
-            "active": True,
-            "activated_at": 1_700_000_010.0,
-            "deactivated_at": None,
-            "last_updated": 1_700_000_020.0,
-            "position": {"type": "Point", "coordinates": [-78.695, 35.725]},
-        }
-    )
-
-
-def test_startup_closes_active_alerts_of_flights_that_never_went_live(
-    fake, tmp_path, monkeypatch
-):
-    fid = "abc123-1700000000"
-    fake.hashes["live:active_alerts"] = {"a1": _stray_alert("a1", fid, "abc123")}
-    fake.hashes["live:alert_episodes"] = {"a1": _stray_alert("a1", fid, "abc123")}
-    fake.hashes[f"live:alerts:{fid}"] = {"a1": _stray_alert("a1", fid, "abc123")}
-    runs: list[dict] = []
-    real_run = AlertEngine._run_actions
-
-    def record(self, actions, meta, payload, alert_id):
-        runs.append({"meta": meta, "alert_id": alert_id})
-        return real_run(self, actions, meta, payload, alert_id)
-
-    monkeypatch.setattr(AlertEngine, "_run_actions", record)
-    engine = Engine(
-        _alerting_config(tmp_path), aircraft_db_path=str(tmp_path / "aircraft.db")
-    )
-    try:
-        # The deactivate notification went out, attributed to the restart.
-        assert [r["alert_id"] for r in runs] == ["a1"]
-        assert "restart" in json.dumps(runs[0]["meta"], default=str)
-        # Closed in Redis: no ghost active alert, no leftover per-flight keys.
-        assert "a1" not in fake.hashes.get("live:active_alerts", {})
-        assert f"live:alerts:{fid}" not in fake.hashes
-        # The completed episode is archived with its flight.
-        with contextlib.closing(ArchiveReader(engine.history_store.path)) as archive:
-            archived = archive.get_alerts(flight_id=fid)
-        assert [a["alert_id"] for a in archived] == ["a1"]
-        assert archived[0]["active"] is False and archived[0]["deactivated_at"]
-    finally:
-        engine.shutdown()
-
-
-def test_stray_active_alerts_skip_flights_still_live(fake):
-    fake.sets["live:flights"] = {"live01-1"}
-    fake.hashes["live:active_alerts"] = {
-        "a1": _stray_alert("a1", "live01-1", "live01"),
-        "a2": _stray_alert("a2", "gone02-2", "gone02"),
-        "a3": "{not json",
-    }
-    store = LiveWriter(LOCAL_REDIS_URI)
-    strays = store.stray_active_alerts()
-    assert [doc["alert_id"] for doc in strays] == ["a2"]
-    # Unusable entries cannot be closed properly; they are dropped.
-    assert "a3" not in fake.hashes["live:active_alerts"]
-    assert "a1" in fake.hashes["live:active_alerts"]
-
-
-# --- Leftover flights on restart ---------------------------------------------
-
-
-def test_restart_archives_every_episode_of_a_leftover_flight(fake, tmp_path):
-    t = time.time() - 300
-    fid = f"abc123-{int(t)}"
-    fake.sets["live:flights"] = {fid}
-    fake.kv[f"live:flight:{fid}"] = json.dumps(
-        {
-            "flight_id": fid,
-            "icao": "abc123",
-            "start_time": t,
-            "end_time": t + 60,
-            "info": {},
-        }
-    )
-    fake.zsets[f"live:telemetry:{fid}"] = {
-        json.dumps({"timestamp": t + n, "latitude": 35.725, "longitude": -78.695}): t
-        + n
-        for n in range(3)
-    }
-    fake.hashes[f"live:alerts:{fid}"] = {
-        "earlier": alert_doc("earlier", fid, active=False, at=t + 5),
-        "current": alert_doc("current", fid, active=True, at=t + 30),
-    }
-    fake.hashes["live:active_alerts"] = {
-        "current": alert_doc("current", fid, active=True, at=t + 30)
-    }
-    engine = Engine(pad_config(tmp_path), aircraft_db_path=str(tmp_path / "a.db"))
-    try:
-        with contextlib.closing(ArchiveReader(engine.history_store.path)) as archive:
-            archived = {a["alert_id"]: a for a in archive.get_alerts(flight_id=fid)}
-        assert set(archived) == {"earlier", "current"}
-        assert archived["current"]["active"] is False
-    finally:
-        engine.shutdown()
+# --- Finalize reads the flight's episodes from the archive -------------------
 
 
 def test_persist_defers_when_alerts_cannot_be_read(fake, tmp_path, monkeypatch):
@@ -662,16 +508,15 @@ def test_persist_defers_when_alerts_cannot_be_read(fake, tmp_path, monkeypatch):
     try:
         fid = "abc123-1700000000"
 
-        def unreadable(**_kwargs):
-            raise LiveUnavailable("live store is unavailable")
+        def unreadable(_flight_id):
+            raise HistoryUnavailable("history archive is unavailable")
 
-        monkeypatch.setattr(engine.live_store, "get_alerts", unreadable)
+        monkeypatch.setattr(engine.history_store, "flight_alerts", unreadable)
         assert (
-            engine.archiver.finalize(
-                fine_track_plane("abc123", 1_700_000_000.0), from_snapshot=True
-            )
+            engine.archiver.finalize(fine_track_plane("abc123", 1_700_000_000.0))
             is False
         )
+        assert fid in engine.archiver.pending
         with contextlib.closing(ArchiveReader(engine.history_store.path)) as archive:
             assert archive.get_flight(fid) is None
     finally:

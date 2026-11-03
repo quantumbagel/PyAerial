@@ -24,9 +24,7 @@ from pyaerial.store.live.keys import (
     KEY_ACTIVE_ALERTS,
     KEY_ALERT_EPISODES,
     KEY_ALERTS,
-    KEY_FLIGHTS,
     LIVE_FLIGHT_TTL_SECONDS,
-    safe_json_loads,
 )
 
 log = logging.getLogger("pyaerial.store.redis")
@@ -347,37 +345,3 @@ class EpisodesMixin(MirroredStore):
         if flight_id:
             return list(self._mem.alerts.get(flight_id, []))
         return list(self._mem.alert_episodes)
-
-    def stray_active_alerts(self) -> list[dict[str, Any]]:
-        """Active alert docs whose flight is not in ``live:flights``.
-
-        An alert written for a brand-new flight just before a crash (ahead of
-        that tick's flight write) is invisible to the startup archive and the
-        orphan sweep, so it would stay active forever. Entries that cannot be
-        parsed into a flight cannot be closed properly and are dropped.
-        """
-        if self.memory_only:
-            return []
-        client = self._redis()
-        if client is None:
-            return []
-        try:
-            live = set(client.smembers(KEY_FLIGHTS))
-            active = cast("dict[str, str]", client.hgetall(KEY_ACTIVE_ALERTS))
-            strays: list[dict[str, Any]] = []
-            broken: list[str] = []
-            for alert_id, raw in active.items():
-                doc = safe_json_loads(raw)
-                flight_id = doc.get("flight_id") if isinstance(doc, dict) else None
-                if not isinstance(flight_id, str) or "-" not in flight_id:
-                    broken.append(alert_id)
-                elif flight_id not in live:
-                    strays.append({**doc, "alert_id": alert_id})
-            if broken and self.writer:
-                log.warning("Dropping %d unreadable active alert(s)", len(broken))
-                client.hdel(KEY_ACTIVE_ALERTS, *broken)
-        except RedisError as exc:
-            log.error("Failed to read active alerts: %s", exc)
-            self._mark_disconnected(exc, client)
-            return []
-        return strays

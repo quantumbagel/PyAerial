@@ -3,7 +3,6 @@ signals, archive retries and the pending-finalize memory budget."""
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import signal
@@ -24,13 +23,11 @@ from helpers import (
     make_config,
     make_engine,
     one_fix_plane,
-    pad_config,
 )
 from pyaerial.config.schema import ArchiveConfig
 from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState, Verdict
 from pyaerial.store.archive.writer import FRAME_PRUNE_BATCH
-from pyaerial.store.live import LiveWriter
 
 # --- Main loop stage isolation ----------------------------------------------
 
@@ -167,31 +164,6 @@ def test_shutdown_finishes_when_one_plane_fails(tmp_path, monkeypatch):
     assert closed == ["live", "history"]
 
 
-def test_startup_archive_survives_a_bad_leftover(tmp_path, monkeypatch):
-    engine = make_engine(tmp_path)
-    try:
-        monkeypatch.setattr(
-            engine.live_store,
-            "planes_for_finalize",
-            lambda: [one_fix_plane("bad"), one_fix_plane("good")],
-        )
-        archived: list[str] = []
-
-        def finalize(plane, **_kwargs):
-            if plane.info.icao == "bad":
-                raise ValueError("unexpected")
-            archived.append(plane.info.icao)
-            return True
-
-        monkeypatch.setattr(engine.history_store, "finalize_plane", finalize)
-        engine.archiver.recover_on_startup()
-        assert archived == ["good"]
-    finally:
-        monkeypatch.undo()
-        engine.archiver.clear_pending()
-        engine.shutdown()
-
-
 # --- Archive retry storms ----------------------------------------------------
 
 
@@ -222,35 +194,6 @@ def test_pending_retries_back_off_while_writes_fail(tmp_path, monkeypatch):
         engine.archiver.retry_pending()
         assert attempts == ["aaa", "bbb"]
         assert set(engine.archiver.pending) == {"aaa-1", "bbb-1", "ccc-1"}
-    finally:
-        monkeypatch.undo()
-        engine.archiver.clear_pending()
-        engine.shutdown()
-
-
-def test_orphan_sweep_stops_at_first_failure(tmp_path, monkeypatch):
-    engine = make_engine(tmp_path)
-    try:
-        monkeypatch.setattr(engine.history_store, "disabled", False)
-        monkeypatch.setattr(engine.history_store, "ping", lambda: True)
-        monkeypatch.setattr(
-            engine.live_store, "flight_ids", lambda: {f"o{n:05d}-1" for n in range(50)}
-        )
-        monkeypatch.setattr(
-            engine.live_store,
-            "plane_for_finalize",
-            lambda flight_id: one_fix_plane(flight_id.split("-")[0]),
-        )
-        attempts: list[str] = []
-
-        def failing(plane, **_kwargs):
-            attempts.append(plane.info.icao)
-            return False
-
-        monkeypatch.setattr(engine.history_store, "finalize_plane", failing)
-        engine.archiver.sweep_orphans()
-        engine.archiver.sweep_orphans()
-        assert len(attempts) == 1
     finally:
         monkeypatch.undo()
         engine.archiver.clear_pending()
@@ -530,33 +473,3 @@ def test_catch_up_is_capped_per_tick_but_not_at_shutdown(tmp_path, monkeypatch):
     assert 0 < len(archived) < 40
     engine.shutdown()  # the final attempt is not capped
     assert len(archived) == 40
-
-
-def test_startup_archive_keeps_the_heartbeat_fresh(fake, tmp_path, monkeypatch):
-    t = time.time() - 300
-    for n in range(5):
-        fid = f"a{n:05d}-{int(t)}"
-        fake.sets.setdefault("live:flights", set()).add(fid)
-        fake.kv[f"live:flight:{fid}"] = json.dumps(
-            {
-                "flight_id": fid,
-                "icao": f"a{n:05d}",
-                "start_time": t,
-                "end_time": t + 9,
-                "info": {},
-            }
-        )
-    beats: list[float] = []
-    real_touch = LiveWriter.touch_engine
-
-    def touch(self):
-        beats.append(time.monotonic())
-        return real_touch(self)
-
-    monkeypatch.setattr(LiveWriter, "touch_engine", touch)
-    monkeypatch.setattr(archiver_mod, "STARTUP_HEARTBEAT_INTERVAL", 0.0)
-    engine = Engine(pad_config(tmp_path), aircraft_db_path=str(tmp_path / "a.db"))
-    try:
-        assert len(beats) >= 5
-    finally:
-        engine.shutdown()

@@ -18,9 +18,14 @@ from pyaerial.store.archive._conn import (
     HistoryUnavailable,
     unavailable,
 )
-from pyaerial.store.archive.rows import alert_from_row
+from pyaerial.store.archive.rows import (
+    alert_from_row,
+    flight_from_row,
+    telemetry_from_row,
+)
 from pyaerial.store.archive.schema import (
     FLIGHT_STATUS_COMPLETED,
+    FLIGHT_STATUS_INTERRUPTED,
     FLIGHT_STATUS_LIVE,
     HistorySchemaMismatch,
     drop_tables,
@@ -564,16 +569,80 @@ class ArchiveWriter(ArchiveConnection):
         """Episodes whose row points at *flight_id* (ended there, or still
         open on it). Raises :class:`HistoryUnavailable`: the caller must not
         decide retention without them."""
+        rows = self._read(
+            "flight alerts",
+            "SELECT * FROM alerts WHERE flight_id = ? ORDER BY activated_at",
+            (flight_id,),
+        )
+        return [alert_from_row(row) for row in rows]
+
+    # -- startup recovery ----------------------------------------------------
+
+    def live_flights(self) -> list[dict[str, Any]]:
+        """Flights still ``live`` (a previous engine did not finalize them),
+        as documents with ``info`` decoded and ``previous_flight_id``.
+        Raises :class:`HistoryUnavailable`."""
+        rows = self._read(
+            "live flights",
+            f"SELECT * FROM flights WHERE status = '{FLIGHT_STATUS_LIVE}' "
+            "ORDER BY start_time",
+        )
+        return [
+            {**flight_from_row(row), "previous_flight_id": row["previous_flight_id"]}
+            for row in rows
+        ]
+
+    def active_episodes(self) -> list[dict[str, Any]]:
+        """Every open alert episode, oldest first. Raises HistoryUnavailable."""
+        rows = self._read(
+            "active alerts",
+            "SELECT * FROM alerts WHERE active = 1 ORDER BY activated_at",
+        )
+        return [alert_from_row(row) for row in rows]
+
+    def flight_points(self, flight_id: str) -> list[dict[str, Any]]:
+        """A flight's archived telemetry, oldest first. Raises HistoryUnavailable."""
+        rows = self._read(
+            "telemetry",
+            "SELECT * FROM telemetry WHERE flight_id = ? ORDER BY timestamp",
+            (flight_id,),
+        )
+        return [telemetry_from_row(row) for row in rows]
+
+    def interrupt_flight(self, flight_id: str) -> bool:
+        """Close a ``live`` flight the engine never finalized: status
+        ``interrupted``, ending at its last archived sample (its last
+        checkpoint). False when the archive is unavailable."""
+        if self.disabled:
+            return True
         try:
-            with self._session("flight alerts") as conn:
-                rows = conn.execute(
-                    "SELECT * FROM alerts WHERE flight_id = ? ORDER BY activated_at",
+            with self._session("interrupt") as conn, conn:
+                conn.execute(
+                    f"""
+                    UPDATE flights SET status = '{FLIGHT_STATUS_INTERRUPTED}',
+                        end_time = COALESCE(
+                            (SELECT MAX(timestamp) FROM telemetry
+                             WHERE flight_id = flights.flight_id),
+                            end_time
+                        )
+                    WHERE flight_id = ? AND status = '{FLIGHT_STATUS_LIVE}'
+                    """,
                     (flight_id,),
-                ).fetchall()
+                )
+        except (sqlite3.Error, HistoryUnavailable) as exc:
+            log.error("Failed to close interrupted flight %s: %s", flight_id, exc)
+            self._last_error = f"archive write failed: {exc}"
+            return False
+        self._last_error = None
+        return True
+
+    def _read(self, action: str, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+        try:
+            with self._session(action) as conn:
+                return conn.execute(sql, params).fetchall()
         except sqlite3.Error as exc:
             self._last_error = f"archive read failed: {exc}"
-            raise unavailable("flight alerts", exc) from exc
-        return [alert_from_row(row) for row in rows]
+            raise unavailable(action, exc) from exc
 
     def discard_flight(self, flight_id: str) -> bool:
         """Delete a flight the archive policy does not keep, in one transaction.

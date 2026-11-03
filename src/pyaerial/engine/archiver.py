@@ -1,9 +1,10 @@
 """Flights into the archive: checkpoints of live flights, finalize, deferred
-retries, recovery of flights a previous engine left behind, and segmentation
-of long tracks.
+retries, recovery of what a previous engine left open, and segmentation of
+long tracks.
 
-A flight is written to the archive before its live copy is popped, so a
-SQLite outage cannot lose it. Tick thread only.
+The archive is the record of every flight and alert episode: a tracked
+flight is checkpointed into it while live, and finalized (rewritten whole,
+or deleted by the archive policy) when it ends. Tick thread only.
 """
 
 from __future__ import annotations
@@ -11,26 +12,22 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import replace
 from types import MappingProxyType
 from typing import Any, Protocol
 
 from shapely import Polygon
 
-from pyaerial.alerts.engine import ENDED_RESTART
 from pyaerial.alerts.retain import should_retain
 from pyaerial.config.schema import Config
 from pyaerial.constants import STORE_LAT, STORE_LONG
 from pyaerial.engine import segments
 from pyaerial.engine.guard import StageGuard
-from pyaerial.models import Plane
+from pyaerial.models import AircraftInfo, Plane, TrackState
+from pyaerial.store.archive import HistoryUnavailable
+from pyaerial.store.archive.schema import LIFECYCLE_SCHEMA_VERSION
 from pyaerial.store.archive.writer import FlightCheckpoint
-from pyaerial.store.codec import (
-    build_telemetry_docs,
-    integrity_rows,
-    plane_from_alert_docs,
-)
-from pyaerial.store.live import LiveUnavailable, LiveWriteStore
+from pyaerial.store.codec import build_telemetry_docs, integrity_rows, plane_from_rows
+from pyaerial.store.live import LiveWriteStore
 
 log = logging.getLogger("pyaerial.engine")
 
@@ -40,21 +37,21 @@ log = logging.getLogger("pyaerial.engine")
 # neither a memory bound nor a loss bound: 256 long flights is gigabytes, 256
 # short ones a few MB. pending_cost runs ~30% above measured, so real use
 # stays under the budget; 1 GiB holds ~330 30 min flights (~160 flight-hours,
-# ~2000 10 min ones). Beyond it the oldest fall back to their live Redis copy.
-# Spilling to disk was rejected: the likeliest cause of a long outage is a
-# full disk (raw_frames writes GBs a day to the same volume), where a spool
-# fails too, and it would add a second recovery path.
+# ~2000 10 min ones). Beyond it the oldest are dropped, keeping only what
+# their checkpoints wrote (closed as interrupted). Spilling to disk was
+# rejected: the likeliest cause of a long outage is a full disk (raw_frames
+# writes GBs a day to the same volume), where a spool fails too.
 PENDING_FINALIZE_BUDGET_BYTES = 1 << 30
 _PENDING_BYTES_PER_VALUE = 100
 _PENDING_BYTES_PER_PLANE = 4_096
 # After an archive write fails, wait this long before retrying deferred flights.
 _HISTORY_RETRY_INTERVAL = 10.0
-# Per-tick time for archiving deferred and orphaned flights once history is
-# back: ~25 ms per 30 min flight measured, so ~8 flights a tick. Catching up
-# on hundreds in one tick took ~8 s, close to the 10 s heartbeat TTL.
+# Per-tick time for archiving deferred flights once history is back: ~25 ms
+# per 30 min flight measured, so ~8 flights a tick. Catching up on hundreds
+# in one tick took ~8 s, close to the 10 s heartbeat TTL.
 # Shutdown's final attempt is not capped.
 ARCHIVE_TICK_BUDGET = 0.2
-# Refresh the heartbeat this often while archiving leftovers at startup.
+# Refresh the heartbeat this often during startup recovery.
 STARTUP_HEARTBEAT_INTERVAL = 1.0
 # Live flights are checkpointed into the archive this often: a crash loses
 # at most CHECKPOINT_SECONDS + SETTLE_SECONDS of each flight's samples.
@@ -102,6 +99,22 @@ def _closed_alert(alert: dict) -> dict:
     return doc
 
 
+def _flight_id_plane(flight_id: str, callsign: str) -> Plane | None:
+    """A minimal plane for an episode whose flight row is not live (or gone):
+    ICAO and first packet from the id (``{icao}-{first_packet}``)."""
+    icao, _, first_text = flight_id.rpartition("-")
+    try:
+        first = float(int(first_text))
+    except ValueError:
+        return None
+    if not icao:
+        return None
+    return Plane(
+        info=AircraftInfo(icao=icao, callsign=callsign or None),
+        track=TrackState(first_packet=first, last_update=first),
+    )
+
+
 class FlightArchive(Protocol):
     """The flight side of :class:`~pyaerial.store.ArchiveWriter`."""
 
@@ -127,9 +140,23 @@ class FlightArchive(Protocol):
         now: float,
     ) -> bool: ...
 
+    def flight_alerts(self, flight_id: str) -> list[dict[str, Any]]: ...
+
+    def live_flights(self) -> list[dict[str, Any]]: ...
+
+    def active_episodes(self) -> list[dict[str, Any]]: ...
+
+    def flight_points(self, flight_id: str) -> list[dict[str, Any]]: ...
+
+    def interrupt_flight(self, flight_id: str) -> bool: ...
+
+    def discard_flight(self, flight_id: str) -> bool: ...
+
 
 class _EpisodeCloser(Protocol):
-    def deactivate(self, plane: Plane, ended_by: str | None = None) -> bool: ...
+    def close_restored(
+        self, plane: Plane, doc: Mapping[str, Any], *, now: float | None = None
+    ) -> None: ...
 
 
 class EpisodeLog(Protocol):
@@ -141,7 +168,9 @@ class EpisodeLog(Protocol):
         self, entries: Sequence[tuple[dict[str, Any], dict[str, Any]]]
     ) -> None: ...
 
-    def open_on(self, alert_id: str) -> str | None: ...
+    def drain(self) -> bool: ...
+
+    def open_docs(self, flight_id: str) -> list[dict[str, Any]]: ...
 
 
 class AlertHooks(Protocol):
@@ -156,21 +185,23 @@ class AlertHooks(Protocol):
 
 
 class FlightArchiver:
-    """Archives finished flights and owns everything that can still lose one.
+    """Archives flights and owns everything that can still lose one.
 
-    - :meth:`finalize`: close alerts, archive, then pop the live copy; a
-      failed write keeps the flight in :attr:`pending` (bounded by
-      ``PENDING_FINALIZE_BUDGET_BYTES``; overflow counted as
-      ``pending_evicted``) for retry with back-off.
-    - :meth:`tick`: retries pending flights and sweeps orphaned live flights
-      within a per-tick time budget.
-    - :meth:`recover_on_startup`: leftovers of a previous engine process.
+    - :meth:`checkpoint`: tracked flights' settled samples, new verdicts and
+      open episodes, every CHECKPOINT_SECONDS.
+    - :meth:`finalize`: close alerts, then archive the whole flight (or
+      delete it, per ``archive.flights``); a failed write keeps the flight
+      in :attr:`pending` (bounded by ``PENDING_FINALIZE_BUDGET_BYTES``;
+      overflow counted as ``pending_evicted``) for retry with back-off.
+    - :meth:`recover_on_startup`: closes what a previous engine process left
+      open (its live flights and their episodes); retried by :meth:`tick`
+      while the archive is down.
     - :meth:`split_long_flights`: segments of ``tracking.max_flight_seconds``.
 
-    *tracked* returns the planes being tracked (``tracker.planes``): never
-    swept as orphans. Test hooks: :attr:`pending`, :meth:`defer`,
-    :meth:`clear_pending`, :meth:`retry_now`, :meth:`back_off`,
-    ``max_flight_seconds`` and :func:`segments.start_new_segment`.
+    *tracked* returns the planes being tracked (``tracker.planes``). Test
+    hooks: :attr:`pending`, :meth:`defer`, :meth:`clear_pending`,
+    :meth:`retry_now`, :meth:`back_off`, ``max_flight_seconds`` and
+    :func:`segments.start_new_segment`.
     """
 
     def __init__(
@@ -195,11 +226,17 @@ class FlightArchiver:
         self._episodes = episodes
         # Insertion-ordered: the first key is the oldest deferred flight.
         self._pending: dict[str, Plane] = {}
+        # Open episodes a split carried on from a pending segment: they count
+        # for its retention, though their rows moved to the next segment.
+        self._carried: dict[str, list[dict[str, Any]]] = {}
         # Evictions since history was last writable (logged once each way).
         self._pending_evicted = 0
         self._pending_evicted_total = 0
         self._history_retry_at = 0.0
         self._next_checkpoint = 0.0
+        # Whether the archive holds nothing left open by another process
+        # (startup recovery done, and redone after evictions).
+        self._recovered = True
         self.max_flight_seconds = float(
             getattr(
                 config.tracking,
@@ -231,60 +268,172 @@ class FlightArchiver:
 
     # -- finalize ------------------------------------------------------------
 
-    def finalize(self, plane: Plane, *, from_snapshot: bool = False) -> bool:
-        """Deactivate alerts, persist to SQLite, then drop the live Redis copy.
+    def finalize(self, plane: Plane) -> bool:
+        """Deactivate alerts, then persist the flight to SQLite (or delete it,
+        per the archive policy), and drop its live Redis copy.
 
-        Redis is only popped after the archive accepts the write (or the flight
-        is intentionally not retained) so a disk outage cannot lose history.
         Returns False when the flight was deferred for retry.
         """
         # A broken alerter must not keep the flight out of the archive.
         with self._guard("alert deactivation"):
             self._alerts.deactivate_plane(plane)
-        return self._archive_and_pop(plane, from_snapshot=from_snapshot)
+        return self._archive_and_pop(plane)
 
-    def _archive_and_pop(self, plane: Plane, *, from_snapshot: bool) -> bool:
+    def _archive_and_pop(
+        self, plane: Plane, carried: Sequence[dict[str, Any]] = ()
+    ) -> bool:
         """Persist a flight whose alerts are closed, then pop its live copy."""
         flight_id = plane.flight_id
-        if self._persist(flight_id, plane, from_snapshot=from_snapshot):
+        if carried:
+            self._carried[flight_id] = list(carried)
+        if self._persist(flight_id, plane):
             self._pending.pop(flight_id, None)
+            self._carried.pop(flight_id, None)
             self._live.pop_flight(flight_id)
             return True
         log.warning(
-            "Deferred persist for %s; keeping live data until history is writable",
+            "Deferred persist for %s; keeping it in memory until history is writable",
             flight_id,
         )
         self.defer(flight_id, plane)
         return False
 
-    def _persist(self, flight_id: str, plane: Plane, *, from_snapshot: bool) -> bool:
+    def _persist(self, flight_id: str, plane: Plane) -> bool:
         """Archive one flight with its closed alerts. False keeps it for retry.
 
-        An unexpected exception (a bug, not an outage) also returns False: the
-        full in-memory plane and its live copy are kept instead of being lost
-        with the engine.
+        Its episodes are read from the archive (after any the archive refused
+        earlier are re-sent), so retention never decides without them. An
+        unexpected exception (a bug, not an outage) also returns False: the
+        full in-memory plane is kept instead of being lost with the engine.
         """
+        store = self._archive
         try:
-            docs = self._live.get_alerts(flight_id=flight_id, active_only=False)
-            # Episodes a segment split carried on to the next flight stay
-            # open there (the archive row already moved): they count for
-            # this segment's retention but are not closed onto it.
-            carried = [doc for doc in docs if self._carried(doc, flight_id)]
-            alerts = [_closed_alert(doc) for doc in docs if doc not in carried]
-            store = self._archive
-            # A disabled archive writes nothing: skip the policy work.
-            retained = getattr(store, "disabled", False) or self.retain(
-                plane, [*alerts, *carried], from_snapshot=from_snapshot
-            )
+            if store.disabled:
+                # Writes nothing: skip the policy work.
+                return store.finalize_plane(plane, alerts=[], retained=True)
+            if self._episodes is not None and not self._episodes.drain():
+                return False
+            alerts = [_closed_alert(doc) for doc in store.flight_alerts(flight_id)]
+            retained = self.retain(plane, [*alerts, *self._carried.get(flight_id, ())])
             return store.finalize_plane(plane, alerts=alerts, retained=retained)
-        except LiveUnavailable as exc:
-            # The flight's alert episodes cannot be read: archive it later
-            # rather than without them.
+        except HistoryUnavailable as exc:
             log.warning("Deferring archive of %s: %s", flight_id, exc)
             return False
         except Exception:
             self._guard.failed("archive")
             return False
+
+    def retain(self, plane: Plane, alerts: list[dict]) -> bool:
+        """Whether the archive keeps this flight (``archive.flights`` policy)."""
+        return should_retain(
+            plane,
+            alerts,
+            self.config,
+            self.polygons,
+            positions=_position_samples(plane),
+        )
+
+    # -- deferred flights ----------------------------------------------------
+
+    def defer(self, flight_id: str, plane: Plane) -> None:
+        """Keep a flight for archive retry within PENDING_FINALIZE_BUDGET_BYTES.
+
+        Over the budget the oldest in-memory planes are dropped. What their
+        checkpoints wrote stays in the archive as a live flight, closed as
+        interrupted once history is writable again.
+        """
+        pending = self._pending
+        pending.pop(flight_id, None)
+        pending[flight_id] = plane
+        budget = PENDING_FINALIZE_BUDGET_BYTES
+        # Recomputed rather than tracked: enqueues only happen while history
+        # is failing, and each cost is O(number of series).
+        total = sum(pending_cost(p) for p in pending.values())
+        while total > budget and len(pending) > 1:
+            oldest = next(iter(pending))
+            total -= pending_cost(pending.pop(oldest))
+            self._carried.pop(oldest, None)
+            if self._pending_evicted == 0:
+                log.error(
+                    "Deferred archive memory budget (%d MiB) reached; dropping "
+                    "the oldest in-memory flights (their checkpointed part is "
+                    "kept as interrupted flights)",
+                    budget >> 20,
+                )
+            self._pending_evicted += 1
+            self._pending_evicted_total += 1
+            self._recovered = False
+
+    def clear_pending(self) -> None:
+        """Forget every deferred flight (tests)."""
+        self._pending.clear()
+        self._carried.clear()
+
+    def _history_writable(self) -> bool:
+        store = self._archive
+        return store.disabled or store.ping()
+
+    def _history_retry_due(self) -> bool:
+        return time.monotonic() >= self._history_retry_at
+
+    def back_off(self) -> None:
+        """Pause retries, recovery and checkpoints for _HISTORY_RETRY_INTERVAL."""
+        self._history_retry_at = time.monotonic() + _HISTORY_RETRY_INTERVAL
+
+    def retry_now(self) -> None:
+        """End a back-off: the next retry or checkpoint runs at once."""
+        self._history_retry_at = 0.0
+
+    def tick(self, budget: float | None = ARCHIVE_TICK_BUDGET) -> None:
+        """Retry deferred flights within *budget* seconds (``None``: no
+        limit), finish recovery if the archive was down, then checkpoint.
+        Each step runs under its own stage guard."""
+        deadline = None if budget is None else time.monotonic() + budget
+        with self._guard("pending archive"):
+            self.retry_pending(deadline)
+        if not self._recovered:
+            with self._guard("startup recovery"):
+                self._recover()
+        with self._guard("checkpoint"):
+            self.checkpoint()
+
+    def retry_pending(self, deadline: float | None = None) -> None:
+        """Archive deferred flights; with *deadline*, stop when it passes."""
+        pending = self._pending
+        if not pending or not self._history_retry_due():
+            return
+        if not self._history_writable():
+            return
+        for index, (flight_id, plane) in enumerate(list(pending.items())):
+            # At least one per tick, so a slow archive still makes progress.
+            if index and deadline is not None and time.monotonic() >= deadline:
+                return
+            if not self._persist(flight_id, plane):
+                # Disk full or I/O errors fail every write alike (while ping
+                # still works): back off instead of retrying, and logging, every
+                # pending flight each tick. The failed flight goes to the back
+                # so one that keeps failing cannot block the rest.
+                del pending[flight_id]
+                pending[flight_id] = plane
+                self.back_off()
+                return
+            del pending[flight_id]
+            self._carried.pop(flight_id, None)
+            self._live.pop_flight(flight_id)
+        if self._pending_evicted:
+            log.warning(
+                "History writable again; %d deferred flight(s) were dropped from "
+                "memory while it was down and are archived as interrupted",
+                self._pending_evicted,
+            )
+            self._pending_evicted = 0
+
+    def shutdown(self) -> None:
+        """Last attempt, regardless of back-off and without a time budget: a
+        flight still pending now keeps only its checkpoints (interrupted at
+        the next start)."""
+        self.retry_now()
+        self.tick(None)
 
     # -- checkpoints ---------------------------------------------------------
 
@@ -340,171 +489,109 @@ class FlightArchiver:
                 track.verdicts_through = item.integrity[-1][1]
         return True
 
-    def _carried(self, doc: Mapping[str, Any], flight_id: str) -> bool:
-        if self._episodes is None or not doc.get("active"):
-            return False
-        open_on = self._episodes.open_on(str(doc.get("alert_id") or ""))
-        return open_on is not None and open_on != flight_id
-
-    def retain(self, plane: Plane, alerts: list[dict], *, from_snapshot: bool) -> bool:
-        """Whether the archive keeps this flight (``archive.flights`` policy).
-
-        ``from_snapshot`` marks a crash/orphan reconstruction from the clipped
-        live window: kept whenever it has a position or alerts, and a later
-        longer series may upgrade the archive.
-        """
-        retained = should_retain(
-            plane,
-            alerts,
-            self.config,
-            self.polygons,
-            positions=_position_samples(plane),
-        )
-        if not retained and from_snapshot:
-            recv = plane.received_data
-            retained = bool(alerts) or bool(recv.get(STORE_LAT))
-        return retained
-
-    # -- deferred flights ----------------------------------------------------
-
-    def defer(self, flight_id: str, plane: Plane) -> None:
-        """Keep a flight for archive retry within PENDING_FINALIZE_BUDGET_BYTES.
-
-        Over the budget the oldest in-memory planes are dropped. Their live
-        copy is not popped, so the orphan sweep still archives them (from the
-        live snapshot, clipped to telemetry_keep_seconds) once history is
-        writable again.
-        """
-        pending = self._pending
-        pending.pop(flight_id, None)
-        pending[flight_id] = plane
-        budget = PENDING_FINALIZE_BUDGET_BYTES
-        # Recomputed rather than tracked: enqueues only happen while history
-        # is failing, and each cost is O(number of series).
-        total = sum(pending_cost(p) for p in pending.values())
-        while total > budget and len(pending) > 1:
-            oldest = next(iter(pending))
-            total -= pending_cost(pending.pop(oldest))
-            if self._pending_evicted == 0:
-                log.error(
-                    "Deferred archive memory budget (%d MiB) reached; dropping "
-                    "the oldest in-memory flights (live copies, clipped to "
-                    "tracking.telemetry_keep_seconds, are kept for later archive)",
-                    budget >> 20,
-                )
-            self._pending_evicted += 1
-            self._pending_evicted_total += 1
-
-    def clear_pending(self) -> None:
-        """Forget every deferred flight (their live copies stay; tests)."""
-        self._pending.clear()
-
-    def _history_writable(self) -> bool:
-        store = self._archive
-        return store.disabled or store.ping()
-
-    def _history_retry_due(self) -> bool:
-        return time.monotonic() >= self._history_retry_at
-
-    def back_off(self) -> None:
-        """Pause retries and orphan sweeps for _HISTORY_RETRY_INTERVAL."""
-        self._history_retry_at = time.monotonic() + _HISTORY_RETRY_INTERVAL
-
-    def retry_now(self) -> None:
-        """End a back-off: the next retry or sweep runs at once."""
-        self._history_retry_at = 0.0
-
-    def tick(self, budget: float | None = ARCHIVE_TICK_BUDGET) -> None:
-        """Retry deferred flights, then sweep orphans, within *budget* seconds
-        (``None``: no limit). Each step runs under its own stage guard."""
-        deadline = None if budget is None else time.monotonic() + budget
-        with self._guard("pending archive"):
-            self.retry_pending(deadline)
-        with self._guard("orphan archive"):
-            self.sweep_orphans(deadline)
-        with self._guard("checkpoint"):
-            self.checkpoint()
-
-    def retry_pending(self, deadline: float | None = None) -> None:
-        """Archive deferred flights; with *deadline*, stop when it passes."""
-        pending = self._pending
-        if not pending or not self._history_retry_due():
-            return
-        if not self._history_writable():
-            return
-        tracked = {plane.flight_id for plane in self._tracked().values()}
-        for index, (flight_id, plane) in enumerate(list(pending.items())):
-            # At least one per tick, so a slow archive still makes progress.
-            if index and deadline is not None and time.monotonic() >= deadline:
-                return
-            snapshot = flight_id not in tracked
-            if not self._persist(flight_id, plane, from_snapshot=snapshot):
-                # Disk full or I/O errors fail every write alike (while ping
-                # still works): back off instead of retrying, and logging, every
-                # pending flight each tick. The failed flight goes to the back
-                # so one that keeps failing cannot block the rest.
-                del pending[flight_id]
-                pending[flight_id] = plane
-                self.back_off()
-                return
-            del pending[flight_id]
-            self._live.pop_flight(flight_id)
-        if self._pending_evicted:
-            log.warning(
-                "History writable again; %d deferred flight(s) were dropped from "
-                "memory while it was down and will be archived from live copies",
-                self._pending_evicted,
-            )
-            self._pending_evicted = 0
-
-    def sweep_orphans(self, deadline: float | None = None) -> None:
-        """Archive leftover live flights; with *deadline*, stop when it passes."""
-        if not self._history_retry_due():
-            return
-        if deadline is not None and time.monotonic() >= deadline:
-            return
-        tracked = {plane.flight_id for plane in self._tracked().values()}
-        tracked |= set(self._pending)
-        leftover = self._live.flight_ids() - tracked
-        if leftover and not self._history_writable():
-            return
-        for flight_id in leftover:
-            if deadline is not None and time.monotonic() >= deadline:
-                return
-            try:
-                plane = self._live.plane_for_finalize(flight_id)
-            except Exception:
-                self._guard.failed("orphan snapshot")
-                continue
-            if plane is not None and not self.finalize(plane, from_snapshot=True):
-                self.back_off()
-                return
-
-    def shutdown(self) -> None:
-        """Last attempt, regardless of back-off and without a time budget: a
-        flight still pending now is only recoverable from its clipped live
-        copy at the next start."""
-        self.retry_now()
-        self.tick(None)
-
     # -- startup recovery ----------------------------------------------------
 
     def recover_on_startup(self) -> None:
-        """Archive a previous engine's live flights, then close its stray alerts."""
-        self._archive_startup_live_flights()
-        self._close_stray_active_alerts()
+        """Close what a previous engine process left open in the archive.
 
-    def _archive_startup_live_flights(self) -> None:
-        """Persist leftover Redis live copies from a previous engine process.
-
-        Whatever fails here stays in Redis for the main loop's orphan sweep.
+        Runs before tracking starts; if the archive is down it is retried by
+        :meth:`tick` once it is writable.
         """
-        with self._guard("startup archive"):
+        self._recovered = self._archive.disabled
+        if not self._recovered:
+            with self._guard("startup recovery"):
+                self._recover()
+        # Redis is only a cache of what this process tracks: drop whatever a
+        # previous one left (each tick republishes the current state).
+        stale = 0
+        with self._guard("live cache"):
+            stale = self._live.clear_cache()
+        found = getattr(self._archive, "schema_found", None)
+        if stale and found is not None and found < LIFECYCLE_SCHEMA_VERSION:
+            log.warning(
+                "Discarded %d live flight(s) a pre-1.0 PyAerial left in Redis "
+                "(it was not stopped gracefully before the upgrade); they are "
+                "not in the archive",
+                stale,
+            )
+
+    def _recover(self) -> bool:
+        """Close the archive's live flights and open episodes that are not
+        this process's (tracked or pending).
+
+        1. Each open episode gets its one deactivate (``ended_by: restart``)
+           and is recorded closed at its last refresh.
+        2. Each live flight is kept as ``interrupted`` (ending at its last
+           checkpointed sample) or deleted, by the archive policy decided on
+           what the archive holds.
+
+        Idempotent: a crash part way repeats only the unfinished steps (and
+        at most the one deactivate whose record had not committed).
+        """
+        if not self._history_retry_due() or not self._history_writable():
+            return False
+        archive = self._archive
+        owned = {plane.flight_id for plane in self._tracked().values()}
+        owned |= set(self._pending)
+        try:
+            flights = {doc["flight_id"]: doc for doc in archive.live_flights()}
+            episodes = [
+                doc
+                for doc in archive.active_episodes()
+                if doc.get("flight_id") not in owned
+            ]
+            planes: dict[str, Plane] = {}
             beat = time.monotonic()
-            for plane in self._live.planes_for_finalize():
-                with self._guard("finalize"):
-                    self.finalize(plane, from_snapshot=True)
+            for doc in episodes:
+                flight_id = str(doc.get("flight_id") or "")
+                plane = planes.get(flight_id)
+                if plane is None:
+                    flight = flights.get(flight_id)
+                    plane = (
+                        plane_from_rows(flight, archive.flight_points(flight_id))
+                        if flight is not None
+                        else _flight_id_plane(flight_id, str(doc.get("callsign") or ""))
+                    )
+                if plane is None:
+                    log.warning("Cannot close alert %s of %s", doc.get("alert_id"), flight_id)
+                    continue
+                planes[flight_id] = plane
+                with self._guard("restart alert"):
+                    self._alerts.alerts.close_restored(plane, doc)
                 beat = self._keep_heartbeat(beat)
+            # Closing an episode of a flight with no row gave it one.
+            leftovers = [
+                doc for doc in archive.live_flights() if doc["flight_id"] not in owned
+            ]
+            kept = 0
+            for flight in leftovers:
+                flight_id = flight["flight_id"]
+                plane = planes.get(flight_id) or plane_from_rows(
+                    flight, archive.flight_points(flight_id)
+                )
+                if self.retain(plane, archive.flight_alerts(flight_id)):
+                    done = archive.interrupt_flight(flight_id)
+                    kept += done
+                else:
+                    done = archive.discard_flight(flight_id)
+                if not done:
+                    self.back_off()
+                    return False
+                beat = self._keep_heartbeat(beat)
+        except HistoryUnavailable as exc:
+            log.warning("Deferring recovery of interrupted flights: %s", exc)
+            self.back_off()
+            return False
+        if leftovers or episodes:
+            log.warning(
+                "Recovered %d flight(s) a previous engine left open (%d kept as "
+                "interrupted) and closed %d alert(s) it left active",
+                len(leftovers),
+                kept,
+                len(episodes),
+            )
+        self._recovered = True
+        return True
 
     def _keep_heartbeat(self, last: float) -> float:
         """Refresh the heartbeat during long startup work (10 s TTL)."""
@@ -514,39 +601,6 @@ class FlightArchiver:
         with self._guard("heartbeat"):
             self._live.touch_engine()
         return now
-
-    def _close_stray_active_alerts(self) -> None:
-        """Close active alerts whose flight never reached ``live:flights``.
-
-        A crash between an alert write and that tick's flight write leaves an
-        active alert neither the startup archive nor the orphan sweep can see.
-        Each is deactivated like any restart leftover (the notification goes
-        out with ``ended_by: restart``), and the closed episode is archived
-        with a flight row that has no telemetry: the position is used for the
-        notification only, never written as a sample.
-        """
-        with self._guard("stray alerts"):
-            by_flight: dict[str, list[dict]] = {}
-            for doc in self._live.stray_active_alerts():
-                by_flight.setdefault(doc["flight_id"], []).append(doc)
-            beat = time.monotonic()
-            for flight_id, docs in by_flight.items():
-                beat = self._keep_heartbeat(beat)
-                plane = plane_from_alert_docs(flight_id, docs)
-                if plane is None:
-                    log.warning("Cannot close stray alerts of %s", flight_id)
-                    continue
-                log.warning(
-                    "Closing %d alert(s) of %s left active by a crash before "
-                    "the flight was written",
-                    len(docs),
-                    flight_id,
-                )
-                with self._guard("stray alert"):
-                    self._alerts.alerts.deactivate(plane, ended_by=ENDED_RESTART)
-                    self._archive_and_pop(
-                        replace(plane, received_data={}), from_snapshot=True
-                    )
 
     # -- segmentation --------------------------------------------------------
 
@@ -589,6 +643,10 @@ class FlightArchiver:
         # Snapshot first: from here on the segment is archived (or kept for
         # retry) whatever the later steps do, so a bug cannot lose the track.
         segment = segments.segment_copy(plane)
+        carried: list[dict[str, Any]] = []
+        if self._episodes is not None:
+            with self._guard("segment alerts"):
+                carried = self._episodes.open_docs(old_flight_id)
         new_flight_id: str | None = None
         try:
             segments.start_new_segment(plane, new_first, keep_position=keep_position)
@@ -596,12 +654,10 @@ class FlightArchiver:
         except Exception:
             self._guard.failed("segment trim")
         if new_flight_id is not None:
-            carried = 0
             with self._guard("segment alerts"):
-                carried = self._live.carry_active_alerts(old_flight_id, new_flight_id)
+                self._live.carry_active_alerts(old_flight_id, new_flight_id)
             with self._guard("segment alerts"):
-                # Switch the alert engine to the new flight now, so an orphan
-                # sweep of the old segment can never send a false deactivate.
+                # The alert engine and the episode rows move to the new flight.
                 self._alerts.handover(plane, old_flight_id, new_flight_id)
             with self._guard("live store"):
                 # Live before the old copy is popped: no tick without it.
@@ -612,6 +668,6 @@ class FlightArchiver:
                 old_flight_id,
                 self.max_flight_seconds,
                 new_flight_id,
-                f" ({carried} active alert(s) carried over)" if carried else "",
+                f" ({len(carried)} active alert(s) carried over)" if carried else "",
             )
-        self._archive_and_pop(segment, from_snapshot=False)
+        self._archive_and_pop(segment, carried)

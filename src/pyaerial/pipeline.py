@@ -146,8 +146,8 @@ class PlaneCalculator:
         """Deactivate alerts and drop motion state for an expired plane.
 
         Per-ICAO state (motion, lookups) is kept when another flight of the
-        same aircraft is live, e.g. when the orphan sweep archives an old
-        live copy of an aircraft that is being tracked again.
+        same aircraft is live (an older flight of an aircraft that is being
+        tracked again).
         """
         icao = plane.info.icao
         if not self.alerts.deactivate(plane):

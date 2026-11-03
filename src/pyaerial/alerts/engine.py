@@ -49,9 +49,9 @@ ENDED_CLEARED = "cleared"  # the rule's conditions stopped holding
 ENDED_LOST = "lost"  # aircraft not heard for tracking.remember_planes
 ENDED_SHUTDOWN = "shutdown"  # engine stopping while the aircraft was tracked
 # Left active by an engine that stopped without shutting down (crash, kill).
-# Its flight is archived at the next start and tracking starts a new flight,
-# so the episode cannot resume: it is closed, and an aircraft still in the
-# zone activates again under a new alert_id.
+# Its flight is closed as interrupted at the next start and tracking starts a
+# new flight, so the episode cannot resume: it is closed, and an aircraft
+# still in the zone activates again under a new alert_id.
 ENDED_RESTART = "restart"
 
 
@@ -476,15 +476,15 @@ class AlertEngine:
     def deactivate(self, plane: Plane, ended_by: str | None = None) -> bool:
         """Close every alert of a flight being removed, with one deactivate each.
 
-        Covers alerts this process raised and, via the live store, alerts a
-        previous engine process left active (``ended_by="restart"``).
+        Covers the alerts this process raised (a previous process's are closed
+        by :meth:`close_restored`).
         ``ended_by`` defaults to ``lost`` for a plane silent for longer than
         ``remember_planes`` (expiry) and ``shutdown`` otherwise: the engine
         only removes a still-fresh plane when it is stopping.
 
         Only state of *plane*'s own flight is touched. When a different
-        flight of the same ICAO is live (an old live copy archived by the
-        orphan sweep while the aircraft is tracked again), its alerts and
+        flight of the same ICAO is live (an older flight finalized late, e.g.
+        a deferred segment, while the aircraft is tracked again), its alerts and
         pending matches are left alone and False is returned so callers keep
         per-ICAO state (motion, lookups) too. True otherwise.
         """
@@ -526,11 +526,9 @@ class AlertEngine:
         position = _last_position(plane)
 
         geofence_etas = {z: None for z in self.config.zones}
-        closed: set[str] = set()
         for key in stale_keys:
             zone_name, rule_name = key[1], key[2]
             state = self._alert_state.pop(key)
-            closed.add(state["alert_id"])
             rule = self._find_rule(zone_name, rule_name)
             last_eta = state.get("eta")
             if rule is not None:
@@ -563,7 +561,6 @@ class AlertEngine:
                     deactivated_at=now,
                     active=False,
                 )
-        self._close_orphaned_alerts(plane, closed, callsign, position, now)
         if not other_flight_live:
             plane.active_alerts = []
         return not other_flight_live
@@ -574,98 +571,89 @@ class AlertEngine:
             return None
         return next((r for r in zone.rules if r.name == rule_name), None)
 
-    def _close_orphaned_alerts(
-        self,
-        plane: Plane,
-        closed: set[str],
-        callsign: str,
-        position: tuple[float, float] | None,
-        now: float,
+    def close_restored(
+        self, plane: Plane, doc: Mapping[str, Any], *, now: float | None = None
     ) -> None:
-        """Deactivate store episodes of this flight that no live state owns.
+        """Close an episode a previous engine process left open (crash, kill).
 
-        After a crash the next engine archives the leftover flights at
-        startup; their still-active episodes would otherwise vanish from Redis
-        without the deactivate notification webhook consumers wait for.
+        Sends its one deactivate notification (``ended_by: restart``), then
+        records it closed. It ends when it was last known to hold (its last
+        refresh), not at the (possibly much later) restart. *plane* is the
+        episode's flight as archived (``plane.flight_id`` is the episode's);
+        *doc* its archived row. No notification when the rule is no longer
+        configured.
         """
         if self.store is None:
             return
-        try:
-            flight_id = plane.flight_id
-            docs = self.store.get_alerts(flight_id=flight_id, active_only=True)
-        except Exception:
-            log.exception("Could not read leftover active alerts from the live store")
-            return
-        payload: dict | None = None
-        for doc in docs:
-            alert_id = doc.get("alert_id")
-            if not alert_id or alert_id in closed:
-                continue
-            zone_name = str(doc.get("zone") or "")
-            rule_name = str(doc.get("rule") or "")
-            activated_at = doc.get("activated_at")
-            if not isinstance(activated_at, (int, float)):
-                activated_at = now
-            # Last refresh by the old process: when the episode was last known
-            # to hold, not the (possibly much later) restart time.
-            last_seen = doc.get("last_updated")
-            ended_at = (
-                min(now, max(activated_at, last_seen))
-                if isinstance(last_seen, (int, float))
-                else now
+        now = time.time() if now is None else now
+        alert_id = str(doc.get("alert_id") or "")
+        zone_name = str(doc.get("zone") or "")
+        rule_name = str(doc.get("rule") or "")
+        activated_at = doc.get("activated_at")
+        if not isinstance(activated_at, (int, float)):
+            activated_at = now
+        last_seen = doc.get("last_updated")
+        ended_at = (
+            min(now, max(activated_at, last_seen))
+            if isinstance(last_seen, (int, float))
+            else now
+        )
+        eta = doc.get("eta") if isinstance(doc.get("eta"), (int, float)) else None
+        lat, lon = doc.get("latitude"), doc.get("longitude")
+        position = (
+            (lat, lon)
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float))
+            else _last_position(plane)
+        )
+        payload = self._build_payload(plane, position)
+        callsign = str(doc.get(STORE_CALLSIGN) or plane.info.callsign or "")
+        rule = self._find_rule(zone_name, rule_name)
+        if rule is None:
+            log.warning(
+                "Closing alert %s left active by a previous engine run; "
+                "zones.%s.rules.%s is no longer configured, so no "
+                "deactivate notification is sent",
+                alert_id,
+                zone_name,
+                rule_name,
             )
-            eta = doc.get("eta") if isinstance(doc.get("eta"), (int, float)) else None
-            if payload is None:
-                payload = self._build_payload(plane, position)
-            rule = self._find_rule(zone_name, rule_name)
-            if rule is None:
-                log.warning(
-                    "Closing alert %s left active by a previous engine run; "
-                    "zones.%s.rules.%s is no longer configured, so no "
-                    "deactivate notification is sent",
-                    alert_id,
-                    zone_name,
-                    rule_name,
-                )
-                meta = {
-                    STORE_ICAO: str(doc.get(STORE_ICAO) or ""),
-                    STORE_CALLSIGN: doc.get(STORE_CALLSIGN) or callsign,
-                    ALERT_CAT_TYPE: rule_name,
-                    ALERT_CAT_ZONE: zone_name,
-                    ALERT_CAT_ETA: eta,
-                    ALERT_CAT_REASON: {
-                        "hook": _ALERT_HOOK_DEACTIVATE,
-                        "ended_by": ENDED_RESTART,
-                    },
-                }
-            else:
-                log.info(
-                    "Closing alert %s left active by a previous engine run", alert_id
-                )
-                meta = self._build_meta(
-                    plane,
-                    zone_name,
-                    rule,
-                    eta,
-                    {},
-                    doc.get(STORE_CALLSIGN) or callsign,
-                    _ALERT_HOOK_DEACTIVATE,
-                    alert_id,
-                    ended_by=ENDED_RESTART,
-                    activated_at=activated_at,
-                    deactivated_at=ended_at,
-                )
-                if rule.on_deactivate:
-                    self._run_actions(rule.on_deactivate, meta, payload, alert_id)
-            self.store.record_alert_episode(
+            meta: dict[str, Any] = {
+                STORE_ICAO: str(doc.get(STORE_ICAO) or plane.icao),
+                STORE_CALLSIGN: callsign,
+                ALERT_CAT_TYPE: rule_name,
+                ALERT_CAT_ZONE: zone_name,
+                ALERT_CAT_ETA: eta,
+                ALERT_CAT_REASON: {
+                    "hook": _ALERT_HOOK_DEACTIVATE,
+                    "ended_by": ENDED_RESTART,
+                },
+            }
+        else:
+            log.info("Closing alert %s left active by a previous engine run", alert_id)
+            meta = self._build_meta(
                 plane,
-                meta,
-                payload,
-                alert_id=alert_id,
+                zone_name,
+                rule,
+                eta,
+                {},
+                callsign,
+                _ALERT_HOOK_DEACTIVATE,
+                alert_id,
+                ended_by=ENDED_RESTART,
                 activated_at=activated_at,
                 deactivated_at=ended_at,
-                active=False,
             )
+            if rule.on_deactivate:
+                self._run_actions(rule.on_deactivate, meta, payload, alert_id)
+        self.store.record_alert_episode(
+            plane,
+            meta,
+            payload,
+            alert_id=alert_id,
+            activated_at=activated_at,
+            deactivated_at=ended_at,
+            active=False,
+        )
 
     def _build_meta(
         self,

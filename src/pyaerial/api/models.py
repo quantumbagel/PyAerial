@@ -157,6 +157,10 @@ class _FlightBase(WireModel):
     """Null until the engine scores the aircraft."""
     is_live: bool
     status: FlightStatus
+    interrupted: bool = omittable()
+    """Sent (``true``) only for a completed flight the engine did not
+    finalize (it was killed or crashed): the track ends at its last archive
+    checkpoint, up to ~15 s before the engine stopped."""
 
 
 class FlightSummary(_FlightBase):

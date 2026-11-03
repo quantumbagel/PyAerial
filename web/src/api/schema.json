@@ -699,6 +699,10 @@
           ],
           "description": "Null until the engine scores the aircraft."
         },
+        "interrupted": {
+          "description": "Sent (``true``) only for a completed flight the engine did not\nfinalize (it was killed or crashed): the track ends at its last archive\ncheckpoint, up to ~15 s before the engine stopped.",
+          "type": "boolean"
+        },
         "is_live": {
           "type": "boolean"
         },
@@ -921,6 +925,10 @@
             }
           ],
           "description": "Null until the engine scores the aircraft."
+        },
+        "interrupted": {
+          "description": "Sent (``true``) only for a completed flight the engine did not\nfinalize (it was killed or crashed): the track ends at its last archive\ncheckpoint, up to ~15 s before the engine stopped.",
+          "type": "boolean"
         },
         "is_live": {
           "type": "boolean"

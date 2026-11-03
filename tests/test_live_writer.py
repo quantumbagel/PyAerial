@@ -4,7 +4,6 @@ claim, alert episodes, recovery reads and the memory mirror."""
 from __future__ import annotations
 
 import json
-import logging
 import threading
 import time
 
@@ -33,10 +32,8 @@ from pyaerial.models import (
     Plane,
     TrackState,
     Verdict,
-    sample_provenance,
 )
-from pyaerial.store.codec import build_telemetry_docs
-from pyaerial.store.live import LiveUnavailable, LiveWriter, keys, recovery
+from pyaerial.store.live import LiveUnavailable, LiveWriter, keys
 
 URI = "redis://user:s3cret@redis.example:6380/0"
 
@@ -120,24 +117,6 @@ def test_unchanged_flights_are_not_rewritten(fake):
     store.write_live_planes(planes)
     assert fake.calls.count("execute") == 1
     assert '"NEW1"' in fake.kv["live:flight:a00000-1000"]
-
-
-def test_snapshot_keeps_sample_receivers_and_integrity(fake):
-    store = LiveWriter(URI)
-    t = time.time()
-    plane = _plane(t=t)
-    plane.received_data[STORE_LAT].append(Datum(35.1, t + 5))
-    plane.received_data[STORE_LONG].append(Datum(-78.1, t + 5))
-    plane.track.position_receivers = {t: ("nl", "be"), t + 5: ("nl",)}
-    plane.track.integrity_log = [
-        Verdict(t - 1, 0.9, "ok", (), {}),
-        Verdict(t + 2, 0.3, "spoofed", ("aoa",), {}),
-    ]
-    store.write_live_planes({"abc123": plane})
-    rebuilt = store.plane_for_finalize(f"abc123-{int(t)}")
-    assert rebuilt is not None
-    for stamp in (t, t + 5):
-        assert sample_provenance(rebuilt, stamp) == sample_provenance(plane, stamp)
 
 
 # --- Redis writer ownership -------------------------------------------------
@@ -235,60 +214,10 @@ def test_reconnect_backfill_sets_ttls(fake):
     assert fake.ttls[f"live:telemetry:{fid}"] == keys.LIVE_FLIGHT_TTL_SECONDS
 
 
-def test_crash_recovery_still_rebuilds_flights_before_the_ttl(fake):
-    crashed = LiveWriter(LOCAL_REDIS_URI)
-    plane = heading_plane("abc123", time.time(), samples=3)
-    crashed.write_live_planes({"ABC123": plane})
-    fid = f"abc123-{int(plane.track.first_packet)}"
-
-    restarted = LiveWriter(LOCAL_REDIS_URI)
-    rebuilt = restarted.planes_for_finalize()
-    assert [p.info.icao for p in rebuilt] == ["abc123"]
-    assert len(rebuilt[0].received_data[STORE_LAT]) == 3
-    assert fid in restarted.flight_ids()
-
-
-def test_expired_flight_remnants_are_cleaned_not_retried(fake):
-    crashed = LiveWriter(LOCAL_REDIS_URI)
-    plane = heading_plane("abc123", time.time())
-    fid = f"abc123-{int(plane.track.first_packet)}"
-    crashed.write_live_planes({"ABC123": plane})
-    crashed.record_alert_episode(
-        plane, {STORE_ICAO: "abc123"}, {}, alert_id="a1", activated_at=1.0
-    )
-    # Engine stayed down past the TTL: per-flight keys are gone, but the
-    # shared set and alert hashes still name the flight.
-    fake.lapse(f"live:flight:{fid}", f"live:telemetry:{fid}", f"live:alerts:{fid}")
-
-    restarted = LiveWriter(LOCAL_REDIS_URI)
-    assert restarted.planes_for_finalize() == []
-    assert fid not in fake.sets.get("live:flights", set())
-    assert "a1" not in fake.hashes.get("live:active_alerts", {})
-    assert "a1" not in fake.hashes.get("live:alert_episodes", {})
-    fake.calls.clear()
-    assert restarted.planes_for_finalize() == []
-    assert "get" not in fake.calls  # nothing left to re-read every tick
-
-
-def test_redis_error_during_snapshot_does_not_drop_the_flight(fake):
-    store = LiveWriter(LOCAL_REDIS_URI)
-    plane = heading_plane("abc123", time.time())
-    fid = f"abc123-{int(plane.track.first_packet)}"
-    store.write_live_planes({"ABC123": plane})
-    store._mem.flights.clear()  # as if written by a previous process
-    fake.fail.add("get")
-    assert store.plane_for_finalize(fid) is None
-    fake.fail.clear()
-    store._last_connect_attempt = 0.0
-    store.retry_pending_pops()
-    assert fid in fake.sets["live:flights"]
-    assert f"live:flight:{fid}" in fake.kv
-
-
 # --- Capped telemetry reads, latest point, backfill and corrupt docs ---------
 
 
-def test_live_telemetry_and_crash_snapshot_keep_gnss_height(fake):
+def test_live_telemetry_keeps_gnss_height(fake):
     store = LiveWriter(LOCAL_REDIS_URI, telemetry_keep_seconds=0)
     assert store.claim_engine()
     plane = gnss_then_baro_plane(time.time())
@@ -299,12 +228,6 @@ def test_live_telemetry_and_crash_snapshot_keep_gnss_height(fake):
     assert points[0]["gnss_height"] == 10972.8
     assert "gnss_height" not in points[-1]
     assert any("gnss_height" in p for p in store.get_live_telemetry())
-
-    restarted = LiveWriter(LOCAL_REDIS_URI)
-    rebuilt = restarted.plane_for_finalize(fid)
-    docs = build_telemetry_docs(rebuilt, fid, "abc123")
-    assert docs[0]["gnss_height"] == 10972.8
-    assert "gnss_height" not in docs[-1]
 
 
 # --- Live telemetry reads are capped inside Redis ----------------------------
@@ -436,52 +359,7 @@ def test_backfill_survives_concurrent_live_writes(fake, monkeypatch):
     assert {f"a{n:05d}-{1000 + n}" for n in range(5)} <= fake.sets["live:flights"]
 
 
-# --- Corrupt live docs are not re-read every sweep ---------------------------
-
-
-def test_corrupt_live_doc_is_skipped_after_first_sweep(fake, caplog):
-    fake.sets["live:flights"] = {"bad111-1", "noicao-1"}
-    fake.kv["live:flight:bad111-1"] = "{not json"
-    fake.kv["live:flight:noicao-1"] = '{"info": {}}'
-    store = LiveWriter(LOCAL_REDIS_URI)
-    with caplog.at_level(logging.WARNING, logger="pyaerial.store.redis"):
-        assert store.planes_for_finalize() == []
-        fake.calls.clear()
-        assert store.planes_for_finalize() == []
-    assert fake.calls.count("get") == 0
-    assert caplog.text.count("bad111-1") == 1
-    assert caplog.text.count("noicao-1") == 1
-    # Kept (not deleted), but the TTL guarantees Redis lets go eventually.
-    assert fake.kv["live:flight:bad111-1"] == "{not json"
-    assert fake.ttls["live:flight:bad111-1"] > 0
-
-
-def test_unreadable_flight_memory_is_bounded(fake, monkeypatch):
-    monkeypatch.setattr(recovery, "_UNREADABLE_FLIGHTS_MAX", 3)
-    store = LiveWriter(LOCAL_REDIS_URI)
-    for n in range(5):
-        fake.kv[f"live:flight:x{n}-1"] = "garbage"
-        store.plane_for_finalize(f"x{n}-1")
-    assert len(store._unreadable_flights) == 3
-
-
 # --- Score-less verdicts and telemetry provenance in the live store ----------
-
-
-def test_live_snapshot_rebuilds_scoreless_verdicts(fake):
-    store = LiveWriter(LOCAL_REDIS_URI, telemetry_keep_seconds=0)
-    plane = with_unknown_then_ok(track_plane("abc123", time.time()))
-    fid = f"abc123-{int(plane.track.first_packet)}"
-    store.write_live_planes({"ABC123": plane})
-    restarted = LiveWriter(LOCAL_REDIS_URI)
-    rebuilt = restarted.plane_for_finalize(fid)
-    verdicts = rebuilt.track.integrity_log
-    assert [(v.score, v.status) for v in verdicts] == [(None, "unknown"), (0.9, "ok")]
-    original = build_telemetry_docs(plane, fid, "abc123")
-    again = build_telemetry_docs(rebuilt, fid, "abc123")
-    assert [d.get("integrity_status") for d in again] == [
-        d.get("integrity_status") for d in original
-    ]
 
 
 # --- /ws/live telemetry push carries provenance ------------------------------
