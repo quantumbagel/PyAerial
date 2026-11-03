@@ -33,7 +33,7 @@ from pyaerial.pipeline import PlaneCalculator
 from pyaerial.receivers import RawFrame, available_receivers
 from pyaerial.receivers.positions import ReceiverPositions
 from pyaerial.store import ArchiveWriter
-from pyaerial.store.live import LiveWriter, LiveWriteStore
+from pyaerial.store.live import LiveWriter, LiveWriteStore, NullLiveWriter
 from pyaerial.store.recorder import EpisodeRecorder
 from pyaerial.tracker import Tracker
 
@@ -50,7 +50,7 @@ class Engine:
     and its recovery paths; this class runs the tick loop over them.
 
     *history_store* replaces the archive writer built from the config, e.g.
-    a real archive behind an ``isolated`` (memory-only) live store.
+    a real archive behind an ``isolated`` engine (no live store).
 
     Test hooks: :meth:`tick` runs one iteration, :meth:`process_frames` its
     frame stages, :meth:`expire_planes` its expiry; :meth:`request_stop` is
@@ -73,11 +73,15 @@ class Engine:
         self.integrity = IntegrityMonitor(config, self.positions)
         self.polygons: dict[str, Polygon] = build_polygons(config.zones)
         self.aircraft_db = AircraftDB(aircraft_db_path)
-        self.live_store: LiveWriteStore = LiveWriter(
-            config.database.redis_uri,
-            memory_only=isolated,
-            telemetry_keep_seconds=config.tracking.telemetry_keep_seconds,
-            writer=True,
+        # Redis is the portal's cache of what is tracked; an isolated engine
+        # (replay, profiling, tests) has none.
+        self.live_store: LiveWriteStore = (
+            NullLiveWriter()
+            if isolated
+            else LiveWriter(
+                config.database.redis_uri,
+                telemetry_keep_seconds=config.tracking.telemetry_keep_seconds,
+            )
         )
         self._last_status_log = 0.0
         self.history_store = (
@@ -144,7 +148,7 @@ class Engine:
         self._install_signal_handlers()
         hz = self.config.tracking.hz
         tick_budget = 1.0 / hz
-        store = "memory" if self._isolated else "redis+sqlite"
+        store = "isolated" if self._isolated else "redis+sqlite"
 
         # Startup failures (e.g. no receiver could start) still shut down, so
         # the heartbeat claimed in __init__ is released and stores are closed.
@@ -224,8 +228,6 @@ class Engine:
         with guard("segments"):
             self.archiver.split_long_flights()
         self.archiver.tick()
-        with guard("pending pops"):
-            self.live_store.retry_pending_pops()
         return processed
 
     def process_frames(self, raw: list[RawFrame]) -> int:
@@ -375,8 +377,9 @@ class Engine:
                     self.archiver.finalize(plane)
             self.tracker.planes.clear()
             self.archiver.shutdown()
-            with self._guard("pending pops"):
-                self.live_store.retry_pending_pops()
+            with self._guard("live store"):
+                # Nothing is tracked any more: the publish empties the cache.
+                self.live_store.write_live_planes({})
             with self._guard("heartbeat"):
                 self.live_store.clear_engine()
 

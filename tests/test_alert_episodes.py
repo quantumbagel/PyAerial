@@ -11,6 +11,8 @@ import time
 import pytest
 
 from helpers import (
+    LOCAL_REDIS_URI,
+    episode_recorder,
     InlineDispatcher,
     fine_track_plane,
     make_config,
@@ -355,10 +357,10 @@ def _tick(engine, plane, clock, position=_INSIDE, seconds=1.0):
 # --- ICAO collision: an older flight is finalized while a newer one is live -
 
 
-def test_orphan_of_old_flight_leaves_live_flight_alert_alone(clock):
+def test_orphan_of_old_flight_leaves_live_flight_alert_alone(fake, clock):
     _IDENTITY_EVENTS.clear()
-    store = LiveWriter("redis://localhost:1/0", memory_only=True)
-    engine = _alert_engine(_identity_config(), store)
+    cache = LiveWriter(LOCAL_REDIS_URI)
+    engine = _alert_engine(_identity_config(), episode_recorder(cache))
     try:
         live = _identity_plane(first=time.time() - 30)
         for _ in range(3):
@@ -370,11 +372,12 @@ def test_orphan_of_old_flight_leaves_live_flight_alert_alone(clock):
         assert live.active_alerts  # the live plane's list is untouched
         for _ in range(3):
             _tick(engine, live, clock)
-        live_alerts = store.get_alerts(flight_id=live.flight_id)
+        cache.write_live_planes({"ABC123": live})
+        live_alerts = cache.get_alerts(flight_id=live.flight_id)
         assert [a["alert_id"] for a in live_alerts] == [state["alert_id"]]
     finally:
         engine.close()
-        store.close()
+        cache.close()
     assert [e["hook"] for e in _IDENTITY_EVENTS] == ["activate"]  # no lost, no re-activate
 
 
@@ -423,8 +426,8 @@ def test_pending_match_survives_orphan_sweep(clock):
 
 def _segmented_run(clock, *, explicit: bool):
     _IDENTITY_EVENTS.clear()
-    store = LiveWriter("redis://localhost:1/0", memory_only=True)
-    engine = _alert_engine(_identity_config(while_active=4), store)
+    store = LiveWriter(LOCAL_REDIS_URI)
+    engine = _alert_engine(_identity_config(while_active=4), episode_recorder(store))
     t0 = time.time() - 600
     plane = _identity_plane(first=t0)
     old_id = plane.flight_id
@@ -440,21 +443,20 @@ def _segmented_run(clock, *, explicit: bool):
         if explicit:
             engine.handover(plane, old_id, new_id)
             engine.handover(plane, old_id, new_id)  # idempotent
-            store.pop_flight(old_id)  # the engine archives and pops segment 1
         _tick(engine, plane, clock)
-        if not explicit:
-            store.pop_flight(old_id)
+        store.write_live_planes({"ABC123": plane})  # segment 1 drops out
         seen["active_mid"] = store.get_alerts(active_only=True)
         for _ in range(3):
             _tick(engine, plane, clock)
         _tick(engine, plane, clock, position=_OUTSIDE)
+        store.write_live_planes({"ABC123": plane})
         return store, seen, new_id
     finally:
         engine.close()
 
 
 @pytest.mark.parametrize("explicit", [True, False])
-def test_handover_continues_episode_without_notifications(clock, explicit):
+def test_handover_continues_episode_without_notifications(fake, clock, explicit):
     store, seen, new_id = _segmented_run(clock, explicit=explicit)
     episode = seen["episode"]
     try:
@@ -478,7 +480,7 @@ def test_handover_continues_episode_without_notifications(clock, explicit):
         store.close()
 
 
-def test_handover_keeps_while_active_cadence(clock):
+def test_handover_keeps_while_active_cadence(fake, clock):
     _segmented_run(clock, explicit=True)
     # 1 s ticks: activate at t=1, handover before t=4, while_active due at
     # t=5. Resetting the cadence at the handover would push it to t=8, the

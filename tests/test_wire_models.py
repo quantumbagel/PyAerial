@@ -20,7 +20,13 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ValidationError
 
-from helpers import make_config, make_plane, with_unknown_then_ok
+from helpers import (
+    LOCAL_REDIS_URI,
+    episode_recorder,
+    make_config,
+    make_plane,
+    with_unknown_then_ok,
+)
 from pyaerial.alerts.engine import AlertEngine
 from pyaerial.api import models
 from pyaerial.api.broadcaster import LiveBroadcaster, _Client
@@ -208,10 +214,10 @@ def _quiet_plane(first: float) -> Plane:
 
 
 @pytest.fixture
-def stores(tmp_path, monkeypatch):
+def stores(fake, tmp_path, monkeypatch):
     config = make_config()
     config.zones["pad"].rules[0].dwell_seconds = 1
-    store = LiveWriter("redis://localhost:1/0", memory_only=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     # Recent: the live store drops telemetry older than telemetry_keep_seconds.
     now = time.time()
     alerting = _alerting_plane(now - 5)
@@ -220,7 +226,7 @@ def stores(tmp_path, monkeypatch):
         "C0FFEE": _spoofed_plane(now - 30),
         "BEEF01": _quiet_plane(now - 30),
     }
-    engine = AlertEngine(config, build_polygons(config.zones), store)
+    engine = AlertEngine(config, build_polygons(config.zones), episode_recorder(store))
     motion = ResolvedMotion(heading_deg=0.0, speed_kph=185.2, turn_rate_deg_s=0.0)
     mono = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: mono[0])

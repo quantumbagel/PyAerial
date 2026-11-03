@@ -100,7 +100,7 @@ def test_every_hook_carries_one_stable_alert_id(monkeypatch):
 
 
 def test_stored_alert_document_shape_is_unchanged():
-    from pyaerial.store.live import LiveWriter
+    from pyaerial.store.codec import alert_episode_doc
 
     plane = Plane(
         info=AircraftInfo(icao="abc123"),
@@ -113,15 +113,7 @@ def test_stored_alert_document_shape_is_unchanged():
         "zone": "z",
         "type": "r",
     }
-    doc = LiveWriter._alert_doc(
-        None,
-        plane,
-        meta,
-        {},
-        alert_id="a1",
-        activated_at=1.0,
-        active=True,  # type: ignore[arg-type]
-    )
+    doc = alert_episode_doc(plane, meta, {}, alert_id="a1", activated_at=1.0, active=True)
     assert set(doc) == {
         "alert_id",
         "flight_id",

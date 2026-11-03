@@ -1,18 +1,17 @@
-"""LiveWriter, the engine's live store: flight and telemetry writes, writer
-claim, alert episodes, recovery reads and the memory mirror."""
+"""LiveWriter, the engine's live store: a cache of what it tracks. The tick's
+publish (flights, telemetry, episodes, deletions), the writer claim, and
+republishing after Redis comes back."""
 
 from __future__ import annotations
 
 import json
-import threading
 import time
 
 import pytest
 
-from fake_redis import FakePipeline, FakeRedis
+from fake_redis import FakeRedis
 from helpers import (
     LOCAL_REDIS_URI,
-    alert_doc,
     alert_meta,
     fine_track_plane,
     gnss_then_baro_plane,
@@ -22,7 +21,6 @@ from helpers import (
 )
 from pyaerial.api import queries
 from pyaerial.constants import (
-    STORE_ICAO,
     STORE_LAT,
     STORE_LONG,
 )
@@ -33,9 +31,25 @@ from pyaerial.models import (
     TrackState,
     Verdict,
 )
+from pyaerial.store.codec import alert_episode_doc
 from pyaerial.store.live import LiveUnavailable, LiveWriter, keys
 
 URI = "redis://user:s3cret@redis.example:6380/0"
+
+
+def _episode(plane, alert_id, *, active=True, at=5.0, last=None):
+    doc = alert_episode_doc(
+        plane,
+        alert_meta(plane.icao),
+        {},
+        alert_id=alert_id,
+        activated_at=at,
+        active=active,
+        deactivated_at=None if active else (last or at),
+    )
+    if last is not None:
+        doc["last_updated"] = last
+    return doc
 
 
 def _plane(icao: str = "abc123", t: float | None = None) -> Plane:
@@ -52,8 +66,7 @@ def _plane(icao: str = "abc123", t: float | None = None) -> Plane:
 
 def test_get_flights_batches_round_trips_and_count_uses_scard(fake):
     store = LiveWriter(URI)
-    for n in range(20):
-        store.write_live_planes({f"p{n}": _plane(f"a{n:05x}")})
+    store.write_live_planes({f"p{n}": _plane(f"a{n:05x}") for n in range(20)})
     fake.calls.clear()
     flights = store.get_flights()
     assert len(flights) == 20
@@ -78,21 +91,20 @@ def test_failed_deactivation_does_not_leave_ghost_active_alert(fake):
     store = LiveWriter(URI)
     assert store.claim_engine()
     plane = _plane()
+    store.cache_episode(_episode(plane, "a1"))
     store.write_live_planes({"p": plane})
-    store.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=1.0)
     assert "a1" in fake.hashes["live:active_alerts"]
 
     fake.fail.add("execute")
-    store.record_alert_episode(
-        plane, alert_meta(), {}, alert_id="a1", activated_at=1.0, active=False,
-        deactivated_at=2.0,
-    )
+    store.cache_episode(_episode(plane, "a1", active=False, last=2.0))
+    store.write_live_planes({"p": plane})
     assert store.client is None  # write failure was noticed
     assert "a1" in fake.hashes["live:active_alerts"]  # Redis still has the ghost
 
     fake.fail.clear()
     store._last_connect_attempt = 0.0
     assert store.ping()
+    store.write_live_planes({"p": plane})  # the next tick republishes
     assert "a1" not in fake.hashes["live:active_alerts"]
 
 
@@ -175,10 +187,8 @@ def test_live_flight_keys_carry_a_refreshed_safety_ttl(fake):
     assert store.claim_engine()
     plane = heading_plane("abc123", time.time())
     fid = f"abc123-{int(plane.track.first_packet)}"
+    store.cache_episode(_episode(plane, "a1", at=1.0))
     store.write_live_planes({"ABC123": plane})
-    store.record_alert_episode(
-        plane, {STORE_ICAO: "abc123"}, {}, alert_id="a1", activated_at=1.0
-    )
     ttl = keys.LIVE_FLIGHT_TTL_SECONDS
     # Must outlive any engine downtime we still want to archive after.
     assert ttl >= 3 * 86_400
@@ -198,23 +208,36 @@ def test_live_flight_keys_carry_a_refreshed_safety_ttl(fake):
     assert fake.ttls[f"live:telemetry:{fid}"] == ttl
 
 
-def test_reconnect_backfill_sets_ttls(fake):
+def test_reconnect_republishes_everything_and_drops_what_ended(fake):
     store = LiveWriter(LOCAL_REDIS_URI)
     assert store.claim_engine()
-    plane = heading_plane("abc123", time.time())
-    fid = f"abc123-{int(plane.track.first_packet)}"
-    store.write_live_planes({"ABC123": plane})
-    fake.kv.clear()
+    plane = heading_plane("abc123", time.time(), samples=3)
+    ended = heading_plane("def456", time.time())
+    fid = plane.flight_id
+    store.cache_episode(_episode(plane, "a1"))
+    store.write_live_planes({"ABC123": plane, "DEF456": ended})
+    # Redis restarts with its data (no AOF loss) while ``ended`` finishes...
+    store._mark_disconnected(RuntimeError("restart"), store.client)
+    fake.down = True
+    store._last_connect_attempt = 0.0
+    store.write_live_planes({"ABC123": plane})  # Redis down: nothing written
+    fake.down = False
+    # ... or loses some of it.
+    fake.kv.pop(f"live:flight:{fid}")
     fake.zsets.clear()
     fake.ttls.clear()
-    store._mark_disconnected(RuntimeError("restart"), store.client)
     store._last_connect_attempt = 0.0
     assert store.ping()
+    store.write_live_planes({"ABC123": plane})
+    assert fake.sets["live:flights"] == {fid}
+    assert f"live:flight:{ended.flight_id}" not in fake.kv
+    assert len(fake.zsets[f"live:telemetry:{fid}"]) == 3
+    assert "a1" in fake.hashes["live:active_alerts"]
     assert fake.ttls[f"live:flight:{fid}"] == keys.LIVE_FLIGHT_TTL_SECONDS
     assert fake.ttls[f"live:telemetry:{fid}"] == keys.LIVE_FLIGHT_TTL_SECONDS
 
 
-# --- Capped telemetry reads, latest point, backfill and corrupt docs ---------
+# --- GNSS height in live telemetry -------------------------------------------
 
 
 def test_live_telemetry_keeps_gnss_height(fake):
@@ -233,12 +256,8 @@ def test_live_telemetry_keeps_gnss_height(fake):
 # --- Live telemetry reads are capped inside Redis ----------------------------
 
 
-def _live_store_with_points(
-    count: int, *, memory_only: bool = False
-) -> tuple[LiveWriter, str]:
-    store = LiveWriter(
-        LOCAL_REDIS_URI, memory_only=memory_only, telemetry_keep_seconds=0
-    )
+def _live_store_with_points(count: int) -> tuple[LiveWriter, str]:
+    store = LiveWriter(LOCAL_REDIS_URI, telemetry_keep_seconds=0)
     store.claim_engine()
     plane = track_plane("abc123", 1_000.0, samples=count)
     store.write_live_planes({"ABC123": plane})
@@ -246,9 +265,8 @@ def _live_store_with_points(
     return store, "abc123-1000"
 
 
-@pytest.mark.parametrize("memory_only", [False, True])
-def test_live_get_telemetry_limit_and_newest(fake, memory_only):
-    store, fid = _live_store_with_points(50, memory_only=memory_only)
+def test_live_get_telemetry_limit_and_newest(fake):
+    store, fid = _live_store_with_points(50)
     fake.calls.clear()
     newest = store.get_telemetry(fid, limit=10, newest=True)
     assert [p["timestamp"] for p in newest] == [1040.0 + n for n in range(10)]
@@ -257,10 +275,9 @@ def test_live_get_telemetry_limit_and_newest(fake, memory_only):
     newest_after = store.get_telemetry(fid, since=1019.0, limit=3, newest=True)
     assert [p["timestamp"] for p in newest_after] == [1047.0, 1048.0, 1049.0]
     assert len(store.get_telemetry(fid)) == 50  # no limit: unchanged
-    if not memory_only:
-        # The cap is applied by Redis, not after reading the whole ring.
-        assert "zrange" in fake.calls and "zrangebyscore" in fake.calls
-        assert "zrevrangebyscore" in fake.calls
+    # The cap is applied by Redis, not after reading the whole ring.
+    assert "zrange" in fake.calls and "zrangebyscore" in fake.calls
+    assert "zrevrangebyscore" in fake.calls
 
 
 def test_live_fetch_telemetry_passes_the_cap_to_the_store(fake, monkeypatch):
@@ -298,14 +315,12 @@ def test_live_fetch_telemetry_passes_the_cap_to_the_store(fake, monkeypatch):
 # --- Latest live point -------------------------------------------------------
 
 
-@pytest.mark.parametrize("memory_only", [False, True])
-def test_latest_telemetry_reads_one_point(fake, memory_only):
-    store, fid = _live_store_with_points(40, memory_only=memory_only)
+def test_latest_telemetry_reads_one_point(fake):
+    store, fid = _live_store_with_points(40)
     fake.calls.clear()
     assert store.latest_telemetry(fid)["timestamp"] == 1039.0
     assert store.latest_telemetry("nope-1") is None
-    if not memory_only:
-        assert "zrevrange" in fake.calls and "zrange" not in fake.calls
+    assert "zrevrange" in fake.calls and "zrange" not in fake.calls
 
 
 def test_live_flight_detail_uses_latest_point_only(fake, monkeypatch):
@@ -322,54 +337,14 @@ def test_live_flight_detail_uses_latest_point_only(fake, monkeypatch):
     assert detail["latitude"] == pytest.approx(35.39)
 
 
-# --- Backfill snapshots memory under the lock --------------------------------
-
-
-def test_backfill_survives_concurrent_live_writes(fake, monkeypatch):
-    store = LiveWriter(LOCAL_REDIS_URI, telemetry_keep_seconds=0)
-    assert store.claim_engine()
-    for n in range(5):
-        store.write_live_planes({f"P{n}": track_plane(f"a{n:05d}", 1_000.0 + n)})
-    store._mark_disconnected(RuntimeError("restart"), store.client)
-    fake.kv.clear()
-    fake.zsets.clear()
-    fake.sets.clear()
-
-    real_zadd = FakePipeline.__getattr__
-    writers: list[threading.Thread] = []
-
-    def queue_and_mutate(self, name):
-        method = real_zadd(self, name)
-        if name == "zadd" and not writers:
-            # The engine thread adds a flight while the backfill is queueing.
-            writer = threading.Thread(
-                target=store.write_live_planes,
-                args=({"NEW": track_plane("bbbbbb", 2_000.0)},),
-            )
-            writers.append(writer)
-            writer.start()
-            writer.join(timeout=2.0)
-            assert not writer.is_alive(), "live writer blocked behind the backfill"
-        return method
-
-    monkeypatch.setattr(FakePipeline, "__getattr__", queue_and_mutate)
-    store._last_connect_attempt = 0.0
-    assert store.ping() is True
-    assert writers
-    assert {f"a{n:05d}-{1000 + n}" for n in range(5)} <= fake.sets["live:flights"]
-
-
 # --- Score-less verdicts and telemetry provenance in the live store ----------
 
 
 # --- /ws/live telemetry push carries provenance ------------------------------
 
 
-@pytest.mark.parametrize("memory_only", [False, True])
-def test_live_telemetry_push_keeps_provenance(fake, memory_only):
-    store = LiveWriter(
-        LOCAL_REDIS_URI, memory_only=memory_only, telemetry_keep_seconds=0
-    )
+def test_live_telemetry_push_keeps_provenance(fake):
+    store = LiveWriter(LOCAL_REDIS_URI, telemetry_keep_seconds=0)
     plane = with_unknown_then_ok(track_plane("abc123", time.time()))
     plane.track.integrity_log.append(
         Verdict(
@@ -388,82 +363,34 @@ def test_live_telemetry_push_keeps_provenance(fake, memory_only):
     assert points[-1]["integrity_score"] == 0.4
     assert points[-1]["integrity_flags"] == ["aoa"]
     # No verdict yet: the fields stay absent rather than null.
-    bare = LiveWriter(LOCAL_REDIS_URI, memory_only=True, telemetry_keep_seconds=0)
-    bare.write_live_planes({"DEF456": track_plane("def456", time.time())})
-    assert "integrity_status" not in bare.get_live_telemetry()[0]
+    store.write_live_planes({"DEF456": track_plane("def456", time.time())})
+    bare = [p for p in store.get_live_telemetry() if p["icao"] == "def456"]
+    assert "integrity_status" not in bare[0]
 
 
-# --- Alert episodes in Redis and batched refreshes ---------------------------
+# --- Alert episodes in the tick's publish -----------------------------------
 
 
-def test_get_alerts_merges_redis_and_memory_episodes(fake):
+def test_writer_reads_redis_only_and_raises_when_down(fake):
     store = LiveWriter(LOCAL_REDIS_URI)
-    plane = fine_track_plane("abc123", 1_700_000_000.0)
-    fid = plane.flight_id
-    fake.hashes[f"live:alerts:{fid}"] = {
-        "earlier": alert_doc("earlier", fid, active=False, at=1_700_000_010.0),
-        "current": alert_doc("current", fid, active=True, at=1_700_000_100.0),
-    }
-    # The restart closes the active one, which puts the flight into memory.
-    store.record_alert_episode(
-        plane,
-        alert_meta(),
-        {},
-        alert_id="current",
-        activated_at=1_700_000_100.0,
-        active=False,
-        deactivated_at=1_700_000_200.0,
-    )
-    alerts = {
-        a["alert_id"]: a for a in store.get_alerts(flight_id=fid, active_only=False)
-    }
-    assert set(alerts) == {"earlier", "current"}
-    assert alerts["current"]["active"] is False  # memory wins
-
-
-def test_writer_raises_instead_of_returning_no_alerts(fake):
-    store = LiveWriter(LOCAL_REDIS_URI)
-    fid = "abc123-1700000000"
-    fake.hashes[f"live:alerts:{fid}"] = {
-        "a1": alert_doc("a1", fid, active=False, at=1.0)
-    }
+    plane = fine_track_plane("abc123", time.time())
+    store.cache_episode(_episode(plane, "a1"))
+    store.write_live_planes({"ABC123": plane})
+    assert [a["alert_id"] for a in store.get_alerts(active_only=False)] == ["a1"]
     fake.fail.add("hvals")
     with pytest.raises(LiveUnavailable):
-        store.get_alerts(flight_id=fid, active_only=False)
-    # Redis known down (cooldown): a flight this process never owned cannot
-    # be answered from memory either.
-    fake.fail.clear()
-    store._last_connect_attempt = time.monotonic()  # within the reconnect cooldown
-    assert store.client is None
-    with pytest.raises(LiveUnavailable):
-        store.get_alerts(flight_id=fid, active_only=False)
-    store._last_connect_attempt = 0.0
-    # Its own flights are fully in memory.
-    plane = fine_track_plane("def456", 1_700_000_000.0)
-    store.write_live_planes({"DEF456": plane})
-    store.record_alert_episode(
-        plane, alert_meta("def456"), {}, alert_id="b1", activated_at=2.0
-    )
-    assert [
-        a["alert_id"]
-        for a in store.get_alerts(
-            flight_id=plane.flight_id, active_only=False
-        )
-    ] == ["b1"]
-
-
-# --- Active alert refresh: no HGET, batched with the tick --------------------
+        store.get_alerts(flight_id=plane.flight_id, active_only=False)
 
 
 def test_active_alert_refresh_is_batched_without_reads(fake):
     store = LiveWriter(LOCAL_REDIS_URI)
     plane = fine_track_plane("abc123", time.time())
+    store.cache_episode(_episode(plane, "a1"))
     store.write_live_planes({"ABC123": plane})
-    store.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=5.0)
     fake.calls.clear()
     for n in range(3):
-        store.update_active_alert(plane, "a1", alert_meta(), {}, 10.0 + n)
-    assert fake.calls == []  # nothing until the tick's flush
+        store.cache_episode(_episode(plane, "a1", last=10.0 + n))
+    assert fake.calls == []  # nothing until the tick's publish
     store.write_live_planes({"ABC123": plane})
     assert "hget" not in fake.calls
     assert fake.calls.count("execute") == 1
@@ -474,28 +401,68 @@ def test_active_alert_refresh_is_batched_without_reads(fake):
 def test_deactivation_is_not_overwritten_by_a_pending_refresh(fake):
     store = LiveWriter(LOCAL_REDIS_URI)
     plane = fine_track_plane("abc123", time.time())
-    store.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=5.0)
-    store.update_active_alert(plane, "a1", alert_meta(), {}, 10.0)
-    store.record_alert_episode(
-        plane,
-        alert_meta(),
-        {},
-        alert_id="a1",
-        activated_at=5.0,
-        active=False,
-        deactivated_at=11.0,
-    )
+    store.cache_episode(_episode(plane, "a1"))
+    store.cache_episode(_episode(plane, "a1", last=10.0))
+    store.cache_episode(_episode(plane, "a1", active=False, last=11.0))
     store.write_live_planes({"ABC123": plane})
     assert "a1" not in fake.hashes.get("live:active_alerts", {})
     episode = json.loads(fake.hashes["live:alert_episodes"]["a1"])
     assert episode["active"] is False
 
 
-def test_popped_flight_refresh_is_dropped(fake):
+def test_flight_no_longer_tracked_is_deleted_with_its_episodes(fake):
     store = LiveWriter(LOCAL_REDIS_URI)
     plane = fine_track_plane("abc123", time.time())
-    store.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=5.0)
-    store.update_active_alert(plane, "a1", alert_meta(), {}, 10.0)
-    store.pop_flight(plane.flight_id)
-    store.write_live_planes({"DEF456": fine_track_plane("def456", time.time())})
+    other = fine_track_plane("def456", time.time())
+    fid = plane.flight_id
+    store.cache_episode(_episode(plane, "a1"))
+    store.write_live_planes({"ABC123": plane, "DEF456": other})
+    store.cache_episode(_episode(plane, "a1", active=False, last=11.0))
+    store.write_live_planes({"DEF456": other})
+    assert fake.sets["live:flights"] == {other.flight_id}
+    for key in (f"live:flight:{fid}",):
+        assert key not in fake.kv
+    assert f"live:telemetry:{fid}" not in fake.zsets
+    assert f"live:alerts:{fid}" not in fake.hashes
+    assert "a1" not in fake.hashes.get("live:active_alerts", {})
+    assert "a1" not in fake.hashes.get("live:alert_episodes", {})
+
+
+def test_carried_episode_moves_to_the_next_segment(fake):
+    store = LiveWriter(LOCAL_REDIS_URI)
+    first = time.time() - 7_200
+    plane = fine_track_plane("abc123", first)
+    old = plane.flight_id
+    store.cache_episode(_episode(plane, "A1"))
+    store.write_live_planes({"ABC123": plane})
+    plane.track.first_packet = first + 3_600
+    new = plane.flight_id
+    store.cache_episode(_episode(plane, "A1"))  # the handover re-records it
+    store.write_live_planes({"ABC123": plane})
+    assert fake.sets["live:flights"] == {new}
+    assert f"live:alerts:{old}" not in fake.hashes
+    assert json.loads(fake.hashes["live:alert_episodes"]["A1"])["flight_id"] == new
+    assert json.loads(fake.hashes["live:active_alerts"]["A1"])["flight_id"] == new
+    assert "A1" in fake.hashes[f"live:alerts:{new}"]
+
+
+def test_episodes_of_flights_never_published_are_not_written(fake):
+    """A previous process's flight closed at startup, or a flight closed after
+    its last publish: no live keys appear for it."""
+    store = LiveWriter(LOCAL_REDIS_URI)
+    plane = fine_track_plane("abc123", 1_700_000_000.0)
+    store.cache_episode(_episode(plane, "a1", active=False, last=9.0))
+    store.write_live_planes({})
+    assert not fake.hashes.get("live:alert_episodes")
+    assert f"live:alerts:{plane.flight_id}" not in fake.hashes
+
+
+def test_maintenance_handle_deletes_one_flight(fake):
+    engine_store = LiveWriter(LOCAL_REDIS_URI)
+    plane = fine_track_plane("abc123", time.time())
+    engine_store.cache_episode(_episode(plane, "a1"))
+    engine_store.write_live_planes({"ABC123": plane})
+    handle = LiveWriter(LOCAL_REDIS_URI, writer=False)
+    handle.pop_flight(plane.flight_id)
+    assert not fake.sets.get("live:flights")
     assert "a1" not in fake.hashes.get("live:active_alerts", {})

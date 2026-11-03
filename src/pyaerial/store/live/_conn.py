@@ -66,13 +66,12 @@ class LiveConnection:
     def _connect(self) -> None:
         """Create the Redis client, verify it, and publish it as ``self.client``.
 
-        Safe to call repeatedly: on failure the store keeps running (the
-        writer with its in-memory buffer) and retries later via
-        :meth:`_redis`. The network round trips (up to the 2 s socket
-        timeouts each) run without ``_conn_lock``, and the client is published
-        only once usable: for the engine, after it re-claimed the heartbeat
-        and backfilled Redis, so no other thread writes through it before
-        ownership is settled.
+        Safe to call repeatedly: on failure the store keeps running and
+        retries later via :meth:`_redis`. The network round trips (up to the
+        2 s socket timeouts each) run without ``_conn_lock``, and the client
+        is published only once usable: for the engine, after it re-claimed
+        the heartbeat, so no other thread writes through it before ownership
+        is settled.
         """
         client = redis.Redis.from_url(
             self.uri,
@@ -105,8 +104,8 @@ class LiveConnection:
             self._reported_down = True
         if exc is not None:
             log.warning(
-                "Redis unavailable at %s; operating with in-memory live "
-                "buffer. Reason: %s",
+                "Redis unavailable at %s; the live view is empty until it "
+                "reconnects. Reason: %s",
                 self._log_uri,
                 exc,
             )
@@ -164,7 +163,7 @@ class LiveConnection:
         try:
             client.ping()
         except RedisError as exc:
-            log.warning("Lost Redis connection; operating with in-memory live buffer.")
+            log.warning("Lost Redis connection; the live view is empty until it reconnects.")
             self._mark_disconnected(exc, client)
             return None
         self._last_ping_ok = now

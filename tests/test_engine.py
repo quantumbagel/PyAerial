@@ -28,6 +28,8 @@ from pyaerial.engine.supervisor import (
 )
 from pyaerial.models import AircraftInfo, Plane, TrackState
 from pyaerial.receivers.frames import RawFrame
+from pyaerial.store.codec import live_flight_doc
+from pyaerial.store.live import NullLiveWriter
 
 
 class _DummyReceiver:
@@ -168,10 +170,6 @@ def test_pending_finalize_is_capped(tmp_path, monkeypatch, caplog):
         monkeypatch.setattr(
             engine.history_store, "finalize_plane", lambda *a, **k: False
         )
-        popped: list[str] = []
-        monkeypatch.setattr(
-            engine.live_store, "pop_flight", lambda flight_id: popped.append(flight_id)
-        )
         monkeypatch.setattr(engine.calculator, "deactivate_plane", lambda plane: None)
         monkeypatch.setattr(
             archiver_mod,
@@ -187,8 +185,6 @@ def test_pending_finalize_is_capped(tmp_path, monkeypatch, caplog):
         assert list(engine.archiver.pending) == ["ccc-1", "ddd-1"]
         assert engine.archiver.counters()["pending_evicted"] == 2
         assert caplog.text.count("memory budget") == 1
-        # Nothing was archived, so no live copy was popped.
-        assert popped == []
         # Re-enqueueing a pending flight updates it in place (no eviction).
         engine.archiver.defer("ddd-1", _plane("ddd", 1.0))
         assert list(engine.archiver.pending) == ["ccc-1", "ddd-1"]
@@ -220,10 +216,6 @@ def test_pending_finalize_retries_then_clears(tmp_path, monkeypatch):
     engine = make_engine(tmp_path)
     try:
         monkeypatch.setattr(engine.calculator, "deactivate_plane", lambda plane: None)
-        popped: list[str] = []
-        monkeypatch.setattr(
-            engine.live_store, "pop_flight", lambda flight_id: popped.append(flight_id)
-        )
 
         calls = {"n": 0}
 
@@ -237,7 +229,6 @@ def test_pending_finalize_retries_then_clears(tmp_path, monkeypatch):
         assert engine.archiver.pending
         engine.archiver.retry_pending()
         assert engine.archiver.pending == {}
-        assert popped == ["abc123-1"]
     finally:
         engine.shutdown()
 
@@ -259,11 +250,10 @@ def test_yielded_shutdown_skips_finalize(tmp_path, monkeypatch):
         engine.shutdown()
 
 
-def test_isolated_engine_uses_memory_store(tmp_path):
+def test_isolated_engine_has_no_live_store_or_archive(tmp_path):
     engine = make_engine(tmp_path)
     try:
-        assert engine.live_store.memory_only is True
-        assert engine.live_store.writer is True
+        assert isinstance(engine.live_store, NullLiveWriter)
         assert engine.live_store.ping() is True
         assert engine.history_store.disabled is True
     finally:
@@ -294,7 +284,6 @@ def test_finalize_closes_active_alerts(tmp_path, monkeypatch):
             return True
 
         monkeypatch.setattr(engine.history_store, "finalize_plane", _finalize)
-        monkeypatch.setattr(engine.live_store, "pop_flight", lambda flight_id: None)
         engine.archiver.finalize(_plane())
         assert captured[0][0]["active"] is False
         assert captured[0][0]["deactivated_at"] is not None
@@ -410,15 +399,17 @@ def test_engine_scores_integrity_into_live_flights(tmp_path):
     engine = Engine(
         config, isolated=True, aircraft_db_path=str(tmp_path / "aircraft.db")
     )
+    written: dict = {}
+    engine.live_store.write_live_planes = written.update  # type: ignore[method-assign]
     runner = threading.Thread(target=engine.run, daemon=True)
     runner.start()
     try:
         deadline = time.monotonic() + 5
         doc = None
         while time.monotonic() < deadline and doc is None:
-            flights = list(engine.live_store._mem.flights.values())
-            if flights and "integrity" in flights[0]["info"]:
-                doc = flights[0]
+            published = list(planes.values()) if (planes := dict(written)) else []
+            if published and published[0].info.integrity is not None:
+                doc = live_flight_doc(published[0])
             time.sleep(0.05)
         assert doc is not None
         assert doc["icao"] == "40621d"

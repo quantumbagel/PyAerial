@@ -218,7 +218,7 @@ def test_one_bad_plane_does_not_stop_alerting_for_others(caplog):
         calc.close()
 
 
-def test_registration_reaches_plane_info_and_live_summary():
+def test_registration_reaches_plane_info_and_live_summary(fake):
     from pyaerial.store.live import LiveWriter
 
     class _Db:
@@ -237,7 +237,7 @@ def test_registration_reaches_plane_info_and_live_summary():
             return True
 
     config = make_config()
-    store = LiveWriter("redis://localhost:1/0", memory_only=True)
+    store = LiveWriter("redis://localhost:1/0")
     calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=_Db())
     try:
         plane = _plane()

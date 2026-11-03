@@ -272,26 +272,25 @@ class FlightArchiver:
 
     def finalize(self, plane: Plane) -> bool:
         """Deactivate alerts, then persist the flight to SQLite (or delete it,
-        per the archive policy), and drop its live Redis copy.
+        per the archive policy). Its live copy goes with the next publish.
 
         Returns False when the flight was deferred for retry.
         """
         # A broken alerter must not keep the flight out of the archive.
         with self._guard("alert deactivation"):
             self._alerts.deactivate_plane(plane)
-        return self._archive_and_pop(plane)
+        return self._archive_flight(plane)
 
-    def _archive_and_pop(
+    def _archive_flight(
         self, plane: Plane, carried: Sequence[dict[str, Any]] = ()
     ) -> bool:
-        """Persist a flight whose alerts are closed, then pop its live copy."""
+        """Persist a flight whose alerts are closed, or defer it."""
         flight_id = plane.flight_id
         if carried:
             self._carried[flight_id] = list(carried)
         if self._persist(flight_id, plane):
             self._pending.pop(flight_id, None)
             self._carried.pop(flight_id, None)
-            self._live.pop_flight(flight_id)
             return True
         log.warning(
             "Deferred persist for %s; keeping it in memory until history is writable",
@@ -421,7 +420,6 @@ class FlightArchiver:
                 return
             del pending[flight_id]
             self._carried.pop(flight_id, None)
-            self._live.pop_flight(flight_id)
         if self._pending_evicted:
             log.warning(
                 "History writable again; %d deferred flight(s) were dropped from "
@@ -664,13 +662,8 @@ class FlightArchiver:
             self._guard.failed("segment trim")
         if new_flight_id is not None:
             with self._guard("segment alerts"):
-                self._live.carry_active_alerts(old_flight_id, new_flight_id)
-            with self._guard("segment alerts"):
                 # The alert engine and the episode rows move to the new flight.
                 self._alerts.handover(plane, old_flight_id, new_flight_id)
-            with self._guard("live store"):
-                # Live before the old copy is popped: no tick without it.
-                self._live.write_live_planes({new_flight_id: plane})
             log.info(
                 "Flight %s exceeded tracking.max_flight_seconds (%.0f s); archived "
                 "it and continue as %s%s",
@@ -679,4 +672,5 @@ class FlightArchiver:
                 new_flight_id,
                 f" ({len(carried)} active alert(s) carried over)" if carried else "",
             )
-        self._archive_and_pop(segment, carried)
+        # The next publish shows the new flight and drops the old one at once.
+        self._archive_flight(segment, carried)

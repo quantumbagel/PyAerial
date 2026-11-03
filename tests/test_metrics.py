@@ -289,8 +289,8 @@ def test_one_redis_get_per_scrape(fake, store):
     assert backends.heartbeat is not None and backends.heartbeat["history_pending"] == 2
 
 
-def test_memory_only_store_uses_engine_seen_at():
-    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
+def test_engine_up_follows_the_heartbeat(fake):
+    store = LiveWriter("redis://localhost:6379/0")
     app = create_app(config=_config(), history=None, live_store=store)
     _text, fams = _scrape(app)
     assert value(fams, "pyaerial_engine_up") == 0

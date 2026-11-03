@@ -105,19 +105,19 @@ def test_failed_startup_still_shuts_down(tmp_path, monkeypatch):
 def test_finalize_exception_keeps_flight_and_other_planes(tmp_path, monkeypatch):
     engine = make_engine(tmp_path)
     try:
-        popped: list[str] = []
-        monkeypatch.setattr(engine.live_store, "pop_flight", popped.append)
+        archived: list[str] = []
 
         def finalize(plane, **_kwargs):
             if plane.info.icao == "bad":
                 raise ValueError("unexpected")
+            archived.append(plane.flight_id)
             return True
 
         monkeypatch.setattr(engine.history_store, "finalize_plane", finalize)
-        engine.archiver.finalize(one_fix_plane("bad"))
-        engine.archiver.finalize(one_fix_plane("good"))
-        assert popped == ["good-1"]
-        # Kept (full in-memory copy) for retry; its live copy is not popped.
+        assert not engine.archiver.finalize(one_fix_plane("bad"))
+        assert engine.archiver.finalize(one_fix_plane("good"))
+        assert archived == ["good-1"]
+        # Kept (full in-memory copy) for retry.
         assert list(engine.archiver.pending) == ["bad-1"]
     finally:
         monkeypatch.undo()
@@ -128,15 +128,19 @@ def test_finalize_exception_keeps_flight_and_other_planes(tmp_path, monkeypatch)
 def test_alert_deactivation_failure_still_archives(tmp_path, monkeypatch):
     engine = make_engine(tmp_path)
     try:
-        popped: list[str] = []
-        monkeypatch.setattr(engine.live_store, "pop_flight", popped.append)
+        archived: list[str] = []
+
+        def finalize(plane, **_kwargs):
+            archived.append(plane.flight_id)
+            return True
 
         def broken(one_fix_plane):
             raise RuntimeError("alerter bug")
 
+        monkeypatch.setattr(engine.history_store, "finalize_plane", finalize)
         monkeypatch.setattr(engine.calculator, "deactivate_plane", broken)
-        engine.archiver.finalize(one_fix_plane())
-        assert popped == ["abc123-1"]
+        assert engine.archiver.finalize(one_fix_plane())
+        assert archived == ["abc123-1"]
     finally:
         monkeypatch.undo()
         engine.shutdown()
@@ -369,7 +373,6 @@ def test_pending_finalize_is_bounded_by_memory(tmp_path, monkeypatch):
         monkeypatch.setattr(
             engine.history_store, "finalize_plane", lambda *a, **k: False
         )
-        monkeypatch.setattr(engine.live_store, "pop_flight", lambda flight_id: None)
         long_flight = archiver_mod.pending_cost(heading_plane("big", 1.0, samples=2_000))
         short_flight = archiver_mod.pending_cost(heading_plane("small", 1.0, samples=10))
         assert long_flight > 50 * short_flight  # cost tracks flight length

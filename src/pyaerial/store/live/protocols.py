@@ -1,12 +1,12 @@
 """What each consumer of the live store depends on.
 
 - :class:`LiveReadStore`: the portal (``api/``); read-only.
-- :class:`EpisodeStore`: the alert engine; records and reads alert episodes.
-- :class:`LiveWriteStore`: the tracking engine; claim, heartbeat, writes and
-  recovery.
+- :class:`EpisodeStore`: the alert engine; records alert episodes.
+- :class:`LiveWriteStore`: the tracking engine; claim, heartbeat, the
+  tick's publish and the episode outbox.
 
 :class:`~pyaerial.store.live.reader.LiveReader` implements the first,
-:class:`~pyaerial.store.live.writer.LiveWriter` all three.
+:class:`~pyaerial.store.live.writer.LiveWriter` the first and the last.
 """
 
 from __future__ import annotations
@@ -66,6 +66,9 @@ class LiveReadStore(Protocol):
 
 
 class EpisodeStore(Protocol):
+    """Where the alert engine records episodes (in the tracking engine, the
+    :class:`~pyaerial.store.recorder.EpisodeRecorder`)."""
+
     def record_alert_episode(
         self,
         plane: Plane,
@@ -87,17 +90,11 @@ class EpisodeStore(Protocol):
         timestamp: float,
     ) -> None: ...
 
-    def get_alerts(
-        self,
-        *,
-        since: float = 0.0,
-        flight_id: str | None = None,
-        rule: str | None = None,
-        active_only: bool = True,
-    ) -> list[dict[str, Any]]: ...
 
+class LiveWriteStore(Protocol):
+    """The tracking engine's live store: :class:`LiveWriter`, or the
+    :class:`~pyaerial.store.live.null.NullLiveWriter` of an isolated engine."""
 
-class LiveWriteStore(EpisodeStore, Protocol):
     def ping(self) -> bool: ...
 
     def claim_engine(self) -> bool: ...
@@ -110,23 +107,23 @@ class LiveWriteStore(EpisodeStore, Protocol):
 
     def set_engine_health(self, **fields: Any) -> None: ...
 
-    def write_live_planes(self, planes: dict[str, Plane]) -> None: ...
+    def write_live_planes(self, planes: Mapping[str, Plane]) -> None: ...
 
-    def carry_active_alerts(self, old_flight_id: str, new_flight_id: str) -> int: ...
-
-    def publish_raw(self, messages: list[dict[str, Any]]) -> None: ...
-
-    def pop_flight(self, flight_id: str) -> dict[str, Any]: ...
-
-    def retry_pending_pops(self) -> None: ...
-
-    def clear_cache(self) -> int: ...
+    def cache_episode(self, doc: Mapping[str, Any]) -> None: ...
 
     def save_outbox(self, entries: Mapping[str, Any]) -> None: ...
 
     def drop_outbox(self, alert_ids: Iterable[str]) -> None: ...
 
     def load_outbox(self) -> list[Any]: ...
+
+    def clear_cache(self) -> int: ...
+
+    def add_raw_listener(
+        self, callback: Callable[[dict[str, Any]], None]
+    ) -> Callable[[], None]: ...
+
+    def publish_raw(self, messages: list[dict[str, Any]]) -> None: ...
 
     def close(self) -> None: ...
 

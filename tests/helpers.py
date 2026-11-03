@@ -32,6 +32,8 @@ from pyaerial.constants import (
 from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, Series, TrackState, Verdict
 from pyaerial.receivers.positions import ReceiverPositions
+from pyaerial.store.archive import ArchiveWriter
+from pyaerial.store.recorder import EpisodeRecorder
 from pyaerial.tracker import Tracker
 
 
@@ -284,6 +286,12 @@ class InlineDispatcher:
 
 # Any URI does with the ``fake`` fixture (conftest.py) patched in.
 LOCAL_REDIS_URI = "redis://localhost:6379/0"
+
+
+def episode_recorder(live) -> EpisodeRecorder:
+    """The tracking engine's episode store over *live*, without an archive:
+    episodes reach Redis with the next ``live.write_live_planes``."""
+    return EpisodeRecorder(ArchiveWriter("unused.db", disabled=True), live)
 
 
 def tracker_at_home() -> Tracker:

@@ -28,7 +28,8 @@ from pyaerial.webapp import uvicorn_options
 
 
 def _memory_store() -> LiveWriter:
-    return LiveWriter("redis://localhost:6379/0", memory_only=True)
+    """A live store on the ``fake`` Redis (the test must request it)."""
+    return LiveWriter("redis://localhost:6379/0")
 
 
 def _drain_snapshot(ws) -> None:
@@ -404,7 +405,7 @@ def test_ws_request_ids_are_bounded():
 # -- stats / engine_live -----------------------------------------------------
 
 
-def test_stats_include_server_side_engine_live():
+def test_stats_include_server_side_engine_live(fake):
     from pyaerial.api.queries import engine_is_live, get_stats
 
     store = _memory_store()
@@ -442,7 +443,7 @@ def test_lifespan_stops_broadcaster_when_beast_start_fails(monkeypatch):
     assert broadcaster._task is None
 
 
-def test_snapshot_failure_does_not_leave_zombie_client(monkeypatch):
+def test_snapshot_failure_does_not_leave_zombie_client(fake, monkeypatch):
     store = _memory_store()
     app = create_app(config=make_config(), history=None, live_store=store, aircraft_db=None)
     broadcaster = app.state.broadcaster

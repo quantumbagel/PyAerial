@@ -13,7 +13,6 @@ from typing import Any, Protocol
 
 from pyaerial.models import Plane
 from pyaerial.store.codec import alert_episode_doc, flight_row
-from pyaerial.store.live.protocols import EpisodeStore
 
 log = logging.getLogger("pyaerial.store")
 
@@ -33,9 +32,11 @@ class EpisodeArchive(Protocol):
     ) -> bool: ...
 
 
-class EpisodeCache(EpisodeStore, Protocol):
+class EpisodeCache(Protocol):
     """The live store side: the portal's cache, and a copy of the outbox
     (``live:episode_outbox``) so a crash during an outage loses no episode."""
+
+    def cache_episode(self, doc: Mapping[str, Any]) -> None: ...
 
     def save_outbox(self, entries: Mapping[str, Any]) -> None: ...
 
@@ -106,15 +107,7 @@ class EpisodeRecorder:
         else:
             self._open.pop(alert_id, None)
         self._write((flight_row(plane), doc))
-        self._live.record_alert_episode(
-            plane,
-            meta,
-            payload,
-            alert_id=alert_id,
-            activated_at=activated_at,
-            active=active,
-            deactivated_at=deactivated_at,
-        )
+        self._live.cache_episode(doc)
 
     def update_active_alert(
         self,
@@ -137,19 +130,7 @@ class EpisodeRecorder:
         )
         doc["last_updated"] = timestamp
         self._open[alert_id] = (plane, doc)
-        self._live.update_active_alert(plane, alert_id, meta, payload, timestamp)
-
-    def get_alerts(
-        self,
-        *,
-        since: float = 0.0,
-        flight_id: str | None = None,
-        rule: str | None = None,
-        active_only: bool = True,
-    ) -> list[dict[str, Any]]:
-        return self._live.get_alerts(
-            since=since, flight_id=flight_id, rule=rule, active_only=active_only
-        )
+        self._live.cache_episode(doc)
 
     # -- archive side --------------------------------------------------------
 

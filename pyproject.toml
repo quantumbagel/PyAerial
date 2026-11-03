@@ -161,14 +161,19 @@ modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "Live reader has no memory mirror or write paths"
+name = "Portal readers have no write paths"
 type = "forbidden"
-source_modules = ["pyaerial.store.live.reader"]
+# The portal's readers (live and archive) never import a writer, the
+# episode recorder, or the isolated engine's null store.
+source_modules = [
+    "pyaerial.store.live.reader",
+    "pyaerial.store.archive.reader",
+]
 forbidden_modules = [
-    "pyaerial.store.live._mirror",
-    "pyaerial.store.live.episodes",
-    "pyaerial.store.live.recovery",
-    "pyaerial.store.memory",
+    "pyaerial.store.live.writer",
+    "pyaerial.store.live.null",
+    "pyaerial.store.archive.writer",
+    "pyaerial.store.recorder",
 ]
 
 [tool.mypy]

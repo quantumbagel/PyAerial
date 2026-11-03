@@ -212,7 +212,7 @@ def test_reset_reports_locked_database_cleanly(capsys):
     assert "database is locked" in capsys.readouterr().err
 
 
-def test_store_engine_is_live_is_tristate():
+def test_store_engine_is_live_is_tristate(fake):
     from pyaerial.store.live import engine_is_live
     from pyaerial.store.live import LiveWriter
 
@@ -228,7 +228,7 @@ def test_store_engine_is_live_is_tristate():
     assert engine_is_live(_Fresh()) is True
     assert engine_is_live(_Stale()) is False
     assert engine_is_live(_UnreachableLive()) is None
-    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0")
     assert engine_is_live(store) is False
     store.touch_engine()
     assert engine_is_live(store) is True

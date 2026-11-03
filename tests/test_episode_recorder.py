@@ -87,6 +87,10 @@ def test_activation_and_deactivation_reach_the_archive_at_once(engine):
 def test_refused_episode_waits_in_the_outbox_until_a_checkpoint(engine, monkeypatch):
     plane = _plane(engine)
     rec = engine.episodes
+    cached: list[str] = []
+    monkeypatch.setattr(
+        engine.live_store, "cache_episode", lambda doc: cached.append(doc["alert_id"])
+    )
     monkeypatch.setattr(engine.history_store, "upsert_episodes", lambda e: False)
     rec.record_alert_episode(plane, _META, {}, alert_id="A1", activated_at=100.0)
     rec.record_alert_episode(
@@ -102,9 +106,7 @@ def test_refused_episode_waits_in_the_outbox_until_a_checkpoint(engine, monkeypa
     assert rec.outbox["A1"][1]["active"] is False  # latest state only
     assert _rows(engine, "SELECT COUNT(*) FROM alerts") == [(0,)]
     # The live cache was still written.
-    assert [a["alert_id"] for a in engine.live_store.get_alerts(active_only=False)] == [
-        "A1"
-    ]
+    assert cached == ["A1", "A1"]
     monkeypatch.undo()
     assert engine.archiver.checkpoint(force=True)
     assert rec.outbox == {}
@@ -130,12 +132,14 @@ def test_a_failing_archive_write_still_updates_the_live_cache(engine, monkeypatc
     def boom(_entries):
         raise RuntimeError("bug")
 
+    cached: list[dict] = []
+    monkeypatch.setattr(engine.live_store, "cache_episode", cached.append)
     monkeypatch.setattr(engine.history_store, "upsert_episodes", boom)
     engine.episodes.record_alert_episode(
         plane, _META, {}, alert_id="A1", activated_at=100.0
     )
     assert "A1" in engine.episodes.outbox
-    assert engine.live_store.get_alerts(active_only=True)[0]["alert_id"] == "A1"
+    assert [doc["alert_id"] for doc in cached] == ["A1"]
 
 
 def test_handover_rerecord_keeps_last_updated(engine):

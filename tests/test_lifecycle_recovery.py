@@ -304,15 +304,11 @@ def test_long_recovery_keeps_the_heartbeat_fresh(tmp_path, monkeypatch):
         _previous_run(config.database.path, plane, alert_id=None)
     beats: list[float] = []
     monkeypatch.setattr(archiver_mod, "STARTUP_HEARTBEAT_INTERVAL", 0.0)
-    from pyaerial.store.live import LiveWriter
+    from pyaerial.store.live import NullLiveWriter
 
-    real_touch = LiveWriter.touch_engine
-
-    def touch(self):
-        beats.append(time.monotonic())
-        return real_touch(self)
-
-    monkeypatch.setattr(LiveWriter, "touch_engine", touch)
+    monkeypatch.setattr(
+        NullLiveWriter, "touch_engine", lambda self: beats.append(time.monotonic())
+    )
     engine = _engine(config)
     engine.shutdown()
     assert len(beats) >= 5

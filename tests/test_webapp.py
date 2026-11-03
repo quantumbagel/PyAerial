@@ -62,10 +62,10 @@ def test_health_and_api(monkeypatch):
         assert client.get("/api/stats").status_code == 404
 
 
-def test_websocket_hello_snapshot_and_subscribe():
+def test_websocket_hello_snapshot_and_subscribe(fake):
     from fastapi.testclient import TestClient
 
-    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0")
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
@@ -114,13 +114,13 @@ def test_websocket_hello_snapshot_and_subscribe():
             assert ws.receive_json()["type"] == "hello"
 
 
-def test_subscribe_sends_a_snapshot_of_added_streams():
+def test_subscribe_sends_a_snapshot_of_added_streams(fake):
     """Subscribing to alerts delivers the current alerts, not just later changes."""
     import time
 
     from fastapi.testclient import TestClient
 
-    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0")
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
@@ -151,12 +151,12 @@ def test_subscribe_sends_a_snapshot_of_added_streams():
             assert "flights" not in seen
 
 
-def test_websocket_beast_endpoint_and_publish():
+def test_websocket_beast_endpoint_and_publish(fake):
     from fastapi.testclient import TestClient
 
     from pyaerial.receivers.frames import BeastParser
 
-    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0")
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
@@ -181,10 +181,10 @@ def test_websocket_beast_endpoint_and_publish():
             assert frames[0][2] == 12_000_000
 
 
-def test_websocket_raw_endpoint_and_publish():
+def test_websocket_raw_endpoint_and_publish(fake):
     from fastapi.testclient import TestClient
 
-    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0")
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
@@ -208,10 +208,10 @@ def test_websocket_raw_endpoint_and_publish():
                 assert beast_ws.receive_bytes()
 
 
-def test_websocket_live_ignores_beast_stream():
+def test_websocket_live_ignores_beast_stream(fake):
     from fastapi.testclient import TestClient
 
-    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0")
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
@@ -244,7 +244,7 @@ def test_websocket_live_ignores_beast_stream():
             assert reply["success"] is False
 
 
-def test_beast_tcp_streams_frames():
+def test_beast_tcp_streams_frames(fake):
     import asyncio
 
     from fastapi.testclient import TestClient
@@ -254,7 +254,7 @@ def test_beast_tcp_streams_frames():
     config = make_config()
     config.web.beast_host = "127.0.0.1"
     config.web.beast_port = 0
-    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0")
     app = create_app(
         config=config, history=None, live_store=store, aircraft_db=None
     )
@@ -333,10 +333,10 @@ def test_websocket_rejects_disallowed_origin():
             assert exc.code == 1008
 
 
-def test_ready_uses_live_store_ping():
+def test_ready_uses_live_store_ping(fake):
     from fastapi.testclient import TestClient
 
-    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0")
     assert store.ping() is True
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None

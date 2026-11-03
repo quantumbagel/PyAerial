@@ -6,7 +6,7 @@ Pins, as checked-in JSON under ``tests/golden/``:
 * ``api_spec.json``: ``GET /api`` from the real FastAPI app;
 * ``api_push_<type>.json``: one pushed ``/ws/live`` message of each stream
   (``flights``, ``alerts``, ``stats``, ``telemetry``), produced by the real
-  ``LiveBroadcaster._broadcast_tick`` over a memory-only live store that a
+  ``LiveBroadcaster._broadcast_tick`` over a live store (fake Redis) that a
   real ``AlertEngine`` activation and ``write_live_planes`` filled.
 
 Times are frozen and every time-valued field (``*_at``, ``*_time``,
@@ -29,7 +29,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from helpers import make_config
+from helpers import LOCAL_REDIS_URI, episode_recorder, make_config
 from pyaerial.alerts import engine as engine_mod
 from pyaerial.alerts.engine import AlertEngine
 from pyaerial.api.broadcaster import LiveBroadcaster, _Client
@@ -117,8 +117,8 @@ def _plane() -> Plane:
 def _pushed_messages(monkeypatch) -> dict[str, dict]:
     config = make_config()
     config.zones["pad"].rules[0].dwell_seconds = 1
-    store = LiveWriter("redis://localhost:1/0", memory_only=True)
-    engine = AlertEngine(config, build_polygons(config.zones), store)
+    store = LiveWriter(LOCAL_REDIS_URI)
+    engine = AlertEngine(config, build_polygons(config.zones), episode_recorder(store))
     plane = _plane()
     motion = ResolvedMotion(heading_deg=0.0, speed_kph=185.2, turn_rate_deg_s=0.0)
     mono = [100.0]
@@ -147,7 +147,7 @@ def _pushed_messages(monkeypatch) -> dict[str, dict]:
     return {message["type"]: message for message in messages}
 
 
-def test_pushed_messages_match_golden(frozen, monkeypatch):
+def test_pushed_messages_match_golden(fake, frozen, monkeypatch):
     messages = _pushed_messages(monkeypatch)
     assert set(messages) == set(WS_STREAMS)
     # Non-empty samples: the fixture shows real field sets, not [].

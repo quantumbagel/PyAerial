@@ -426,17 +426,15 @@ class AlertEngine:
           consumers keep one activate and one deactivate per episode.
         * The episode keeps its ``alert_id`` and ``activated_at``: alert_id is
           the pairing key consumers already hold, and the archive's
-          ``alerts`` table is keyed by alert_id alone. Its live record is
-          upserted under *new_flight_id*, so ``live:active_alerts`` points at
-          the new flight. The old segment's copy is the live store's job
-          (``LiveWriter.carry_active_alerts``, called by the engine).
-        * Archive: each segment archived while the episode is active stores
-          its row (so ``retain`` keeps it); a later segment's archive replaces
-          that row, so the archive ends with one row per episode, on the
-          segment where it ended, with the original ``activated_at``.
+          ``alerts`` table is keyed by alert_id alone. It is re-recorded under
+          *new_flight_id*: its one archive row (and live record) moves to the
+          new flight, keeping the segment where it began (start_flight_id).
+        * Archive: the old segment's retention still counts the episode (the
+          engine passes it along); the archive ends with one row per
+          episode, on the segment where it ended, with the original
+          ``activated_at``.
         * Dwell / hysteresis timers and the while_active cadence carry over.
-        * Order: call it before the old segment's live copy is popped.
-          Idempotent. If the engine skips it, the first ``check()`` that sees
+        * Idempotent. If the engine skips it, the first ``check()`` that sees
           the new flight id for this ICAO calls it.
         """
         icao = plane.icao

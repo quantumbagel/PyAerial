@@ -16,6 +16,7 @@ from fake_redis import FakeRedis
 from helpers import LOCAL_REDIS_URI, alert_meta, track_plane
 from pyaerial.constants import STORE_LAT, STORE_LONG
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
+from pyaerial.store.codec import alert_episode_doc
 from pyaerial.store.live import LiveReader, LiveUnavailable, LiveWriter, _conn
 from pyaerial.urls import redact_uri
 
@@ -63,35 +64,37 @@ def test_reader_raises_live_unavailable_when_redis_down(fake):
 
 
 @pytest.mark.parametrize(
-    "kwargs",
+    ("kwargs", "expected"),
     [
-        {},
-        {"active_only": False},
-        {"flight_id": "FID"},
-        {"flight_id": "FID", "active_only": False},
-        {"rule": "warn", "active_only": False},
-        {"since": 1.5, "active_only": False},
+        ({}, ["a1"]),
+        ({"active_only": False}, ["a2", "a1"]),
+        ({"flight_id": "FID"}, ["a1"]),
+        ({"flight_id": "FID", "active_only": False}, ["a2", "a1"]),
+        ({"rule": "warn", "active_only": False}, ["a2", "a1"]),
+        ({"since": 1.5, "active_only": False}, ["a2"]),
     ],
 )
-def test_get_alerts_memory_and_redis_agree(fake, kwargs):
+def test_get_alerts_filters(fake, kwargs, expected):
     writer = LiveWriter(URI)
-    mem = LiveWriter(URI, memory_only=True)
     plane = _plane(t=1_700_000_000.0)
     fid = f"abc123-{int(1_700_000_000.0)}"
     if kwargs.get("flight_id") == "FID":
         kwargs = {**kwargs, "flight_id": fid}
-    for store in (writer, mem):
-        store.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=1.0)
-        store.record_alert_episode(plane, alert_meta(), {}, alert_id="a2", activated_at=2.0)
-        store.record_alert_episode(
-            plane, alert_meta(), {}, alert_id="a2", activated_at=2.0, active=False,
+    meta = alert_meta()
+    writer.cache_episode(
+        alert_episode_doc(plane, meta, {}, alert_id="a1", activated_at=1.0, active=True)
+    )
+    writer.cache_episode(
+        alert_episode_doc(
+            plane, meta, {}, alert_id="a2", activated_at=2.0, active=False,
             deactivated_at=3.0,
         )
+    )
+    writer.write_live_planes({"ABC123": plane})
     reader = LiveReader(URI)
-    from_redis = [a["alert_id"] for a in reader.get_alerts(**kwargs)]
-    from_mem = [a["alert_id"] for a in mem.get_alerts(**kwargs)]
-    assert from_redis == from_mem
-    assert from_redis
+    got = [a["alert_id"] for a in reader.get_alerts(**kwargs)]
+    assert sorted(got) == sorted(expected)
+    assert [a["alert_id"] for a in writer.get_alerts(**kwargs)] == got
 
 
 # --- Redis reconnect does not block other callers ----------------------------
@@ -147,13 +150,11 @@ def test_reconnect_failure_is_still_reported(monkeypatch, caplog):
 # --- Read-only role -----------------------------------------------------------
 
 
-def test_reader_has_no_write_methods_or_memory_mirror(fake):
+def test_reader_has_no_write_methods(fake):
     reader = LiveReader(URI)
     for name in (
         "write_live_planes",
-        "record_alert_episode",
-        "update_active_alert",
-        "carry_active_alerts",
+        "cache_episode",
         "touch_engine",
         "claim_engine",
         "ensure_writer",
@@ -161,22 +162,23 @@ def test_reader_has_no_write_methods_or_memory_mirror(fake):
         "set_engine_health",
         "publish_raw",
         "pop_flight",
-        "retry_pending_pops",
         "clear_all",
-        "plane_for_finalize",
-        "stray_active_alerts",
+        "clear_cache",
+        "save_outbox",
     ):
         assert not hasattr(reader, name), name
-    assert not hasattr(reader, "_mem")
-    assert not hasattr(reader, "_mem_lock")
 
 
 def test_reader_sees_what_the_writer_wrote(fake):
     writer = LiveWriter(LOCAL_REDIS_URI, telemetry_keep_seconds=0)
     assert writer.claim_engine()
     plane = track_plane("abc123", 1_000.0, samples=5)
+    writer.cache_episode(
+        alert_episode_doc(
+            plane, alert_meta(), {}, alert_id="a1", activated_at=1.0, active=True
+        )
+    )
     writer.write_live_planes({"ABC123": plane})
-    writer.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=1.0)
     reader = LiveReader(LOCAL_REDIS_URI)
     fid = "abc123-1000"
     assert reader.get_flights() == writer.get_flights()
@@ -230,11 +232,3 @@ def test_engine_heartbeat_read_error_raises(fake):
     fake.fail.add("get")
     with pytest.raises(LiveUnavailable):
         reader.engine_heartbeat()
-
-
-def test_memory_writer_heartbeat_has_only_seen_at():
-    store = LiveWriter(LOCAL_REDIS_URI, memory_only=True)
-    assert store.engine_heartbeat() is None
-    store.touch_engine()
-    doc = store.engine_heartbeat()
-    assert doc is not None and set(doc) == {"seen_at"}

@@ -1,8 +1,8 @@
 """In-process raw frame listeners and the ``live:raw`` Redis subscription.
 
 The engine publishes batches (:meth:`LiveWriter.publish_raw`); the portal
-subscribes. Local listeners also see local publishes, so a memory-only store
-delivers in-process.
+subscribes. Local listeners also see local publishes, so a co-located
+engine delivers in-process.
 """
 
 from __future__ import annotations
@@ -35,10 +35,6 @@ class RawFeed(LiveConnection):
         self._raw_pubsub: Any = None
         self._raw_callback: Callable[[dict[str, Any]], None] | None = None
 
-    def _listens_on_redis(self) -> bool:
-        """Whether :meth:`start_raw_pubsub` subscribes to Redis."""
-        return True
-
     def add_raw_listener(
         self, callback: Callable[[dict[str, Any]], None]
     ) -> Callable[[], None]:
@@ -54,9 +50,8 @@ class RawFeed(LiveConnection):
     def start_raw_pubsub(self, on_payload: Callable[[dict[str, Any]], None]) -> None:
         """Listen for ``live:raw`` on Redis and invoke *on_payload*.
 
-        Always registers an in-process listener so tests (memory-only) and a
-        co-located engine see local publishes. A background thread subscribes
-        to Redis when this store is not memory-only.
+        Always registers an in-process listener so a co-located engine's
+        local publishes are seen too. A background thread subscribes to Redis.
         """
         if self._raw_callback is on_payload:
             return
@@ -64,8 +59,6 @@ class RawFeed(LiveConnection):
             self.stop_raw_pubsub()
         self._raw_callback = on_payload
         self.add_raw_listener(on_payload)
-        if not self._listens_on_redis():
-            return
         self._raw_stop.clear()
         self._raw_thread = threading.Thread(
             target=self._raw_pubsub_loop,
