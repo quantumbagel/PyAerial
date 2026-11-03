@@ -15,7 +15,9 @@ Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading
 - `altitude` is barometric only. GNSS height is a separate `gnss_height`; rules and alerts use it only when an aircraft reports no barometric altitude.
 - A first airborne position (or the first after 180 s without one) waits for an even/odd CPR pair, so tracks start a few seconds later but never at an aliased position.
 - DF18 frames with non-ICAO addresses are no longer tracked.
-- Archive schema 3. Archives from 0.12-0.22 are upgraded in place on the engine's first start; there is no downgrade.
+- Archive schema 4. Archives from 0.12-0.22 are upgraded in place on the engine's first start; there is no downgrade.
+- **Stop `pyaerial run` gracefully before upgrading** (`docker compose stop`, Ctrl-C, SIGTERM). A 0.x engine that crashed left its in-flight flights only in Redis; the new engine does not import them (it logs a warning with their count and clears them).
+- The archive is now the source of truth for flights and alert episodes: a tracked flight is written as `live` from its first checkpoint, and a crash leaves it `interrupted` (ending at its last checkpoint) instead of being rebuilt from Redis. Under `archive.flights: rules`, an interrupted flight that no rule matches is deleted, where a crash leftover used to be kept.
 - Docker Compose: the Redis password is a Compose secret read through `PYAERIAL_REDIS_PASSWORD_FILE`, no longer part of `PYAERIAL_REDIS`; a one-shot `redis-config` service renders the Redis config; the image ships only the example config, so bind-mount yours (Compose does). Recreate the stack after pulling.
 - `fetchTelemetry` returns at most 5000 points by default (`limit` up to 20000), live and history, with `truncated` beside `data`.
 - `pyaerial` without a subcommand exits 2 (was 0).
@@ -33,7 +35,8 @@ Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading
 - `gnss_height` in the `telemetry` table and on WebSocket telemetry points.
 - Alert notifications carry `alert_id`, `flight_id` and `altitude_source`; deactivations carry `reason.ended_by` (`cleared`, `lost`, `shutdown`, `restart`), also on WebSocket alerts and in the portal. `print` lines show the hook and `alert_id`.
 - Archive health (`history`, `history_error`, `history_pending`) in the `live:engine` heartbeat.
-- `counters` in the `live:engine` heartbeat: frames received and dropped, messages processed, receiver restarts, stage errors, tracked aircraft.
+- Archive checkpoints: every 5 s each tracked flight's samples (older than 10 s), new integrity verdicts and open alert episodes are written, so a crash loses at most about 15 s per flight (was everything older than the Redis telemetry window). New `flights.status` value `interrupted`; new columns `flights.checkpoint_at`, `flights.previous_flight_id`, `alerts.start_flight_id`. The API marks interrupted flights `interrupted: true` (status stays `completed`), and the portal's history shows a badge.
+- `counters` in the `live:engine` heartbeat: frames received and dropped, messages processed, deferred flights and outbox episodes dropped, receiver restarts, stage errors, tracked aircraft.
 - Replay of dump1090 Beast binary captures, and a bundled sample capture used by `examples/replay.yaml`.
 - `pyaerial reset --force` for when Redis is unreachable.
 - `subscribe` sends a snapshot for newly added `flights`, `alerts` and `stats` streams.
@@ -48,7 +51,7 @@ Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading
 - Flight pushes also follow integrity changes.
 - Older archives are upgraded in place in one transaction instead of being refused; an archive from a newer PyAerial is refused and left untouched.
 - The portal opens the archive read-only and shows history as unavailable until the engine has created or upgraded it.
-- Per-flight Redis keys expire 7 days after their last write.
+- Redis is a cache of what the engine tracks: it is republished every tick (in full after a Redis restart), cleared at startup, and no longer read to recover after a crash. Only alert episodes the archive refused during an outage are kept there (`live:episode_outbox`). Per-flight keys expire 7 days after their last write.
 - The engine intake queue is sized from `tracking.hz`.
 - `cross_network` and `receiver.json` requests have deadlines, back off on failure and honour `Retry-After`.
 - `logging.level` is case-insensitive and accepts `warn`; errors from `PYAERIAL_*` overrides name the variable.

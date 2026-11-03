@@ -350,7 +350,7 @@ Each failing check multiplies the score by `1 - weight` (half that for `warn`). 
 
 **Live state (Redis)**
 
-These keys are internal (see Compatibility in the [README](README.md)). Per-flight keys expire 7 days after their last write; normally the engine removes them sooner.
+These keys are internal (see Compatibility in the [README](README.md)). They are a cache of what the engine tracks, for the portal: the engine republishes them each tick (and in full after a Redis restart), deletes a flight's keys once it stops tracking it, and clears what a previous engine left at startup. Nothing in them is needed to recover after a crash, except `live:episode_outbox`. Per-flight keys also expire 7 days after their last write.
 
 | Key | Type | Contents |
 |-----|------|----------|
@@ -361,6 +361,7 @@ These keys are internal (see Compatibility in the [README](README.md)). Per-flig
 | `live:active_alerts` | Hash (`alert_id` to JSON) | Active episodes, all flights |
 | `live:alert_episodes` | Hash (`alert_id` to JSON) | All episodes |
 | `live:engine` | String (JSON), 10 s TTL | Engine heartbeat, rewritten every tick (fields below) |
+| `live:episode_outbox` | Hash (`alert_id` to JSON) | Alert episodes the archive refused (it was down), until it accepts them; the next engine replays them after a crash. Empty in normal operation |
 | `live:raw` | Pub/Sub channel | Corrected receiver frames, served on `/ws/raw`, `/ws/beast` and Beast TCP |
 
 `live:engine` fields:
@@ -370,25 +371,29 @@ These keys are internal (see Compatibility in the [README](README.md)). Per-flig
 | `seen_at`, `token` | Last write (unix seconds); the owning engine's ID |
 | `history` | Archive health: `ok`, `down` or `disabled` |
 | `history_error`, `history_pending` | Last archive error; flights waiting to be archived |
-| `counters` | Since `counters.since` (engine start): `frames_received` (taken off the intake queue), `frames_dropped` (intake queue full), `messages_processed`, `pending_evicted` (deferred flights dropped from memory while the archive was down; archived later from Redis), `receiver_restarts` (per receiver), `stage_errors` (per engine stage). Plus `planes_tracked`, the current count |
+| `counters` | Since `counters.since` (engine start): `frames_received` (taken off the intake queue), `frames_dropped` (intake queue full), `messages_processed`, `pending_evicted` (deferred flights dropped from memory while the archive was down; their checkpointed part is kept as interrupted), `episodes_dropped` (alert episodes dropped from a full outbox while the archive was down), `receiver_restarts` (per receiver), `stage_errors` (per engine stage). Plus `planes_tracked`, the current count |
 
 **Research archive (SQLite)**
 
-A flight is finalized after `remember_planes` seconds without frames and kept according to `archive.flights`. Flight IDs are `{icao}-{first_packet_timestamp}`, e.g. `a1b2c3-1721832000`.
+Flight IDs are `{icao}-{first_packet_timestamp}`, e.g. `a1b2c3-1721832000`. `flights.status` is:
 
-- Flights longer than `tracking.max_flight_seconds` become segments, each a flight of its own, sharing their boundary sample. Active alerts continue on the next segment under the same `alert_id`, without new notifications.
-- At startup the engine archives flights a crashed engine left in Redis and closes their alerts (`ended_by: restart`). An alert whose flight was never written gets a flight row without telemetry.
+- `live`: being tracked. Every 5 s the engine checkpoints the flight's samples older than 10 s and its new integrity verdicts; alert episodes are written as they activate and close. Hidden from the portal's history.
+- `completed`: finalized after `remember_planes` seconds without frames (or at shutdown, or at a segment boundary), and rewritten whole. A flight `archive.flights` does not keep is deleted instead, with its episodes.
+- `interrupted`: the engine stopped without finalizing it (killed, crashed, power loss). At the next start it ends at its last checkpointed sample, so a crash loses at most about 15 s of each flight; its open alerts are closed with one deactivate (`ended_by: restart`, at their last refresh). The same `archive.flights` policy decides, on what was checkpointed, whether it is kept. The API shows it as `completed` with `interrupted: true`.
+
+- Flights longer than `tracking.max_flight_seconds` become segments, each a flight of its own (`previous_flight_id` names the one it continues), sharing their boundary sample. Active alerts continue on the next segment under the same `alert_id`, without new notifications; the episode's row is on the segment where it ended (`start_flight_id` is where it began).
+- While the archive is down, finished flights wait in memory (1 GiB) and episodes in an outbox (also copied to Redis), and are written once it is back. A crash during an outage loses the samples since it began.
 - Suspected spoofs are archived like any other flight; filter on the provenance columns to select verified data.
 
-The database runs in WAL mode; the portal opens it read-only. For backups, upgrades and schema compatibility see Operations in the [README](README.md) (current schema: 3, in `PRAGMA user_version`). A file from a newer PyAerial, or not a PyAerial archive, is refused and left untouched; the engine then runs with history offline, and `pyaerial reset --yes` recreates it.
+The database runs in WAL mode; the portal opens it read-only. For backups, upgrades and schema compatibility see Operations in the [README](README.md) (current schema: 4, in `PRAGMA user_version`). A file from a newer PyAerial, or not a PyAerial archive, is refused and left untouched; the engine then runs with history offline, and `pyaerial reset --yes` recreates it.
 
 | Table | Keys / indexes | Contents |
 |-------|----------------|----------|
-| `flights` | `flight_id`; `icao`, `callsign`, `end_time` | ICAO, callsign, registration, time bounds, final `info` document (with the last `integrity` verdict) |
+| `flights` | `flight_id`; `icao`, `callsign`, `end_time`, live flights | `status` (above), ICAO, callsign, registration, time bounds, final `info` document (with the last `integrity` verdict), `checkpoint_at`, `previous_flight_id`. `retained` is always 1 (legacy) |
 | `telemetry` | `(flight_id, timestamp)`; `(icao, timestamp)` | Position samples: `altitude`, `gnss_height` (`NULL` except from TC 20-22 positions), speed, heading, provenance |
 | `integrity` | `(flight_id, timestamp)`; `(icao, timestamp)` | Verdict log: every status change, plus score or check changes at most every 30 s. `score` (`NULL` for `unknown`), `status`, `flags` (JSON array of checks that did not pass), `checks` (full JSON) |
 | `frames` | `timestamp`; `(icao, timestamp)` | With `raw_frames: true`, one row per receiver copy, before merging: `receiver`, `hex`, `df`, `icao` (DF17/18 only), `rssi`, `clock` (12 MHz ticks), `bearing`, `elevation`, `cfo` |
-| `alerts` | `alert_id`; `flight_id`, `activated_at` | Alert episodes; `reason` (JSON) has `ended_by` once closed |
+| `alerts` | `alert_id`; `flight_id`, `activated_at`, active episodes | Alert episodes, one row each, written from activation on; `reason` (JSON) has `ended_by` once closed; `start_flight_id` is the segment where it began |
 
 Telemetry provenance columns:
 

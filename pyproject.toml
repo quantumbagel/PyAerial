@@ -85,6 +85,10 @@ pyaerial = [
 [tool.pytest.ini_options]
 pythonpath = ["tests"]
 testpaths = ["tests"]
+# The crash-injection test takes about a minute: `pytest -m slow` runs it
+# (CI does, as its own step); a plain `pytest` skips it.
+markers = ["slow: long-running test, excluded unless selected with -m slow"]
+addopts = "-m 'not slow'"
 
 [tool.importlinter]
 root_package = "pyaerial"

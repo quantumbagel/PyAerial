@@ -97,6 +97,7 @@ Flight summary (live and history views share these fields):
 - Unknown metadata is `null`; placeholders such as `"UNKNOWN"` or `""` are never sent.
 - `integrity` is `null` until the engine scores the aircraft. Otherwise it has `status`, `score` (`null` while `unknown`), `checks`, and when present `emitter` and `rebroadcast`. See "Integrity output" in [CONFIGURATION.md](CONFIGURATION.md).
 - `active_alerts[].alert_id` is never empty (`<flight_id>:<zone>:<rule>` when the store has no id).
+- `status` is `live` or `completed`. A history flight the engine did not finalize (it was killed or crashed) also has `interrupted: true`; its track ends at the engine's last archive checkpoint. The key is absent otherwise.
 
 Alert episodes carry `alert_id`, `flight_id`, `icao`, `callsign`, `zone`, `rule`, `active`, `activated_at`, `deactivated_at`, `ended_by`, `eta`, `altitude`, `latitude` and `longitude`. `ended_by` (`cleared`, `lost`, `shutdown`, `restart`; see "Alerters" in [CONFIGURATION.md](CONFIGURATION.md)) is `null` while active or unknown.
 

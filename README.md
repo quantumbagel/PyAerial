@@ -94,7 +94,7 @@ For reproducible installs, `requirements.lock` pins every runtime dependency wit
 
 *Upgrading*
 
-1. Back up the archive (below).
+1. Back up the archive (below), and stop the engine gracefully (`docker compose stop`; it archives in-flight flights).
 2. `git pull`, then `docker compose build` (host: `scripts/build_web.sh` and `pip install -e .`).
 3. Validate your config, since validation gets stricter between releases: `docker compose run --rm --no-deps pyaerial pyaerial validate -c /opt/PyAerial/config.yaml` (host: `pyaerial validate -c config.yaml`). Read [CHANGELOG.md](CHANGELOG.md) for breaking changes.
 4. `docker compose up -d`.

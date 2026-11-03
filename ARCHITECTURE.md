@@ -16,8 +16,8 @@ Internals for contributors. Users start at the [README](README.md).
 3. Merge copies, drop duplicates and CRC failures, publish to `live:raw`.
 4. `Tracker.ingest` decodes and updates `tracker.planes`.
 5. `IntegrityMonitor.evaluate` scores aircraft. `PlaneCalculator.calculate_all` (`pipeline.py`) runs kinematics, enrichment and the alert engine.
-6. Write live state and the heartbeat to Redis.
-7. Expire idle aircraft, split long flights, retry deferred archive work (`FlightArchiver`).
+6. Publish the tracked flights to Redis (a cache for the portal) and refresh the heartbeat.
+7. Expire idle aircraft, split long flights, retry deferred archive work and checkpoint live flights into the archive (`FlightArchiver`).
 
 Each stage runs under a `StageGuard` (`engine/guard.py`, one instance shared by the engine, supervisor and archiver): an exception is logged (one traceback per stage per interval), counted in `counters.stage_errors`, and the tick continues.
 
@@ -46,9 +46,9 @@ pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls | pyaeri
 
 - `core.py`: `Engine`, the tick loop, stage guards, status line, heartbeat counters, signals, startup and shutdown order; `run_engine`.
 - `supervisor.py`: `ReceiverSupervisor`, receiver threads (start, restart with back-off, stop), the bounded intake queue (sized from `tracking.hz`, drop-oldest), the merge-window hold-back, merge/de-dup, raw publish and raw frame archive.
-- `archiver.py`: `FlightArchiver`, finalize and persist, the archive policy (`retain`), deferred flights and their memory budget, retry back-off and the per-tick budget, the orphan sweep, startup recovery, segmentation (pure helpers in `segments.py`).
-- `guard.py`: `StageGuard`. `lint-imports` keeps `core` above `supervisor | archiver` (independent of each other) above `segments | guard`. Both components take narrow protocols (`FrameArchive`, `RawPublisher`, `FrameDeduper`; `FlightArchive`, `LiveWriteStore`, `AlertHooks`), not the `Engine`.
-- Test seams: `Engine.tick()`, `process_frames()`, `expire_planes()`, `log_status(now=)`, `request_stop()`, the `history_store=` argument; `supervisor.enqueue(frame)`, `drain()`, `held`, `receivers`, `queue`; `archiver.pending`, `defer()`, `clear_pending()`, `retry_now()`, `back_off()`, `max_flight_seconds`. Prefer them to private attributes.
+- `archiver.py`: `FlightArchiver`, checkpoints, finalize, the archive policy (`retain`), deferred flights and their memory budget, retry back-off and the per-tick budget, startup recovery, segmentation (pure helpers in `segments.py`).
+- `guard.py`: `StageGuard`. `lint-imports` keeps `core` above `supervisor | archiver` (independent of each other) above `segments | guard`. Both components take narrow protocols (`FrameArchive`, `RawPublisher`, `FrameDeduper`; `FlightArchive`, `LiveWriteStore`, `AlertHooks`, `EpisodeLog`), not the `Engine`.
+- Test seams: `Engine.tick()`, `process_frames()`, `expire_planes()`, `log_status(now=)`, `request_stop()`, the `history_store=` argument (a real archive behind `isolated=True`); `supervisor.enqueue(frame)`, `drain()`, `held`, `receivers`, `queue`; `archiver.pending`, `checkpoint(now, force=)`, `defer()`, `clear_pending()`, `retry_now()`, `back_off()`, `max_flight_seconds`. Prefer them to private attributes.
 
 **Threads**
 
@@ -61,26 +61,25 @@ pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls | pyaeri
 
 **Persistence and recovery**
 
-A finished flight is written to the archive before its Redis copy is popped (`FlightArchiver.finalize`, then `_archive_and_pop`), so a SQLite outage cannot lose it. Recovery paths in `engine/archiver.py`:
+The archive is the record; Redis is a cache of what the engine tracks.
 
-- `retry_pending`: flights that failed to archive wait in memory (bounded; overflow counted as `pending_evicted`) and are retried with backoff.
-- `recover_on_startup` (`_archive_startup_live_flights`): archives live flights a previous engine left in Redis.
-- `recover_on_startup` (`_close_stray_active_alerts`): closes active alerts whose flight never reached Redis (`ended_by: restart`).
-- `sweep_orphans`: each tick, archives Redis flights nobody tracks.
-- `LiveWriter.retry_pending_pops`: retries failed Redis deletes.
+- A tracked flight gets a `live` row with its first checkpoint (`FlightArchiver.checkpoint`, each flight every `CHECKPOINT_SECONDS` = 5 s, spread over the ticks): samples older than `SETTLE_SECONDS` = 10 s, and new integrity verdicts. Alert episodes are written at activation and deactivation (`store/recorder.py`, `EpisodeRecorder`: notify, then record), their while-active refreshes with the checkpoint.
+- Finalize rewrites the whole flight as `completed`, or deletes it by the archive policy (`discard_flight`; an episode carried over a segment split moves back to the segment where it began). Failed writes wait in memory (`retry_pending`, 1 GiB budget, overflow counted as `pending_evicted`); refused episodes wait in a bounded outbox that is copied to Redis (`live:episode_outbox`) until the archive accepts them.
+- Startup (`recover_on_startup`, retried by the tick while the archive is down): replay the episode outbox, close every open episode of another process with one `ended_by: restart` deactivate (`AlertEngine.close_restored`), keep each leftover `live` flight as `interrupted` or delete it by the policy, then clear the Redis cache.
 
 The archive package `store/archive/`:
 
 - `schema.py`: DDL, `SCHEMA_VERSION`, migrations and inspection helpers (functions over a `sqlite3` connection). An upgrade runs in one transaction.
-- `writer.py`: `ArchiveWriter`, for the engine and `pyaerial reset`. Creates and upgrades the schema, finalizes flights (a re-archive wins only with a longer time span, decided under `BEGIN IMMEDIATE`), writes and prunes raw frames, reports `health()`.
-- `reader.py`: `ArchiveReader`, for the portal. Opens the file `mode=ro`, never runs DDL, and reports `missing`, `needs_upgrade`, `incompatible` or `down` in `state`.
-- `_conn.py`: the connection, lock and reconnect backoff they share. Plane-to-row conversion is in `store/codec.py`.
+- `writer.py`: `ArchiveWriter`, for the engine and `pyaerial reset`. Creates and upgrades the schema; checkpoints, episodes, finalize, discard and recovery reads; writes and prunes raw frames; reports `health()`.
+- `reader.py`: `ArchiveReader`, for the portal. Opens the file `mode=ro`, never runs DDL, hides `live` flights and their episodes, and reports `missing`, `needs_upgrade`, `incompatible` or `down` in `state`.
+- `rows.py` (row decoding) and `_conn.py` (connection, lock, reconnect backoff) are shared. Plane-to-row conversion is in `store/codec.py`.
 
 The live store package `store/live/` (Redis keys in CONFIGURATION.md):
 
-- `writer.py`: `LiveWriter`, for the engine (and `pyaerial reset` with `writer=False`, which never claims the heartbeat). Claims and refreshes `live:engine`, writes flights and telemetry in one pipeline per tick, publishes raw frames, and mirrors everything in memory (`store/memory.py`), replayed into Redis on reconnect. Alert episodes are in `episodes.py`, pops and finalize/recovery reads in `recovery.py`, the mirror and its fallback reads in `_mirror.py`. `memory_only=True` is the isolated mode: the mirror is the whole store.
-- `reader.py`: `LiveReader`, for the portal. Read-only queries, `engine_heartbeat()`, the `live:raw` subscription; no memory mirror, so it raises `LiveUnavailable` while Redis is down.
-- `keys.py` (key names, TTLs, heartbeat payload), `_conn.py` (client and reconnect backoff), `_reads.py` (Redis queries) and `_raw.py` (raw listeners and subscription) are shared. `lint-imports` keeps the reader from importing the writer side.
+- `writer.py`: `LiveWriter`, for the engine (and `pyaerial reset` with `writer=False`, which never claims the heartbeat). Claims and refreshes `live:engine`, publishes the tracked flights, telemetry and episodes in one pipeline per tick (deleting flights no longer tracked; everything again after a failure or reconnect), keeps the episode outbox copy, publishes raw frames. It holds nothing recovery needs.
+- `null.py`: `NullLiveWriter`, the isolated engine's (replay, profiling, tests): writes nothing.
+- `reader.py`: `LiveReader`, for the portal. Read-only queries (`_queries.py`, shared with the writer), `engine_heartbeat()`, the `live:raw` subscription; raises `LiveUnavailable` while Redis is down.
+- `keys.py` (key names, TTLs, heartbeat payload), `_conn.py` (client and reconnect backoff), `_reads.py` (Redis queries) and `_raw.py` (raw listeners and subscription) are shared. `lint-imports` keeps the portal's readers from importing any writer.
 - `protocols.py`: `LiveReadStore` (api/), `EpisodeStore` (alerts), `LiveWriteStore` (engine).
 
 **Adding a receiver or alerter**
@@ -97,6 +96,7 @@ The live store package `store/live/` (Redis keys in CONFIGURATION.md):
 ```bash
 pip install -e ".[dev]"
 pytest
+pytest -m slow   # crash injection: SIGKILL loop against a real archive (~1 min)
 ruff check src tests
 lint-imports
 cd web && npm ci && npm run lint && npm run typecheck && npm test
