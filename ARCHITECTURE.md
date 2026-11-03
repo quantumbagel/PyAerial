@@ -39,7 +39,7 @@ pyaerial.classify
 pyaerial.receivers
 pyaerial.config.schema | pyaerial.config.geofence_file
 pyaerial.models | pyaerial.logging_setup
-pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls
+pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls | pyaerial.plugins
 ```
 
 **Threads**
@@ -65,9 +65,11 @@ Archive schema upgrades (`store/history.py`) run in one transaction.
 
 **Adding a receiver or alerter**
 
-- Receiver: subclass `pyaerial.receivers.Receiver`, implement `run()` (call `self.emit(...)` per frame, poll `should_stop()`, return a reason when exiting), decorate it with `@register_receiver("name")`, and import it in `register_builtins()` in `receivers/__init__.py`. Top-level `host` / `port` reach only `dump1090` and `aoa` (`ReceiverConfig.receiver_arguments`); other receivers read `options`.
-- Alerter: subclass `pyaerial.alerters.Alerter`, implement `alert(meta, payload)`, decorate it with `@register_alerter("name")`, and import it in `register_builtins()` in `alerters/__init__.py`.
-- Declare `known_options` on the class (or extend the tables in `config/loader.py`) so `validate` rejects typos.
+- Receiver: subclass `pyaerial.receivers.Receiver` and implement `run()` (call `self.emit(...)` per frame, poll `should_stop()`, return a reason when exiting). Top-level `host` / `port` reach only `dump1090` and `aoa` (`ReceiverConfig.receiver_arguments`); other receivers read `options`.
+- Alerter: subclass `pyaerial.alerters.Alerter` and implement `alert(meta, payload)`.
+- Both declare `known_options: ClassVar[frozenset[str]]` (every `options` key they read; the loader rejects others with a "did you mean" hint) and may override `@classmethod validate_options(options, *, config_dir) -> list[str]`: plugin-specific checks returning error messages, no I/O beyond local files, may normalize `options` in place (`replay` resolves its path). A message starting with `options.<key>:` is reported against that key. A receiver that reads a Beast/AVR feed also implements `endpoint(options) -> ReceiverEndpoint` (host, port, wire format), used by the self-feed check and the portal.
+- Registration is by entry point: groups `pyaerial.receivers` and `pyaerial.alerters` (the builtins are declared in `pyproject.toml`; if PyAerial's metadata is missing they are imported directly). A third-party distribution declares, e.g., `[project.entry-points."pyaerial.receivers"] mysdr = "mypkg.sdr:MySdrReceiver"`. Builtin names cannot be replaced (warning); a plugin that fails to import or lacks `known_options` is logged once and skipped. In-process code may use `@register_receiver("name")` / `@register_alerter("name")`.
+- The loader (`config/loader.py`) only calls the contract; rules that need several sections (the self-feed Beast port check) stay there.
 - The JSON webhook body (`alerters/contract.py`) and the WebSocket messages are public contracts pinned by golden files in `tests/golden/`.
 
 **Tests and checks**

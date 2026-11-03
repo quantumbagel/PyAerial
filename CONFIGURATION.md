@@ -129,7 +129,7 @@ Storage, rules, the WebSocket API and JSON webhooks use SI and WGS84 units. Only
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `type` | required | `dump1090`, `aoa` or `replay` |
+| `type` | required | `dump1090`, `aoa`, `replay`, or a plugin's type (`pyaerial validate` lists them) |
 | `host`, `port` | | TCP source (`dump1090`, `aoa`) |
 | `format` | from port | `dump1090` only: `beast` / `binary` or `avr` / `raw`, case-insensitive; also accepted in `options`. Port 30002 implies AVR, any other Beast |
 | `position` | unset | Fixed antenna position: `latitude`, `longitude`, `altitude` (m above mean sea level, default 0) |
@@ -215,7 +215,7 @@ A polygon needs 3+ distinct vertices, non-zero area and no self-intersecting edg
 | `method` | `POST` | `POST` or `PUT` |
 | `headers` | `{}` | Extra request headers |
 
-Bad options fail `pyaerial validate`. Delivery: 5 s timeout per attempt; up to 3 attempts with backoff on transport errors and `5xx`; `429` is retried after `Retry-After` (at most 30 s); other `4xx` and all `3xx` (redirects are not followed) fail. Notifications for one `alert_id` are delivered in order.
+Bad options fail `pyaerial validate`. Other `method` values come from installed alerter plugins; `pyaerial validate` lists every receiver and alerter and where it came from (`builtin` or the plugin's distribution). A plugin that fails to load is listed as unavailable and reported only if the config uses it. Delivery: 5 s timeout per attempt; up to 3 attempts with backoff on transport errors and `5xx`; `429` is retried after `Retry-After` (at most 30 s); other `4xx` and all `3xx` (redirects are not followed) fail. Notifications for one `alert_id` are delivered in order.
 
 *JSON body (`format: json`)*. Schema `pyaerial.alert/1`; see Compatibility in the [README](README.md). Every field is always present; "or null" fields can be `null`. Times are unix seconds; other units follow the table above.
 
@@ -253,6 +253,7 @@ Every activation gets exactly one deactivation, except episodes whose rule was r
 | `allowed_hosts` | `[]` | `PYAERIAL_WEB_ALLOWED_HOSTS` | Accepted `Host` names, e.g. `["tracker.example", "*.lan"]`; others get HTTP 400, except `localhost` and `127.0.0.1`. Needed for same-origin WebSockets under a hostname. Add a LAN IP if you browse by IP |
 | `trusted_proxies` | `[]` | | Proxy IPs or CIDRs whose `X-Forwarded-For` is trusted; empty trusts only `127.0.0.1` |
 | `enable_docs` | `false` | | Serve `/docs`, `/redoc` and `/openapi.json` |
+| `metrics` | `true` | | Serve Prometheus `/metrics` ([WEBSOCKET.md](WEBSOCKET.md)): traffic and error counters, receiver names, no hosts or secrets. Set `false` if people who can reach the portal should not see them |
 | `beast_host` | `127.0.0.1` | `PYAERIAL_BEAST_HOST` | Beast TCP bind address; `0.0.0.0` for other hosts or containers |
 | `beast_port` | `30105` | `PYAERIAL_BEAST_PORT` | Beast TCP port (not 30005, dump1090's); `null` (env: `off`) disables it, `/ws/beast` still serves |
 | `beast_max_clients` | `16` | | Concurrent Beast TCP feeders |

@@ -26,6 +26,7 @@ import json
 import math
 import socket
 import time
+from typing import TypedDict
 
 from pyaerial.receivers import Receiver, register_receiver
 from pyaerial.receivers.frames import _AVR_HEX_LENGTHS, _HEX_DIGITS, BEAST_CLOCK_MOD
@@ -45,7 +46,19 @@ def _number(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def parse_aoa_line(line: str) -> dict[str, object] | None:
+class AoaFrame(TypedDict):
+    """One validated sidecar line: ``hex`` and ``time`` plus the emit keywords."""
+
+    hex: str
+    time: float | None
+    rssi: float | None
+    clock: int | None
+    bearing: float | None
+    elevation: float | None
+    cfo: float | None
+
+
+def parse_aoa_line(line: str) -> AoaFrame | None:
     """Validate one sidecar JSON line. Returns emit kwargs plus ``hex``/``time``."""
     try:
         doc = json.loads(line)
@@ -81,6 +94,18 @@ def parse_aoa_line(line: str) -> dict[str, object] | None:
 
 @register_receiver("aoa")
 class AoAReceiver(Receiver):
+    # bearing_offset / array_axis are read by the integrity monitor.
+    known_options = frozenset(
+        {
+            "host",
+            "port",
+            "tcp_connection_ip",
+            "tcp_connection_port",
+            "bearing_offset",
+            "array_axis",
+        }
+    )
+
     def configure(self, arguments: dict) -> None:
         self.ip = str(
             arguments.get("tcp_connection_ip") or arguments.get("host") or "localhost"
@@ -131,9 +156,15 @@ class AoAReceiver(Receiver):
                     # merge can keep a copy stamped ahead of the others and
                     # the tracker then drops their (older) samples. Precise
                     # timing comes from the 12 MHz ``clock`` instead.
-                    parsed.pop("time")
-                    hex_msg = parsed.pop("hex")
-                    self.emit(hex_msg, now, **parsed)
+                    self.emit(
+                        parsed["hex"],
+                        now,
+                        rssi=parsed["rssi"],
+                        clock=parsed["clock"],
+                        bearing=parsed["bearing"],
+                        elevation=parsed["elevation"],
+                        cfo=parsed["cfo"],
+                    )
         finally:
             with contextlib.suppress(OSError):
                 client.close()

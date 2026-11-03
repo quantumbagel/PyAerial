@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from pyaerial.receivers import Receiver, register_receiver
 from pyaerial.receivers.frames import (
@@ -49,6 +49,23 @@ def _as_bool(value: object, default: bool = True) -> bool:
 @register_receiver("replay")
 class ReplayReceiver(Receiver):
     """Ingest Mode S hex frames from disk with optional timestamp pacing."""
+
+    known_options = frozenset({"path", "speed", "loop", "interval"})
+
+    @classmethod
+    def validate_options(cls, options: dict[str, Any], *, config_dir: Path) -> list[str]:
+        raw_path = options.get("path")
+        if not raw_path:
+            return ["replay requires options.path"]
+        path = Path(str(raw_path)).expanduser()
+        if not path.is_absolute():
+            path = config_dir / path
+        path = path.resolve()
+        # Normalized in place: the engine may run from another directory.
+        options["path"] = str(path)
+        if not path.is_file():
+            return [f"options.path: not found: {path}"]
+        return []
 
     def configure(self, arguments: dict) -> None:
         path = arguments.get("path")
@@ -108,6 +125,7 @@ class ReplayReceiver(Receiver):
 
     def _load(self) -> list[ReplayFrame]:
         data = self.path.read_bytes()
+        rows: list[tuple[float | None, str, int | None, float | None]]
         if _is_beast(data):
             rows = [
                 (None, hex_msg, clock, rssi)

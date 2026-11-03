@@ -2,6 +2,8 @@ import logging
 import math
 import threading
 import time
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import requests
@@ -160,7 +162,7 @@ def build_tracker_links(
     callsign_clean = (callsign or "").strip()
     reg_clean = (registration or "").strip()
 
-    links = {}
+    links: dict[str, str] = {}
     if not icao_clean:
         return links
 
@@ -216,7 +218,7 @@ def _alert_telemetry(meta: dict, payload: dict) -> tuple:
     )
 
 
-def _safe_num(val: object) -> float | int | None:
+def _safe_num(val: Any) -> float | int | None:
     if val is None:
         return None
     try:
@@ -246,11 +248,31 @@ def _hex_to_int(hex_str: str | None, default: int = 15680580) -> int:
 class WebhookAlerter(Alerter):
     """Sends JSON alerts to a configured HTTP webhook endpoint."""
 
+    known_options = frozenset({"url", "format", "method", "headers"})
+
+    @classmethod
+    def validate_options(cls, options: dict[str, Any], *, config_dir: Path) -> list[str]:
+        # The URL is a secret: messages show at most scheme://host. format and
+        # headers are checked by building the alerter (configure).
+        problems = []
+        url = options.get("url")
+        if not url:
+            problems.append("webhook action requires options.url")
+        elif not webhook_url_allowed(str(url)):
+            problems.append(
+                "webhook url must be https (http allowed only for localhost): "
+                f"{redact_url(str(url))}"
+            )
+        method = options.get("method")
+        if method is not None and str(method).strip().upper() not in _WEBHOOK_METHODS:
+            problems.append("webhook method must be POST or PUT")
+        return problems
+
     def configure(self, arguments: dict) -> None:
-        self.url = arguments.get("url")
-        if not self.url:
+        raw_url = arguments.get("url")
+        if not raw_url:
             raise ValueError("webhook URL must be provided in alerter options")
-        url = str(self.url).strip()
+        url = str(raw_url).strip()
         if not webhook_url_allowed(url):
             raise ValueError(
                 "webhook URL must be https (http allowed only for localhost)"

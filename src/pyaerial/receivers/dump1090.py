@@ -5,8 +5,10 @@ from __future__ import annotations
 import contextlib
 import socket
 import time
+from pathlib import Path
+from typing import Any
 
-from pyaerial.receivers import Receiver, register_receiver
+from pyaerial.receivers import Receiver, ReceiverEndpoint, register_receiver
 from pyaerial.receivers.frames import (
     _BEAST_BUF_MAX,
     BeastParser,
@@ -22,36 +24,70 @@ _SOCKET_TIMEOUT = 1.0
 _IDLE_TIMEOUT = 150.0
 _AVR_FORMATS = {"avr", "raw"}
 _BEAST_FORMATS = {"beast", "binary"}
+_AVR_PORT = 30002
+_BEAST_PORT = 30005
 
 
 @register_receiver("dump1090")
 class Dump1090Receiver(Receiver):
+    # tcp_connection_* also come from the top-level host/port fields.
+    known_options = frozenset({"format", "tcp_connection_ip", "tcp_connection_port"})
+
+    @classmethod
+    def validate_options(cls, options: dict[str, Any], *, config_dir: Path) -> list[str]:
+        raw_fmt = options.get("format")
+        fmt = str(raw_fmt).lower() if raw_fmt is not None else None
+        if fmt is not None and fmt not in _AVR_FORMATS | _BEAST_FORMATS:
+            # configure() would fall back to AVR with only a log warning.
+            return [f"format {raw_fmt!r} is not one of avr, raw, beast, binary"]
+        try:
+            port = int(options["tcp_connection_port"])
+        except (KeyError, TypeError, ValueError):
+            port = None
+        if port == _AVR_PORT and fmt in _BEAST_FORMATS:
+            return [
+                f"format {fmt} is Beast binary; port 30002 is AVR text. "
+                "Use port 30005, or format: avr."
+            ]
+        if port == _BEAST_PORT and fmt in _AVR_FORMATS:
+            return [
+                f"format {fmt} is AVR text; port 30005 is Beast binary. "
+                "Use port 30002, or format: beast."
+            ]
+        return []
+
+    @classmethod
+    def endpoint(cls, options: dict[str, Any]) -> ReceiverEndpoint:
+        """Host, port and wire format (``beast`` or ``avr``) for ``options``.
+
+        The one place the format is decided: an explicit ``format`` wins (an
+        unknown name means AVR); otherwise port 30002 means AVR, anything else
+        Beast, which carries the 12 MHz clock and signal level the integrity
+        checks need. Raises ValueError for a non-numeric port.
+        """
+        raw_fmt = options.get("format")
+        raw_port = options.get("tcp_connection_port")
+        port = int(raw_port) if raw_port is not None else None
+        if raw_fmt is not None:
+            wire = "beast" if str(raw_fmt).lower() in _BEAST_FORMATS else "avr"
+        else:
+            wire = "avr" if port == _AVR_PORT else "beast"
+        if port is None:
+            port = _BEAST_PORT if wire == "beast" else _AVR_PORT
+        host = str(options.get("tcp_connection_ip") or "localhost")
+        return ReceiverEndpoint(host, port, wire)
+
     def configure(self, arguments: dict) -> None:
-        self.ip = str(arguments.get("tcp_connection_ip", "localhost"))
-        port = arguments.get("tcp_connection_port")
+        endpoint = self.endpoint(arguments)
         fmt_raw = arguments.get("format")
-        if fmt_raw is not None:
-            fmt = str(fmt_raw).lower()
-            if fmt in _BEAST_FORMATS:
-                self.format = "beast"
-            elif fmt in _AVR_FORMATS:
-                self.format = "avr"
-            else:
-                self.format = "avr"
-                self.log.warning(
-                    "Unknown dump1090 format %r; using AVR. Valid: avr, beast",
-                    fmt,
-                )
-        elif port is not None and int(port) == 30002:
-            self.format = "avr"
-        else:
-            # Beast carries the 12 MHz clock and signal level that the
-            # integrity checks need; AVR text carries neither.
-            self.format = "beast"
-        if port is not None:
-            self.port = int(port)
-        else:
-            self.port = 30005 if self.format == "beast" else 30002
+        if fmt_raw is not None and str(fmt_raw).lower() not in _AVR_FORMATS | _BEAST_FORMATS:
+            self.log.warning(
+                "Unknown dump1090 format %r; using AVR. Valid: avr, beast",
+                str(fmt_raw).lower(),
+            )
+        self.ip = str(arguments.get("tcp_connection_ip", "localhost"))
+        self.port = endpoint.port
+        self.format = endpoint.wire_format
 
     def run(self) -> str | None:
         try:

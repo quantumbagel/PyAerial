@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Any, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import ruamel.yaml
@@ -14,7 +15,6 @@ from pydantic import ValidationError
 
 from pyaerial.config.geofence_file import GeofenceFileError, load_geofence_coordinates
 from pyaerial.config.schema import AlertActionConfig, Config, ReceiverConfig
-from pyaerial.urls import redact_url, webhook_url_allowed
 
 log = logging.getLogger("pyaerial.config")
 
@@ -22,7 +22,6 @@ _ENV_INTERPOLATION = re.compile(
     r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}"
 )
 _FILE_INTERPOLATION = re.compile(r"\$\{file:([^}]+)\}")
-_DUMP1090_FORMATS = frozenset({"avr", "raw", "beast", "binary"})
 
 
 class ConfigError(Exception):
@@ -107,7 +106,8 @@ def load_config(
     # A section whose keys are all commented out parses as null; treat it as
     # absent so defaults apply (and required sections report "missing").
     data = {key: value for key, value in data.items() if value is not None}
-    data = _expand_env_vars(data, config_path)
+    # Expansion maps a dict to a dict (only its string leaves change).
+    data = cast(dict[str, Any], _expand_env_vars(data, config_path))
     overridden: dict[tuple[str, str], str] = {}
     data = _apply_env_overrides(data, overridden)
     data = _resolve_zone_files(data, config_path)
@@ -240,10 +240,18 @@ def _resolve_zone_files(data: dict, config_path: Path) -> dict:
     return data
 
 
-def _validate_cross_references(config: Config, path: Path) -> None:
-    """Check receiver types, alerter methods, and webhook options."""
-    from pyaerial.alerters import available_alerters
-    from pyaerial.receivers import available_receivers, unavailable_receivers
+def _validate_cross_references(config: Config, path: Path | str) -> None:
+    """Check plugin names and options, then cross-section rules.
+
+    Each plugin validates its own options (``validate_options``); the loader
+    only knows the contract, and keeps rules that span sections.
+    """
+    path = Path(path)
+    from pyaerial.receivers import (
+        available_receivers,
+        receiver_class,
+        unavailable_receivers,
+    )
 
     known_receivers = set(available_receivers())
     missing_extras = unavailable_receivers()
@@ -270,95 +278,68 @@ def _validate_cross_references(config: Config, path: Path) -> None:
             )
         raise ConfigError("\n".join(lines))
 
-    option_problems = [
-        f"receivers.{name}.options: {msg}"
+    receiver_classes = {
+        name: cls
         for name, cfg in config.receivers.items()
-        for msg in _unknown_options(
-            cfg.options, _known_options(_receiver_class(cfg.type), _RECEIVER_OPTIONS, cfg.type)
-        )
-    ]
-    if option_problems:
-        raise ConfigError(
-            f"configuration file {path} is invalid:\n"
-            + "\n".join(f"  - {item}" for item in option_problems)
-        )
-
-    loop_problems = _beast_feedback_problems(config)
-    if loop_problems:
-        raise ConfigError(
-            f"configuration file {path} is invalid:\n"
-            + "\n".join(f"  - {item}" for item in loop_problems)
-        )
-
-    dump1090_problems: list[str] = []
-    for name, cfg in config.receivers.items():
-        if cfg.type != "dump1090":
-            continue
-        # options.format reaches the receiver too; it falls back to AVR (with
-        # only a log warning) for names it does not know.
-        raw_fmt = cfg.receiver_arguments().get("format")
-        fmt = str(raw_fmt).lower() if raw_fmt is not None else None
-        port = cfg.port
-        if fmt is not None and fmt not in _DUMP1090_FORMATS:
-            dump1090_problems.append(
-                f"receivers.{name}: format {raw_fmt!r} is not one of "
-                "avr, raw, beast, binary"
+        if (cls := receiver_class(cfg.type)) is not None
+    }
+    _raise_if(
+        path,
+        [
+            f"receivers.{name}.options: {msg}"
+            for name, cfg in config.receivers.items()
+            for msg in _unknown_options(cfg.options, receiver_classes[name].known_options)
+        ],
+    )
+    _raise_if(path, _beast_feedback_problems(config, receiver_classes))
+    _raise_if(
+        path,
+        [
+            _locate(f"receivers.{name}", msg)
+            for name, cfg in config.receivers.items()
+            for msg in _plugin_option_problems(
+                receiver_classes[name], cfg, path.parent
             )
-            continue
-        if port == 30002 and fmt in {"beast", "binary"}:
-            dump1090_problems.append(
-                f"receivers.{name}: format {fmt} is Beast binary; "
-                "port 30002 is AVR text. Use port 30005, or format: avr."
-            )
-        if port == 30005 and fmt in {"avr", "raw"}:
-            dump1090_problems.append(
-                f"receivers.{name}: format {fmt} is AVR text; "
-                "port 30005 is Beast binary. Use port 30002, or format: beast."
-            )
-    if dump1090_problems:
-        raise ConfigError(
-            f"configuration file {path} is invalid:\n"
-            + "\n".join(f"  - {item}" for item in dump1090_problems)
-        )
-
-    replay_problems: list[str] = []
-    for name, cfg in config.receivers.items():
-        if cfg.type != "replay":
-            continue
-        raw_path = cfg.options.get("path")
-        if not raw_path:
-            replay_problems.append(f"receivers.{name}: replay requires options.path")
-            continue
-        replay_path = Path(str(raw_path)).expanduser()
-        if not replay_path.is_absolute():
-            replay_path = (path.parent / replay_path).resolve()
-        else:
-            replay_path = replay_path.resolve()
-        cfg.options["path"] = str(replay_path)
-        if not replay_path.is_file():
-            replay_problems.append(
-                f"receivers.{name}.options.path: not found: {replay_path}"
-            )
-    if replay_problems:
-        raise ConfigError(
-            f"configuration file {path} is invalid:\n"
-            + "\n".join(f"  - {item}" for item in replay_problems)
-        )
-
+        ],
+    )
     # The engine builds receivers at startup and only logs (then skips) one
     # whose options it rejects; build each once here so that fails now.
-    receiver_problems = [
-        f"receivers.{name}: {msg}"
-        for name, cfg in config.receivers.items()
-        for msg in _receiver_problems(name, cfg)
+    _raise_if(
+        path,
+        [
+            f"receivers.{name}: {msg}"
+            for name, cfg in config.receivers.items()
+            for msg in _receiver_problems(name, cfg)
+        ],
+    )
+    _raise_if(path, _alerter_action_problems(config, path.parent))
+
+
+def plugin_summary() -> list[str]:
+    """Lines naming every available plugin and where it came from."""
+    from pyaerial.alerters import alerter_sources, unavailable_alerters
+    from pyaerial.receivers import receiver_sources, unavailable_receivers
+
+    def listing(sources: dict[str, str]) -> str:
+        return ", ".join(f"{name} ({source})" for name, source in sources.items())
+
+    lines = [
+        f"available receivers: {listing(receiver_sources())}",
+        f"available alerters: {listing(alerter_sources())}",
     ]
-    if receiver_problems:
-        raise ConfigError(
-            f"configuration file {path} is invalid:\n"
-            + "\n".join(f"  - {item}" for item in receiver_problems)
-        )
+    for kind, broken in (
+        ("receiver", unavailable_receivers()),
+        ("alerter", unavailable_alerters()),
+    ):
+        lines.extend(f"unavailable {kind} {name}: {why}" for name, why in broken.items())
+    return lines
+
+
+def _alerter_action_problems(config: Config, config_dir: Path) -> list[str]:
+    from pyaerial.alerters import alerter_class, available_alerters, unavailable_alerters
 
     known_alerters = set(available_alerters())
+    broken = unavailable_alerters()
     problems: list[str] = []
     for zone_name, zone in config.zones.items():
         for rule in zone.rules:
@@ -367,130 +348,102 @@ def _validate_cross_references(config: Config, path: Path) -> None:
                 actions.extend(rule.while_active.actions)
             for action in actions:
                 loc = f"zones.{zone_name}.rules.{rule.name}"
-                if action.method not in known_alerters:
-                    problems.append(
-                        f"{loc}: unknown alerter {action.method!r}; "
-                        f"available: {', '.join(sorted(known_alerters))}"
-                    )
-                    continue
-                found = len(problems)
-                known = _known_options(
-                    _alerter_class(action.method), _ALERTER_OPTIONS, action.method
-                )
-                problems.extend(
-                    f"{loc}: {action.method} options: {msg}"
-                    for msg in _unknown_options(action.options, known)
-                )
-                if len(problems) > found:
-                    continue
-                if action.method == "webhook":
-                    url = action.options.get("url")
-                    if not url:
-                        problems.append(f"{loc}: webhook action requires options.url")
-                    elif not webhook_url_allowed(str(url)):
+                cls = alerter_class(action.method)
+                if cls is None:
+                    if action.method in broken:
                         problems.append(
-                            f"{loc}: webhook url must be https "
-                            f"(http allowed only for localhost): {redact_url(str(url))}"
+                            f"{loc}: alerter {action.method!r} is unavailable "
+                            f"({broken[action.method]})"
                         )
-                    method = action.options.get("method")
-                    if method is not None and str(method).strip().upper() not in {
-                        "POST",
-                        "PUT",
-                    }:
-                        problems.append(f"{loc}: webhook method must be POST or PUT")
-                if len(problems) == found:
+                    else:
+                        problems.append(
+                            f"{loc}: unknown alerter {action.method!r}; "
+                            f"available: {', '.join(sorted(known_alerters))}"
+                        )
+                    continue
+                unknown = _unknown_options(action.options, cls.known_options)
+                if unknown:
                     problems.extend(
-                        f"{loc}: {msg}" for msg in _alerter_problems(action)
+                        f"{loc}: {action.method} options: {msg}" for msg in unknown
                     )
+                    continue
+                own = [
+                    _locate(loc, msg)
+                    for msg in _plugin_option_problems(cls, action, config_dir)
+                ]
+                problems.extend(own or [f"{loc}: {msg}" for msg in _alerter_problems(action)])
+    return problems
+
+
+def _raise_if(path: Path, problems: list[str]) -> None:
     if problems:
-        lines = [f"configuration file {path} is invalid:"]
-        lines.extend(f"  - {item}" for item in problems)
-        raise ConfigError("\n".join(lines))
+        raise ConfigError(
+            f"configuration file {path} is invalid:\n"
+            + "\n".join(f"  - {item}" for item in problems)
+        )
+
+
+def _locate(prefix: str, message: str) -> str:
+    """``receivers.r`` + ``options.path: x`` -> ``receivers.r.options.path: x``."""
+    if message.startswith("options."):
+        return f"{prefix}.{message}"
+    return f"{prefix}: {message}"
+
+
+def _plugin_option_problems(
+    cls: Any, target: ReceiverConfig | AlertActionConfig, config_dir: Path
+) -> list[str]:
+    """Run the plugin's ``validate_options``; keep any in-place normalization.
+
+    Receivers see the arguments they will get (top-level host/port/format
+    merged in); normalized values are copied back into ``options``.
+    """
+    if isinstance(target, ReceiverConfig):
+        args = target.receiver_arguments()
+    else:
+        args = target.options
+    try:
+        problems = list(cls.validate_options(args, config_dir=config_dir))
+    except Exception as exc:  # noqa: BLE001 - a plugin bug must not crash validate
+        log.debug("validate_options of %s failed", cls.__qualname__, exc_info=True)
+        return [f"options could not be validated ({type(exc).__name__}: {exc})"]
+    if isinstance(target, ReceiverConfig):
+        for key in list(target.options):
+            if key in args:
+                target.options[key] = args[key]
+    return [str(message) for message in problems]
 
 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", ""})
 
 
-def _beast_feedback_problems(config: Config) -> list[str]:
-    """A dump1090 receiver reading this machine's ``web.beast_port`` (the
-    portal's re-encoded output) would feed the engine its own frames."""
+def _beast_feedback_problems(config: Config, classes: dict[str, Any]) -> list[str]:
+    """A receiver reading this machine's ``web.beast_port`` (the portal's
+    re-encoded output) would feed the engine its own frames."""
     port = config.web.beast_port
     if not port:
         return []
     problems = []
     for name, cfg in config.receivers.items():
-        if cfg.type != "dump1090":
+        try:
+            endpoint = classes[name].endpoint(cfg.receiver_arguments())
+        except ValueError:
+            continue  # a bad port is reported by the receiver's own checks
+        if endpoint is None:
             continue
-        args = cfg.receiver_arguments()
-        host = str(args.get("tcp_connection_ip") or "localhost").strip("[]").lower()
-        receiver_port = args.get("tcp_connection_port")
-        if receiver_port is None:
-            receiver_port = 30002 if _dump1090_wire_format(args) == "avr" else 30005
-        if host in _LOOPBACK_HOSTS and str(receiver_port) == str(port):
+        host = endpoint.host.strip("[]").lower()
+        if host in _LOOPBACK_HOSTS and endpoint.port == port:
             problems.append(
-                f"receivers.{name} reads {host or 'localhost'}:{receiver_port}, which is "
-                f"web.beast_port: the engine would ingest its own re-served output. "
-                "Use another web.beast_port (default 30105) or PYAERIAL_BEAST_PORT=off"
+                f"receivers.{name} reads {host or 'localhost'}:{endpoint.port}, "
+                "which is web.beast_port: the engine would ingest its own re-served "
+                "output. Use another web.beast_port (default 30105) or "
+                "PYAERIAL_BEAST_PORT=off"
             )
     return problems
 
 
-def _dump1090_wire_format(args: dict[str, object]) -> str:
-    fmt = args.get("format")
-    if fmt is not None:
-        return "beast" if str(fmt).lower() in {"beast", "binary"} else "avr"
-    port = args.get("tcp_connection_port")
-    return "avr" if port is not None and str(port) == "30002" else "beast"
-
-
-# Option keys each built-in plugin reads (configure(), plus the integrity
-# monitor for AoA). A plugin class may declare ``known_options`` instead.
-_RECEIVER_OPTIONS: dict[str, frozenset[str]] = {
-    "dump1090": frozenset({"format", "tcp_connection_ip", "tcp_connection_port"}),
-    "aoa": frozenset(
-        {
-            "host",
-            "port",
-            "tcp_connection_ip",
-            "tcp_connection_port",
-            "bearing_offset",
-            "array_axis",
-        }
-    ),
-    "replay": frozenset({"path", "speed", "loop", "interval"}),
-}
-_ALERTER_OPTIONS: dict[str, frozenset[str]] = {
-    "webhook": frozenset({"url", "format", "method", "headers"}),
-    "print": frozenset(),
-}
-
-
-def _receiver_class(kind: str) -> type | None:
-    from pyaerial.receivers import _REGISTRY
-
-    return _REGISTRY.get(kind)
-
-
-def _alerter_class(method: str) -> type | None:
-    from pyaerial.alerters import _REGISTRY
-
-    return _REGISTRY.get(method)
-
-
-def _known_options(
-    cls: type | None, table: dict[str, frozenset[str]], name: str
-) -> frozenset[str] | None:
-    declared = getattr(cls, "known_options", None)
-    if declared is not None:
-        return frozenset(declared)
-    # None: a plugin we know nothing about; its options are not checked.
-    return table.get(name)
-
-
-def _unknown_options(options: dict[str, object], known: frozenset[str] | None) -> list[str]:
+def _unknown_options(options: dict[str, object], known: frozenset[str]) -> list[str]:
     """One message per option key the plugin does not read (typos)."""
-    if known is None:
-        return []
     messages = []
     for key in sorted(str(key) for key in options if str(key) not in known):
         close = difflib.get_close_matches(key, sorted(known), n=1)
@@ -500,12 +453,16 @@ def _unknown_options(options: dict[str, object], known: frozenset[str] | None) -
     return messages
 
 
+def _discard_frame(*_args: object, **_kwargs: object) -> None:
+    """``emit`` for receivers built only to validate their options."""
+
+
 def _receiver_problems(name: str, cfg: ReceiverConfig) -> list[str]:
     """Construct the receiver (``configure`` only; no I/O, nothing started)."""
     from pyaerial.receivers import create_receiver
 
     try:
-        create_receiver(cfg.type, name, lambda *_args: None, cfg.receiver_arguments())
+        create_receiver(cfg.type, name, _discard_frame, cfg.receiver_arguments())
     except (ValueError, TypeError, KeyError) as exc:
         return [str(exc).strip("'\"")]
     return []
@@ -610,7 +567,7 @@ def _format_validation_error(
     for error in exc.errors():
         loc = tuple(str(part) for part in error["loc"])
         location = ".".join(loc) or "<root>"
-        env_var = (overridden or {}).get(loc[:2])
+        env_var = (overridden or {}).get((loc[0], loc[1])) if len(loc) >= 2 else None
         if env_var is not None:
             # The bad value came from the environment, not the file.
             location = f"{env_var}={os.environ.get(env_var, '')!r} (sets {location})"

@@ -58,6 +58,17 @@ Changelog = "https://github.com/quantumbagel/PyAerial/blob/master/CHANGELOG.md"
 [project.scripts]
 pyaerial = "pyaerial.cli:main"
 
+# Plugins are discovered through these groups; a third-party distribution adds
+# its own entries (see ARCHITECTURE.md). The builtins are listed here too.
+[project.entry-points."pyaerial.receivers"]
+aoa = "pyaerial.receivers.aoa:AoAReceiver"
+dump1090 = "pyaerial.receivers.dump1090:Dump1090Receiver"
+replay = "pyaerial.receivers.replay:ReplayReceiver"
+
+[project.entry-points."pyaerial.alerters"]
+print = "pyaerial.alerters.printer:PrintAlerter"
+webhook = "pyaerial.alerters.webhook:WebhookAlerter"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
@@ -103,16 +114,17 @@ layers = [
     "pyaerial.receivers",
     "pyaerial.config.schema | pyaerial.config.geofence_file",
     "pyaerial.models | pyaerial.logging_setup",
-    "pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls",
+    "pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls | pyaerial.plugins",
 ]
 
 [tool.mypy]
-# Lenient start: bodies of unannotated functions are not checked yet
-# (check_untyped_defs is off); third-party packages without stubs are Any.
+# Unannotated functions are type-checked too (check_untyped_defs), though
+# missing annotations are not errors yet; third-party packages without stubs
+# are Any.
 python_version = "3.11"
 files = ["src/pyaerial"]
 ignore_missing_imports = true
-check_untyped_defs = false
+check_untyped_defs = true
 warn_unused_configs = true
 
 [tool.ruff]

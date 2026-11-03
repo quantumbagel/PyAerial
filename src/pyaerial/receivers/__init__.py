@@ -1,4 +1,4 @@
-"""Receiver interfaces and registration for Mode S / ADS-B message transports."""
+"""Receiver plugin contract and the receiver registry."""
 
 from __future__ import annotations
 
@@ -6,16 +6,21 @@ import abc
 import logging
 import threading
 from collections.abc import Callable
-from typing import Protocol
+from pathlib import Path
+from typing import Any, ClassVar, NamedTuple, Protocol
 
+from pyaerial.plugins import PluginRegistry
 from pyaerial.receivers.frames import RawFrame
 
 __all__ = [
     "Emit",
     "RawFrame",
     "Receiver",
+    "ReceiverEndpoint",
     "available_receivers",
     "create_receiver",
+    "receiver_class",
+    "receiver_sources",
     "register_builtins",
     "register_receiver",
     "unavailable_receivers",
@@ -38,12 +43,25 @@ class Emit(Protocol):
     ) -> None: ...
 
 
-_REGISTRY: dict[str, type["Receiver"]] = {}
-_UNAVAILABLE: dict[str, str] = {}
+class ReceiverEndpoint(NamedTuple):
+    """Where a network receiver connects, and the wire format it expects there."""
+
+    host: str
+    port: int
+    wire_format: str
 
 
 class Receiver(abc.ABC):
-    """Base class for all receivers."""
+    """Base class for all receivers.
+
+    Plugin contract (see ARCHITECTURE.md): declare ``known_options``, implement
+    :meth:`run`, and override :meth:`validate_options` / :meth:`endpoint` when
+    they apply. Register with ``@register_receiver(name)`` or, for a separate
+    distribution, a ``pyaerial.receivers`` entry point.
+    """
+
+    #: Every ``options`` key this receiver reads; ``validate`` rejects others.
+    known_options: ClassVar[frozenset[str]]
 
     def __init__(self, name: str, emit: Emit, arguments: dict):
         self.name = name
@@ -52,6 +70,22 @@ class Receiver(abc.ABC):
         self.log = logging.getLogger(f"pyaerial.receiver.{name}")
         self._stop = threading.Event()
         self.configure(arguments)
+
+    @classmethod
+    def validate_options(cls, options: dict[str, Any], *, config_dir: Path) -> list[str]:
+        """Problems with ``options`` as human-readable messages (empty: fine).
+
+        Called by the config loader with the arguments the receiver will get.
+        Must do no I/O beyond local file checks. May normalize values in place
+        (e.g. resolve a path against ``config_dir``). A message starting with
+        ``options.<key>:`` is reported against that key.
+        """
+        return []
+
+    @classmethod
+    def endpoint(cls, options: dict[str, Any]) -> ReceiverEndpoint | None:
+        """Where this receiver connects, for receivers that read a Beast/AVR feed."""
+        return None
 
     def configure(self, arguments: dict) -> None:  # noqa: B027 - optional hook
         """Validate/store receiver-specific arguments. Override as needed."""
@@ -73,41 +107,54 @@ class Receiver(abc.ABC):
         return self._stop.is_set()
 
 
+RECEIVERS: PluginRegistry[Receiver] = PluginRegistry(
+    "receiver",
+    "pyaerial.receivers",
+    Receiver,
+    {
+        "aoa": "pyaerial.receivers.aoa:AoAReceiver",
+        "dump1090": "pyaerial.receivers.dump1090:Dump1090Receiver",
+        "replay": "pyaerial.receivers.replay:ReplayReceiver",
+    },
+)
+
+
 def register_receiver(name: str) -> Callable[[type[Receiver]], type[Receiver]]:
     """Class decorator that registers a receiver under ``name``."""
-
-    def decorator(cls: type[Receiver]) -> type[Receiver]:
-        _REGISTRY[name] = cls
-        return cls
-
-    return decorator
+    return RECEIVERS.decorator(name)
 
 
 def available_receivers() -> list[str]:
-    return sorted(_REGISTRY)
+    return RECEIVERS.names()
+
+
+def receiver_class(name: str) -> type[Receiver] | None:
+    return RECEIVERS.get(name)
+
+
+def receiver_sources() -> dict[str, str]:
+    """Receiver type -> ``"builtin"`` or the plugin's distribution name."""
+    return RECEIVERS.sources()
 
 
 def unavailable_receivers() -> dict[str, str]:
-    """Receiver types that failed to import, mapped to the reason."""
-    return dict(_UNAVAILABLE)
+    """Receiver types that failed to load, mapped to the reason."""
+    return RECEIVERS.unavailable_plugins()
 
 
 def create_receiver(method: str, name: str, emit: Emit, arguments: dict) -> Receiver:
     """Instantiate the receiver registered under ``method``."""
-    if method in _UNAVAILABLE:
-        raise KeyError(f"receiver {method!r} is unavailable ({_UNAVAILABLE[method]}).")
-    if method not in _REGISTRY:
+    unavailable = RECEIVERS.unavailable_plugins()
+    cls = RECEIVERS.get(method)
+    if cls is None:
+        if method in unavailable:
+            raise KeyError(f"receiver {method!r} is unavailable ({unavailable[method]}).")
         raise KeyError(
             f"unknown receiver method {method!r}; available: {available_receivers()}"
         )
-    return _REGISTRY[method](name, emit, arguments)
+    return cls(name, emit, arguments)
 
 
 def register_builtins() -> None:
-    """Import built-in receivers so they register themselves."""
-    from pyaerial.receivers import aoa as _aoa  # noqa: F401
-    from pyaerial.receivers import dump1090 as _dump1090  # noqa: F401
-    from pyaerial.receivers import replay as _replay  # noqa: F401
-
-
-register_builtins()
+    """Make sure the built-in (and discoverable) receivers are registered."""
+    RECEIVERS.ensure_loaded()

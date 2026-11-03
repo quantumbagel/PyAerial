@@ -15,6 +15,7 @@ import sys
 
 from pyaerial import __version__
 from pyaerial.config import Config, ConfigError, load_config
+from pyaerial.config.loader import plugin_summary
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB, DEFAULT_CONFIG_FILE
 from pyaerial.engine import run_engine
 from pyaerial.logging_setup import setup_logging
@@ -183,6 +184,8 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     print(f"  zones: {', '.join(config.zones) or '(none)'}")
     print(f"  history: {config.database.path}")
     print(f"  hz: {config.tracking.hz}")
+    for line in plugin_summary():
+        print(f"  {line}")
 
 
 def _cmd_reset(args: argparse.Namespace) -> None:

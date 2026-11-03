@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from pyaerial.alerters import Alerter, register_alerter
 from pyaerial.constants import (
     ALERT_CAT_ETA,
@@ -16,6 +18,8 @@ from pyaerial.constants import (
 
 @register_alerter("print")
 class PrintAlerter(Alerter):
+    known_options: ClassVar[frozenset[str]] = frozenset()
+
     def alert(self, meta: dict, payload: dict) -> None:
         reason = meta.get(ALERT_CAT_REASON)
         # Without the hook, activate and deactivate lines look identical.
