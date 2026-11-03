@@ -157,6 +157,12 @@ class TrackState:
     # Position fixes the CPR jump gate rejected (evidence of two transmitters
     # sharing an ICAO address).
     gate_rejects: int = 0
+    # Archive checkpoint cursors: the newest sample timestamp and verdict
+    # time already written to this flight's ``live`` archive row.
+    archived_through: float | None = None
+    verdicts_through: float | None = None
+    # The segment this flight continues (a split of a long track).
+    previous_flight_id: str | None = None
 
 
 @dataclass(slots=True)

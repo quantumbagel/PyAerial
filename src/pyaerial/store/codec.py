@@ -2,8 +2,9 @@
 
 The in-memory :class:`~pyaerial.models.Plane` becomes the live Redis flight
 document and its telemetry points, the archive's flight row, telemetry rows
-and integrity rows; a live document (plus its telemetry points) or a set of
-stray alert documents becomes a ``Plane`` again for archiving. Field names
+and integrity rows; a live document (plus its telemetry points), an archived
+flight row (plus its telemetry), or a set of stray alert documents becomes a
+``Plane`` again for archiving. Field names
 and value encodings here are wire formats: changing one is a contract change.
 """
 
@@ -166,6 +167,42 @@ def plane_from_live(
     """
     raw_info = doc.get("info")
     info = info_from_doc(raw_info if isinstance(raw_info, dict) else {}, icao)
+    return _plane_from_points(
+        info,
+        doc.get("start_time"),
+        doc.get("end_time"),
+        points,
+        doc.get("active_alerts") or [],
+    )
+
+
+def plane_from_rows(
+    flight: Mapping[str, Any], points: Sequence[Mapping[str, Any]]
+) -> Plane:
+    """A plane rebuilt from an archived flight row and its telemetry points.
+
+    For decisions on an interrupted flight (retention) from what the archive
+    holds: *flight* has the ``flights`` columns with ``info`` decoded,
+    *points* the decoded telemetry rows, oldest first.
+    """
+    raw_info = flight.get("info")
+    icao = str(flight.get("icao") or "").lower()
+    info = info_from_doc(raw_info if isinstance(raw_info, dict) else {}, icao)
+    plane = _plane_from_points(
+        info, flight.get("start_time"), flight.get("end_time"), points, []
+    )
+    previous = flight.get("previous_flight_id")
+    plane.track.previous_flight_id = previous if isinstance(previous, str) else None
+    return plane
+
+
+def _plane_from_points(
+    info: AircraftInfo,
+    start: Any,
+    end: Any,
+    points: Sequence[Mapping[str, Any]],
+    active_alerts: list[dict[str, Any]],
+) -> Plane:
     recv: Series = {}
     calc: Series = {}
 
@@ -206,8 +243,6 @@ def plane_from_live(
                 flagged,
             ):
                 verdicts.append(Verdict(ts, score, status, flagged))
-    start = doc.get("start_time")
-    end = doc.get("end_time")
     if not isinstance(start, (int, float)):
         start = points[0]["timestamp"] if points else time.time()
     if not isinstance(end, (int, float)):
@@ -222,7 +257,7 @@ def plane_from_live(
         ),
         received_data=recv,
         calculated_data=calc,
-        active_alerts=doc.get("active_alerts") or [],
+        active_alerts=active_alerts,
     )
 
 
@@ -274,16 +309,25 @@ def plane_from_alert_docs(
 
 
 def build_telemetry_docs(
-    plane: Plane, flight_id: str, icao: str
+    plane: Plane,
+    flight_id: str,
+    icao: str,
+    *,
+    since: float | None = None,
+    until: float | None = None,
 ) -> list[dict[str, Any]]:
     """Archive telemetry documents from a plane's in-memory time series.
 
     Each sample carries the receivers that heard it and the integrity verdict
     in effect when it arrived (see :func:`pyaerial.models.sample_provenance`).
+    ``since`` / ``until`` select the samples with ``since < t <= until``
+    (a checkpoint slice); the default is the whole flight.
     """
     docs: list[dict[str, Any]] = []
     used_ts: set[float] = set()
-    for sample in iter_telemetry_samples(plane):
+    for sample in iter_telemetry_samples(plane, since=since):
+        if until is not None and sample[0] > until:
+            break
         stamp = sample[0]
         while stamp in used_ts:
             stamp += 1e-6
@@ -300,10 +344,29 @@ def build_telemetry_docs(
     return docs
 
 
+def flight_row(plane: Plane) -> dict[str, Any]:
+    """The ``flights`` columns of a plane (JSON-safe: also queued in the
+    episode outbox while the archive is down). ``status`` is the writer's."""
+    track = plane.track
+    return {
+        "flight_id": plane.flight_id,
+        "icao": plane.icao,
+        "start_time": track.first_packet,
+        "end_time": track.last_update,
+        **info_text_fields(plane.info),
+        "info": info_json(plane.info),
+        "previous_flight_id": track.previous_flight_id,
+    }
+
+
 def integrity_rows(
-    plane: Plane, flight_id: str, icao: str
+    plane: Plane, flight_id: str, icao: str, *, after: float | None = None
 ) -> list[tuple[str, float, str, float | None, str, str, str | None]]:
-    """``integrity`` table rows: one per logged verdict."""
+    """``integrity`` table rows: one per logged verdict (newer than *after*).
+
+    The log is append-only and each verdict is stamped when it was made, so
+    a checkpoint writes only the verdicts after the last one it wrote.
+    """
     return [
         (
             flight_id,
@@ -315,6 +378,7 @@ def integrity_rows(
             json_dumps(verdict.checks) if verdict.checks is not None else None,
         )
         for verdict in plane.track.integrity_log
+        if after is None or verdict.time > after
     ]
 
 

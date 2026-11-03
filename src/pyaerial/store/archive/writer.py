@@ -6,8 +6,9 @@ from __future__ import annotations
 import logging
 import math
 import sqlite3
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.models import Plane
@@ -17,14 +18,17 @@ from pyaerial.store.archive._conn import (
     HistoryUnavailable,
     unavailable,
 )
+from pyaerial.store.archive.rows import alert_from_row
 from pyaerial.store.archive.schema import (
     FLIGHT_STATUS_COMPLETED,
+    FLIGHT_STATUS_LIVE,
     HistorySchemaMismatch,
     drop_tables,
     ensure_schema,
 )
 from pyaerial.store.codec import (
     build_telemetry_docs,
+    flight_row,
     info_json,
     info_text_fields,
     integrity_rows,
@@ -35,6 +39,72 @@ log = logging.getLogger("pyaerial.store")
 # Rows deleted per prune_frames call, so one prune never stalls the engine tick.
 # The engine prunes again on the next tick while a call returns a full batch.
 FRAME_PRUNE_BATCH = 20_000
+
+_TELEMETRY_INSERT = """
+    INSERT OR REPLACE INTO telemetry (
+        flight_id, timestamp, icao, latitude, longitude, altitude, speed,
+        heading, receivers, integrity_score, integrity_status,
+        integrity_flags, gnss_height
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+_INTEGRITY_INSERT = """
+    INSERT OR REPLACE INTO integrity (
+        flight_id, timestamp, icao, score, status, flags, checks
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+"""
+# A live flight row: created by its first checkpoint (or alert episode),
+# refreshed by later ones. Never turns a finalized flight back into a live one.
+_FLIGHT_UPSERT_LIVE = f"""
+    INSERT INTO flights (
+        flight_id, icao, status, start_time, end_time, retained, callsign,
+        model, owner, country, aircraft_type, registration, info,
+        checkpoint_at, previous_flight_id
+    ) VALUES (?, ?, '{FLIGHT_STATUS_LIVE}', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(flight_id) DO UPDATE SET
+        end_time = MAX(flights.end_time, excluded.end_time),
+        callsign = excluded.callsign, model = excluded.model,
+        owner = excluded.owner, country = excluded.country,
+        aircraft_type = excluded.aircraft_type,
+        registration = excluded.registration, info = excluded.info,
+        checkpoint_at = COALESCE(excluded.checkpoint_at, flights.checkpoint_at)
+    WHERE flights.status = '{FLIGHT_STATUS_LIVE}'
+"""
+# One row per episode (alert_id), upserted on activate, while active and on
+# deactivate. A closed episode is never reopened by a stale refresh, keeps
+# the segment where it began and its original activation, and last_updated
+# never moves back (re-recording at a segment handover).
+_ALERT_UPSERT = """
+    INSERT INTO alerts (
+        alert_id, flight_id, icao, callsign, zone, rule, active,
+        activated_at, deactivated_at, eta, reason, last_updated, latitude,
+        longitude, altitude, start_flight_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(alert_id) DO UPDATE SET
+        flight_id = excluded.flight_id, icao = excluded.icao,
+        callsign = excluded.callsign, zone = excluded.zone,
+        rule = excluded.rule, active = excluded.active,
+        activated_at = COALESCE(alerts.activated_at, excluded.activated_at),
+        deactivated_at = excluded.deactivated_at, eta = excluded.eta,
+        reason = excluded.reason,
+        last_updated = MAX(
+            COALESCE(alerts.last_updated, excluded.last_updated),
+            COALESCE(excluded.last_updated, alerts.last_updated)
+        ),
+        latitude = excluded.latitude, longitude = excluded.longitude,
+        altitude = excluded.altitude,
+        start_flight_id = COALESCE(alerts.start_flight_id, excluded.start_flight_id)
+    WHERE NOT (alerts.active = 0 AND excluded.active = 1)
+"""
+
+
+class FlightCheckpoint(NamedTuple):
+    """One live flight's slice for :meth:`ArchiveWriter.checkpoint`: the new
+    telemetry docs (:func:`~pyaerial.store.codec.build_telemetry_docs` with
+    ``since``/``until``) and verdict rows (``integrity_rows`` with ``after``)."""
+
+    plane: Plane
+    telemetry: list[dict[str, Any]]
+    integrity: list[tuple]
 
 
 def _bind_eta(eta: Any) -> float | None:
@@ -61,6 +131,52 @@ def _json_list(value: Any) -> str | None:
 
 def _finite(value: float | None) -> float | None:
     return value if value is not None and math.isfinite(value) else None
+
+
+def _telemetry_row(doc: dict[str, Any]) -> tuple:
+    return (
+        doc["flight_id"],
+        doc["timestamp"],
+        doc["icao"],
+        doc.get("latitude"),
+        doc.get("longitude"),
+        doc.get("altitude"),
+        doc.get("speed"),
+        doc.get("heading"),
+        _json_list(doc.get("receivers")),
+        doc.get("integrity_score"),
+        doc.get("integrity_status"),
+        json_dumps(doc["integrity_flags"]) if "integrity_flags" in doc else None,
+        doc.get("gnss_height"),
+    )
+
+
+def _live_flight_params(row: Mapping[str, Any], checkpoint_at: float | None) -> tuple:
+    """``_FLIGHT_UPSERT_LIVE`` parameters for a :func:`codec.flight_row`."""
+    return (
+        row["flight_id"],
+        row["icao"],
+        row["start_time"],
+        row["end_time"],
+        row.get("callsign") or "",
+        row.get("model") or "",
+        row.get("owner") or "",
+        row.get("country") or "",
+        row.get("aircraft_type") or "",
+        row.get("registration") or "",
+        row.get("info") or "{}",
+        checkpoint_at,
+        row.get("previous_flight_id"),
+    )
+
+
+def _alert_upsert_params(
+    alert: Mapping[str, Any], flight_id: str, icao: str, callsign: str
+) -> tuple:
+    """``_ALERT_UPSERT`` parameters; a new row began on *flight_id* unless the
+    document names its ``start_flight_id``."""
+    row = _alert_row(dict(alert), flight_id, icao, callsign)
+    return (*row, alert.get("start_flight_id") or flight_id)
 
 
 def _alert_row(
@@ -228,11 +344,23 @@ class ArchiveWriter(ArchiveConnection):
                         return True
                     conn.execute(
                         """
-                        INSERT OR REPLACE INTO flights (
+                        INSERT INTO flights (
                             flight_id, icao, status, start_time, end_time,
                             retained, callsign, model, owner, country,
-                            aircraft_type, registration, info
-                        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                            aircraft_type, registration, info,
+                            previous_flight_id
+                        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(flight_id) DO UPDATE SET
+                            status = excluded.status,
+                            start_time = excluded.start_time,
+                            end_time = excluded.end_time, retained = 1,
+                            callsign = excluded.callsign,
+                            model = excluded.model, owner = excluded.owner,
+                            country = excluded.country,
+                            aircraft_type = excluded.aircraft_type,
+                            registration = excluded.registration,
+                            info = excluded.info,
+                            previous_flight_id = excluded.previous_flight_id
                         """,
                         (
                             flight_id,
@@ -242,68 +370,32 @@ class ArchiveWriter(ArchiveConnection):
                             plane.track.last_update,
                             *info_text_fields(info).values(),
                             info_json(info),
+                            plane.track.previous_flight_id,
                         ),
                     )
                     conn.execute(
                         "DELETE FROM telemetry WHERE flight_id = ?", (flight_id,)
                     )
                     conn.executemany(
-                        """
-                        INSERT OR REPLACE INTO telemetry (
-                            flight_id, timestamp, icao, latitude, longitude,
-                            altitude, speed, heading, receivers,
-                            integrity_score, integrity_status, integrity_flags,
-                            gnss_height
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        [
-                            (
-                                doc["flight_id"],
-                                doc["timestamp"],
-                                doc["icao"],
-                                doc.get("latitude"),
-                                doc.get("longitude"),
-                                doc.get("altitude"),
-                                doc.get("speed"),
-                                doc.get("heading"),
-                                _json_list(doc.get("receivers")),
-                                doc.get("integrity_score"),
-                                doc.get("integrity_status"),
-                                (
-                                    json_dumps(doc["integrity_flags"])
-                                    if "integrity_flags" in doc
-                                    else None
-                                ),
-                                doc.get("gnss_height"),
-                            )
-                            for doc in telemetry_docs
-                        ],
+                        _TELEMETRY_INSERT,
+                        [_telemetry_row(doc) for doc in telemetry_docs],
                     )
                     conn.execute(
                         "DELETE FROM integrity WHERE flight_id = ?", (flight_id,)
                     )
                     conn.executemany(
-                        """
-                        INSERT OR REPLACE INTO integrity (
-                            flight_id, timestamp, icao, score, status, flags, checks
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        integrity_rows(plane, flight_id, icao),
+                        _INTEGRITY_INSERT, integrity_rows(plane, flight_id, icao)
                     )
-                    conn.execute("DELETE FROM alerts WHERE flight_id = ?", (flight_id,))
-                    alert_rows = [
-                        _alert_row(alert, flight_id, icao, info.callsign or "")
-                        for alert in alerts
-                    ]
+                    # By alert_id: a row keeps the segment its episode began
+                    # on (start_flight_id) when a later segment updates it.
                     conn.executemany(
-                        """
-                        INSERT OR REPLACE INTO alerts (
-                            alert_id, flight_id, icao, callsign, zone, rule,
-                            active, activated_at, deactivated_at, eta, reason,
-                            last_updated, latitude, longitude, altitude
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        alert_rows,
+                        _ALERT_UPSERT,
+                        [
+                            _alert_upsert_params(
+                                alert, flight_id, icao, info.callsign or ""
+                            )
+                            for alert in alerts
+                        ],
                     )
             self._last_error = None
             return True
@@ -374,6 +466,150 @@ class ArchiveWriter(ArchiveConnection):
             max(old_span, 0.0),
             new_span,
         )
+        return True
+
+    # -- incremental (live) writes ------------------------------------------
+
+    def checkpoint(
+        self,
+        flights: Iterable[FlightCheckpoint],
+        episodes: Sequence[tuple[Mapping[str, Any], Mapping[str, Any]]] = (),
+        *,
+        now: float,
+    ) -> bool:
+        """Write live flights' new samples and verdicts, and refresh episodes.
+
+        One transaction: each flight's ``live`` row is created or refreshed
+        (``checkpoint_at = now``), its telemetry and verdict slices inserted,
+        and *episodes* (``(flight_row, alert_doc)`` pairs, see
+        :meth:`upsert_episodes`) upserted. False (nothing written; the caller
+        keeps its cursors) when the archive is unavailable.
+        """
+        if self.disabled:
+            return True
+        if not self._ensure_connected():
+            return False
+        try:
+            with self._session("checkpoint") as conn, conn:
+                conn.execute("BEGIN IMMEDIATE")
+                for item in flights:
+                    conn.execute(
+                        _FLIGHT_UPSERT_LIVE,
+                        _live_flight_params(flight_row(item.plane), now),
+                    )
+                    if item.telemetry:
+                        conn.executemany(
+                            _TELEMETRY_INSERT,
+                            [_telemetry_row(doc) for doc in item.telemetry],
+                        )
+                    if item.integrity:
+                        conn.executemany(_INTEGRITY_INSERT, item.integrity)
+                self._write_episodes(conn, episodes)
+        except (sqlite3.Error, HistoryUnavailable) as exc:
+            log.error("Failed to checkpoint live flights: %s", exc)
+            self._last_error = f"archive write failed: {exc}"
+            return False
+        self._last_error = None
+        return True
+
+    def upsert_episodes(
+        self, episodes: Sequence[tuple[Mapping[str, Any], Mapping[str, Any]]]
+    ) -> bool:
+        """Record alert episodes, each with its flight, in one transaction.
+
+        Each item is ``(flight_row, alert_doc)``: a
+        :func:`~pyaerial.store.codec.flight_row` and the episode document.
+        The flight's ``live`` row is written first (created if this is its
+        first write), so an episode never exists without its flight. False
+        when the archive is unavailable (the caller keeps them for retry).
+        """
+        if self.disabled or not episodes:
+            return True
+        if not self._ensure_connected():
+            return False
+        try:
+            with self._session("alert episodes") as conn, conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._write_episodes(conn, episodes)
+        except (sqlite3.Error, HistoryUnavailable) as exc:
+            log.error("Failed to record alert episodes: %s", exc)
+            self._last_error = f"archive write failed: {exc}"
+            return False
+        self._last_error = None
+        return True
+
+    @staticmethod
+    def _write_episodes(
+        conn: sqlite3.Connection,
+        episodes: Sequence[tuple[Mapping[str, Any], Mapping[str, Any]]],
+    ) -> None:
+        for flight, alert in episodes:
+            conn.execute(_FLIGHT_UPSERT_LIVE, _live_flight_params(flight, None))
+            conn.execute(
+                _ALERT_UPSERT,
+                _alert_upsert_params(
+                    alert,
+                    str(alert.get("flight_id") or flight["flight_id"]),
+                    str(flight["icao"]),
+                    str(flight.get("callsign") or ""),
+                ),
+            )
+
+    def flight_alerts(self, flight_id: str) -> list[dict[str, Any]]:
+        """Episodes whose row points at *flight_id* (ended there, or still
+        open on it). Raises :class:`HistoryUnavailable`: the caller must not
+        decide retention without them."""
+        try:
+            with self._session("flight alerts") as conn:
+                rows = conn.execute(
+                    "SELECT * FROM alerts WHERE flight_id = ? ORDER BY activated_at",
+                    (flight_id,),
+                ).fetchall()
+        except sqlite3.Error as exc:
+            self._last_error = f"archive read failed: {exc}"
+            raise unavailable("flight alerts", exc) from exc
+        return [alert_from_row(row) for row in rows]
+
+    def discard_flight(self, flight_id: str) -> bool:
+        """Delete a flight the archive policy does not keep, in one transaction.
+
+        Its flight, telemetry and verdict rows go, with the closed episodes
+        that began on it. A closed episode carried over from an earlier
+        segment goes back to that segment's row if it was kept (else it goes
+        too), so every alert row points at an existing flight. Open episodes
+        are left to the caller (a segment split carries them on). False when
+        the archive is unavailable.
+        """
+        if self.disabled:
+            return True
+        if not self._ensure_connected():
+            return False
+        try:
+            with self._session("discard") as conn, conn:
+                conn.execute("BEGIN IMMEDIATE")
+                for table in ("telemetry", "integrity", "flights"):
+                    conn.execute(
+                        f"DELETE FROM {table} WHERE flight_id = ?", (flight_id,)
+                    )
+                conn.execute(
+                    """
+                    UPDATE alerts SET flight_id = start_flight_id
+                    WHERE flight_id = ? AND active = 0
+                        AND start_flight_id IS NOT NULL
+                        AND start_flight_id != flight_id
+                        AND start_flight_id IN (SELECT flight_id FROM flights)
+                    """,
+                    (flight_id,),
+                )
+                conn.execute(
+                    "DELETE FROM alerts WHERE flight_id = ? AND active = 0",
+                    (flight_id,),
+                )
+        except (sqlite3.Error, HistoryUnavailable) as exc:
+            log.error("Failed to discard flight %s: %s", flight_id, exc)
+            self._last_error = f"archive write failed: {exc}"
+            return False
+        self._last_error = None
         return True
 
     def write_frames(self, frames: list[RawFrame]) -> bool:

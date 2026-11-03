@@ -3,8 +3,6 @@ locks the file, and reports why history is unavailable through ``state``."""
 
 from __future__ import annotations
 
-import contextlib
-import json
 import logging
 import sqlite3
 from pathlib import Path
@@ -14,6 +12,11 @@ from pyaerial.store.archive._conn import (
     ArchiveConnection,
     HistoryUnavailable,
     unavailable,
+)
+from pyaerial.store.archive.rows import (
+    alert_from_row,
+    flight_from_row,
+    telemetry_from_row,
 )
 from pyaerial.store.archive.schema import (
     FLIGHT_STATUS_COMPLETED,
@@ -25,17 +28,10 @@ from pyaerial.store.archive.schema import (
 
 log = logging.getLogger("pyaerial.store")
 
-# Telemetry columns stored as JSON arrays.
-_JSON_LIST_COLUMNS = ("receivers", "integrity_flags")
-
 
 def _contains_pattern(query: str) -> str:
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
-
-
-def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
-    return {key: row[key] for key in row.keys()}
 
 
 class ArchiveReader(ArchiveConnection):
@@ -131,7 +127,7 @@ class ArchiveReader(ArchiveConnection):
         try:
             with self._session("flights") as conn:
                 rows = conn.execute(sql, params).fetchall()
-            return [self._flight_from_row(row) for row in rows]
+            return [flight_from_row(row) for row in rows]
         except sqlite3.Error as exc:
             raise unavailable("flights", exc) from exc
 
@@ -141,7 +137,7 @@ class ArchiveReader(ArchiveConnection):
                 row = conn.execute(
                     "SELECT * FROM flights WHERE flight_id = ?", (flight_id,)
                 ).fetchone()
-            return self._flight_from_row(row) if row else None
+            return flight_from_row(row) if row else None
         except sqlite3.Error as exc:
             raise unavailable("flight", exc) from exc
 
@@ -179,7 +175,7 @@ class ArchiveReader(ArchiveConnection):
         try:
             with self._session("telemetry") as conn:
                 rows = conn.execute(sql, params).fetchall()
-            return [self._telemetry_from_row(row) for row in rows]
+            return [telemetry_from_row(row) for row in rows]
         except sqlite3.Error as exc:
             raise unavailable("telemetry", exc) from exc
 
@@ -200,7 +196,7 @@ class ArchiveReader(ArchiveConnection):
         try:
             with self._session("latest telemetry") as conn:
                 rows = conn.execute(sql, flight_ids).fetchall()
-            return {row["flight_id"]: self._telemetry_from_row(row) for row in rows}
+            return {row["flight_id"]: telemetry_from_row(row) for row in rows}
         except sqlite3.Error as exc:
             raise unavailable("latest telemetry", exc) from exc
 
@@ -250,7 +246,7 @@ class ArchiveReader(ArchiveConnection):
         try:
             with self._session("alerts") as conn:
                 rows = conn.execute(sql, params).fetchall()
-            return [self._alert_from_row(row) for row in rows]
+            return [alert_from_row(row) for row in rows]
         except sqlite3.Error as exc:
             raise unavailable("alerts", exc) from exc
 
@@ -264,7 +260,7 @@ class ArchiveReader(ArchiveConnection):
                     f"SELECT * FROM alerts WHERE flight_id IN ({placeholders})",
                     flight_ids,
                 ).fetchall()
-            return [self._alert_from_row(row) for row in rows]
+            return [alert_from_row(row) for row in rows]
         except sqlite3.Error as exc:
             raise unavailable("alert stats", exc) from exc
 
@@ -305,7 +301,7 @@ class ArchiveReader(ArchiveConnection):
                     "SELECT * FROM flights WHERE icao = ? ORDER BY start_time",
                     (icao.lower(),),
                 ).fetchall()
-            return [self._flight_from_row(row) for row in rows]
+            return [flight_from_row(row) for row in rows]
         except (sqlite3.Error, HistoryUnavailable):
             return []
 
@@ -362,75 +358,3 @@ class ArchiveReader(ArchiveConnection):
             except OSError:
                 continue
         return total
-
-    def _flight_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
-        raw = _row_dict(row)
-        try:
-            info = json.loads(raw.get("info") or "{}")
-        except json.JSONDecodeError:
-            info = {}
-        if not isinstance(info, dict):
-            info = {}
-        return {
-            "_id": raw["flight_id"],
-            "flight_id": raw["flight_id"],
-            "icao": raw["icao"],
-            "status": raw["status"],
-            "start_time": raw["start_time"],
-            "end_time": raw["end_time"],
-            "retained": bool(raw["retained"]),
-            "callsign": raw["callsign"] or "",
-            "model": raw["model"] or "",
-            "owner": raw["owner"] or "",
-            "country": raw["country"] or "",
-            "aircraft_type": raw["aircraft_type"] or "",
-            "registration": raw.get("registration") or "",
-            "info": info,
-            "active_alerts": [],
-        }
-
-    def _telemetry_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
-        doc = {key: value for key, value in _row_dict(row).items() if value is not None}
-        for key in _JSON_LIST_COLUMNS:
-            if key not in doc:
-                continue
-            try:
-                value = json.loads(doc[key])
-            except (json.JSONDecodeError, TypeError):
-                value = None
-            if isinstance(value, list):
-                doc[key] = value
-                continue
-            # A hand-edited or damaged row: drop the field, keep the sample.
-            log.warning(
-                "Ignoring malformed %s in telemetry %s at %s",
-                key,
-                doc.get("flight_id"),
-                doc.get("timestamp"),
-            )
-            del doc[key]
-        return doc
-
-    def _alert_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
-        raw = _row_dict(row)
-        reason = raw["reason"]
-        if isinstance(reason, str) and reason[:1] in "{[":
-            with contextlib.suppress(json.JSONDecodeError):
-                reason = json.loads(reason)
-        return {
-            "alert_id": raw["alert_id"],
-            "flight_id": raw["flight_id"],
-            "icao": raw["icao"],
-            "callsign": raw["callsign"],
-            "zone": raw["zone"],
-            "rule": raw["rule"],
-            "active": bool(raw["active"]),
-            "activated_at": raw["activated_at"],
-            "deactivated_at": raw["deactivated_at"],
-            "eta": raw["eta"],
-            "reason": reason,
-            "last_updated": raw["last_updated"],
-            "latitude": raw["latitude"],
-            "longitude": raw["longitude"],
-            "altitude": raw["altitude"],
-        }
