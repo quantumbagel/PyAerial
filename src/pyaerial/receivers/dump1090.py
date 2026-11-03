@@ -32,6 +32,8 @@ _BEAST_PORT = 30005
 class Dump1090Receiver(Receiver):
     # tcp_connection_* also come from the top-level host/port fields.
     known_options = frozenset({"format", "tcp_connection_ip", "tcp_connection_port"})
+    #: Feeder name in log messages.
+    feeder = "dump1090"
 
     @classmethod
     def validate_options(cls, options: dict[str, Any], *, config_dir: Path) -> list[str]:
@@ -82,7 +84,8 @@ class Dump1090Receiver(Receiver):
         fmt_raw = arguments.get("format")
         if fmt_raw is not None and str(fmt_raw).lower() not in _AVR_FORMATS | _BEAST_FORMATS:
             self.log.warning(
-                "Unknown dump1090 format %r; using AVR. Valid: avr, beast",
+                "Unknown %s format %r; using AVR. Valid: avr, beast",
+                self.feeder,
                 str(fmt_raw).lower(),
             )
         self.ip = str(arguments.get("tcp_connection_ip", "localhost"))
@@ -98,7 +101,8 @@ class Dump1090Receiver(Receiver):
             return f"failed to connect to {self.ip}:{self.port} ({exc})"
         client.settimeout(_SOCKET_TIMEOUT)
         self.log.info(
-            "Connected to dump1090 %s stream at %s:%s",
+            "Connected to %s %s stream at %s:%s",
+            self.feeder,
             self.format,
             self.ip,
             self.port,

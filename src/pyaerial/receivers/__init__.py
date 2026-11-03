@@ -114,6 +114,7 @@ RECEIVERS: PluginRegistry[Receiver] = PluginRegistry(
     {
         "aoa": "pyaerial.receivers.aoa:AoAReceiver",
         "dump1090": "pyaerial.receivers.dump1090:Dump1090Receiver",
+        "readsb": "pyaerial.receivers.readsb:ReadsbReceiver",
         "replay": "pyaerial.receivers.replay:ReplayReceiver",
     },
 )

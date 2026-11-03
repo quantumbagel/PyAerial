@@ -160,16 +160,41 @@ class ReceiverPosition:
         }
 
 
-def default_position_url(cfg: ReceiverConfig) -> str | None:
-    """``receiver.json`` URL for a dump1090-style receiver, if one is implied."""
+def default_position_urls(cfg: ReceiverConfig) -> list[str]:
+    """``receiver.json`` URLs to try, in order, for a receiver.
+
+    dump1090-fa serves it on port 8080. readsb only writes it to its
+    ``--write-json`` directory; tar1090 serves that as ``/tar1090/data/`` on
+    port 80 and ``/data/`` on port 8504, and the ultrafeeder container's
+    tar1090 as ``/data/`` on its web port (8080 in its example compose file).
+    """
     if cfg.position_url:
-        return cfg.position_url
-    if cfg.type != "dump1090":
-        return None
+        return [cfg.position_url]
+    if cfg.type not in ("dump1090", "readsb"):
+        return []
     host = cfg.host or "localhost"
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    return f"http://{host}:{_DEFAULT_JSON_PORT}/data/receiver.json"
+    dump1090 = f"http://{host}:{_DEFAULT_JSON_PORT}/data/receiver.json"
+    if cfg.type == "dump1090":
+        return [dump1090]
+    return [
+        f"http://{host}/tar1090/data/receiver.json",
+        f"http://{host}:8504/data/receiver.json",
+        dump1090,
+    ]
+
+
+def default_position_url(cfg: ReceiverConfig) -> str | None:
+    """The first of :func:`default_position_urls`, if any."""
+    urls = default_position_urls(cfg)
+    return urls[0] if urls else None
+
+
+def looks_rounded(lat: float, lon: float) -> bool:
+    """Whether a position is on a 0.01 degree grid (readsb's
+    ``--json-location-accuracy`` 1, 3 or 4; it writes 6 decimals otherwise)."""
+    return all(abs(value * 100 - round(value * 100)) < 1e-6 for value in (lat, lon))
 
 
 def parse_receiver_json(doc: object) -> tuple[float, float, float | None] | None:
@@ -204,7 +229,8 @@ class ReceiverPositions:
         self._config = config
         self._lock = threading.Lock()
         self._positions: dict[str, ReceiverPosition] = {}
-        self._urls: dict[str, str] = {}
+        # Candidate receiver.json URLs; pinned to the first that has a position.
+        self._urls: dict[str, list[str]] = {}
         self._backoff: dict[str, Backoff] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -228,9 +254,9 @@ class ReceiverPositions:
                 SOURCE_HOME,
                 time.time(),
             )
-            url = default_position_url(cfg) if fetch else None
-            if url:
-                self._urls[name] = url
+            urls = default_position_urls(cfg) if fetch else []
+            if urls:
+                self._urls[name] = urls
                 self._backoff[name] = Backoff(_REFRESH_SECONDS, _MAX_BACKOFF_SECONDS)
 
     def get(self, name: str | None) -> ReceiverPosition:
@@ -284,15 +310,27 @@ class ReceiverPositions:
     def refresh(self, now: float | None = None) -> None:
         """Fetch every ``receiver.json`` that is due (not backing off)."""
         now = time.monotonic() if now is None else now
-        for name, url in list(self._urls.items()):
+        for name, urls in list(self._urls.items()):
             backoff = self._backoff[name]
             if not backoff.ready(now):
                 continue
-            try:
-                fetched = self._fetch(url)
-            except FetchError as exc:
-                delay = backoff.failure(now, exc.retry_after)
-                log.debug("No receiver position: %s (retry in %.0f s)", exc, delay)
+            fetched = None
+            error: FetchError | None = None
+            answered = False
+            for url in urls:
+                try:
+                    fetched = self._fetch(url)
+                except FetchError as exc:
+                    error = exc
+                    continue
+                answered = True
+                if fetched is not None:
+                    self._urls[name] = [url]
+                    break
+            if not answered:
+                assert error is not None  # every candidate failed
+                delay = backoff.failure(now, error.retry_after)
+                log.debug("No receiver position: %s (retry in %.0f s)", error, delay)
                 continue
             backoff.success(now, _REFRESH_SECONDS)
             if fetched is None:
@@ -307,6 +345,15 @@ class ReceiverPositions:
                     lon,
                     redact_url(url),
                 )
+                if looks_rounded(lat, lon):
+                    log.warning(
+                        "Receiver %s position from %s looks rounded to 0.01 degree "
+                        "(readsb --json-location-accuracy?); TDOA needs the exact "
+                        "antenna position: set receivers.%s.position",
+                        name,
+                        redact_url(url),
+                        name,
+                    )
             self.set(name, lat, lon, alt, source=SOURCE_RECEIVER_JSON)
 
     def _poll(self) -> None:

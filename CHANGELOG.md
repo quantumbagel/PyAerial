@@ -30,6 +30,7 @@ Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading
 - Versioned JSON webhook body: `"schema": "pyaerial.alert/1"`, a top-level `event`, and every field always present (field table in [CONFIGURATION.md](CONFIGURATION.md)).
 - `tracking.max_flight_seconds` (default 14400): long tracks are archived as segments; active alerts carry over under the same `alert_id`.
 - `enrichment.enabled`: turn off the engine's hexdb.io / Planespotters lookups.
+- `readsb` receiver type: dump1090's Beast/AVR client plus readsb's tar1090 `receiver.json` locations; its BeastReduce port (30006) is rejected unless `options.allow_reduced: true`.
 - Per-IP limits: `web.ws_rate_limit_per_ip` / `web.ws_rate_burst_per_ip` (200/s, burst 400) and `web.beast_max_clients_per_ip` (4).
 - `integrity.cross_network.timeout_seconds`.
 - `gnss_height` in the `telemetry` table and on WebSocket telemetry points.

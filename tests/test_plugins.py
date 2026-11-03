@@ -223,7 +223,7 @@ def test_broken_plugin_is_skipped_once(plugins, tmp_path, caplog, capsys):
         _EntryPoint("brokensdr", ImportError("No module named 'soapysdr'"))
     )
     with caplog.at_level(logging.ERROR, logger="pyaerial.plugins"):
-        assert receivers_mod.available_receivers() == ["aoa", "dump1090", "replay"]
+        assert receivers_mod.available_receivers() == ["aoa", "dump1090", "readsb", "replay"]
         receivers_mod.available_receivers()  # discovery runs once
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1 and "brokensdr" in errors[0].getMessage()
@@ -268,6 +268,7 @@ def test_builtins_register_without_package_metadata(plugins):
     assert receivers_mod.receiver_sources() == {
         "aoa": BUILTIN,
         "dump1090": BUILTIN,
+        "readsb": BUILTIN,
         "replay": BUILTIN,
     }
     assert alerters_mod.alerter_sources() == {"print": BUILTIN, "webhook": BUILTIN}
@@ -278,7 +279,7 @@ def test_unreadable_metadata_falls_back_to_builtins(plugins, monkeypatch):
         raise OSError("corrupt metadata")
 
     monkeypatch.setattr(plugins_mod, "entry_points", _broken)
-    assert receivers_mod.available_receivers() == ["aoa", "dump1090", "replay"]
+    assert receivers_mod.available_receivers() == ["aoa", "dump1090", "readsb", "replay"]
 
 
 def test_own_entry_points_register_builtins(plugins):
@@ -295,7 +296,7 @@ def test_validate_lists_plugins_and_where_they_come_from(plugins, tmp_path, caps
     out = capsys.readouterr().out
     assert (
         "available receivers: aoa (builtin), dump1090 (builtin), "
-        f"fakesdr ({PLUGIN_DIST}), replay (builtin)"
+        f"fakesdr ({PLUGIN_DIST}), readsb (builtin), replay (builtin)"
     ) in out
     assert f"available alerters: fakepager ({PLUGIN_DIST}), print (builtin)" in out
 
@@ -314,7 +315,7 @@ def test_pyproject_declares_every_builtin():
         assert eps[group] == registry._builtins
 
 
-@pytest.mark.parametrize("name", ["aoa", "dump1090", "replay"])
+@pytest.mark.parametrize("name", ["aoa", "dump1090", "readsb", "replay"])
 def test_builtin_receivers_declare_the_contract(name):
     cls = receivers_mod.receiver_class(name)
     assert isinstance(cls.known_options, frozenset) and cls.known_options

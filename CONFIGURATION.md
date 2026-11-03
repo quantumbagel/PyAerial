@@ -129,18 +129,37 @@ Storage, rules, the WebSocket API and JSON webhooks use SI and WGS84 units. Only
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `type` | required | `dump1090`, `aoa`, `replay`, or a plugin's type (`pyaerial validate` lists them) |
-| `host`, `port` | | TCP source (`dump1090`, `aoa`) |
-| `format` | from port | `dump1090` only: `beast` / `binary` or `avr` / `raw`, case-insensitive; also accepted in `options`. Port 30002 implies AVR, any other Beast |
+| `type` | required | `dump1090`, `readsb`, `aoa`, `replay`, or a plugin's type (`pyaerial validate` lists them) |
+| `host`, `port` | | TCP source (`dump1090`, `readsb`, `aoa`) |
+| `format` | from port | `dump1090` and `readsb`: `beast` / `binary` or `avr` / `raw`, case-insensitive; also accepted in `options`. Port 30002 implies AVR, any other Beast |
 | `position` | unset | Fixed antenna position: `latitude`, `longitude`, `altitude` (m above mean sea level, default 0) |
-| `position_url` | `http://<host>:8080/data/receiver.json` (`dump1090` only) | Where to fetch the antenna position when `position` is unset |
+| `position_url` | `http://<host>:8080/data/receiver.json` (`dump1090`; `readsb` below) | Where to fetch the antenna position when `position` is unset |
 | `antenna_height` | `10` | Metres above ground, for the radio-horizon check |
 | `options` | `{}` | Type-specific options (below) |
 
-- Prefer Beast (30005). AVR text (30002) has no signal level or clock, so most integrity checks cannot run. A `format` that contradicts the port is rejected, and so is a `dump1090` receiver that reads this machine's `web.beast_port`.
+- Prefer Beast (30005). AVR text (30002) has no signal level or clock, so most integrity checks cannot run. A `format` that contradicts the port is rejected, and so is a `dump1090` or `readsb` receiver that reads this machine's `web.beast_port`.
 - The antenna position comes from `position`, else the receiver's `receiver.json` (published by dump1090-fa and readsb; refreshed every 60 s, so moving receivers work), else `home`. A fetched position uses the file's altitude or 0 m, so set `position` when receivers sit at very different heights. Failed fetches back off up to 15 min; redirects are not followed.
 - A receiver silent for 150 s is reconnected.
 - Extended squitters that fail CRC and DF18 frames with non-ICAO addresses are ignored. A first airborne position (or the first after 180 s without one) needs an even/odd CPR pair within 10 s.
+
+*readsb (`type: readsb`)*. [readsb](https://github.com/wiedehopf/readsb) serves dump1090's Beast (`--net-bo-port`, 30005) and AVR (`--net-ro-port`, 30002) outputs, so it takes the same keys. An external readsb (or the ultrafeeder container) is read the same way as the bundled dump1090.
+
+```yaml
+receivers:
+  roof:
+    type: readsb
+    host: feeder.lan
+    port: 30005
+    # position_url: http://feeder.lan/tar1090/data/receiver.json
+```
+
+- Read the full Beast output, not BeastReduce (`--net-beast-reduce-out-port`, 30006 in ultrafeeder): it is rate-limited and deduplicated, so the integrity checks miss most frames. Port 30006 is rejected; set `options.allow_reduced: true` if yours serves full Beast.
+- readsb only writes `receiver.json` to its `--write-json` directory. Without `position_url`, PyAerial tries tar1090's `http://<host>/tar1090/data/receiver.json`, then `http://<host>:8504/data/receiver.json`, then `http://<host>:8080/data/receiver.json` (ultrafeeder's example port), and keeps the first that has a location. It carries no altitude unless readsb gets one from gpsd. A `--json-location-accuracy` other than 2 rounds the location (a warning is logged), which is too coarse for TDOA: set `position`.
+- Keep readsb's defaults: without `--net-verbatim` it forwards CRC-corrected frames as dump1090 does, so different receivers' copies of a transmission are identical and pair up for TDOA. Give each PyAerial receiver a readsb that decodes one radio: Beast inputs merged into its output (`--net-bi-port`, `beast_in` connectors) mix clocks and repeat frames, which the `timing` and `replay` checks read as spoofing.
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `allow_reduced` | `false` | Accept port 30006 (only when it serves full Beast) |
 
 *Angle of arrival (`type: aoa`)*. Bearings need a coherent multi-channel SDR (KrakenSDR, bladeRF 2.0, USRP B210/N310) running its own DSP; dump1090 has no phase information. The `aoa` receiver reads one JSON object per line from that sidecar:
 

@@ -136,7 +136,7 @@ class ReceiverConfig(_Strict):
 
     @model_validator(mode="after")
     def _dump1090_format(self) -> "ReceiverConfig":
-        if self.type == "dump1090" and self.format is not None:
+        if self.type in ("dump1090", "readsb") and self.format is not None:
             fmt = str(self.format).lower()
             if fmt not in _DUMP1090_FORMATS:
                 raise ValueError(
@@ -148,12 +148,12 @@ class ReceiverConfig(_Strict):
     def receiver_arguments(self) -> dict[str, object]:
         """Build the argument dict expected by receiver plugins."""
         args = dict(self.options)
-        if self.type in ("dump1090", "aoa"):
+        if self.type in ("dump1090", "readsb", "aoa"):
             if self.host is not None:
                 args.setdefault("tcp_connection_ip", self.host)
             if self.port is not None:
                 args.setdefault("tcp_connection_port", self.port)
-        if self.type == "dump1090":
+        if self.type in ("dump1090", "readsb"):
             if self.format is not None:
                 args.setdefault("format", self.format)
         return args
