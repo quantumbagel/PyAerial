@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Protocol
 
 from pyaerial.constants import LIVE_ENGINE_TTL_SECONDS
@@ -121,6 +121,12 @@ class LiveWriteStore(EpisodeStore, Protocol):
     def retry_pending_pops(self) -> None: ...
 
     def clear_cache(self) -> int: ...
+
+    def save_outbox(self, entries: Mapping[str, Any]) -> None: ...
+
+    def drop_outbox(self, alert_ids: Iterable[str]) -> None: ...
+
+    def load_outbox(self) -> list[Any]: ...
 
     def close(self) -> None: ...
 

@@ -170,6 +170,8 @@ class EpisodeLog(Protocol):
 
     def drain(self) -> bool: ...
 
+    def restore_outbox(self) -> int: ...
+
     def open_docs(self, flight_id: str) -> list[dict[str, Any]]: ...
 
 
@@ -499,6 +501,9 @@ class FlightArchiver:
         """
         self._recovered = self._archive.disabled
         if not self._recovered:
+            if self._episodes is not None:
+                with self._guard("episode outbox"):
+                    self._episodes.restore_outbox()
             with self._guard("startup recovery"):
                 self._recover()
         # Redis is only a cache of what this process tracks: drop whatever a
@@ -529,6 +534,10 @@ class FlightArchiver:
         at most the one deactivate whose record had not committed).
         """
         if not self._history_retry_due() or not self._history_writable():
+            return False
+        # Episodes a previous engine could not archive go in first.
+        if self._episodes is not None and not self._episodes.drain():
+            self.back_off()
             return False
         archive = self._archive
         owned = {plane.flight_id for plane in self._tracked().values()}

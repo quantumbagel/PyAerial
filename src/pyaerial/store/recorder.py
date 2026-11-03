@@ -8,7 +8,7 @@ activation and deactivation through it, in the order it notifies.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Protocol
 
 from pyaerial.models import Plane
@@ -19,6 +19,10 @@ log = logging.getLogger("pyaerial.store")
 
 # (flight_row, alert_doc): an episode as ArchiveWriter.upsert_episodes takes it.
 EpisodeEntry = tuple[dict[str, Any], dict[str, Any]]
+# Episode writes waiting for the archive while it is down, latest state per
+# alert_id (~1 KB each). A busy site raises a few hundred alerts an hour, so
+# this covers days of outage; beyond it the oldest are dropped (counted).
+OUTBOX_MAX = 10_000
 
 
 class EpisodeArchive(Protocol):
@@ -27,6 +31,17 @@ class EpisodeArchive(Protocol):
     def upsert_episodes(
         self, episodes: Sequence[tuple[Mapping[str, Any], Mapping[str, Any]]]
     ) -> bool: ...
+
+
+class EpisodeCache(EpisodeStore, Protocol):
+    """The live store side: the portal's cache, and a copy of the outbox
+    (``live:episode_outbox``) so a crash during an outage loses no episode."""
+
+    def save_outbox(self, entries: Mapping[str, Any]) -> None: ...
+
+    def drop_outbox(self, alert_ids: Iterable[str]) -> None: ...
+
+    def load_outbox(self) -> list[Any]: ...
 
 
 class EpisodeRecorder:
@@ -38,18 +53,22 @@ class EpisodeRecorder:
       memory per open episode, written to the archive with the next
       checkpoint (:meth:`checkpoint_episodes`), and to the live store now.
     - A write the archive refuses (outage) waits in the outbox, latest state
-      per alert_id, and is re-sent with every checkpoint until it commits.
+      per alert_id (at most OUTBOX_MAX), and is re-sent with every
+      checkpoint until it commits. It is copied to Redis while it waits, so
+      the next engine replays it after a crash (:meth:`restore_outbox`).
 
     Tick thread only.
     """
 
-    def __init__(self, archive: EpisodeArchive, live: EpisodeStore):
+    def __init__(self, archive: EpisodeArchive, live: EpisodeCache):
         self._archive = archive
         self._live = live
         # alert_id -> (plane, latest doc) of every open episode.
         self._open: dict[str, tuple[Plane, dict[str, Any]]] = {}
-        # alert_id -> entry the archive has not accepted yet.
+        # alert_id -> entry the archive has not accepted yet, oldest first.
         self._outbox: dict[str, EpisodeEntry] = {}
+        #: Outbox entries dropped over OUTBOX_MAX since start.
+        self.dropped = 0
 
     # -- EpisodeStore --------------------------------------------------------
 
@@ -143,10 +162,36 @@ class EpisodeRecorder:
 
     def written(self, entries: Sequence[EpisodeEntry]) -> None:
         """*entries* (from :meth:`checkpoint_episodes`) were committed."""
+        done = []
         for entry in entries:
             alert_id = entry[1].get("alert_id")
             if alert_id is not None and self._outbox.get(alert_id) is entry:
                 del self._outbox[alert_id]
+                done.append(alert_id)
+        if done:
+            self._cache("drop", self._live.drop_outbox, done)
+
+    def restore_outbox(self) -> int:
+        """Queue the episodes a previous engine left in the Redis outbox
+        (it crashed while the archive was down). Returns how many."""
+        restored = 0
+        for entry in self._live.load_outbox():
+            if (
+                isinstance(entry, list)
+                and len(entry) == 2
+                and isinstance(entry[0], dict)
+                and isinstance(entry[1], dict)
+                and entry[1].get("alert_id")
+                and entry[1]["alert_id"] not in self._outbox
+            ):
+                self._outbox[entry[1]["alert_id"]] = (entry[0], entry[1])
+                restored += 1
+        if restored:
+            log.warning(
+                "Replaying %d alert episode(s) a previous engine could not archive",
+                restored,
+            )
+        return restored
 
     def drain(self) -> bool:
         """Re-send the outbox now. True when it is empty afterwards."""
@@ -176,9 +221,30 @@ class EpisodeRecorder:
 
     def _write(self, entry: EpisodeEntry) -> None:
         alert_id = entry[1]["alert_id"]
-        self._outbox.pop(alert_id, None)
-        if not self._upsert([entry]):
-            self._outbox[alert_id] = entry
+        queued = self._outbox.pop(alert_id, None)
+        if self._upsert([entry]):
+            if queued is not None:
+                self._cache("drop", self._live.drop_outbox, [alert_id])
+            return
+        self._outbox[alert_id] = entry
+        while len(self._outbox) > OUTBOX_MAX:
+            oldest = next(iter(self._outbox))
+            del self._outbox[oldest]
+            if not self.dropped:
+                log.error(
+                    "Unarchived alert episode outbox is full (%d); dropping the "
+                    "oldest (counted as episodes_dropped)",
+                    OUTBOX_MAX,
+                )
+            self.dropped += 1
+            self._cache("drop", self._live.drop_outbox, [oldest])
+        self._cache("save", self._live.save_outbox, {alert_id: entry})
+
+    def _cache(self, what: str, call: Any, arg: Any) -> None:
+        try:
+            call(arg)
+        except Exception:
+            log.exception("Episode outbox %s in the live store failed", what)
 
     def _upsert(self, entries: list[EpisodeEntry]) -> bool:
         try:

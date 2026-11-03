@@ -21,6 +21,9 @@ KEY_ALERTS = "live:alerts:{flight_id}"
 KEY_ACTIVE_ALERTS = "live:active_alerts"
 KEY_ALERT_EPISODES = "live:alert_episodes"
 KEY_ENGINE = "live:engine"
+# Alert episodes the archive refused (it was down), so the next engine can
+# still record and close them after a crash. Written only during an outage.
+KEY_EPISODE_OUTBOX = "live:episode_outbox"
 RAW_CHANNEL = "live:raw"
 # Safety net on per-flight keys (doc, telemetry, alerts), re-armed on every
 # write. While an engine runs it pops finalized flights itself, so this only

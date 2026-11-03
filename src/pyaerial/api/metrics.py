@@ -54,6 +54,10 @@ _ENGINE_COUNTERS = (
         "pending_evicted",
         "Deferred flights dropped from memory while the archive was down.",
     ),
+    (
+        "episodes_dropped",
+        "Alert episodes dropped from a full outbox while the archive was down.",
+    ),
 )
 
 

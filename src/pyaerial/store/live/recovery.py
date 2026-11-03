@@ -8,17 +8,20 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 import redis
 from redis.exceptions import RedisError
 
+from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.store.live._mirror import MirroredStore
 from pyaerial.store.live.keys import (
     KEY_ACTIVE_ALERTS,
     KEY_ALERT_EPISODES,
     KEY_ALERTS,
     KEY_ENGINE,
+    KEY_EPISODE_OUTBOX,
     KEY_FLIGHT,
     KEY_FLIGHTS,
     KEY_TELEMETRY,
@@ -62,7 +65,9 @@ class RecoveryMixin(MirroredStore):
                     KEY_ALERTS.format(flight_id=flight_id),
                 )
             shared = [KEY_FLIGHTS, KEY_ACTIVE_ALERTS, KEY_ALERT_EPISODES]
-            pipe.delete(*shared, *(() if keep_engine else (KEY_ENGINE,)))
+            # The episode outbox is not cache: the next engine replays it.
+            owned = () if keep_engine else (KEY_ENGINE, KEY_EPISODE_OUTBOX)
+            pipe.delete(*shared, *owned)
             pipe.execute()
             self._pending_pops.clear()
             if flight_ids:
@@ -71,6 +76,48 @@ class RecoveryMixin(MirroredStore):
         except RedisError as exc:
             log.warning("Could not clear Redis live store: %s", exc)
             return 0
+
+    # -- episode outbox -------------------------------------------------------
+
+    def save_outbox(self, entries: Mapping[str, Any]) -> None:
+        """Keep episodes the archive refused (alert_id -> entry) in Redis."""
+        client = self._redis() if self.writer else None
+        if client is None or not entries:
+            return
+        try:
+            pipe = client.pipeline()
+            for alert_id, entry in entries.items():
+                pipe.hset(KEY_EPISODE_OUTBOX, alert_id, json_dumps(entry))
+            pipe.execute()
+        except RedisError as exc:
+            log.error("Failed to save %d unarchived episode(s): %s", len(entries), exc)
+            self._mark_disconnected(exc, client)
+
+    def drop_outbox(self, alert_ids: Iterable[str]) -> None:
+        """Forget episodes the archive has accepted."""
+        ids = list(alert_ids)
+        client = self._redis() if self.writer else None
+        if client is None or not ids:
+            return
+        try:
+            client.hdel(KEY_EPISODE_OUTBOX, *ids)
+        except RedisError as exc:
+            log.warning("Failed to drop archived episodes from Redis: %s", exc)
+            self._mark_disconnected(exc, client)
+
+    def load_outbox(self) -> list[Any]:
+        """Episodes a previous engine could not archive, as saved."""
+        client = self._redis()
+        if client is None:
+            return []
+        try:
+            stored = cast("dict[str, str]", client.hgetall(KEY_EPISODE_OUTBOX))
+        except RedisError as exc:
+            log.error("Failed to read unarchived episodes: %s", exc)
+            self._mark_disconnected(exc, client)
+            return []
+        entries = [safe_json_loads(raw) for raw in stored.values()]
+        return [entry for entry in entries if isinstance(entry, list)]
 
     def pop_flight(self, flight_id: str) -> dict[str, Any]:
         """Return buffered flight data and delete Redis keys for the flight."""

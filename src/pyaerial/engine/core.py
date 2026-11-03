@@ -324,6 +324,7 @@ class Engine:
             "messages_processed": self._messages_processed,
             "planes_tracked": len(self.tracker.planes),
             "pending_evicted": self.archiver.counters()["pending_evicted"],
+            "episodes_dropped": self.episodes.dropped,
             "receiver_restarts": intake["receiver_restarts"],
             "stage_errors": self._guard.counts(),
         }
