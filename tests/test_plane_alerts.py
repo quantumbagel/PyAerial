@@ -7,35 +7,25 @@ from pyaerial.calc.geo import build_polygons
 from pyaerial.pipeline import PlaneCalculator
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALC_DATA,
-    STORE_FIRST_PACKET,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import Datum
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 
 
 def _plane(lat: float = 35.725, lon: float = -78.695, t: float | None = None):
     if t is None:
         t = time.time()
-    return {
-        STORE_INFO: {STORE_ICAO: "abc123", "callsign": "N123AB"},
-        STORE_RECV_DATA: {
+    return Plane(
+        info=AircraftInfo(icao="abc123", callsign="N123AB"),
+        track=TrackState(first_packet=t - 5, last_update=t),
+        received_data={
             STORE_LAT: [Datum(lat, t - 5), Datum(lat + 0.001, t)],
             STORE_LONG: [Datum(lon, t - 5), Datum(lon, t)],
             STORE_ALT: [Datum(400.0, t)],
         },
-        STORE_CALC_DATA: {},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: t - 5,
-            STORE_MOST_RECENT_PACKET: t,
-        },
-    }
+        calculated_data={},
+    )
 
 
 def test_while_active_starts_at_activation_time(monkeypatch):
@@ -106,9 +96,9 @@ def test_metadata_lookup_failure_is_retried():
     )
     try:
         plane = _plane()
-        icao = plane[STORE_INFO][STORE_ICAO]
+        icao = plane.info.icao
         calc._bg_lookup_metadata(icao)
-        assert plane[STORE_INFO].get("metadata_resolved") is not True
+        assert plane.info.metadata_resolved is not True
         result = calc._pending_results.get(icao)
         assert result is not None
         assert result["resolved"] is False
@@ -132,7 +122,7 @@ def test_deactivate_clears_lookup_state_and_discards_inflight_result():
     )
     try:
         plane = _plane()
-        icao = plane[STORE_INFO][STORE_ICAO]
+        icao = plane.info.icao
         calc._bg_lookup_metadata(icao)
         assert icao in calc._pending_results
         assert icao in calc._lookup_failures
@@ -194,7 +184,7 @@ def test_deactivate_clears_motion_and_alerts():
         plane = _plane()
         calc.calculate_plane(plane)
         calc.deactivate_plane(plane)
-        assert plane.get("active_alerts") == []
+        assert plane.active_alerts == []
         assert "abc123" not in calc._kalman_filters
     finally:
         calc.close()
@@ -207,7 +197,7 @@ def test_one_bad_plane_does_not_stop_alerting_for_others(caplog):
     real_check = calc.alerts.check
 
     def check(plane, *args):
-        if plane[STORE_INFO][STORE_ICAO] == "bad001":
+        if plane.info.icao == "bad001":
             # e.g. shapely rejecting a non-finite projected point
             raise ValueError("Point coordinates must be finite")
         return real_check(plane, *args)
@@ -215,7 +205,7 @@ def test_one_bad_plane_does_not_stop_alerting_for_others(caplog):
     calc.alerts.check = check  # type: ignore[method-assign]
     try:
         bad = _plane()
-        bad[STORE_INFO][STORE_ICAO] = "bad001"
+        bad.info.icao = "bad001"
         good = _plane()
         planes = {"bad001": bad, "abc123": good}
         with caplog.at_level("ERROR", logger="pyaerial.pipeline"):
@@ -253,10 +243,10 @@ def test_registration_reaches_plane_info_and_live_summary():
         plane = _plane()
         calc._bg_lookup_metadata("abc123", "N123AB")
         calc.calculate_plane(plane)
-        info = plane[STORE_INFO]
-        assert info["registration"] == "HB-JZA"
-        assert info["aircraft_type"] == "A320"
-        assert info["callsign"] == "N123AB"  # live callsign kept
+        info = plane.info
+        assert info.registration == "HB-JZA"
+        assert info.aircraft_type == "A320"
+        assert info.callsign == "N123AB"  # live callsign kept
         store.write_live_planes({"abc123": plane})
         (summary,) = store.get_flights()
         assert summary["registration"] == "HB-JZA"
@@ -351,7 +341,7 @@ def test_close_does_not_wait_for_inflight_lookup_and_drops_late_result():
     assert calc._pending_results == {}
     # No new lookups are started once closed.
     other = _plane()
-    other[STORE_INFO][STORE_ICAO] = "def456"
+    other.info.icao = "def456"
     calc._resolve_callsign(other)
     assert "def456" not in calc._pending_lookups
 
@@ -367,7 +357,7 @@ def test_inflight_lookup_does_not_delay_interpreter_exit():
         """
         import sys, threading, time
         sys.path.insert(0, %r)
-        from helpers import make_config
+        from helpers import make_config, make_plane
         from pyaerial.calc.geo import build_polygons
         from pyaerial.pipeline import PlaneCalculator
         started = threading.Event()
@@ -380,7 +370,7 @@ def test_inflight_lookup_does_not_delay_interpreter_exit():
                 return True
         config = make_config()
         calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=Db())
-        calc._resolve_callsign({"info": {"icao": "abc123"}})
+        calc._resolve_callsign(make_plane("abc123"))
         started.wait(5)
         calc.close()
         """
@@ -395,18 +385,15 @@ def test_single_position_still_calculates():
     calc = PlaneCalculator(config, build_polygons(config.zones))
     try:
         t = 1_700_000_000.0
-        plane = {
-            STORE_INFO: {STORE_ICAO: "abc123"},
-            STORE_RECV_DATA: {
+        plane = Plane(
+            info=AircraftInfo(icao="abc123"),
+            track=TrackState(first_packet=t, last_update=t),
+            received_data={
                 STORE_LAT: [Datum(35.725, t)],
                 STORE_LONG: [Datum(-78.695, t)],
             },
-            STORE_CALC_DATA: {},
-            STORE_INTERNAL: {
-                STORE_FIRST_PACKET: t,
-                STORE_MOST_RECENT_PACKET: t,
-            },
-        }
+            calculated_data={},
+        )
         calc.calculate_plane(plane)  # must not raise
     finally:
         calc.close()

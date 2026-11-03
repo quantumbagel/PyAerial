@@ -24,14 +24,8 @@ from pyaerial.config.schema import (
 )
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_FIRST_PACKET,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import Datum
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 
 _EVENTS: dict[str, list] = {}
 
@@ -165,14 +159,11 @@ def test_bounded_engine_matches_full_horizon_engine(monkeypatch, curved):
     )
     planes = {
         tag: {
-            ac["icao"]: {
-                STORE_INFO: {STORE_ICAO: ac["icao"]},
-                STORE_RECV_DATA: {STORE_ALT: [Datum(ac["alt"], 0.0)]},
-                STORE_INTERNAL: {
-                    STORE_FIRST_PACKET: 1.0,
-                    STORE_MOST_RECENT_PACKET: 1.0,
-                },
-            }
+            ac["icao"]: Plane(
+                info=AircraftInfo(icao=ac["icao"]),
+                track=TrackState(first_packet=1.0, last_update=1.0),
+                received_data={STORE_ALT: [Datum(ac["alt"], 0.0)]},
+            )
             for ac in traffic
         }
         for tag in engines
@@ -190,8 +181,8 @@ def test_bounded_engine_matches_full_horizon_engine(monkeypatch, curved):
                 for tag, eng in engines.items():
                     plane = planes[tag][ac["icao"]]
                     eng.check(plane, (ac["lat"], ac["lon"]), motion, "")
-                bounded = planes["bounded"][ac["icao"]]["active_alerts"]
-                reference = planes["full"][ac["icao"]]["active_alerts"]
+                bounded = planes["bounded"][ac["icao"]].active_alerts
+                reference = planes["full"][ac["icao"]].active_alerts
                 strip = [
                     [(a["zone"], a["rule"], a["eta"]) for a in alerts]
                     for alerts in (bounded, reference)

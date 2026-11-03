@@ -17,6 +17,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
+from typing import TypeGuard
 
 import requests
 import urllib3
@@ -191,7 +192,7 @@ def parse_receiver_json(doc: object) -> tuple[float, float, float | None] | None
     return float(lat), float(lon), altitude
 
 
-def _is_number(value: object) -> bool:
+def _is_number(value: object) -> TypeGuard[int | float]:
     # JSON true/false are ints to isinstance.
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 

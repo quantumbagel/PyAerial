@@ -27,19 +27,8 @@ from helpers import (
     pad_config,
 )
 from pyaerial.config.schema import ArchiveConfig
-from pyaerial.constants import (
-    STORE_CALC_DATA,
-    STORE_FIRST_PACKET,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
-    STORE_MOST_RECENT_PACKET,
-    STORE_POSITION_RECEIVERS,
-    STORE_RECV_DATA,
-)
 from pyaerial.engine import Engine
-from pyaerial.models import Datum, Verdict
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState, Verdict
 from pyaerial.store.history import FRAME_PRUNE_BATCH
 from pyaerial.store.redis_live import RedisLiveStore
 
@@ -123,7 +112,7 @@ def test_finalize_exception_keeps_flight_and_other_planes(tmp_path, monkeypatch)
         monkeypatch.setattr(engine.live_store, "pop_flight", popped.append)
 
         def finalize(plane, **_kwargs):
-            if plane[STORE_INFO][STORE_ICAO] == "bad":
+            if plane.info.icao == "bad":
                 raise ValueError("unexpected")
             return True
 
@@ -161,7 +150,7 @@ def test_shutdown_finishes_when_one_plane_fails(tmp_path, monkeypatch):
     archived: list[str] = []
 
     def finalize(plane, **_kwargs):
-        icao = plane[STORE_INFO][STORE_ICAO]
+        icao = plane.info.icao
         if icao == "bad":
             raise ValueError("unexpected")
         archived.append(icao)
@@ -189,9 +178,9 @@ def test_startup_archive_survives_a_bad_leftover(tmp_path, monkeypatch):
         archived: list[str] = []
 
         def finalize(plane, **_kwargs):
-            if plane[STORE_INFO][STORE_ICAO] == "bad":
+            if plane.info.icao == "bad":
                 raise ValueError("unexpected")
-            archived.append(plane[STORE_INFO][STORE_ICAO])
+            archived.append(plane.info.icao)
             return True
 
         monkeypatch.setattr(engine.history_store, "finalize_plane", finalize)
@@ -215,7 +204,7 @@ def test_pending_retries_back_off_while_writes_fail(tmp_path, monkeypatch):
         attempts: list[str] = []
 
         def failing(plane, **_kwargs):
-            attempts.append(plane[STORE_INFO][STORE_ICAO])
+            attempts.append(plane.info.icao)
             return False
 
         monkeypatch.setattr(engine.history_store, "finalize_plane", failing)
@@ -255,7 +244,7 @@ def test_orphan_sweep_stops_at_first_failure(tmp_path, monkeypatch):
         attempts: list[str] = []
 
         def failing(plane, **_kwargs):
-            attempts.append(plane[STORE_INFO][STORE_ICAO])
+            attempts.append(plane.info.icao)
             return False
 
         monkeypatch.setattr(engine.history_store, "finalize_plane", failing)
@@ -276,7 +265,7 @@ def test_shutdown_retries_pending_despite_back_off(tmp_path, monkeypatch):
     monkeypatch.setattr(
         engine.history_store,
         "finalize_plane",
-        lambda plane, **_k: archived.append(plane[STORE_INFO][STORE_ICAO]) or True,
+        lambda plane, **_k: archived.append(plane.info.icao) or True,
     )
     engine._pending_finalize["aaa-1"] = one_fix_plane("aaa")
     engine._history_retry_at = time.monotonic() + 3600
@@ -352,7 +341,6 @@ _SIGNAL_SCRIPT = textwrap.dedent(
     """
     import sys, time
     from helpers import make_config
-    from pyaerial.constants import STORE_ICAO, STORE_INFO
     from pyaerial.engine import Engine
     from helpers import heading_plane
 
@@ -363,7 +351,7 @@ _SIGNAL_SCRIPT = textwrap.dedent(
     def finalize(plane, **_kwargs):
         if slow:
             time.sleep(60)
-        print("archived", plane[STORE_INFO][STORE_ICAO], flush=True)
+        print("archived", plane.info.icao, flush=True)
         return True
 
     engine.history_store.finalize_plane = finalize
@@ -461,7 +449,7 @@ def test_pending_finalize_is_bounded_by_memory(tmp_path, monkeypatch):
         engine.shutdown()
 
 
-def _tracker_like_plane(positions: int) -> dict:
+def _tracker_like_plane(positions: int) -> Plane:
     """Series as the tracker and kinematics fill them: ~2 positions and ~2
     velocity messages a second, two receivers, a verdict a minute."""
     recv = {
@@ -494,17 +482,17 @@ def _tracker_like_plane(positions: int) -> dict:
         )
         for n in range(positions // 120)
     ]
-    return {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: recv,
-        STORE_CALC_DATA: calc,
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 1.7e9,
-            STORE_MOST_RECENT_PACKET: 1.7e9 + positions / 2,
-            STORE_POSITION_RECEIVERS: heard,
-            STORE_INTEGRITY_LOG: verdicts,
-        },
-    }
+    return Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(
+            first_packet=1.7e9,
+            last_update=1.7e9 + positions / 2,
+            position_receivers=heard,
+            integrity_log=verdicts,
+        ),
+        received_data=recv,
+        calculated_data=calc,
+    )
 
 
 def test_pending_cost_tracks_measured_memory():
@@ -529,7 +517,7 @@ def test_catch_up_is_capped_per_tick_but_not_at_shutdown(tmp_path, monkeypatch):
 
     def slow_finalize(plane, **_kwargs):
         time.sleep(0.02)
-        archived.append(plane[STORE_INFO][STORE_ICAO])
+        archived.append(plane.info.icao)
         return True
 
     monkeypatch.setattr(engine.history_store, "finalize_plane", slow_finalize)

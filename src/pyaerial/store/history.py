@@ -14,24 +14,15 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from pyaerial.constants import (
-    STORE_CALLSIGN,
-    STORE_FIRST_PACKET,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
-    STORE_MOST_RECENT_PACKET,
-)
 from pyaerial.jsonutil import dumps as json_dumps
-from pyaerial.models import (
-    Verdict,
-    flight_id_for_plane,
-    iter_telemetry_samples,
-    sample_provenance,
-)
+from pyaerial.models import Plane
 from pyaerial.receivers.frames import RawFrame, frame_fields
-from pyaerial.store.samples import gnss_height_at
+from pyaerial.store.codec import (
+    build_telemetry_docs,
+    info_json,
+    info_text_fields,
+    integrity_rows,
+)
 
 log = logging.getLogger("pyaerial.store")
 
@@ -253,44 +244,8 @@ def _finite(value: float | None) -> float | None:
     return value if value is not None and math.isfinite(value) else None
 
 
-def build_telemetry_docs(
-    plane: dict, flight_id: str, icao: str
-) -> list[dict[str, Any]]:
-    """Build telemetry documents from a plane's in-memory time series.
-
-    Each sample carries the receivers that heard it and the integrity verdict
-    in effect when it arrived (see :func:`pyaerial.models.sample_provenance`).
-    """
-    docs: list[dict[str, Any]] = []
-    used_ts: set[float] = set()
-    for timestamp, lat, lon, alt, speed, heading in iter_telemetry_samples(plane):
-        stamp = timestamp
-        while stamp in used_ts:
-            stamp += 1e-6
-        used_ts.add(stamp)
-        doc: dict[str, Any] = {
-            "flight_id": flight_id,
-            "icao": icao,
-            "timestamp": stamp,
-            "latitude": lat,
-            "longitude": lon,
-        }
-        if alt is not None:
-            doc["altitude"] = alt
-        if speed is not None:
-            doc["speed"] = speed
-        if heading is not None:
-            doc["heading"] = heading
-        gnss_height = gnss_height_at(plane, timestamp)
-        if gnss_height is not None:
-            doc["gnss_height"] = gnss_height
-        doc.update(sample_provenance(plane, timestamp))
-        docs.append(doc)
-    return docs
-
-
 def _alert_row(
-    alert: dict[str, Any], flight_id: str, icao: str, info: dict[str, Any]
+    alert: dict[str, Any], flight_id: str, icao: str, callsign: str
 ) -> tuple:
     """``alerts`` columns in table order, starting alert_id, flight_id."""
     alert_id = (
@@ -302,7 +257,7 @@ def _alert_row(
         alert_id,
         flight_id,
         alert.get("icao", icao),
-        alert.get("callsign") or info.get(STORE_CALLSIGN) or "",
+        alert.get("callsign") or callsign,
         alert.get("zone", ""),
         alert.get("rule", ""),
         1 if alert.get("active", False) else 0,
@@ -722,7 +677,7 @@ class HistoryStore:
 
     def finalize_plane(
         self,
-        plane: dict,
+        plane: Plane,
         *,
         alerts: list[dict[str, Any]] | None = None,
         retained: bool = True,
@@ -739,8 +694,8 @@ class HistoryStore:
         if self.disabled:
             return True
         alert_docs = alerts or []
-        flight_id = flight_id_for_plane(plane)
-        icao = str(plane.get(STORE_INFO, {}).get(STORE_ICAO, "")).lower()
+        flight_id = plane.flight_id
+        icao = plane.icao
         if not retained:
             log.debug("Discarded flight %s (archive policy)", flight_id)
             if not alert_docs:
@@ -760,15 +715,14 @@ class HistoryStore:
 
     def _persist_completed_flight(
         self,
-        plane: dict,
+        plane: Plane,
         flight_id: str,
         alerts: list[dict[str, Any]],
         *,
         telemetry_docs: list[dict[str, Any]] | None = None,
     ) -> bool:
-        info = plane.get(STORE_INFO, {})
-        internal = plane[STORE_INTERNAL]
-        icao = info[STORE_ICAO].lower()
+        info = plane.info
+        icao = plane.icao
         if telemetry_docs is None:
             telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         try:
@@ -792,17 +746,10 @@ class HistoryStore:
                             flight_id,
                             icao,
                             _FLIGHT_STATUS_COMPLETED,
-                            internal[STORE_FIRST_PACKET],
-                            internal[STORE_MOST_RECENT_PACKET],
-                            info.get(STORE_CALLSIGN) or "",
-                            info.get("model") or "",
-                            info.get("owner") or "",
-                            info.get("country") or "",
-                            info.get("aircraft_type") or "",
-                            info.get("registration") or "",
-                            json_dumps(
-                                {str(k): v for k, v in info.items()}, default=str
-                            ),
+                            plane.track.first_packet,
+                            plane.track.last_update,
+                            *info_text_fields(info).values(),
+                            info_json(info),
                         ),
                     )
                     conn.execute(
@@ -843,33 +790,18 @@ class HistoryStore:
                     conn.execute(
                         "DELETE FROM integrity WHERE flight_id = ?", (flight_id,)
                     )
-                    verdicts: list[Verdict] = internal.get(STORE_INTEGRITY_LOG) or []
                     conn.executemany(
                         """
                         INSERT OR REPLACE INTO integrity (
                             flight_id, timestamp, icao, score, status, flags, checks
                         ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
-                        [
-                            (
-                                flight_id,
-                                verdict.time,
-                                icao,
-                                verdict.score,
-                                verdict.status,
-                                json_dumps(list(verdict.flagged)),
-                                (
-                                    json_dumps(verdict.checks)
-                                    if verdict.checks is not None
-                                    else None
-                                ),
-                            )
-                            for verdict in verdicts
-                        ],
+                        integrity_rows(plane, flight_id, icao),
                     )
                     conn.execute("DELETE FROM alerts WHERE flight_id = ?", (flight_id,))
                     alert_rows = [
-                        _alert_row(alert, flight_id, icao, info) for alert in alerts
+                        _alert_row(alert, flight_id, icao, info.callsign or "")
+                        for alert in alerts
                     ]
                     conn.executemany(
                         """
@@ -889,7 +821,7 @@ class HistoryStore:
             return False
 
     def _update_archived_alerts(
-        self, alerts: list[dict[str, Any]], flight_id: str, icao: str, plane: dict
+        self, alerts: list[dict[str, Any]], flight_id: str, icao: str, plane: Plane
     ) -> bool:
         """Update the rows of episodes already archived; insert nothing.
 
@@ -898,8 +830,8 @@ class HistoryStore:
         an episode that began and ended in this flight is discarded with it.
         False (retry) when SQLite fails.
         """
-        info = plane.get(STORE_INFO) or {}
-        rows = [_alert_row(alert, flight_id, icao, info) for alert in alerts]
+        callsign = plane.info.callsign or ""
+        rows = [_alert_row(alert, flight_id, icao, callsign) for alert in alerts]
         try:
             with self._session("alerts") as conn, conn:
                 conn.executemany(
@@ -1088,7 +1020,7 @@ class HistoryStore:
             if limited and newest
             else " ORDER BY timestamp ASC"
         )
-        if limited:
+        if limited and limit is not None:
             sql += " LIMIT ?"
             params.append(int(limit))
         if limited and newest:

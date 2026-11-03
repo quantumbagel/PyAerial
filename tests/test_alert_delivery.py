@@ -20,14 +20,8 @@ from pyaerial.calc.motion import ResolvedMotion
 from pyaerial.config.schema import AlertActionConfig, WhileActiveConfig
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_FIRST_PACKET,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import Datum
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 
 _SEEN: list[dict] = []
 
@@ -74,14 +68,11 @@ def _run_episode(engine: AlertEngine, monkeypatch) -> None:
     mono = [1000.0]
     monkeypatch.setattr(time, "monotonic", lambda: mono[0])
     now = time.time()
-    plane = {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: {STORE_ALT: [Datum(400.0, now)]},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 1700000000.0,
-            STORE_MOST_RECENT_PACKET: now,
-        },
-    }
+    plane = Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(first_packet=1700000000.0, last_update=now),
+        received_data={STORE_ALT: [Datum(400.0, now)]},
+    )
     motion = ResolvedMotion(heading_deg=0.0, speed_kph=0.0, turn_rate_deg_s=0.0)
     for _ in range(4):  # hold, activate, while_active, while_active
         engine.check(plane, (35.725, -78.695), motion, "N1")
@@ -111,10 +102,10 @@ def test_every_hook_carries_one_stable_alert_id(monkeypatch):
 def test_stored_alert_document_shape_is_unchanged():
     from pyaerial.store.redis_live import RedisLiveStore
 
-    plane = {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_INTERNAL: {STORE_FIRST_PACKET: 1.0, STORE_MOST_RECENT_PACKET: 2.0},
-    }
+    plane = Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(first_packet=1.0, last_update=2.0),
+    )
     meta = {
         "alert_id": "a1",
         "flight_id": "abc123-1",

@@ -11,15 +11,15 @@ import logging
 import queue
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from shapely import Polygon
 
 from pyaerial.alerts.engine import AlertEngine
 from pyaerial.calc.kinematics import Kinematics
 from pyaerial.config.schema import Config
-from pyaerial.constants import STORE_CALLSIGN, STORE_ICAO, STORE_INFO
 from pyaerial.enrich.aircraft_db import AircraftDB
+from pyaerial.models import Plane
 
 if TYPE_CHECKING:
     from pyaerial.store.redis_live import RedisLiveStore
@@ -57,7 +57,7 @@ class PlaneCalculator:
         self._pending_lookups: set[str] = set()
         # In-flight lookups whose plane expired; their result is discarded.
         self._cancelled_lookups: set[str] = set()
-        self._pending_results: dict[str, dict] = {}
+        self._pending_results: dict[str, dict[str, Any]] = {}
         # time.monotonic() deadlines
         self._lookup_backoff_until: dict[str, float] = {}
         self._lookup_failures: dict[str, int] = {}
@@ -107,7 +107,7 @@ class PlaneCalculator:
                 return
             self._bg_lookup_metadata(*job)
 
-    def calculate_all(self, planes: dict[str, dict]) -> None:
+    def calculate_all(self, planes: dict[str, Plane]) -> None:
         # Always evaluate every plane with a position so ETA can coast during
         # ADS-B gaps.
         for key, plane in planes.items():
@@ -123,7 +123,7 @@ class PlaneCalculator:
             else:
                 self._failing.discard(key)
 
-    def handover(self, plane: dict, old_flight_id: str, new_flight_id: str) -> None:
+    def handover(self, plane: Plane, old_flight_id: str, new_flight_id: str) -> None:
         """Flight segmentation: continue *plane*'s alerts under *new_flight_id*.
 
         See :meth:`AlertEngine.handover`. Motion and lookup state are per
@@ -134,7 +134,7 @@ class PlaneCalculator:
     def forget_motion(self, icao: str) -> None:
         self.kinematics.forget(icao)
 
-    def calculate_plane(self, plane: dict) -> None:
+    def calculate_plane(self, plane: Plane) -> None:
         self._apply_lookup_result(plane)
         update = self.kinematics.update(plane)
         if update is None:
@@ -142,15 +142,14 @@ class PlaneCalculator:
         callsign = self._resolve_callsign(plane)
         self.alerts.check(plane, update.alert_position, update.motion, callsign)
 
-    def deactivate_plane(self, plane: dict) -> None:
+    def deactivate_plane(self, plane: Plane) -> None:
         """Deactivate alerts and drop motion state for an expired plane.
 
         Per-ICAO state (motion, lookups) is kept when another flight of the
         same aircraft is live, e.g. when the orphan sweep archives an old
         live copy of an aircraft that is being tracked again.
         """
-        info = plane.get(STORE_INFO, {})
-        icao = info.get(STORE_ICAO)
+        icao = plane.info.icao
         if not self.alerts.deactivate(plane):
             return
         if icao:
@@ -164,30 +163,37 @@ class PlaneCalculator:
                 if icao in self._pending_lookups:
                     self._cancelled_lookups.add(icao)
 
-    def _apply_lookup_result(self, plane: dict) -> None:
-        info = plane.get(STORE_INFO) or {}
-        icao = info.get(STORE_ICAO)
+    def _apply_lookup_result(self, plane: Plane) -> None:
+        info = plane.info
+        icao = info.icao
         if not icao:
             return
         with self._lock:
             result = self._pending_results.pop(icao, None)
         if not result:
             return
-        live_cs = info.get(STORE_CALLSIGN)
-        if result.get("callsign") and not live_cs:
-            info[STORE_CALLSIGN] = result["callsign"]
+        if result.get("callsign") and not info.callsign:
+            info.callsign = result["callsign"]
         if result.get("resolved"):
-            for field in ("model", "owner", "country", "aircraft_type", "registration"):
-                if result.get(field):
-                    info[field] = result[field]
-            info["metadata_resolved"] = True
+            # In this order: it is the order of the archived info document.
+            if result.get("model"):
+                info.model = result["model"]
+            if result.get("owner"):
+                info.owner = result["owner"]
+            if result.get("country"):
+                info.country = result["country"]
+            if result.get("aircraft_type"):
+                info.aircraft_type = result["aircraft_type"]
+            if result.get("registration"):
+                info.registration = result["registration"]
+            info.metadata_resolved = True
 
-    def _resolve_callsign(self, plane: dict) -> str:
-        info = plane[STORE_INFO]
-        if info.get("metadata_resolved"):
-            return info.get(STORE_CALLSIGN) or ""
+    def _resolve_callsign(self, plane: Plane) -> str:
+        info = plane.info
+        if info.metadata_resolved:
+            return info.callsign or ""
 
-        icao = info[STORE_ICAO]
+        icao = info.icao
         now = time.monotonic()
         with self._lock:
             if (
@@ -195,7 +201,7 @@ class PlaneCalculator:
                 or icao in self._pending_lookups
                 or now < self._lookup_backoff_until.get(icao, 0.0)
             ):
-                return info.get(STORE_CALLSIGN) or ""
+                return info.callsign or ""
             self._pending_lookups.add(icao)
             self._cancelled_lookups.discard(icao)
             if not self._lookup_threads:
@@ -210,8 +216,8 @@ class PlaneCalculator:
                 for thread in self._lookup_threads:
                     thread.start()
 
-        self._lookup_queue.put((icao, info.get(STORE_CALLSIGN) or ""))
-        return info.get(STORE_CALLSIGN) or ""
+        self._lookup_queue.put((icao, info.callsign or ""))
+        return info.callsign or ""
 
     def _bg_lookup_metadata(self, icao: str, live_callsign: str = "") -> None:
         callsign = live_callsign
@@ -230,7 +236,9 @@ class PlaneCalculator:
                     record = self.aircraft_db.lookup_cached_fast(icao)
                 if record:
                     if not callsign:
-                        callsign = record.get("callsign") or record.get("registration")
+                        callsign = (
+                            record.get("callsign") or record.get("registration") or ""
+                        )
                     model = record.get("model") or ""
                     owner = record.get("owner") or ""
                     country = record.get("country") or ""

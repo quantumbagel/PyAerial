@@ -5,7 +5,6 @@ from pyaerial.integrity.monitor import (
     STATUS_SPOOFED,
     STATUS_SUSPECT,
     STATUS_UNKNOWN,
-    STORE_INTEGRITY,
     IntegrityMonitor,
 )
 
@@ -14,6 +13,5 @@ __all__ = [
     "STATUS_SPOOFED",
     "STATUS_SUSPECT",
     "STATUS_UNKNOWN",
-    "STORE_INTEGRITY",
     "IntegrityMonitor",
 ]

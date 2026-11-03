@@ -19,19 +19,13 @@ from helpers import (
     pad_config,
 )
 from pyaerial.config.schema import ArchiveConfig
-from pyaerial.constants import (
-    STORE_FIRST_PACKET,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
-    STORE_MOST_RECENT_PACKET,
-)
 from pyaerial.engine import (
     _RECEIVER_BACKOFF_INITIAL,
     _RECEIVER_BACKOFF_MAX,
     Engine,
     _ReceiverHandle,
 )
+from pyaerial.models import AircraftInfo, Plane, TrackState
 
 
 class _DummyReceiver:
@@ -46,11 +40,8 @@ def _dead_thread() -> threading.Thread:
     return thread
 
 
-def _plane(icao: str = "abc123", first: float = 1.0) -> dict:
-    return {
-        STORE_INFO: {STORE_ICAO: icao},
-        STORE_INTERNAL: {STORE_FIRST_PACKET: first},
-    }
+def _plane(icao: str = "abc123", first: float = 1.0) -> Plane:
+    return Plane(info=AircraftInfo(icao=icao), track=TrackState(first, first))
 
 
 def test_dead_receiver_waits_before_restart(tmp_path, monkeypatch):
@@ -434,7 +425,7 @@ def test_engine_scores_integrity_into_live_flights(tmp_path):
         assert doc["icao"] == "40621d"
         assert doc["info"]["integrity"]["status"] in {"ok", "unknown"}
         # Decoded against the antenna in the Netherlands, not North Carolina home.
-        lat = engine.tracker.planes["40621D"]["received_data"]["latitude"][-1].value
+        lat = engine.tracker.planes["40621D"].received_data["latitude"][-1].value
         assert abs(lat - 52.26) < 0.05
     finally:
         engine._shutdown.set()
@@ -523,17 +514,12 @@ def test_heartbeat_publishes_cumulative_counters(tmp_path, monkeypatch):
         # A pending-finalize eviction.
         monkeypatch.setattr(engine_mod, "_PENDING_FINALIZE_BUDGET_BYTES", 1)
         for icao in ("aaa001", "aaa002"):
-            engine._enqueue_pending_finalize(
-                f"{icao}-1", {STORE_INFO: {STORE_ICAO: icao}}
-            )
+            engine._enqueue_pending_finalize(f"{icao}-1", _plane(icao))
         engine._history_retry_at = time.monotonic() + 3_600  # not archived now
-        engine.tracker.planes["BBB001"] = {
-            STORE_INFO: {STORE_ICAO: "bbb001"},
-            STORE_INTERNAL: {
-                STORE_FIRST_PACKET: time.time(),
-                STORE_MOST_RECENT_PACKET: time.time(),
-            },
-        }
+        engine.tracker.planes["BBB001"] = Plane(
+            info=AircraftInfo(icao="bbb001"),
+            track=TrackState(first_packet=time.time(), last_update=time.time()),
+        )
 
         engine._tick()
         counters = json.loads(client.kv["live:engine"])["counters"]

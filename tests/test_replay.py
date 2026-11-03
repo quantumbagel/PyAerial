@@ -290,7 +290,7 @@ def test_replay_example_tracks_every_aircraft_as_genuine(tmp_path, monkeypatch):
                 )
             engine._tick()
             for icao, plane in engine.tracker.planes.items():
-                status = (plane.info.get("integrity") or {}).get("status")
+                status = (plane.info.integrity or {}).get("status")
                 if status in ("suspect", "spoofed"):
                     flagged.setdefault(icao, set()).add(status)
         planes = dict(engine.tracker.planes)
@@ -299,7 +299,7 @@ def test_replay_example_tracks_every_aircraft_as_genuine(tmp_path, monkeypatch):
     assert len(planes) == 6
     assert flagged == {}
     for plane in planes.values():
-        integrity = plane.info["integrity"]
+        integrity = plane.info.integrity
         assert integrity["status"] == "ok"
         # The checks that need a clock and kinematics actually ran.
         assert {"timing", "kinematics", "message_mix"} <= set(integrity["checks"])

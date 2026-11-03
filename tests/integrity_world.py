@@ -24,21 +24,14 @@ from pyaerial.config.schema import (
 )
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_FIRST_PACKET,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_PACKET_TYPE,
-    STORE_RECV_DATA,
     STORE_VERT_SPEED,
 )
 from pyaerial.integrity import IntegrityMonitor, geodesy
-from pyaerial.models import Datum
+from pyaerial.models import AircraftInfo, Datum, IntegrityDoc, Plane, TrackState
 from pyaerial.receivers.frames import BEAST_CLOCK_HZ, BEAST_CLOCK_MOD, RawFrame
 from pyaerial.receivers.positions import ReceiverPositions
 
@@ -105,21 +98,17 @@ class Aircraft:
         return self.emitter or self.claimed()
 
 
-def new_plane(icao: str, t: float) -> dict:
-    return {
-        STORE_INFO: {STORE_ICAO: icao},
-        STORE_RECV_DATA: {},
-        "calculated_data": {},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: t,
-            STORE_MOST_RECENT_PACKET: t,
-            STORE_PACKET_TYPE: {},
-        },
-    }
+def new_plane(icao: str, t: float) -> Plane:
+    return Plane(
+        info=AircraftInfo(icao=icao),
+        track=TrackState(first_packet=t, last_update=t, packet_types={}),
+        received_data={},
+        calculated_data={},
+    )
 
 
-def _append(plane: dict, field_name: str, value: float, t: float) -> None:
-    plane[STORE_RECV_DATA].setdefault(field_name, []).append(Datum(value, t))
+def _append(plane: Plane, field_name: str, value: float, t: float) -> None:
+    plane.received_data.setdefault(field_name, []).append(Datum(value, t))
 
 
 class World:
@@ -172,19 +161,19 @@ class World:
 
     def _move(self, ac: Aircraft, t: float) -> None:
         plane = self.planes[ac.icao.upper()]
-        internal = plane[STORE_INTERNAL]
-        last = internal[STORE_MOST_RECENT_PACKET]
+        internal = plane.track
+        last = internal.last_update
         dt = max(0.0, t - last)
         ac.lat, ac.lon = geodesy.destination(ac.lat, ac.lon, ac.track, ac.speed_kph / 3.6 * dt)
         ac.alt += ac.vrate * dt
-        internal[STORE_MOST_RECENT_PACKET] = t
+        internal.last_update = t
         _append(plane, STORE_LAT, ac.lat, t)
         _append(plane, STORE_LONG, ac.lon, t)
         _append(plane, STORE_ALT, ac.alt, t)
         _append(plane, STORE_HORIZ_SPEED, ac.speed_kph, t)
         _append(plane, STORE_HEADING, ac.track, t)
         _append(plane, STORE_VERT_SPEED, ac.vrate, t)
-        pkt = internal[STORE_PACKET_TYPE]
+        pkt = internal.packet_types
         pkt[CAT_AIRBORNE_BARO] = pkt.get(CAT_AIRBORNE_BARO, 0) + 1
         pkt[CAT_VELOCITY] = pkt.get(CAT_VELOCITY, 0) + 1
         if pkt[CAT_AIRBORNE_BARO] % 10 == 1:
@@ -250,8 +239,10 @@ def run_world(world: World, monitor: IntegrityMonitor, seconds: float, extra=Non
         monitor.evaluate(world.planes, world.t, force=True)
 
 
-def integrity_of(world: World, icao: str) -> dict:
-    return world.planes[icao.upper()][STORE_INFO]["integrity"]
+def integrity_of(world: World, icao: str) -> IntegrityDoc:
+    doc = world.planes[icao.upper()].info.integrity
+    assert doc is not None, icao
+    return doc
 
 
 def add_spoofer(world: World, icao: str, emitter_km: float = 5.0, claim_km: float = 150.0) -> Aircraft:

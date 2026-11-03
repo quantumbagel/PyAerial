@@ -10,15 +10,9 @@ from pyaerial.alerts.engine import AlertEngine
 from pyaerial.calc.geo import build_polygons
 from pyaerial.config.schema import AlertActionConfig
 from pyaerial.constants import (
-    STORE_FIRST_PACKET,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
     STORE_LAT,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import Datum
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 
 
 def test_dispatcher_preserves_order_per_key():
@@ -90,11 +84,11 @@ def test_deactivate_without_position_reports_none_not_null_island():
     rule.on_deactivate = [AlertActionConfig(method="capture_test", options={})]
     engine = AlertEngine(config, build_polygons(config.zones))
     try:
-        plane = {
-            STORE_INFO: {STORE_ICAO: "abc123"},
-            STORE_RECV_DATA: {},
-            STORE_INTERNAL: {STORE_FIRST_PACKET: 1.0, STORE_MOST_RECENT_PACKET: 2.0},
-        }
+        plane = Plane(
+            info=AircraftInfo(icao="abc123"),
+            track=TrackState(first_packet=1.0, last_update=2.0),
+            received_data={},
+        )
         engine._alert_state[("abc123", "pad", rule.name)] = {
             "activated_at": 1.0,
             "last_periodic": 0.0,
@@ -134,14 +128,11 @@ def test_activation_hold_uses_monotonic_clock(monkeypatch):
     mono = [1000.0]
     monkeypatch.setattr(time, "time", lambda: wall[0])
     monkeypatch.setattr(time, "monotonic", lambda: mono[0])
-    plane = {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: {"altitude": [Datum(400.0, wall[0])]},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: wall[0],
-            STORE_MOST_RECENT_PACKET: wall[0],
-        },
-    }
+    plane = Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(first_packet=wall[0], last_update=wall[0]),
+        received_data={"altitude": [Datum(400.0, wall[0])]},
+    )
     motion = ResolvedMotion(heading_deg=0.0, speed_kph=0.0, turn_rate_deg_s=0.0)
     position = (35.725, -78.695)
     try:

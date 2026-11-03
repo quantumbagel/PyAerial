@@ -48,28 +48,19 @@ def test_claim_engine_fails_when_redis_down():
 def test_live_queries_hide_flights_when_engine_heartbeat_is_stale():
     store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
     from pyaerial.constants import (
-        STORE_FIRST_PACKET,
-        STORE_ICAO,
-        STORE_INFO,
-        STORE_INTERNAL,
-        STORE_LAT,
-        STORE_LONG,
-        STORE_MOST_RECENT_PACKET,
-        STORE_RECV_DATA,
-    )
-    from pyaerial.models import Datum
+    STORE_LAT,
+    STORE_LONG,
+)
+    from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 
-    plane = {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: {
+    plane = Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(first_packet=1.0, last_update=1.0),
+        received_data={
             STORE_LAT: [Datum(35.72, 1.0)],
             STORE_LONG: [Datum(-78.70, 1.0)],
         },
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 1.0,
-            STORE_MOST_RECENT_PACKET: 1.0,
-        },
-    }
+    )
     store.write_live_planes({"abc123": plane})
     store.clear_engine()
     assert get_live_flights(store, None) == []

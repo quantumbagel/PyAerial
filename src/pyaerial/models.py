@@ -1,35 +1,27 @@
 """
 Core data structures shared across PyAerial and helpers for accessing them.
 
-A :class:`Plane` holds four buckets (``info``, ``received_data``,
-``calculated_data``, ``internal``). Telemetry/calculated values are stored as
-lists of :class:`Datum` (value/timestamp pairs). Dict-style bucket access is
-supported so existing call sites keep working.
+A :class:`Plane` is the one in-memory aircraft shape: identity and enrichment
+(:class:`AircraftInfo`), tracking bookkeeping (:class:`TrackState`), and two
+telemetry maps (``received_data``, ``calculated_data``) of field name ->
+time-ordered list of :class:`Datum`. Documents (Redis, the archive, the API)
+are converted explicitly in :mod:`pyaerial.store.codec`.
 """
 
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass, field, fields, replace
 from operator import attrgetter
-from typing import Any, NamedTuple, TypedDict
+from typing import Any, NamedTuple, NotRequired, TypedDict
 
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALC_DATA,
-    STORE_FIRST_PACKET,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_POSITION_RECEIVERS,
-    STORE_RECV_DATA,
 )
 
 
@@ -48,8 +40,12 @@ class Datum:
         return f"Datum({self.value}, {self.time})"
 
 
+# Telemetry map: field name (STORE_LAT, STORE_HORIZ_SPEED, ...) -> series.
+Series = dict[str, list[Datum]]
+
+
 class Verdict(NamedTuple):
-    """One integrity verdict, logged in ``internal`` each time it changes."""
+    """One integrity verdict, logged in ``TrackState.integrity_log`` on change."""
 
     time: float
     # None when the status is unknown (no meaningful score yet).
@@ -61,104 +57,149 @@ class Verdict(NamedTuple):
     checks: dict[str, Any] | None = None
 
 
-class PlaneState(TypedDict, total=False):
-    """In-memory plane document keyed by telemetry buckets."""
+class IntegrityDoc(TypedDict):
+    """Latest integrity verdict, published in ``AircraftInfo.integrity``."""
 
-    info: dict[str, Any]
-    received_data: dict[str, list[Datum]]
-    calculated_data: dict[str, list[Datum]]
-    internal: dict[str, Any]
-    active_alerts: list[dict[str, Any]]
+    # None while the status is ``unknown``.
+    score: float | None
+    status: str
+    # check name -> CheckResult.as_dict()
+    checks: dict[str, dict[str, Any]]
+    # Estimated emitter position when the claimed one is contradicted.
+    emitter: NotRequired[dict[str, float]]
+    rebroadcast: NotRequired[bool]
 
 
-_PLANE_ATTR = {
-    STORE_INFO: "info",
-    STORE_RECV_DATA: "received_data",
-    STORE_CALC_DATA: "calculated_data",
-    STORE_INTERNAL: "internal",
-    "active_alerts": "active_alerts",
-}
+@dataclass(slots=True)
+class AircraftInfo:
+    """Identity and enrichment of one aircraft.
+
+    ``None`` means "not known" (absent from the ``info`` document). The info
+    document lists fields in the order they were first set, as the dict it
+    replaced did: :meth:`doc_order` keeps that order so the Redis and archive
+    documents stay byte-identical. ``extra`` holds keys of a restored document
+    this version does not model, so they survive archiving.
+    """
+
+    # First, so it exists before __init__ assigns (and records) the others.
+    _doc_order: list[str] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
+    # 24-bit address as decoded (pyModeS hands out upper case).
+    icao: str
+    callsign: str | None = None
+    # [typecode, ADS-B emitter category] from the last identification message.
+    plane_category: list[Any] | None = None
+    # Receiver of the newest frame, and every receiver that heard the aircraft.
+    receiver: str | None = None
+    receivers: list[str] | None = None
+    integrity: IntegrityDoc | None = None
+    # Aircraft database (enrichment).
+    registration: str | None = None
+    model: str | None = None
+    owner: str | None = None
+    country: str | None = None
+    aircraft_type: str | None = None
+    manufacturer: str | None = None
+    manufacturer_name: str | None = None
+    operator_callsign: str | None = None
+    photo_url: str | None = None
+    metadata_resolved: bool | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        object.__setattr__(self, name, value)
+        if value is not None and name in _INFO_DOC_FIELDS:
+            order = self._doc_order
+            if name not in order:
+                order.append(name)
+
+    def doc_order(self) -> tuple[str, ...]:
+        """Document keys (fields and ``extra`` keys) in first-set order."""
+        return tuple(self._doc_order)
+
+    def set_extra(self, key: str, value: Any) -> None:
+        """Keep an unmodelled document key (in document order)."""
+        self.extra[key] = value
+        if key not in self._doc_order:
+            self._doc_order.append(key)
+
+    def copy(self) -> AircraftInfo:
+        """Shallow copy (values shared, like ``dict(info)``), same key order."""
+        twin = replace(self, extra=dict(self.extra))
+        object.__setattr__(twin, "_doc_order", list(self._doc_order))
+        return twin
+
+
+_INFO_DOC_FIELDS = frozenset(
+    f.name for f in fields(AircraftInfo) if f.name not in ("_doc_order", "extra")
+)
+
+
+@dataclass(slots=True)
+class TrackState:
+    """Tracking bookkeeping for one flight (never published as a document)."""
+
+    # First packet of this flight (moved to the split on a segment split).
+    first_packet: float
+    # Newest packet.
+    last_update: float
+    packets: int = 0
+    # classify CAT_* -> packets of that category.
+    packet_types: dict[int, int] = field(default_factory=dict)
+    # Position-fix timestamp -> receivers that heard that frame, strongest first.
+    position_receivers: dict[float, tuple[str, ...]] = field(default_factory=dict)
+    # Integrity verdict changes, oldest first.
+    integrity_log: list[Verdict] = field(default_factory=list)
+    # When the engine first tracked the aircraft. Unlike first_packet it is
+    # kept when a long track is split into segments (max_flight_seconds).
+    track_started: float | None = None
+    # Position fixes the CPR jump gate rejected (evidence of two transmitters
+    # sharing an ICAO address).
+    gate_rejects: int = 0
 
 
 @dataclass(slots=True)
 class Plane:
-    """Typed in-memory plane. Dict-style bucket access still works."""
+    """One tracked aircraft (one flight)."""
 
-    info: dict[str, Any] = field(default_factory=dict)
-    received_data: dict[str, list[Datum]] = field(default_factory=dict)
-    calculated_data: dict[str, list[Datum]] = field(default_factory=dict)
-    internal: dict[str, Any] = field(default_factory=dict)
+    info: AircraftInfo
+    track: TrackState
+    received_data: Series = field(default_factory=dict)
+    calculated_data: Series = field(default_factory=dict)
+    # Alert entries published with the live flight document.
     active_alerts: list[dict[str, Any]] = field(default_factory=list)
 
-    @classmethod
-    def from_mapping(cls, data: "Plane | dict") -> "Plane":
-        """Wrap ``data``, sharing the inner bucket dicts (no copy)."""
-        if isinstance(data, Plane):
-            return data
-        return cls(
-            info=data.setdefault(STORE_INFO, {}),
-            received_data=data.setdefault(STORE_RECV_DATA, {}),
-            calculated_data=data.setdefault(STORE_CALC_DATA, {}),
-            internal=data.setdefault(STORE_INTERNAL, {}),
-            active_alerts=data.setdefault("active_alerts", [])
-            if "active_alerts" in data
-            else list(data.get("active_alerts") or []),
-        )
+    @property
+    def icao(self) -> str:
+        """ICAO address, lowercased."""
+        return self.info.icao.lower()
 
-    def __getitem__(self, key: str) -> Any:
-        attr = _PLANE_ATTR.get(key)
-        if attr is None:
-            raise KeyError(key)
-        return getattr(self, attr)
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        attr = _PLANE_ATTR.get(key)
-        if attr is None:
-            raise KeyError(key)
-        setattr(self, attr, value)
-
-    def __contains__(self, key: object) -> bool:
-        return key in _PLANE_ATTR
-
-    def get(self, key: str, default: Any = None) -> Any:
-        try:
-            return self[key]
-        except KeyError:
-            return default
-
-    def setdefault(self, key: str, default: Any) -> Any:
-        try:
-            return self[key]
-        except KeyError:
-            self[key] = default
-            return default
+    @property
+    def flight_id(self) -> str:
+        """Stable id for one continuous track: ``{icao}-{first_packet_unix}``."""
+        return f"{self.info.icao.lower()}-{int(self.track.first_packet)}"
 
 
-def get_latest(
-    information_type: str,
-    information_datum: str,
-    plane_data: Plane | PlaneState | dict,
-    after_time: float | None = None,
+def latest_datum(
+    series: Mapping[str, Sequence[Datum]],
+    name: str,
+    at_time: float | None = None,
 ) -> Datum | None:
     """
-    Return the most relevant :class:`Datum` for a field.
+    Return the most relevant :class:`Datum` of ``series[name]``.
 
-    :param information_type: bucket (e.g. ``received_data``)
-    :param information_datum: field within the bucket (e.g. ``latitude``)
-    :param plane_data: the plane dict to read from
-    :param after_time: if given, return the datum whose timestamp is closest to
+    :param series: a telemetry map (``plane.received_data`` / ``calculated_data``)
+    :param name: field within it (e.g. ``latitude``)
+    :param at_time: if given, return the datum whose timestamp is closest to
         this time; otherwise return the newest datum.
     """
-    bucket = plane_data.get(information_type)
-    if not bucket:
+    values = series.get(name)
+    if not values:
         return None
-    series = bucket.get(information_datum)
-    if not series:
-        return None
-
-    if after_time is None:
-        return series[-1]
-    return nearest_datum(series, after_time)
+    if at_time is None:
+        return values[-1]
+    return nearest_datum(values, at_time)
 
 
 # C-level key: bisect over long series calls it O(log n) times per lookup,
@@ -192,50 +233,28 @@ def nearest_datum(series: Sequence[Datum], at_time: float) -> Datum | None:
     return before
 
 
-def patch_append(
-    plane: Plane | PlaneState | dict, bucket: str, field: str, datum: Datum
-) -> bool:
+def append_datum(series: Series, name: str, datum: Datum) -> bool:
     """
-    Append ``datum`` to ``plane[bucket][field]`` unless it duplicates the latest
-    value already stored there.
+    Append ``datum`` to ``series[name]`` unless it duplicates the latest value
+    already stored there.
 
     :return: whether the datum was actually added
     """
-    latest = get_latest(bucket, field, plane)
-    if latest == datum:
+    values = series.get(name)
+    if values and values[-1] == datum:
         return False
-    plane.setdefault(bucket, {}).setdefault(field, []).append(datum)
+    if values is None:
+        series[name] = [datum]
+    else:
+        values.append(datum)
     return True
-
-
-def icao_of(plane: Plane | PlaneState | dict) -> str:
-    """Return the plane's ICAO address, lowercased."""
-    info = plane.info if isinstance(plane, Plane) else plane[STORE_INFO]
-    return info[STORE_ICAO].lower()
-
-
-def first_packet_time(plane: Plane | PlaneState | dict) -> float:
-    internal = plane.internal if isinstance(plane, Plane) else plane[STORE_INTERNAL]
-    return internal[STORE_FIRST_PACKET]
-
-
-def last_update(plane: Plane | PlaneState | dict) -> float:
-    internal = plane.internal if isinstance(plane, Plane) else plane[STORE_INTERNAL]
-    return internal[STORE_MOST_RECENT_PACKET]
-
-
-def flight_id_for_plane(plane: Plane | PlaneState | dict) -> str:
-    """Stable id for one continuous track: ``{icao}-{first_packet_unix}``."""
-    return f"{icao_of(plane)}-{int(first_packet_time(plane))}"
 
 
 def _verdict_time(verdict: Verdict) -> float:
     return verdict.time
 
 
-def sample_provenance(
-    plane: Plane | PlaneState | dict, timestamp: float
-) -> dict[str, Any]:
+def sample_provenance(plane: Plane, timestamp: float) -> dict[str, Any]:
     """Receivers and integrity verdict for the position sample at *timestamp*.
 
     ``receivers`` lists the receivers that heard the position frame, the one
@@ -243,12 +262,12 @@ def sample_provenance(
     arrived (the latest one published at or before it), so a sample received
     before the aircraft's first verdict carries none.
     """
-    internal = plane.get(STORE_INTERNAL) or {}
+    track = plane.track
     out: dict[str, Any] = {}
-    heard = (internal.get(STORE_POSITION_RECEIVERS) or {}).get(timestamp)
+    heard = track.position_receivers.get(timestamp)
     if heard:
         out["receivers"] = list(heard)
-    verdicts = internal.get(STORE_INTEGRITY_LOG) or []
+    verdicts = track.integrity_log
     idx = bisect_right(verdicts, timestamp, key=_verdict_time)
     if idx:
         verdict = verdicts[idx - 1]
@@ -265,7 +284,7 @@ def _tail_after(series: Sequence[Datum], since: float | None) -> Sequence[Datum]
 
 
 def iter_telemetry_samples(
-    plane: Plane | PlaneState | dict,
+    plane: Plane,
     since: float | None = None,
 ) -> Iterator[tuple[float, float, float, float | None, float | None, float | None]]:
     """Yield ``(timestamp, lat, lon, alt, speed, heading)`` for each position sample.
@@ -275,8 +294,8 @@ def iter_telemetry_samples(
     ``since`` is given only samples strictly newer than it are produced, and
     only those are visited, so per-tick incremental callers stay O(new · log n).
     """
-    recv = plane.get(STORE_RECV_DATA, {}) or {}
-    calc = plane.get(STORE_CALC_DATA, {}) or {}
+    recv = plane.received_data
+    calc = plane.calculated_data
     lat_series = recv.get(STORE_LAT) or []
     lon_series = recv.get(STORE_LONG) or []
     if not lat_series or not lon_series:

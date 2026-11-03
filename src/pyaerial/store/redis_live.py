@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import redis
 from redis.exceptions import RedisError
@@ -21,33 +21,21 @@ from pyaerial.constants import (
     ALERT_CAT_ZONE,
     LIVE_ENGINE_TTL_SECONDS,
     STORE_ALT,
-    STORE_CALC_DATA,
     STORE_CALLSIGN,
-    STORE_FIRST_PACKET,
-    STORE_GNSS_HEIGHT,
-    STORE_HEADING,
-    STORE_HORIZ_SPEED,
     STORE_ICAO,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_POSITION_RECEIVERS,
-    STORE_RECV_DATA,
 )
 from pyaerial.jsonutil import dumps as json_dumps
-from pyaerial.models import (
-    Datum,
-    Verdict,
-    flight_id_for_plane,
-    iter_telemetry_samples,
-    sample_provenance,
+from pyaerial.models import Plane, iter_telemetry_samples
+from pyaerial.store.codec import (
+    live_doc_icao,
+    live_flight_doc,
+    live_telemetry_point,
+    plane_from_live,
 )
 from pyaerial.store.memory import MemoryLiveBuffer
 from pyaerial.store.present import live_flight_detail, live_flight_summary
-from pyaerial.store.samples import gnss_height_at
 from pyaerial.urls import redact_uri
 
 log = logging.getLogger("pyaerial.store.redis")
@@ -57,7 +45,7 @@ class LiveUnavailable(RuntimeError):
     """Configured Redis live store cannot be read."""
 
 
-def _safe_json_loads(raw: Any) -> Any | None:
+def _safe_json_loads(raw: Any) -> Any:
     try:
         return json.loads(raw)
     except (json.JSONDecodeError, TypeError, ValueError):
@@ -505,7 +493,7 @@ class RedisLiveStore:
         """Fields added to the ``live:engine`` heartbeat value from now on."""
         self._engine_health = dict(fields)
 
-    def write_live_planes(self, planes: dict[str, dict]) -> None:
+    def write_live_planes(self, planes: dict[str, Plane]) -> None:
         if not planes and not self._dirty_alerts:
             return
         if not self.writer and not self.memory_only:
@@ -528,7 +516,7 @@ class RedisLiveStore:
 
     def record_alert_episode(
         self,
-        plane: dict,
+        plane: Plane,
         meta: dict[str, Any],
         payload: dict[str, Any],
         *,
@@ -543,7 +531,7 @@ class RedisLiveStore:
         document for this alert_id is updated in place so there is never more than
         one document per alert episode.
         """
-        flight_id = flight_id_for_plane(plane)
+        flight_id = plane.flight_id
         doc = self._alert_doc(
             plane,
             meta,
@@ -612,7 +600,7 @@ class RedisLiveStore:
 
     def update_active_alert(
         self,
-        plane: dict,
+        plane: Plane,
         alert_id: str,
         meta: dict[str, Any],
         payload: dict[str, Any],
@@ -652,7 +640,7 @@ class RedisLiveStore:
                 deactivated_at=None,
             )
         doc["last_updated"] = timestamp
-        flight_id = flight_id_for_plane(plane)
+        flight_id = plane.flight_id
         with self._mem_lock:
             self._mem.active_alerts[alert_id] = doc
             flight_alerts = self._mem.alerts.get(flight_id, [])
@@ -717,7 +705,8 @@ class RedisLiveStore:
             )
             self._mem.alerts[new_flight_id].extend(moved.values())
             self._mem.alert_episodes = [
-                moved.get(a.get("alert_id"), a) for a in self._mem.alert_episodes
+                moved.get(cast(str, a.get("alert_id")), a)
+                for a in self._mem.alert_episodes
             ]
             for alert_id, (flight_id, doc) in list(self._dirty_alerts.items()):
                 if flight_id == old_flight_id:
@@ -745,7 +734,7 @@ class RedisLiveStore:
 
     def _alert_doc(
         self,
-        plane: dict,
+        plane: Plane,
         meta: dict[str, Any],
         payload: dict[str, Any],
         *,
@@ -754,7 +743,7 @@ class RedisLiveStore:
         active: bool,
         deactivated_at: float | None = None,
     ) -> dict[str, Any]:
-        flight_id = flight_id_for_plane(plane)
+        flight_id = plane.flight_id
         return {
             "alert_id": alert_id,
             "flight_id": flight_id,
@@ -802,13 +791,13 @@ class RedisLiveStore:
                 replies = pipe.execute()
                 for index in range(len(flight_ids)):
                     raw, last_raw = replies[2 * index], replies[2 * index + 1]
-                    doc = _safe_json_loads(raw) if raw else None
-                    if not isinstance(doc, dict):
+                    flight = _safe_json_loads(raw) if raw else None
+                    if not isinstance(flight, dict):
                         continue
                     last_tel = _safe_json_loads(last_raw[0]) if last_raw else None
                     results.append(
                         live_flight_summary(
-                            doc, last_tel if isinstance(last_tel, dict) else None
+                            flight, last_tel if isinstance(last_tel, dict) else None
                         )
                     )
         except RedisError as exc:
@@ -965,7 +954,7 @@ class RedisLiveStore:
                     points.append(self._live_point(flight_id, point))
         else:
             try:
-                for flight_id in client.smembers(_KEY_FLIGHTS):
+                for flight_id in cast("set[str]", client.smembers(_KEY_FLIGHTS)):
                     for point in self._read_telemetry(client, flight_id, since):
                         points.append(self._live_point(flight_id, point))
             except RedisError as exc:
@@ -1154,7 +1143,7 @@ class RedisLiveStore:
             return []
         try:
             live = set(client.smembers(_KEY_FLIGHTS))
-            active = client.hgetall(_KEY_ACTIVE_ALERTS)
+            active = cast("dict[str, str]", client.hgetall(_KEY_ACTIVE_ALERTS))
             strays: list[dict[str, Any]] = []
             broken: list[str] = []
             for alert_id, raw in active.items():
@@ -1177,12 +1166,12 @@ class RedisLiveStore:
         client = self._redis()
         if client is not None:
             try:
-                return set(client.smembers(_KEY_FLIGHTS))
+                return set(cast("set[str]", client.smembers(_KEY_FLIGHTS)))
             except RedisError as exc:
                 self._mark_disconnected(exc, client)
         return set(self._mem.flights)
 
-    def planes_for_finalize(self) -> list[dict[str, Any]]:
+    def planes_for_finalize(self) -> list[Plane]:
         planes = []
         for flight_id in self.flight_ids():
             plane = self.plane_for_finalize(flight_id)
@@ -1215,7 +1204,7 @@ class RedisLiveStore:
         except RedisError as exc:
             self._mark_disconnected(exc, client)
 
-    def plane_for_finalize(self, flight_id: str) -> dict[str, Any] | None:
+    def plane_for_finalize(self, flight_id: str) -> Plane | None:
         if flight_id in self._unreadable_flights:
             return None
         doc: dict[str, Any] | None = self._mem.flights.get(flight_id)
@@ -1241,72 +1230,11 @@ class RedisLiveStore:
                 self._skip_unreadable(client, flight_id, "not a JSON object")
         if not doc:
             return None
-        info = doc.get("info")
-        info = dict(info) if isinstance(info, dict) else {}
-        icao = str(doc.get("icao") or info.get(STORE_ICAO) or "").lower()
+        icao = live_doc_icao(doc)
         if not icao:
             self._skip_unreadable(client, flight_id, "no ICAO address")
             return None
-        info[STORE_ICAO] = icao
-        points = self.get_telemetry(flight_id)
-        recv: dict[str, list] = {}
-        calc: dict[str, list] = {}
-
-        def _append(bucket: dict[str, list], key: str, value: Any, ts: float) -> None:
-            if value is None:
-                return
-            bucket.setdefault(key, []).append(Datum(value, ts))
-
-        heard_by: dict[float, tuple[str, ...]] = {}
-        verdicts: list[Verdict] = []
-        for point in points:
-            ts = point.get("timestamp")
-            if not isinstance(ts, (int, float)):
-                continue
-            _append(recv, STORE_LAT, point.get("latitude"), ts)
-            _append(recv, STORE_LONG, point.get("longitude"), ts)
-            _append(recv, STORE_ALT, point.get("altitude"), ts)
-            _append(recv, STORE_GNSS_HEIGHT, point.get("gnss_height"), ts)
-            _append(calc, STORE_HORIZ_SPEED, point.get("speed"), ts)
-            _append(calc, STORE_HEADING, point.get("heading"), ts)
-            receivers = point.get("receivers")
-            if isinstance(receivers, list) and receivers:
-                heard_by[ts] = tuple(str(name) for name in receivers)
-            score = point.get("integrity_score")
-            status = point.get("integrity_status")
-            # An ``unknown`` verdict (no check had evidence) has no score.
-            if isinstance(status, str) and (
-                score is None
-                or (isinstance(score, (int, float)) and not isinstance(score, bool))
-            ):
-                score = float(score) if score is not None else None
-                flags = point.get("integrity_flags") or []
-                flagged = tuple(str(name) for name in flags)
-                last = verdicts[-1] if verdicts else None
-                if last is None or (last.score, last.status, last.flagged) != (
-                    score,
-                    status,
-                    flagged,
-                ):
-                    verdicts.append(Verdict(ts, score, status, flagged))
-        start = doc.get("start_time")
-        end = doc.get("end_time")
-        if not isinstance(start, (int, float)):
-            start = points[0]["timestamp"] if points else time.time()
-        if not isinstance(end, (int, float)):
-            end = points[-1]["timestamp"] if points else start
-        return {
-            STORE_INFO: info,
-            STORE_INTERNAL: {
-                STORE_FIRST_PACKET: start,
-                STORE_MOST_RECENT_PACKET: end,
-                STORE_POSITION_RECEIVERS: heard_by,
-                STORE_INTEGRITY_LOG: verdicts,
-            },
-            STORE_RECV_DATA: recv,
-            STORE_CALC_DATA: calc,
-            "active_alerts": doc.get("active_alerts") or [],
-        }
+        return plane_from_live(doc, icao, self.get_telemetry(flight_id))
 
     @staticmethod
     def _delete_redis_flight(
@@ -1318,10 +1246,14 @@ class RedisLiveStore:
         for when its per-flight alerts hash (the usual source) has expired.
         """
         raw_flight = client.get(_KEY_FLIGHT.format(flight_id=flight_id))
-        flight_alerts_raw = client.hgetall(_KEY_ALERTS.format(flight_id=flight_id))
+        # decode_responses=True: replies are str.
+        flight_alerts_raw = cast(
+            "dict[str, str]", client.hgetall(_KEY_ALERTS.format(flight_id=flight_id))
+        )
         raw_alerts = list(flight_alerts_raw.values())
         active_raw = []
-        for alert_id, raw in client.hgetall(_KEY_ACTIVE_ALERTS).items():
+        active = cast("dict[str, str]", client.hgetall(_KEY_ACTIVE_ALERTS))
+        for alert_id, raw in active.items():
             parsed = _safe_json_loads(raw)
             if isinstance(parsed, dict) and parsed.get("flight_id") == flight_id:
                 active_raw.append(alert_id)
@@ -1330,14 +1262,14 @@ class RedisLiveStore:
         episode_ids: set[str] = set()
         if flight_alerts_raw:
             ids = list(flight_alerts_raw)
-            for alert_id, raw in zip(
-                ids, client.hmget(_KEY_ALERT_EPISODES, ids), strict=True
-            ):
-                parsed = _safe_json_loads(raw) if raw else None
+            stored = cast("list[str | None]", client.hmget(_KEY_ALERT_EPISODES, ids))
+            for alert_id, episode in zip(ids, stored, strict=True):
+                parsed = _safe_json_loads(episode) if episode else None
                 if not isinstance(parsed, dict) or parsed.get("flight_id") == flight_id:
                     episode_ids.add(alert_id)
         if all_episodes:
-            for alert_id, raw in client.hgetall(_KEY_ALERT_EPISODES).items():
+            episodes = cast("dict[str, str]", client.hgetall(_KEY_ALERT_EPISODES))
+            for alert_id, raw in episodes.items():
                 parsed = _safe_json_loads(raw)
                 if isinstance(parsed, dict) and parsed.get("flight_id") == flight_id:
                     episode_ids.add(alert_id)
@@ -1503,34 +1435,15 @@ class RedisLiveStore:
             except Exception as exc:
                 log.debug("Error closing Redis client: %s", exc)
 
-    def _upsert_live_flight(self, plane: dict, pipe: Any = None) -> bool:
+    def _upsert_live_flight(self, plane: Plane, pipe: Any = None) -> bool:
         """Update one live flight; queue Redis writes on *pipe*.
 
         Returns whether anything was queued. Without *pipe* (and with a
         writable Redis), the writes are executed immediately.
         """
-        info = plane.get(STORE_INFO, {})
-        internal = plane.get(STORE_INTERNAL, {})
-        flight_id = flight_id_for_plane(plane)
-        icao = info[STORE_ICAO].lower()
-        first_packet = internal[STORE_FIRST_PACKET]
-        last_packet = internal[STORE_MOST_RECENT_PACKET]
-
-        flight_doc = {
-            "flight_id": flight_id,
-            "icao": icao,
-            "status": "live",
-            "active_alerts": plane.get("active_alerts") or [],
-            "start_time": first_packet,
-            "end_time": last_packet,
-            "callsign": info.get(STORE_CALLSIGN) or "",
-            "model": info.get("model") or "",
-            "owner": info.get("owner") or "",
-            "country": info.get("country") or "",
-            "aircraft_type": info.get("aircraft_type") or "",
-            "registration": info.get("registration") or "",
-            "info": {str(k): v for k, v in dict(info).items()},
-        }
+        flight_doc = live_flight_doc(plane)
+        flight_id = flight_doc["flight_id"]
+        icao = flight_doc["icao"]
         with self._mem_lock:
             self._mem.flights[flight_id] = flight_doc
 
@@ -1563,7 +1476,7 @@ class RedisLiveStore:
         return queued
 
     def _write_telemetry_points(
-        self, plane: dict, flight_id: str, icao: str, pipe: Any = None
+        self, plane: Plane, flight_id: str, icao: str, pipe: Any = None
     ) -> bool:
         """Append new samples to memory and queue them on *pipe*. Returns queued."""
         last_written = self._last_telemetry_ts.get(flight_id, 0.0)
@@ -1574,24 +1487,9 @@ class RedisLiveStore:
         key = _KEY_TELEMETRY.format(flight_id=flight_id) if pipe is not None else None
 
         new_points: list[dict[str, Any]] = []
-        for timestamp, lat, lon, alt, speed, heading in samples:
-            point: dict[str, Any] = {
-                "icao": icao,
-                "timestamp": timestamp,
-                "latitude": lat,
-                "longitude": lon,
-            }
-            if alt is not None:
-                point["altitude"] = alt
-            if speed is not None:
-                point["speed"] = speed
-            if heading is not None:
-                point["heading"] = heading
-            gnss_height = gnss_height_at(plane, timestamp)
-            if gnss_height is not None:
-                point["gnss_height"] = gnss_height
-            point.update(sample_provenance(plane, timestamp))
-
+        for sample in samples:
+            timestamp = sample[0]
+            point = live_telemetry_point(plane, sample, icao)
             new_points.append(point)
             if pipe is not None and key:
                 pipe.zadd(key, {json_dumps(point): timestamp})
@@ -1658,7 +1556,8 @@ class RedisLiveStore:
             # flight this engine owns that memory no longer considers active.
             owned = set(flights)
             ghosts = []
-            for alert_id, raw in client.hgetall(_KEY_ACTIVE_ALERTS).items():
+            stored = cast("dict[str, str]", client.hgetall(_KEY_ACTIVE_ALERTS))
+            for alert_id, raw in stored.items():
                 if alert_id in active_alerts:
                     continue
                 parsed = _safe_json_loads(raw)
@@ -1685,15 +1584,15 @@ class RedisLiveStore:
                 encoded = json_dumps(doc)
                 pipe.hset(_KEY_ACTIVE_ALERTS, alert_id, encoded)
             for doc in episodes:
-                alert_id = doc.get("alert_id")
-                flight_id = doc.get("flight_id")
-                if not alert_id:
+                episode_id = doc.get("alert_id")
+                episode_flight = doc.get("flight_id")
+                if not episode_id:
                     continue
                 encoded = json_dumps(doc)
-                pipe.hset(_KEY_ALERT_EPISODES, alert_id, encoded)
-                if flight_id:
-                    alerts_key = _KEY_ALERTS.format(flight_id=flight_id)
-                    pipe.hset(alerts_key, alert_id, encoded)
+                pipe.hset(_KEY_ALERT_EPISODES, episode_id, encoded)
+                if episode_flight:
+                    alerts_key = _KEY_ALERTS.format(flight_id=episode_flight)
+                    pipe.hset(alerts_key, episode_id, encoded)
                     pipe.expire(alerts_key, LIVE_FLIGHT_TTL_SECONDS)
             pipe.execute()
             # The heartbeat was just written by the claim that preceded this.

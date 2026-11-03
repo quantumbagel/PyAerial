@@ -9,8 +9,10 @@ import queue
 import signal
 import threading
 import time
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, replace
+from types import FrameType
+from typing import Any
 
 from shapely import Polygon
 
@@ -19,36 +21,24 @@ from pyaerial.alerts.engine import ENDED_RESTART
 from pyaerial.alerts.retain import should_retain
 from pyaerial.calc.geo import build_polygons
 from pyaerial.config.schema import Config
-from pyaerial.constants import (
-    DEFAULT_AIRCRAFT_DB,
-    STORE_CALC_DATA,
-    STORE_CALLSIGN,
-    STORE_FIRST_PACKET,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
-    STORE_LAT,
-    STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_POSITION_RECEIVERS,
-    STORE_RECV_DATA,
-    STORE_TRACK_STARTED,
-)
+from pyaerial.constants import DEFAULT_AIRCRAFT_DB, STORE_LAT, STORE_LONG
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.integrity import IntegrityMonitor
 from pyaerial.logging_setup import setup_logging
-from pyaerial.models import Datum, flight_id_for_plane
+from pyaerial.models import Plane
 from pyaerial.pipeline import PlaneCalculator
 from pyaerial.receivers import RawFrame, Receiver, available_receivers, create_receiver
 from pyaerial.receivers.frames import es_crc_ok, merge_receiver_frames, raw_payload
 from pyaerial.receivers.positions import ReceiverPositions
 from pyaerial.store import HistoryStore, RedisLiveStore
+from pyaerial.store.codec import plane_from_alert_docs
 from pyaerial.store.history import FRAME_PRUNE_BATCH
 from pyaerial.store.redis_live import LiveUnavailable
 from pyaerial.tracker import Tracker
 
 log = logging.getLogger("pyaerial.engine")
+
+_SignalHandler = Callable[[int, FrameType | None], Any] | int | signal.Handlers | None
 
 _RECEIVER_BACKOFF_INITIAL = 1.0
 _RECEIVER_BACKOFF_MAX = 30.0
@@ -103,16 +93,15 @@ _MERGE_WINDOW = 0.1
 _DEFAULT_MAX_FLIGHT_SECONDS = 14_400.0
 
 
-def _pending_cost(plane: dict) -> int:
+def _pending_cost(plane: Plane) -> int:
     """Approximate bytes held by an in-memory plane (O(number of series))."""
     values = 0
-    for bucket in (STORE_RECV_DATA, STORE_CALC_DATA):
-        for series in (plane.get(bucket) or {}).values():
+    for bucket in (plane.received_data, plane.calculated_data):
+        for series in bucket.values():
             values += len(series)
-    internal = plane.get(STORE_INTERNAL) or {}
-    values += len(internal.get(STORE_POSITION_RECEIVERS) or ())
+    values += len(plane.track.position_receivers)
     # A verdict carries the full check results: count it as ~10 values.
-    values += 10 * len(internal.get(STORE_INTEGRITY_LOG) or ())
+    values += 10 * len(plane.track.integrity_log)
     return _PENDING_BYTES_PER_PLANE + values * _PENDING_BYTES_PER_VALUE
 
 
@@ -122,59 +111,14 @@ def _message_queue_size(hz: float) -> int:
     return max(_MESSAGE_QUEUE_MIN, min(_MESSAGE_QUEUE_MAX, wanted))
 
 
-def _plane_for_stray_alerts(flight_id: str, docs: list[dict]) -> dict | None:
-    """Minimal plane for alerts whose flight never reached ``live:flights``.
-
-    Rebuilt from the alert docs alone: ICAO and first packet come from the
-    flight id (``{icao}-{first_packet}``) so ``flight_id_for_plane`` matches,
-    the position from the last alert update.
-    """
-    icao, _, first_text = flight_id.rpartition("-")
-    try:
-        first = float(int(first_text))
-    except ValueError:
-        return None
-    if not icao:
-        return None
-    stamps = [
-        value
-        for doc in docs
-        for value in (doc.get("activated_at"), doc.get("last_updated"))
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
-    ]
-    last = max([first, *stamps])
-    plane: dict = {
-        STORE_INFO: {
-            STORE_ICAO: icao,
-            STORE_CALLSIGN: next(
-                (d["callsign"] for d in docs if d.get("callsign")), ""
-            ),
-        },
-        STORE_INTERNAL: {STORE_FIRST_PACKET: first, STORE_MOST_RECENT_PACKET: last},
-        STORE_RECV_DATA: {},
-    }
-    newest = max(
-        docs, key=lambda d: d.get("last_updated") or d.get("activated_at") or 0
-    )
-    coords = (newest.get("position") or {}).get("coordinates") or []
-    if len(coords) >= 2 and all(
-        isinstance(c, (int, float)) and math.isfinite(c) for c in coords[:2]
-    ):
-        plane[STORE_RECV_DATA] = {
-            STORE_LAT: [Datum(coords[1], last)],
-            STORE_LONG: [Datum(coords[0], last)],
-        }
-    return plane
-
-
-def _position_samples(plane: dict) -> int:
+def _position_samples(plane: Plane) -> int:
     """Telemetry samples the archive would write for *plane*.
 
     Equals ``len(build_telemetry_docs(plane, ...))`` without building them:
     one sample per latitude or longitude timestamp, when both series exist
     (see :func:`pyaerial.models.iter_telemetry_samples`).
     """
-    recv = plane.get(STORE_RECV_DATA) or {}
+    recv = plane.received_data
     lat, lon = recv.get(STORE_LAT) or [], recv.get(STORE_LONG) or []
     if not lat or not lon:
         return 0
@@ -186,24 +130,20 @@ def _merge_key(hex_msg: str) -> tuple[int, str]:
     return len(hex_msg), hex_msg[:8]
 
 
-def _segment_copy(plane: dict) -> dict:
+def _segment_copy(plane: Plane) -> Plane:
     """A detached copy of a plane's series for archiving one segment."""
-    internal = dict(plane.get(STORE_INTERNAL) or {})
-    internal[STORE_POSITION_RECEIVERS] = dict(
-        internal.get(STORE_POSITION_RECEIVERS) or {}
+    track = plane.track
+    return Plane(
+        info=plane.info.copy(),
+        track=replace(
+            track,
+            position_receivers=dict(track.position_receivers),
+            integrity_log=list(track.integrity_log),
+        ),
+        received_data={k: list(v) for k, v in plane.received_data.items()},
+        calculated_data={k: list(v) for k, v in plane.calculated_data.items()},
+        active_alerts=list(plane.active_alerts),
     )
-    internal[STORE_INTEGRITY_LOG] = list(internal.get(STORE_INTEGRITY_LOG) or [])
-    return {
-        STORE_INFO: dict(plane.get(STORE_INFO) or {}),
-        STORE_RECV_DATA: {
-            k: list(v) for k, v in (plane.get(STORE_RECV_DATA) or {}).items()
-        },
-        STORE_CALC_DATA: {
-            k: list(v) for k, v in (plane.get(STORE_CALC_DATA) or {}).items()
-        },
-        STORE_INTERNAL: internal,
-        "active_alerts": list(plane.get("active_alerts") or []),
-    }
 
 
 def _closed_alert(alert: dict) -> dict:
@@ -265,7 +205,7 @@ class Engine:
         self._shutdown = threading.Event()
         self._shutdown_done = False
         # Insertion-ordered: the first key is the oldest deferred flight.
-        self._pending_finalize: dict[str, dict] = {}
+        self._pending_finalize: dict[str, Plane] = {}
         self._pending_evicted = 0
         self._dropped_messages = 0
         self._last_drop_log = 0.0
@@ -273,7 +213,7 @@ class Engine:
         # stage -> (monotonic time of the last logged traceback, suppressed count)
         self._stage_errors: dict[str, tuple[float, int]] = {}
         self._history_retry_at = 0.0
-        self._previous_handlers: dict[int, object] = {}
+        self._previous_handlers: dict[int, _SignalHandler] = {}
         # Frames younger than _MERGE_WINDOW, held for the next tick's merge.
         self._held_frames: list[RawFrame] = []
         self._processed_since_status = 0
@@ -712,18 +652,11 @@ class Engine:
         if limit <= 0:
             return
         for plane in list(self.tracker.planes.values()):
-            internal = plane.get(STORE_INTERNAL) or {}
-            first = internal.get(STORE_FIRST_PACKET)
-            last = internal.get(STORE_MOST_RECENT_PACKET)
-            if not isinstance(first, (int, float)) or not isinstance(
-                last, (int, float)
-            ):
-                continue
-            if last - first > limit:
+            if plane.track.last_update - plane.track.first_packet > limit:
                 with self._guard("segment"):
                     self._split_flight(plane)
 
-    def _split_flight(self, plane: dict) -> None:
+    def _split_flight(self, plane: Plane) -> None:
         """Archive the track so far and keep tracking the aircraft as a new flight.
 
         The new flight starts at the last position sample, which both
@@ -731,10 +664,10 @@ class Engine:
         heading, ETA, and the verdict in effect carry on without a gap.
         Active alert episodes move to the new flight silently.
         """
-        internal = plane[STORE_INTERNAL]
-        old_first = internal[STORE_FIRST_PACKET]
-        last_packet = internal[STORE_MOST_RECENT_PACKET]
-        recv = plane.get(STORE_RECV_DATA) or {}
+        track = plane.track
+        old_first = track.first_packet
+        last_packet = track.last_update
+        recv = plane.received_data
         lat, lon = recv.get(STORE_LAT) or [], recv.get(STORE_LONG) or []
         last_position = min(lat[-1].time, lon[-1].time) if lat and lon else None
         # The shared boundary sample only when it is recent: after a long
@@ -745,18 +678,23 @@ class Engine:
             and last_packet - last_position <= self.config.tracking.remember_planes
             and int(last_position) > int(old_first)
         )
-        new_first = last_position if position_is_fresh else last_packet
+        new_first = (
+            last_position
+            if position_is_fresh and last_position is not None
+            else last_packet
+        )
         if int(new_first) <= int(old_first):
             return  # no distinct flight id possible yet
-        internal.setdefault(STORE_TRACK_STARTED, old_first)
-        old_flight_id = flight_id_for_plane(plane)
+        if track.track_started is None:
+            track.track_started = old_first
+        old_flight_id = plane.flight_id
         # Snapshot first: from here on the segment is archived (or kept for
         # retry) whatever the later steps do, so a bug cannot lose the track.
         segment = _segment_copy(plane)
-        new_flight_id = None
+        new_flight_id: str | None = None
         try:
             self._start_new_segment(plane, new_first, keep_position=position_is_fresh)
-            new_flight_id = flight_id_for_plane(plane)
+            new_flight_id = plane.flight_id
         except Exception:
             self._stage_failed("segment trim")
         if new_flight_id is not None:
@@ -784,7 +722,7 @@ class Engine:
 
     @staticmethod
     def _start_new_segment(
-        plane: dict, new_first: float, *, keep_position: bool
+        plane: Plane, new_first: float, *, keep_position: bool
     ) -> None:
         """Trim the live plane to the start of its next segment.
 
@@ -792,37 +730,35 @@ class Engine:
         verdict in effect carry on); a stale last position is dropped so the
         next segment has no sample before its start.
         """
-        internal = plane[STORE_INTERNAL]
-        for bucket in (STORE_RECV_DATA, STORE_CALC_DATA):
-            for series in (plane.get(bucket) or {}).values():
+        track = plane.track
+        for bucket in (plane.received_data, plane.calculated_data):
+            for series in bucket.values():
                 del series[:-1]
         if not keep_position:
-            recv = plane.get(STORE_RECV_DATA) or {}
+            recv = plane.received_data
             for key in (STORE_LAT, STORE_LONG):
                 if key in recv:
                     recv[key].clear()
-        heard = internal.get(STORE_POSITION_RECEIVERS)
+        heard = track.position_receivers
         if heard:
             for stamp in [s for s in heard if s < new_first]:
                 del heard[stamp]
-        verdicts = internal.get(STORE_INTEGRITY_LOG)
+        verdicts = track.integrity_log
         if verdicts:
             in_effect = [v for v in verdicts if v.time <= new_first][-1:]
             verdicts[:] = in_effect + [v for v in verdicts if v.time > new_first]
-        internal[STORE_FIRST_PACKET] = new_first
+        track.first_packet = new_first
 
     def _mark_track_started(self) -> None:
         """Record when the engine first tracked each aircraft.
 
-        Kept across segment splits, which reset STORE_FIRST_PACKET, so checks
+        Kept across segment splits, which move ``first_packet``, so checks
         that need a track's real age (integrity) can read it.
         """
         for plane in self.tracker.planes.values():
-            internal = plane.get(STORE_INTERNAL)
-            if internal is not None and STORE_TRACK_STARTED not in internal:
-                first = internal.get(STORE_FIRST_PACKET)
-                if first is not None:
-                    internal[STORE_TRACK_STARTED] = first
+            track = plane.track
+            if track.track_started is None:
+                track.track_started = track.first_packet
 
     def _expire_planes(self, now: float) -> None:
         expired = self.tracker.expired_planes(now)
@@ -957,7 +893,7 @@ class Engine:
                 close()
         log.info("Shutdown complete")
 
-    def _finalize_plane(self, plane: dict, *, from_snapshot: bool = False) -> bool:
+    def _finalize_plane(self, plane: Plane, *, from_snapshot: bool = False) -> bool:
         """Deactivate alerts, persist to SQLite, then drop the live Redis copy.
 
         Redis is only popped after the archive accepts the write (or the flight
@@ -969,9 +905,9 @@ class Engine:
             self.calculator.deactivate_plane(plane)
         return self._archive_and_pop(plane, from_snapshot=from_snapshot)
 
-    def _archive_and_pop(self, plane: dict, *, from_snapshot: bool) -> bool:
+    def _archive_and_pop(self, plane: Plane, *, from_snapshot: bool) -> bool:
         """Persist a flight whose alerts are closed, then pop its live copy."""
-        flight_id = flight_id_for_plane(plane)
+        flight_id = plane.flight_id
         if self._persist(flight_id, plane, from_snapshot=from_snapshot):
             self._pending_finalize.pop(flight_id, None)
             self.live_store.pop_flight(flight_id)
@@ -983,7 +919,7 @@ class Engine:
         self._enqueue_pending_finalize(flight_id, plane)
         return False
 
-    def _persist(self, flight_id: str, plane: dict, *, from_snapshot: bool) -> bool:
+    def _persist(self, flight_id: str, plane: Plane, *, from_snapshot: bool) -> bool:
         """Archive one flight with its closed alerts. False keeps it for retry.
 
         An unexpected exception (a bug, not an outage) also returns False: the
@@ -1012,7 +948,7 @@ class Engine:
             self._stage_failed("archive")
             return False
 
-    def _retain(self, plane: dict, alerts: list[dict], *, from_snapshot: bool) -> bool:
+    def _retain(self, plane: Plane, alerts: list[dict], *, from_snapshot: bool) -> bool:
         """Whether the archive keeps this flight (``archive.flights`` policy).
 
         ``from_snapshot`` marks a crash/orphan reconstruction from the clipped
@@ -1027,11 +963,11 @@ class Engine:
             positions=_position_samples(plane),
         )
         if not retained and from_snapshot:
-            recv = plane.get(STORE_RECV_DATA) or {}
+            recv = plane.received_data
             retained = bool(alerts) or bool(recv.get(STORE_LAT))
         return retained
 
-    def _enqueue_pending_finalize(self, flight_id: str, plane: dict) -> None:
+    def _enqueue_pending_finalize(self, flight_id: str, plane: Plane) -> None:
         """Keep a flight for archive retry within _PENDING_FINALIZE_BUDGET_BYTES.
 
         Over the budget the oldest in-memory planes are dropped. Their live
@@ -1075,7 +1011,7 @@ class Engine:
             return
         if not self._history_writable():
             return
-        tracked = {flight_id_for_plane(plane) for plane in self.tracker.planes.values()}
+        tracked = {plane.flight_id for plane in self.tracker.planes.values()}
         for index, (flight_id, plane) in enumerate(
             list(self._pending_finalize.items())
         ):
@@ -1140,7 +1076,7 @@ class Engine:
             beat = time.monotonic()
             for flight_id, docs in by_flight.items():
                 beat = self._keep_heartbeat(beat)
-                plane = _plane_for_stray_alerts(flight_id, docs)
+                plane = plane_from_alert_docs(flight_id, docs)
                 if plane is None:
                     log.warning("Cannot close stray alerts of %s", flight_id)
                     continue
@@ -1153,7 +1089,7 @@ class Engine:
                 with self._guard("stray alert"):
                     self.calculator.alerts.deactivate(plane, ended_by=ENDED_RESTART)
                     self._archive_and_pop(
-                        {**plane, STORE_RECV_DATA: {}}, from_snapshot=True
+                        replace(plane, received_data={}), from_snapshot=True
                     )
 
     def _retry_orphan_live_flights(self, deadline: float | None = None) -> None:
@@ -1162,7 +1098,7 @@ class Engine:
             return
         if deadline is not None and time.monotonic() >= deadline:
             return
-        tracked = {flight_id_for_plane(plane) for plane in self.tracker.planes.values()}
+        tracked = {plane.flight_id for plane in self.tracker.planes.values()}
         tracked |= set(self._pending_finalize)
         leftover = self.live_store.flight_ids() - tracked
         if leftover and not self._history_writable():

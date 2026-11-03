@@ -23,18 +23,18 @@ from helpers import (
 )
 from pyaerial.api import queries
 from pyaerial.constants import (
-    STORE_FIRST_PACKET,
     STORE_ICAO,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_POSITION_RECEIVERS,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import Datum, Verdict, flight_id_for_plane, sample_provenance
+from pyaerial.models import (
+    AircraftInfo,
+    Datum,
+    Plane,
+    TrackState,
+    Verdict,
+    sample_provenance,
+)
 from pyaerial.store.history import build_telemetry_docs
 from pyaerial.store.redis_live import LiveUnavailable, RedisLiveStore
 from pyaerial.urls import redact_uri
@@ -42,16 +42,16 @@ from pyaerial.urls import redact_uri
 URI = "redis://user:s3cret@redis.example:6380/0"
 
 
-def _plane(icao: str = "abc123", t: float | None = None) -> dict:
+def _plane(icao: str = "abc123", t: float | None = None) -> Plane:
     t = time.time() if t is None else t
-    return {
-        STORE_INFO: {STORE_ICAO: icao},
-        STORE_INTERNAL: {STORE_FIRST_PACKET: t, STORE_MOST_RECENT_PACKET: t},
-        STORE_RECV_DATA: {
+    return Plane(
+        info=AircraftInfo(icao=icao),
+        track=TrackState(first_packet=t, last_update=t),
+        received_data={
             STORE_LAT: [Datum(35.0, t)],
             STORE_LONG: [Datum(-78.0, t)],
         },
-    }
+    )
 
 
 def test_redact_uri_hides_password():
@@ -174,7 +174,7 @@ def test_unchanged_flights_are_not_rewritten(fake):
     fake.calls.clear()
     store.write_live_planes(planes)
     assert fake.calls.count("execute") == 0
-    planes["p0"][STORE_INFO]["callsign"] = "NEW1"
+    planes["p0"].info.callsign = "NEW1"
     store.write_live_planes(planes)
     assert fake.calls.count("execute") == 1
     assert '"NEW1"' in fake.kv["live:flight:a00000-1000"]
@@ -184,10 +184,10 @@ def test_snapshot_keeps_sample_receivers_and_integrity(fake):
     store = RedisLiveStore(URI, writer=True)
     t = time.time()
     plane = _plane(t=t)
-    plane[STORE_RECV_DATA][STORE_LAT].append(Datum(35.1, t + 5))
-    plane[STORE_RECV_DATA][STORE_LONG].append(Datum(-78.1, t + 5))
-    plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS] = {t: ("nl", "be"), t + 5: ("nl",)}
-    plane[STORE_INTERNAL][STORE_INTEGRITY_LOG] = [
+    plane.received_data[STORE_LAT].append(Datum(35.1, t + 5))
+    plane.received_data[STORE_LONG].append(Datum(-78.1, t + 5))
+    plane.track.position_receivers = {t: ("nl", "be"), t + 5: ("nl",)}
+    plane.track.integrity_log = [
         Verdict(t - 1, 0.9, "ok", (), {}),
         Verdict(t + 2, 0.3, "spoofed", ("aoa",), {}),
     ]
@@ -303,7 +303,7 @@ def test_live_flight_keys_carry_a_refreshed_safety_ttl(fake):
     store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
     assert store.claim_engine()
     plane = heading_plane("abc123", time.time())
-    fid = f"abc123-{int(plane[STORE_INTERNAL][STORE_FIRST_PACKET])}"
+    fid = f"abc123-{int(plane.track.first_packet)}"
     store.write_live_planes({"ABC123": plane})
     store.record_alert_episode(
         plane, {STORE_ICAO: "abc123"}, {}, alert_id="a1", activated_at=1.0
@@ -319,9 +319,9 @@ def test_live_flight_keys_carry_a_refreshed_safety_ttl(fake):
 
     # Refreshed on write: the next sample re-arms telemetry, the doc re-arms itself.
     fake.ttls.clear()
-    plane[STORE_RECV_DATA][STORE_LAT].append(Datum(35.1, time.time() + 5))
-    plane[STORE_RECV_DATA][STORE_LONG].append(Datum(-78.1, time.time() + 5))
-    plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] = time.time() + 5
+    plane.received_data[STORE_LAT].append(Datum(35.1, time.time() + 5))
+    plane.received_data[STORE_LONG].append(Datum(-78.1, time.time() + 5))
+    plane.track.last_update = time.time() + 5
     store.write_live_planes({"ABC123": plane})
     assert fake.ttls[f"live:flight:{fid}"] == ttl
     assert fake.ttls[f"live:telemetry:{fid}"] == ttl
@@ -331,7 +331,7 @@ def test_reconnect_backfill_sets_ttls(fake):
     store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
     assert store.claim_engine()
     plane = heading_plane("abc123", time.time())
-    fid = f"abc123-{int(plane[STORE_INTERNAL][STORE_FIRST_PACKET])}"
+    fid = f"abc123-{int(plane.track.first_packet)}"
     store.write_live_planes({"ABC123": plane})
     fake.kv.clear()
     fake.zsets.clear()
@@ -347,19 +347,19 @@ def test_crash_recovery_still_rebuilds_flights_before_the_ttl(fake):
     crashed = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
     plane = heading_plane("abc123", time.time(), samples=3)
     crashed.write_live_planes({"ABC123": plane})
-    fid = f"abc123-{int(plane[STORE_INTERNAL][STORE_FIRST_PACKET])}"
+    fid = f"abc123-{int(plane.track.first_packet)}"
 
     restarted = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
     rebuilt = restarted.planes_for_finalize()
-    assert [p[STORE_INFO][STORE_ICAO] for p in rebuilt] == ["abc123"]
-    assert len(rebuilt[0][STORE_RECV_DATA][STORE_LAT]) == 3
+    assert [p.info.icao for p in rebuilt] == ["abc123"]
+    assert len(rebuilt[0].received_data[STORE_LAT]) == 3
     assert fid in restarted.flight_ids()
 
 
 def test_expired_flight_remnants_are_cleaned_not_retried(fake):
     crashed = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
     plane = heading_plane("abc123", time.time())
-    fid = f"abc123-{int(plane[STORE_INTERNAL][STORE_FIRST_PACKET])}"
+    fid = f"abc123-{int(plane.track.first_packet)}"
     crashed.write_live_planes({"ABC123": plane})
     crashed.record_alert_episode(
         plane, {STORE_ICAO: "abc123"}, {}, alert_id="a1", activated_at=1.0
@@ -381,7 +381,7 @@ def test_expired_flight_remnants_are_cleaned_not_retried(fake):
 def test_redis_error_during_snapshot_does_not_drop_the_flight(fake):
     store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
     plane = heading_plane("abc123", time.time())
-    fid = f"abc123-{int(plane[STORE_INTERNAL][STORE_FIRST_PACKET])}"
+    fid = f"abc123-{int(plane.track.first_packet)}"
     store.write_live_planes({"ABC123": plane})
     store._mem.flights.clear()  # as if written by a previous process
     fake.fail.add("get")
@@ -400,7 +400,7 @@ def test_live_telemetry_and_crash_snapshot_keep_gnss_height(fake):
     store = RedisLiveStore(LOCAL_REDIS_URI, writer=True, telemetry_keep_seconds=0)
     assert store.claim_engine()
     plane = gnss_then_baro_plane(time.time())
-    first = plane[STORE_INTERNAL][STORE_FIRST_PACKET]
+    first = plane.track.first_packet
     fid = f"abc123-{int(first)}"
     store.write_live_planes({"ABC123": plane})
     points = queries.get_telemetry(fid, "live", 0.0, live_store=store, history=None)
@@ -581,11 +581,11 @@ def test_unreadable_flight_memory_is_bounded(fake, monkeypatch):
 def test_live_snapshot_rebuilds_scoreless_verdicts(fake):
     store = RedisLiveStore(LOCAL_REDIS_URI, writer=True, telemetry_keep_seconds=0)
     plane = with_unknown_then_ok(track_plane("abc123", time.time()))
-    fid = f"abc123-{int(plane[STORE_INTERNAL][STORE_FIRST_PACKET])}"
+    fid = f"abc123-{int(plane.track.first_packet)}"
     store.write_live_planes({"ABC123": plane})
     restarted = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
     rebuilt = restarted.plane_for_finalize(fid)
-    verdicts = rebuilt[STORE_INTERNAL][STORE_INTEGRITY_LOG]
+    verdicts = rebuilt.track.integrity_log
     assert [(v.score, v.status) for v in verdicts] == [(None, "unknown"), (0.9, "ok")]
     original = build_telemetry_docs(plane, fid, "abc123")
     again = build_telemetry_docs(rebuilt, fid, "abc123")
@@ -603,9 +603,9 @@ def test_live_telemetry_push_keeps_provenance(fake, memory_only):
         LOCAL_REDIS_URI, writer=True, memory_only=memory_only, telemetry_keep_seconds=0
     )
     plane = with_unknown_then_ok(track_plane("abc123", time.time()))
-    plane[STORE_INTERNAL][STORE_INTEGRITY_LOG].append(
+    plane.track.integrity_log.append(
         Verdict(
-            plane[STORE_INTERNAL][STORE_FIRST_PACKET] + 1.8,
+            plane.track.first_packet + 1.8,
             0.4,
             "spoofed",
             ("aoa",),
@@ -631,7 +631,7 @@ def test_live_telemetry_push_keeps_provenance(fake, memory_only):
 def test_get_alerts_merges_redis_and_memory_episodes(fake):
     store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
     plane = fine_track_plane("abc123", 1_700_000_000.0)
-    fid = flight_id_for_plane(plane)
+    fid = plane.flight_id
     fake.hashes[f"live:alerts:{fid}"] = {
         "earlier": alert_doc("earlier", fid, active=False, at=1_700_000_010.0),
         "current": alert_doc("current", fid, active=True, at=1_700_000_100.0),
@@ -679,7 +679,7 @@ def test_writer_raises_instead_of_returning_no_alerts(fake):
     assert [
         a["alert_id"]
         for a in store.get_alerts(
-            flight_id=flight_id_for_plane(plane), active_only=False
+            flight_id=plane.flight_id, active_only=False
         )
     ] == ["b1"]
 
@@ -728,6 +728,6 @@ def test_popped_flight_refresh_is_dropped(fake):
     plane = fine_track_plane("abc123", time.time())
     store.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=5.0)
     store.update_active_alert(plane, "a1", alert_meta(), {}, 10.0)
-    store.pop_flight(flight_id_for_plane(plane))
+    store.pop_flight(plane.flight_id)
     store.write_live_planes({"DEF456": fine_track_plane("def456", time.time())})
     assert "a1" not in fake.hashes.get("live:active_alerts", {})

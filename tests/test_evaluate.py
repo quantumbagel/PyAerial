@@ -4,7 +4,7 @@ import math
 
 from shapely import Polygon
 
-from helpers import make_config
+from helpers import make_config, make_plane
 from pyaerial.alerts.engine import AlertEngine
 from pyaerial.calc import evaluate
 from pyaerial.calc.geo import build_polygons
@@ -14,28 +14,21 @@ from pyaerial.config.schema import (
 )
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALC_DATA,
-    STORE_FIRST_PACKET,
     STORE_GNSS_HEIGHT,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
     STORE_VERT_SPEED,
 )
-from pyaerial.models import Datum
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 
 
 def test_horizontal_speed_and_direction_aliases():
-    plane = {
-        STORE_CALC_DATA: {
+    plane = make_plane(
+        calc={
             STORE_HORIZ_SPEED: [Datum(180.0, 1.0)],
             STORE_HEADING: [Datum(10.0, 1.0)],
         }
-    }
+    )
     polygon = Polygon([(35.72, -78.70), (35.73, -78.70), (35.73, -78.69)])
     resolver = evaluate.make_resolver(
         plane, eta=30.0, polygon=polygon, position=(35.72, -78.70)
@@ -80,14 +73,14 @@ def test_rule_config_rejects_unknown_when_field():
 
 def test_predicted_resolver_projects_latitude_and_longitude():
     """predict_seconds must move lat/lon too, not just distance and eta."""
-    from pyaerial.constants import STORE_LAT, STORE_LONG, STORE_RECV_DATA
+    from pyaerial.constants import STORE_LAT, STORE_LONG
 
-    plane = {
-        STORE_RECV_DATA: {
+    plane = make_plane(
+        recv={
             STORE_LAT: [Datum(35.0, 1.0)],
             STORE_LONG: [Datum(-78.0, 1.0)],
         }
-    }
+    )
     polygon = Polygon([(36.0, -78.1), (36.1, -78.1), (36.1, -77.9)])
     # Due north at 900 km/h for 60 s: 15 km, about 0.135 degrees of latitude.
     resolver = evaluate.make_predicted_resolver(
@@ -103,14 +96,14 @@ def test_predicted_resolver_projects_latitude_and_longitude():
 
 
 def test_live_resolver_lat_lon_match_evaluated_position():
-    from pyaerial.constants import STORE_LAT, STORE_LONG, STORE_RECV_DATA
+    from pyaerial.constants import STORE_LAT, STORE_LONG
 
-    plane = {
-        STORE_RECV_DATA: {
+    plane = make_plane(
+        recv={
             STORE_LAT: [Datum(35.0, 1.0)],
             STORE_LONG: [Datum(-78.0, 1.0)],
         }
-    }
+    )
     polygon = Polygon([(36.0, -78.1), (36.1, -78.1), (36.1, -77.9)])
     coasted = (35.05, -78.01)
     resolver = evaluate.make_resolver(
@@ -126,7 +119,7 @@ def test_distance_is_km_proximity_is_metres():
     polygon = Polygon(
         [(35.72, -78.70), (35.73, -78.70), (35.73, -78.69), (35.72, -78.69)]
     )
-    plane: dict = {}
+    plane = make_plane()
     far = (34.0, -78.70)
     resolver = evaluate.make_resolver(
         plane, eta=math.inf, polygon=polygon, position=far
@@ -153,12 +146,12 @@ _LOW = {
 }
 
 
-def _altitude_plane(**recv: list[Datum]) -> dict:
-    return {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: dict(recv),
-        STORE_INTERNAL: {STORE_FIRST_PACKET: 1.0, STORE_MOST_RECENT_PACKET: 2.0},
-    }
+def _altitude_plane(**recv: list[Datum]) -> Plane:
+    return Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(first_packet=1.0, last_update=2.0),
+        received_data=dict(recv),
+    )
 
 
 def test_gnss_only_aircraft_satisfies_altitude_rule():
@@ -243,7 +236,7 @@ _TRUSTED = {
 
 
 def _resolve(doc: dict | None):
-    plane = {STORE_INFO: {"integrity": doc} if doc is not None else {}}
+    plane = make_plane(integrity=doc)
     return evaluate.make_resolver(plane, 0.0, _PAD, _IN_PAD)
 
 
@@ -273,7 +266,7 @@ def test_known_status_uses_published_score():
 
 
 def test_predicted_resolver_also_ignores_unknown():
-    plane = {STORE_INFO: {"integrity": {"score": 1.0, "status": "unknown"}}}
+    plane = make_plane(integrity={"score": 1.0, "status": "unknown"})
     resolver = evaluate.make_predicted_resolver(
         plane, _PAD, _IN_PAD, 0.0, 0.0, 0.0, 10.0
     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from typing import Any
 
 from pyModeS.position import cprNL
 from pyModeS.util import crc
@@ -22,22 +23,14 @@ from pyaerial.config.schema import (
 )
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALC_DATA,
-    STORE_FIRST_PACKET,
     STORE_GNSS_HEIGHT,
     STORE_HEADING,
     STORE_ICAO,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_POSITION_RECEIVERS,
-    STORE_RECV_DATA,
 )
 from pyaerial.engine import Engine
-from pyaerial.models import Datum, Verdict
+from pyaerial.models import AircraftInfo, Datum, Plane, Series, TrackState, Verdict
 from pyaerial.receivers.positions import ReceiverPositions
 from pyaerial.tracker import Tracker
 
@@ -100,6 +93,29 @@ def make_config(
 # --- live planes -------------------------------------------------------------
 
 
+def make_plane(
+    icao: str = "abc123",
+    first: float = 1.0,
+    last: float | None = None,
+    *,
+    recv: Series | None = None,
+    calc: Series | None = None,
+    **info: Any,
+) -> Plane:
+    """A live plane first heard at *first* (last at *last*, default *first*).
+
+    *info* sets :class:`AircraftInfo` fields (callsign, registration, ...).
+    """
+    return Plane(
+        info=AircraftInfo(icao=icao, **info),
+        track=TrackState(
+            first_packet=first, last_update=first if last is None else last
+        ),
+        received_data=recv if recv is not None else {},
+        calculated_data=calc if calc is not None else {},
+    )
+
+
 def track_plane(
     icao: str = "abc123",
     first: float = 1.0,
@@ -107,83 +123,75 @@ def track_plane(
     *,
     step: float = 1.0,
     lat_step: float = 0.01,
-) -> dict:
+) -> Plane:
     """A live plane with *samples* positions *step* seconds apart from *first*.
 
     Latitude climbs *lat_step* degrees per sample from 35.0; longitude stays
     at -78.0.
     """
     times = [first + n * step for n in range(samples)]
-    return {
-        STORE_INFO: {STORE_ICAO: icao},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: first,
-            STORE_MOST_RECENT_PACKET: times[-1],
-        },
-        STORE_RECV_DATA: {
+    return make_plane(
+        icao,
+        first,
+        times[-1],
+        recv={
             STORE_LAT: [Datum(35.0 + n * lat_step, t) for n, t in enumerate(times)],
             STORE_LONG: [Datum(-78.0, t) for t in times],
         },
-    }
+    )
 
 
 def fine_track_plane(
     icao: str = "abc123", first: float = 1.0, samples: int = 3, step: float = 1.0
-) -> dict:
+) -> Plane:
     """``track_plane`` with positions 1e-4 degrees (~11 m) apart."""
     return track_plane(icao, first, samples, step=step, lat_step=1e-4)
 
 
-def one_fix_plane(icao: str = "abc123", first: float = 1.0) -> dict:
+def one_fix_plane(icao: str = "abc123", first: float = 1.0) -> Plane:
     """A live plane with a single position at *first*."""
-    return {
-        STORE_INFO: {STORE_ICAO: icao},
-        STORE_INTERNAL: {STORE_FIRST_PACKET: first, STORE_MOST_RECENT_PACKET: first},
-        STORE_RECV_DATA: {
+    return make_plane(
+        icao,
+        first,
+        recv={
             STORE_LAT: [Datum(35.0, first)],
             STORE_LONG: [Datum(-78.0, first)],
         },
-    }
+    )
 
 
-def heading_plane(icao: str = "abc123", first: float = 1.0, samples: int = 1) -> dict:
+def heading_plane(icao: str = "abc123", first: float = 1.0, samples: int = 1) -> Plane:
     """Stationary positions and a calculated heading, one per second."""
-    return {
-        STORE_INFO: {STORE_ICAO: icao},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: first,
-            STORE_MOST_RECENT_PACKET: first + samples,
-        },
-        STORE_RECV_DATA: {
+    return make_plane(
+        icao,
+        first,
+        first + samples,
+        recv={
             STORE_LAT: [Datum(35.0, first + n) for n in range(samples)],
             STORE_LONG: [Datum(-78.0, first + n) for n in range(samples)],
         },
-        STORE_CALC_DATA: {
-            STORE_HEADING: [Datum(90.0, first + n) for n in range(samples)]
-        },
-    }
+        calc={STORE_HEADING: [Datum(90.0, first + n) for n in range(samples)]},
+    )
 
 
-def pad_plane(first: float, samples: int = 721, step: float = 10.0) -> dict:
+def pad_plane(first: float, samples: int = 721, step: float = 10.0) -> Plane:
     """A plane parked inside the ``pad`` zone: one position every *step* s."""
     times = [first + n * step for n in range(samples)]
-    return {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: first,
-            STORE_MOST_RECENT_PACKET: times[-1],
-        },
-        STORE_RECV_DATA: {
+    return make_plane(
+        "abc123",
+        first,
+        times[-1],
+        recv={
             STORE_LAT: [Datum(35.725, t) for t in times],
             STORE_LONG: [Datum(-78.695, t) for t in times],
         },
-    }
+    )
 
 
-def gnss_then_baro_plane(first: float = 1.0) -> dict:
+def gnss_then_baro_plane(first: float = 1.0) -> Plane:
     """GNSS (TC 20-22) positions for 30 s, then baro (TC 9-18) positions."""
     plane = track_plane("abc123", first, samples=0 + 1)
-    recv = plane[STORE_RECV_DATA]
+    recv = plane.received_data
     recv[STORE_LAT] = []
     recv[STORE_LONG] = []
     for n in range(61):
@@ -194,20 +202,18 @@ def gnss_then_baro_plane(first: float = 1.0) -> dict:
     # run as its first and last datum only.
     recv[STORE_GNSS_HEIGHT] = [Datum(10972.8, first), Datum(10972.8, first + 30)]
     recv[STORE_ALT] = [Datum(10900.0, first + 31), Datum(10890.0, first + 60)]
-    plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] = first + 60
+    plane.track.last_update = first + 60
     return plane
 
 
-def with_unknown_then_ok(plane: dict) -> dict:
+def with_unknown_then_ok(plane: Plane) -> Plane:
     """Give *plane* an ``unknown`` (score-less) verdict, then an ``ok`` one."""
-    first = plane[STORE_INTERNAL][STORE_FIRST_PACKET]
-    plane[STORE_INTERNAL][STORE_INTEGRITY_LOG] = [
+    first = plane.track.first_packet
+    plane.track.integrity_log = [
         Verdict(first - 0.5, None, "unknown", (), {}),
         Verdict(first + 1.5, 0.9, "ok", (), {"kinematics": {"status": "pass"}}),
     ]
-    plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS] = {
-        first + n: ("roof", "mast") for n in range(3)
-    }
+    plane.track.position_receivers = {first + n: ("roof", "mast") for n in range(3)}
     return plane
 
 
@@ -294,7 +300,7 @@ def tracker_at_home() -> Tracker:
 
 
 def latest_position(tracker: Tracker, icao: str) -> tuple[float, float]:
-    recv = tracker.planes[icao][STORE_RECV_DATA]
+    recv = tracker.planes[icao].received_data
     return recv[STORE_LAT][-1].value, recv[STORE_LONG][-1].value
 
 

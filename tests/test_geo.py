@@ -7,6 +7,7 @@ import pytest
 from geopy.distance import geodesic
 from shapely import Polygon
 
+from helpers import make_plane
 from pyaerial.calc import geo
 from pyaerial.constants import MAX_SPEED_MPS
 from pyaerial.units import MPS_TO_KMH
@@ -53,7 +54,7 @@ def test_predict_seconds_straight_when_curved_disabled():
     from pyaerial.calc import evaluate
 
     polygon = Polygon([(35.72, -78.70), (35.73, -78.70), (35.73, -78.69), (35.72, -78.69)])
-    plane: dict = {}
+    plane = make_plane()
     curved = evaluate.make_predicted_resolver(
         plane, polygon, (35.70, -78.695), 0.0, 400.0, 10.0, 30.0, curved=True
     )

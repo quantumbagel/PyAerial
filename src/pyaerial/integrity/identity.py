@@ -8,6 +8,7 @@ address means the address is cloned, made up, or misprogrammed.
 from __future__ import annotations
 
 import re
+from typing import TypeGuard
 
 _CHARSET = "ABCDEFGHJKLMNPQRSTUVWXYZ"  # no I or O
 _DIGITS = "0123456789"
@@ -65,5 +66,7 @@ def icao_to_n_number(icao: str) -> str | None:
     return out + (_CHARSET + _DIGITS)[rem - 1]
 
 
-def looks_like_n_number(text: str | None) -> bool:
-    return bool(text) and bool(N_NUMBER_RE.match(text.strip().upper()))
+def looks_like_n_number(text: str | None) -> TypeGuard[str]:
+    if not text:
+        return False
+    return bool(N_NUMBER_RE.match(text.strip().upper()))

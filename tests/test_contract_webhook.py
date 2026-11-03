@@ -33,20 +33,13 @@ from pyaerial.calc.motion import ResolvedMotion
 from pyaerial.config.schema import AlertActionConfig, WhileActiveConfig, ZoneConfig
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALC_DATA,
-    STORE_FIRST_PACKET,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
     STORE_VERT_SPEED,
 )
-from pyaerial.models import Datum
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 
 GOLDEN = Path(__file__).parent / "golden"
 _UPDATE = os.environ.get("PYAERIAL_UPDATE_GOLDEN") == "1"
@@ -123,30 +116,30 @@ def _config(fmt: str = "json"):
     )
 
 
-def _plane() -> dict:
+def _plane() -> Plane:
     t = _T0
-    return {
-        STORE_INFO: {
-            STORE_ICAO: "A1B2C3",  # pyModeS hands out upper case
-            "callsign": "N123AB",
-            "registration": "N123AB",
-            "model": "Cessna 172S",
-            "aircraft_type": "C172",
-            "owner": "Example Flying Club",
-            "country": "United States",
-        },
-        STORE_RECV_DATA: {
+    return Plane(
+        info=AircraftInfo(
+            icao="A1B2C3",
+            callsign="N123AB",
+            registration="N123AB",
+            model="Cessna 172S",
+            aircraft_type="C172",
+            owner="Example Flying Club",
+            country="United States",
+        ),
+        track=TrackState(first_packet=t - 600, last_update=t),
+        received_data={
             STORE_LAT: [Datum(35.70, t - 10)],
             STORE_LONG: [Datum(-78.695, t - 10)],
             STORE_ALT: [Datum(457.2, t - 10)],
             STORE_VERT_SPEED: [Datum(-2.54, t - 10)],
         },
-        STORE_CALC_DATA: {
+        calculated_data={
             STORE_HORIZ_SPEED: [Datum(185.2, t - 10)],
             STORE_HEADING: [Datum(0.0, t - 10)],
         },
-        STORE_INTERNAL: {STORE_FIRST_PACKET: t - 600, STORE_MOST_RECENT_PACKET: t},
-    }
+    )
 
 
 def _run(monkeypatch, fmt: str = "json") -> list[dict]:

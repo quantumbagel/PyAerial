@@ -21,10 +21,6 @@ from integrity_world import (
     with_velocity,
 )
 from pyaerial.config.schema import ReceiverConfig
-from pyaerial.constants import (
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
-)
 from pyaerial.integrity import STATUS_OK, geodesy
 from pyaerial.integrity.tdoa import (
     METRES_PER_TICK,
@@ -45,7 +41,7 @@ def _non_ok_since(world: World, t0: float) -> dict[str, list[str]]:
     for icao, plane in world.planes.items():
         bad = [
             f"{v.status}@{v.time - t0:.0f}s {v.flagged}"
-            for v in plane[STORE_INTERNAL][STORE_INTEGRITY_LOG]
+            for v in plane.track.integrity_log
             if v.time >= t0 and v.status != STATUS_OK
         ]
         if bad:

@@ -29,23 +29,13 @@ from pyaerial.api.queries import (
 )
 from pyaerial.config.schema import ArchiveConfig
 from pyaerial.constants import (
-    STORE_CALC_DATA,
-    STORE_CALLSIGN,
-    STORE_FIRST_PACKET,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_POSITION_RECEIVERS,
-    STORE_RECV_DATA,
 )
 from pyaerial.engine import Engine
-from pyaerial.models import Datum, Verdict
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState, Verdict
 from pyaerial.receivers.frames import RawFrame
 from pyaerial.store.history import (
     HistoryStore,
@@ -55,21 +45,18 @@ from pyaerial.store.history import (
 
 
 def _plane(*, icao: str = "abc123", callsign: str = "SWA123"):
-    return {
-        STORE_INFO: {STORE_ICAO: icao, STORE_CALLSIGN: callsign, "model": "A320"},
-        STORE_RECV_DATA: {
+    return Plane(
+        info=AircraftInfo(icao=icao, callsign=callsign, model="A320"),
+        track=TrackState(first_packet=1.0, last_update=10.0),
+        received_data={
             STORE_LAT: [Datum(35.725, 1.0), Datum(35.726, 10.0)],
             STORE_LONG: [Datum(-78.695, 1.0), Datum(-78.694, 10.0)],
         },
-        STORE_CALC_DATA: {
+        calculated_data={
             STORE_HEADING: [Datum(45.0, 1.0)],
             STORE_HORIZ_SPEED: [Datum(200.0, 1.0)],
         },
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 1.0,
-            STORE_MOST_RECENT_PACKET: 10.0,
-        },
-    }
+    )
 
 
 def _store(tmp_path, **kwargs) -> HistoryStore:
@@ -126,8 +113,8 @@ def test_finalize_does_not_replace_completed_telemetry(tmp_path):
     first = store.get_telemetry("abc123-1")
     assert len(first) == 2
     shorter = _plane()
-    shorter[STORE_RECV_DATA][STORE_LAT] = [Datum(35.726, 10.0)]
-    shorter[STORE_RECV_DATA][STORE_LONG] = [Datum(-78.694, 10.0)]
+    shorter.received_data[STORE_LAT] = [Datum(35.726, 10.0)]
+    shorter.received_data[STORE_LONG] = [Datum(-78.694, 10.0)]
     assert store.finalize_plane(shorter, alerts=alerts) is True
     second = store.get_telemetry("abc123-1")
     assert len(second) == 2
@@ -147,8 +134,8 @@ def test_finalize_upgrades_when_incoming_telemetry_is_longer(tmp_path):
         }
     ]
     short = _plane()
-    short[STORE_RECV_DATA][STORE_LAT] = [Datum(35.725, 1.0)]
-    short[STORE_RECV_DATA][STORE_LONG] = [Datum(-78.695, 1.0)]
+    short.received_data[STORE_LAT] = [Datum(35.725, 1.0)]
+    short.received_data[STORE_LONG] = [Datum(-78.695, 1.0)]
     assert store.finalize_plane(short, alerts=alerts) is True
     assert len(store.get_telemetry("abc123-1")) == 1
     longer = _plane()
@@ -308,8 +295,8 @@ def test_list_flights_errors_when_disconnected(tmp_path):
 def test_get_telemetry_limit_pages_forward(tmp_path):
     store = _store(tmp_path)
     plane = _plane()
-    plane[STORE_RECV_DATA][STORE_LAT] = [Datum(35.725, float(t)) for t in range(1, 11)]
-    plane[STORE_RECV_DATA][STORE_LONG] = [
+    plane.received_data[STORE_LAT] = [Datum(35.725, float(t)) for t in range(1, 11)]
+    plane.received_data[STORE_LONG] = [
         Datum(-78.695, float(t)) for t in range(1, 11)
     ]
     alerts = [{"zone": "pad", "rule": "warn", "activated_at": 1.0}]
@@ -392,8 +379,8 @@ def test_archive_all_writes_flights_without_alerts(tmp_path):
 def test_telemetry_carries_receivers_and_integrity_verdict(tmp_path):
     store = _store(tmp_path)
     plane = _plane()
-    plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS] = {1.0: ("nl", "be"), 10.0: ("nl",)}
-    plane[STORE_INTERNAL][STORE_INTEGRITY_LOG] = [
+    plane.track.position_receivers = {1.0: ("nl", "be"), 10.0: ("nl",)}
+    plane.track.integrity_log = [
         Verdict(
             0.5, 0.95, "ok", (), {"kinematics": {"status": "pass", "detail": "ok"}}
         ),
@@ -654,11 +641,11 @@ def test_clipped_snapshot_never_replaces_a_fuller_archive(tmp_path, monkeypatch)
     assert store.finalize_plane(full, alerts=[]) is True
     # A crash-recovery snapshot: more points, but only the last 60 s.
     clipped = fine_track_plane("abc123", 1_000.0, samples=300, step=0.2)
-    clipped[STORE_RECV_DATA][STORE_LAT] = [
-        Datum(d.value, d.time + 930.0) for d in clipped[STORE_RECV_DATA][STORE_LAT]
+    clipped.received_data[STORE_LAT] = [
+        Datum(d.value, d.time + 930.0) for d in clipped.received_data[STORE_LAT]
     ]
-    clipped[STORE_RECV_DATA][STORE_LONG] = [
-        Datum(d.value, d.time + 930.0) for d in clipped[STORE_RECV_DATA][STORE_LONG]
+    clipped.received_data[STORE_LONG] = [
+        Datum(d.value, d.time + 930.0) for d in clipped.received_data[STORE_LONG]
     ]
     # Even if the old helper checks failed transiently, the decision is made
     # inside the write transaction from the archive itself.

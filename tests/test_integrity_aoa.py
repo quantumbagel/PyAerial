@@ -18,11 +18,6 @@ from pyaerial.config.schema import (
     ReceiverConfig,
     ReceiverPositionConfig,
 )
-from pyaerial.constants import (
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
-)
 from pyaerial.integrity import STATUS_OK, geodesy
 
 # --- Bearing clusters and learned AoA bias -----------------------------------
@@ -92,10 +87,10 @@ def test_aoa_bias_learned_when_aircraft_arrive_one_by_one():
     run_world(world, monitor, 60)
     assert abs(geodesy.angle_diff_deg(monitor._bearing_bias["k"], 90.0)) < 1
     for plane in world.planes.values():
-        statuses = {v.status for v in plane[STORE_INTERNAL][STORE_INTEGRITY_LOG]}
+        statuses = {v.status for v in plane.track.integrity_log}
         assert statuses <= {"unknown", STATUS_OK}
-        assert plane[STORE_INFO]["integrity"]["status"] == STATUS_OK
-        assert plane[STORE_INFO]["integrity"]["checks"]["aoa"]["status"] == "pass"
+        assert plane.info.integrity["status"] == STATUS_OK
+        assert plane.info.integrity["checks"]["aoa"]["status"] == "pass"
 
 
 # --- linear-array AoA -----------------------------------------------------------------
@@ -151,6 +146,6 @@ def test_linear_array_bias_is_learned_and_checked_only_once_known(monkeypatch, e
     for icao in world.planes:
         assert integrity_of(world, icao)["checks"]["aoa"]["status"] == "pass", icao
         statuses = {
-            v.status for v in world.planes[icao][STORE_INTERNAL][STORE_INTEGRITY_LOG]
+            v.status for v in world.planes[icao].track.integrity_log
         }
         assert statuses <= {"unknown", STATUS_OK}, (icao, statuses)

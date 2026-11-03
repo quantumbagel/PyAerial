@@ -38,19 +38,12 @@ from pyaerial.calc.geo import build_polygons
 from pyaerial.calc.motion import ResolvedMotion
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALC_DATA,
-    STORE_FIRST_PACKET,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import Datum
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 from pyaerial.store.redis_live import RedisLiveStore
 from pyaerial.webapp import create_app
 from test_contract_webhook import check_golden
@@ -93,37 +86,32 @@ def test_api_spec_matches_golden():
     check_golden("api_spec.json", response.json())
 
 
-def _plane() -> dict:
+def _plane() -> Plane:
     t = T0 - 5
-    return {
-        STORE_INFO: {
-            STORE_ICAO: "A1B2C3",
-            "callsign": "N123AB",
-            "registration": "N123AB",
-            "model": "Cessna 172S",
-            "aircraft_type": "C172",
-            "integrity": {
+    return Plane(
+        info=AircraftInfo(
+            icao="A1B2C3",
+            callsign="N123AB",
+            registration="N123AB",
+            model="Cessna 172S",
+            aircraft_type="C172",
+            integrity={
                 "score": 0.95,
                 "status": "ok",
                 "checks": {"kinematics": {"status": "pass", "detail": "consistent"}},
             },
-        },
-        STORE_RECV_DATA: {
+        ),
+        track=TrackState(first_packet=T0 - 600, last_update=t, packets=42),
+        received_data={
             STORE_LAT: [Datum(35.722, t - 2), Datum(35.725, t)],
             STORE_LONG: [Datum(-78.695, t - 2), Datum(-78.695, t)],
             STORE_ALT: [Datum(457.2, t - 2), Datum(457.2, t)],
         },
-        STORE_CALC_DATA: {
+        calculated_data={
             STORE_HORIZ_SPEED: [Datum(185.2, t)],
             STORE_HEADING: [Datum(0.0, t)],
         },
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: T0 - 600,
-            STORE_MOST_RECENT_PACKET: t,
-            "total_packets": 42,
-            "packet_type": {},
-        },
-    }
+    )
 
 
 def _pushed_messages(monkeypatch) -> dict[str, dict]:

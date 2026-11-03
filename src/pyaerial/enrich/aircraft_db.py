@@ -14,7 +14,12 @@ import requests
 
 log = logging.getLogger("pyaerial.aircraft_db")
 
-_MISSING = object()
+
+class _Missing:
+    """No usable cache entry (a negative cache entry is ``None``)."""
+
+
+_MISSING = _Missing()
 
 
 def normalize_photo_url(value: object) -> str | None:
@@ -104,7 +109,7 @@ class AircraftDB:
             return True
         with self._lock:
             record = self._read_cached_record(icao)
-        if record is _MISSING:
+        if isinstance(record, _Missing):
             return False
         if record is None:
             return True
@@ -119,7 +124,7 @@ class AircraftDB:
             return None
         with self._lock:
             record = self._read_cached_record(icao)
-        if record is _MISSING or record is None:
+        if isinstance(record, _Missing) or record is None:
             return None
         if isinstance(record, dict):
             return normalize_record_photos(record)
@@ -136,7 +141,7 @@ class AircraftDB:
 
         with self._lock:
             record = self._read_cached_record(icao)
-        if record is not _MISSING:
+        if not isinstance(record, _Missing):
             if record is None:
                 return None
             if "photo_checked" in record:
@@ -163,7 +168,7 @@ class AircraftDB:
         self._update_cache(icao, record)
         return normalize_record_photos(record) if record is not None else None
 
-    def _read_cached_record(self, icao: str) -> dict | None | object:
+    def _read_cached_record(self, icao: str) -> dict | None | _Missing:
         """Return cached record, None for a negative cache entry, or _MISSING.
 
         Caller holds ``self._lock``; the connection may have been closed since
@@ -244,7 +249,11 @@ class AircraftDB:
         headers = {
             "User-Agent": "PyAerial/2.0 (https://github.com/quantumbagel/PyAerial)"
         }
-        photo_info = {"photo_url": None, "photo_link": None, "photo_photographer": None}
+        photo_info: dict[str, str | None] = {
+            "photo_url": None,
+            "photo_link": None,
+            "photo_photographer": None,
+        }
 
         # Try looking up by ICAO hex first
         try:

@@ -15,14 +15,6 @@ from integrity_world import (
     run_world,
 )
 from pyaerial.classify import CAT_VELOCITY
-from pyaerial.constants import (
-    STORE_FIRST_PACKET,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
-    STORE_PACKET_TYPE,
-    STORE_TRACK_STARTED,
-)
 from pyaerial.integrity import STATUS_OK, STATUS_UNKNOWN, geodesy
 from pyaerial.integrity import monitor as monitor_module
 from pyaerial.integrity.checks import FAIL, PASS, WARN, CheckResult
@@ -44,7 +36,7 @@ def test_integrity_log_records_changes_not_refreshes():
             "radio_horizon": CheckResult(PASS, "x"),
         }
         monitor._publish("A10000", plane, found, None, world.t + i)
-    log = plane[STORE_INTERNAL][STORE_INTEGRITY_LOG]
+    log = plane.track.integrity_log
     # unknown until 30 s of evidence; recovery waits _RECOVER_SECONDS.
     assert [(v.time - world.t, v.status) for v in log] == [
         (0, "unknown"),
@@ -56,7 +48,7 @@ def test_integrity_log_records_changes_not_refreshes():
     ]
     # The live document is still refreshed.
     assert (
-        plane[STORE_INFO]["integrity"]["checks"]["kinematics"]["detail"] == "moved 239"
+        plane.info.integrity["checks"]["kinematics"]["detail"] == "moved 239"
     )
 
 
@@ -73,7 +65,7 @@ def test_status_agrees_with_published_score():
         "radio_horizon": CheckResult(PASS, "x"),
     }
     monitor._publish("A10000", plane, found, None, world.t + 60)
-    doc = plane[STORE_INFO]["integrity"]
+    doc = plane.info.integrity
     assert (doc["score"], doc["status"]) == (0.8, STATUS_OK)
 
 
@@ -144,7 +136,7 @@ def _drive(statuses: list[str]) -> tuple[list[tuple[float, str]], list[str]]:
         monitor._publish("A10000", plane, _three(status), None, world.t + i)
         published.append(monitor._statuses["A10000"])
     log = [
-        (v.time - world.t, v.status) for v in plane[STORE_INTERNAL][STORE_INTEGRITY_LOG]
+        (v.time - world.t, v.status) for v in plane.track.integrity_log
     ]
     return log, published
 
@@ -186,12 +178,12 @@ def test_genuine_traffic_has_no_status_flaps_over_five_minutes():
     monitor = make_monitor(world, integrity_config(antennas))
     run_world(world, monitor, 300)
     for plane in world.planes.values():
-        statuses = [v.status for v in plane[STORE_INTERNAL][STORE_INTEGRITY_LOG]]
+        statuses = [v.status for v in plane.track.integrity_log]
         assert statuses[-1] == STATUS_OK
         assert [
             s for s, prev in zip(statuses[1:], statuses, strict=False) if s != prev
         ] == [STATUS_OK]
-        assert plane[STORE_INFO]["integrity"]["status"] == STATUS_OK
+        assert plane.info.integrity["status"] == STATUS_OK
 
 
 # --- Evaluation spread over ticks --------------------------------------------
@@ -258,9 +250,6 @@ def test_failing_aircraft_are_rechecked_every_second(monkeypatch):
 # --- Flight splits keep track age, checks and verdict ------------------------
 
 
-TRACK_STARTED = STORE_TRACK_STARTED
-
-
 # --- flight splits ------------------------------------------------------------------
 
 
@@ -268,13 +257,14 @@ def _split(world: World) -> None:
     """What the engine's flight split does to every plane: first_packet moves
     to now, track_started stays."""
     for plane in world.planes.values():
-        internal = plane[STORE_INTERNAL]
-        internal.setdefault(TRACK_STARTED, internal[STORE_FIRST_PACKET])
-        internal[STORE_FIRST_PACKET] = world.t
+        track = plane.track
+        if track.track_started is None:
+            track.track_started = track.first_packet
+        track.first_packet = world.t
 
 
 def _statuses_since(world: World, icao: str, t0: float) -> list[str]:
-    log = world.planes[icao][STORE_INTERNAL][STORE_INTEGRITY_LOG]
+    log = world.planes[icao].track.integrity_log
     return [v.status for v in log if v.time >= t0]
 
 
@@ -288,7 +278,7 @@ def test_split_flight_keeps_track_age_checks_and_verdict():
     monitor = make_monitor(world, config)
 
     def no_velocity(w: World):
-        w.planes["A10000"][STORE_INTERNAL][STORE_PACKET_TYPE][CAT_VELOCITY] = 0
+        w.planes["A10000"].track.packet_types[CAT_VELOCITY] = 0
         return []
 
     run_world(world, monitor, 90, extra=no_velocity)
@@ -313,5 +303,5 @@ def test_track_age_falls_back_to_first_packet():
     monitor = make_monitor(world, integrity_config(antennas))
     run_world(world, monitor, 40)
     # No track_started at all (older engine): first_packet is the track age.
-    assert all(TRACK_STARTED not in p[STORE_INTERNAL] for p in world.planes.values())
+    assert all(p.track.track_started is None for p in world.planes.values())
     assert {integrity_of(world, icao)["status"] for icao in world.planes} == {STATUS_OK}

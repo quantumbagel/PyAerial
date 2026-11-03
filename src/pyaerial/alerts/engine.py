@@ -6,6 +6,9 @@ import logging
 import math
 import time
 import uuid
+from collections.abc import Mapping
+from dataclasses import replace
+from typing import Any
 
 from shapely import Polygon
 
@@ -20,21 +23,15 @@ from pyaerial.constants import (
     ALERT_CAT_TYPE,
     ALERT_CAT_ZONE,
     STORE_ALT,
-    STORE_CALC_DATA,
     STORE_CALLSIGN,
-    STORE_FIRST_PACKET,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
     STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
     STORE_VERT_SPEED,
 )
-from pyaerial.models import flight_id_for_plane, get_latest
+from pyaerial.models import Plane, latest_datum
 from pyaerial.store.redis_live import RedisLiveStore
 
 log = logging.getLogger("pyaerial.alerts")
@@ -77,23 +74,23 @@ def _rule_eta_bound(zone: ZoneConfig) -> float | None:
     return min(max(bounds), float(_ETA_HORIZON))
 
 
-def _last_position(plane: dict) -> tuple[float, float] | None:
+def _last_position(plane: Plane) -> tuple[float, float] | None:
     # No fix means no position: report None, never a fake (0, 0) in the
     # Gulf of Guinea.
-    recv = plane.get(STORE_RECV_DATA, {})
-    lat_series = recv.get(STORE_LAT, [])
-    lon_series = recv.get(STORE_LONG, [])
+    recv = plane.received_data
+    lat_series = recv.get(STORE_LAT)
+    lon_series = recv.get(STORE_LONG)
     if lat_series and lon_series:
         return (lat_series[-1].value, lon_series[-1].value)
     return None
 
 
-def _plane_as_flight(plane: dict, flight_id: str) -> dict | None:
+def _plane_as_flight(plane: Plane, flight_id: str) -> Plane | None:
     """*plane* as seen by the stores under *flight_id* (``{icao}-{start}``)."""
     try:
-        if flight_id_for_plane(plane) == flight_id:
+        if plane.flight_id == flight_id:
             return plane
-    except (KeyError, TypeError, ValueError):
+    except (TypeError, ValueError):
         pass
     icao, _, start = flight_id.rpartition("-")
     try:
@@ -102,9 +99,7 @@ def _plane_as_flight(plane: dict, flight_id: str) -> dict | None:
         return None
     if not icao:
         return None
-    internal = dict(plane.get(STORE_INTERNAL) or {})
-    internal[STORE_FIRST_PACKET] = first_packet
-    return {**plane, STORE_INTERNAL: internal}
+    return replace(plane, track=replace(plane.track, first_packet=first_packet))
 
 
 class AlertEngine:
@@ -185,13 +180,13 @@ class AlertEngine:
 
     def check(
         self,
-        plane: dict,
+        plane: Plane,
         position: tuple[float, float],
         motion: ResolvedMotion,
         callsign: str,
     ) -> None:
-        icao = plane[STORE_INFO][STORE_ICAO].lower()
-        flight_id = flight_id_for_plane(plane)
+        icao = plane.icao
+        flight_id = plane.flight_id
         previous_flight = self._live_flight.get(icao)
         if previous_flight is not None and previous_flight != flight_id:
             # Same aircraft, new flight id without an explicit handover():
@@ -347,10 +342,10 @@ class AlertEngine:
             if state is None:
                 continue
             zone_name, rule_name = key[1], key[2]
-            rule = self._find_rule(zone_name, rule_name)
-            hyst = rule.hysteresis_seconds if rule is not None else 0
+            stale_rule = self._find_rule(zone_name, rule_name)
+            hyst = stale_rule.hysteresis_seconds if stale_rule is not None else 0
             geofence_etas = all_etas()
-            eta = geofence_etas.get(zone_name, state.get("eta"))
+            last_eta = geofence_etas.get(zone_name, state.get("eta"))
             first_unmatch = self._pending_unmatch.setdefault(key, mono)
             if mono - first_unmatch < (hyst or 0):
                 active_alerts.append(
@@ -359,18 +354,18 @@ class AlertEngine:
                         "zone": zone_name,
                         "rule": rule_name,
                         "activated_at": state["activated_at"],
-                        "eta": eta,
+                        "eta": last_eta,
                     }
                 )
                 continue
             self._pending_unmatch.pop(key, None)
             self._alert_state.pop(key, None)
-            if rule is not None:
+            if stale_rule is not None:
                 self._on_deactivate(
                     plane,
                     zone_name,
-                    rule,
-                    eta,
+                    stale_rule,
+                    last_eta,
                     geofence_etas,
                     position,
                     callsign,
@@ -387,7 +382,7 @@ class AlertEngine:
                         STORE_CALLSIGN: callsign,
                         ALERT_CAT_TYPE: rule_name,
                         ALERT_CAT_ZONE: zone_name,
-                        ALERT_CAT_ETA: eta,
+                        ALERT_CAT_ETA: last_eta,
                     },
                     self._build_payload(plane, position),
                     alert_id=state["alert_id"],
@@ -396,7 +391,7 @@ class AlertEngine:
                     active=False,
                 )
 
-        plane["active_alerts"] = active_alerts
+        plane.active_alerts = active_alerts
 
     def _zone_eta(
         self,
@@ -418,7 +413,7 @@ class AlertEngine:
             position, motion.heading_deg, motion.speed_kph, polygon, _ETA_HORIZON
         )
 
-    def handover(self, plane: dict, old_flight_id: str, new_flight_id: str) -> None:
+    def handover(self, plane: Plane, old_flight_id: str, new_flight_id: str) -> None:
         """Continue an aircraft's active alerts from one flight id to the next.
 
         For flight segmentation (``tracking.max_flight_seconds``): the same
@@ -444,8 +439,7 @@ class AlertEngine:
           Idempotent. If the engine skips it, the first ``check()`` that sees
           the new flight id for this ICAO calls it.
         """
-        info = plane.get(STORE_INFO) or {}
-        icao = str(info.get(STORE_ICAO) or "").lower()
+        icao = plane.icao
         if not icao or old_flight_id == new_flight_id:
             return
         self._live_flight[icao] = new_flight_id
@@ -466,7 +460,7 @@ class AlertEngine:
                 rule,
                 state.get("eta"),
                 {},
-                info.get(STORE_CALLSIGN) or "",
+                plane.info.callsign or "",
                 _ALERT_HOOK_WHILE_ACTIVE,
                 state["alert_id"],
             )
@@ -479,7 +473,7 @@ class AlertEngine:
                 active=True,
             )
 
-    def deactivate(self, plane: dict, ended_by: str | None = None) -> bool:
+    def deactivate(self, plane: Plane, ended_by: str | None = None) -> bool:
         """Close every alert of a flight being removed, with one deactivate each.
 
         Covers alerts this process raised and, via the live store, alerts a
@@ -494,13 +488,10 @@ class AlertEngine:
         pending matches are left alone and False is returned so callers keep
         per-ICAO state (motion, lookups) too. True otherwise.
         """
-        info = plane.get(STORE_INFO, {})
-        if STORE_ICAO not in info:
-            return True
-        icao = info[STORE_ICAO].lower()
+        icao = plane.icao
         try:
-            flight_id: str | None = flight_id_for_plane(plane)
-        except (KeyError, TypeError, ValueError):
+            flight_id: str | None = plane.flight_id
+        except (TypeError, ValueError):
             flight_id = None
         live_flight = self._live_flight.get(icao)
         other_flight_live = (
@@ -527,12 +518,11 @@ class AlertEngine:
         ]
         now = time.time()
         if ended_by is None:
-            last = (plane.get(STORE_INTERNAL) or {}).get(STORE_MOST_RECENT_PACKET)
-            silent = isinstance(last, (int, float)) and (
-                now - last > self.config.tracking.remember_planes
+            silent = (
+                now - plane.track.last_update > self.config.tracking.remember_planes
             )
             ended_by = ENDED_LOST if silent else ENDED_SHUTDOWN
-        callsign = info.get(STORE_CALLSIGN) or ""
+        callsign = plane.info.callsign or ""
         position = _last_position(plane)
 
         geofence_etas = {z: None for z in self.config.zones}
@@ -575,7 +565,7 @@ class AlertEngine:
                 )
         self._close_orphaned_alerts(plane, closed, callsign, position, now)
         if not other_flight_live:
-            plane["active_alerts"] = []
+            plane.active_alerts = []
         return not other_flight_live
 
     def _find_rule(self, zone_name: str, rule_name: str) -> RuleConfig | None:
@@ -586,7 +576,7 @@ class AlertEngine:
 
     def _close_orphaned_alerts(
         self,
-        plane: dict,
+        plane: Plane,
         closed: set[str],
         callsign: str,
         position: tuple[float, float] | None,
@@ -601,7 +591,7 @@ class AlertEngine:
         if self.store is None:
             return
         try:
-            flight_id = flight_id_for_plane(plane)
+            flight_id = plane.flight_id
             docs = self.store.get_alerts(flight_id=flight_id, active_only=True)
         except Exception:
             log.exception("Could not read leftover active alerts from the live store")
@@ -679,11 +669,11 @@ class AlertEngine:
 
     def _build_meta(
         self,
-        plane: dict,
+        plane: Plane,
         zone_name: str,
         rule: RuleConfig,
         eta: float | None,
-        geofence_etas: dict[str, float | None],
+        geofence_etas: Mapping[str, float | None],
         callsign: str,
         hook: str,
         alert_id: str,
@@ -697,7 +687,7 @@ class AlertEngine:
         The webhook's ``pyaerial.alert/1`` body is built from this; see
         :mod:`pyaerial.alerters.contract` for every field.
         """
-        info = plane.get(STORE_INFO, {})
+        info = plane.info
         zone_cfg = (
             self.config.zones.get(zone_name)
             if self.config and self.config.zones
@@ -720,13 +710,13 @@ class AlertEngine:
         finite_eta = (
             eta if isinstance(eta, (int, float)) and math.isfinite(eta) else None
         )
-        meta = {
+        meta: dict[str, Any] = {
             # One alert_id per episode: lets webhook consumers pair the
             # activate / while_active / deactivate notifications. The live
             # store copies named keys only, so its documents are unchanged.
             "alert_id": alert_id,
-            "flight_id": flight_id_for_plane(plane),
-            STORE_ICAO: info.get(STORE_ICAO, ""),
+            "flight_id": plane.flight_id,
+            STORE_ICAO: info.icao,
             STORE_CALLSIGN: callsign,
             ALERT_CAT_TYPE: rule.name,
             ALERT_CAT_ZONE: zone_name,
@@ -745,18 +735,17 @@ class AlertEngine:
         }
         if ended_by is not None:
             meta[ALERT_CAT_REASON]["ended_by"] = ended_by
-        for field in (
-            "registration",
-            "manufacturer",
-            "manufacturer_name",
-            "model",
-            "owner",
-            "aircraft_type",
-            "photo_url",
-            "country",
-            "operator_callsign",
+        for field, val in (
+            ("registration", info.registration),
+            ("manufacturer", info.manufacturer),
+            ("manufacturer_name", info.manufacturer_name),
+            ("model", info.model),
+            ("owner", info.owner),
+            ("aircraft_type", info.aircraft_type),
+            ("photo_url", info.photo_url),
+            ("country", info.country),
+            ("operator_callsign", info.operator_callsign),
         ):
-            val = info.get(field)
             if val:
                 meta[field] = val
         return meta
@@ -767,13 +756,13 @@ class AlertEngine:
                 return state.get("activated_at")
         return None
 
-    def _build_payload(self, plane: dict, position: tuple[float, float] | None) -> dict:
+    def _build_payload(self, plane: Plane, position: tuple[float, float] | None) -> dict:
         # Baro altitude, else geometric GNSS height (TC 20-22 only aircraft);
         # altitude_source tells consumers which one they got.
         alt, alt_source = evaluate.altitude_m(plane)
-        speed = get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane)
-        heading = get_latest(STORE_CALC_DATA, STORE_HEADING, plane)
-        vert_speed = get_latest(STORE_RECV_DATA, STORE_VERT_SPEED, plane)
+        speed = latest_datum(plane.calculated_data, STORE_HORIZ_SPEED)
+        heading = latest_datum(plane.calculated_data, STORE_HEADING)
+        vert_speed = latest_datum(plane.received_data, STORE_VERT_SPEED)
         return {
             STORE_LAT: position[0] if position is not None else None,
             STORE_LONG: position[1] if position is not None else None,
@@ -807,7 +796,7 @@ class AlertEngine:
 
     def _on_activate(
         self,
-        plane: dict,
+        plane: Plane,
         zone_name: str,
         rule: RuleConfig,
         eta: float,
@@ -843,11 +832,11 @@ class AlertEngine:
 
     def _on_deactivate(
         self,
-        plane: dict,
+        plane: Plane,
         zone_name: str,
         rule: RuleConfig,
         eta: float | None,
-        geofence_etas: dict[str, float | None],
+        geofence_etas: Mapping[str, float | None],
         position: tuple[float, float] | None,
         callsign: str,
         now: float,
@@ -885,7 +874,7 @@ class AlertEngine:
 
     def _refresh_active_alert(
         self,
-        plane: dict,
+        plane: Plane,
         zone_name: str,
         rule: RuleConfig,
         eta: float,
@@ -912,7 +901,7 @@ class AlertEngine:
 
     def _on_while_active(
         self,
-        plane: dict,
+        plane: Plane,
         zone_name: str,
         rule: RuleConfig,
         eta: float,

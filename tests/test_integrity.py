@@ -26,16 +26,10 @@ from pyaerial.calc.evaluate import integrity_score, make_resolver
 from pyaerial.classify import CAT_AIRBORNE_GNSS
 from pyaerial.config.schema import IntegrityConfig
 from pyaerial.constants import (
-    STORE_GATE_REJECTS,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_PACKET_TYPE,
-    STORE_RECV_DATA,
 )
 from pyaerial.integrity import (
     STATUS_OK,
@@ -149,7 +143,7 @@ def test_genuine_traffic_scores_ok():
     world.add_genuine(15)
     monitor = make_monitor(world, integrity_config(antennas))
     run_world(world, monitor, 40)
-    statuses = {icao: plane[STORE_INFO]["integrity"]["status"] for icao, plane in world.planes.items()}
+    statuses = {icao: plane.info.integrity["status"] for icao, plane in world.planes.items()}
     assert set(statuses.values()) == {STATUS_OK}
 
 
@@ -161,9 +155,9 @@ def test_verdict_changes_are_logged_on_the_plane():
     monitor = make_monitor(world, integrity_config(antennas))
     run_world(world, monitor, 40)
     plane = world.planes["B00001"]
-    verdicts = plane[STORE_INTERNAL][STORE_INTEGRITY_LOG]
+    verdicts = plane.track.integrity_log
     assert [v.time for v in verdicts] == sorted(v.time for v in verdicts)
-    latest = plane[STORE_INFO]["integrity"]
+    latest = plane.info.integrity
     assert verdicts[-1].status == latest["status"]
     assert verdicts[-1].score == latest["score"]
     # Details refresh live; only a changed verdict is logged again.
@@ -282,7 +276,7 @@ def test_replayed_frames_and_duplicate_icao():
     frame = es_position("a10000", 0, salt=42)
     monitor.observe_frames([RawFrame(frame, world.t, "a"), RawFrame(frame, world.t + 1, "a")])
     monitor.observe_frames([RawFrame(frame, world.t + 2, "a"), RawFrame(frame, world.t + 3, "a")])
-    world.planes["A10000"][STORE_INTERNAL][STORE_GATE_REJECTS] = 4
+    world.planes["A10000"].track.gate_rejects = 4
     monitor.evaluate(world.planes, world.t + 3, force=True)
     doc = integrity_of(world, "a10000")
     assert doc["checks"]["replay"]["status"] == "fail"
@@ -376,7 +370,7 @@ def test_mode_s_altitude_runs_for_aircraft_mostly_sending_gnss_positions():
 
     monitor = make_monitor(world, integrity_config(antennas))
     for plane in world.planes.values():
-        plane[STORE_INTERNAL][STORE_PACKET_TYPE][CAT_AIRBORNE_GNSS] = 10_000
+        plane.track.packet_types[CAT_AIRBORNE_GNSS] = 10_000
     run_world(world, monitor, 20, extra=replies)
     assert integrity_of(world, "a10000")["checks"]["mode_s_altitude"]["status"] == "fail"
     assert integrity_of(world, "a10001")["checks"]["mode_s_altitude"]["status"] == "pass"
@@ -390,7 +384,7 @@ def test_kinematics_sees_steady_reported_velocity():
     must still compare against it (a spoofer often reports exactly that)."""
     t0 = 1000.0
     plane = new_plane("A10000", t0)
-    recv = plane[STORE_RECV_DATA]
+    recv = plane.received_data
     recv[STORE_LAT], recv[STORE_LONG] = [], []
     for i in range(61):
         t = t0 + i * 0.5

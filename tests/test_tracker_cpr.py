@@ -14,7 +14,6 @@ from pyaerial.config.schema import HomeConfig
 from pyaerial.constants import (
     STORE_LAT,
     STORE_LONG,
-    STORE_RECV_DATA,
 )
 
 
@@ -32,7 +31,7 @@ def test_aircraft_beyond_180nm_from_antenna_is_not_decoded_into_wrong_zone():
     assert abs(lat - (true_lat + 0.005)) < 0.01
     assert abs(lon - true_lon) < 0.01
     # No fix was ever placed in the aliased zone.
-    lats = [d.value for d in tracker.planes["A1B2C3"][STORE_RECV_DATA][STORE_LAT]]
+    lats = [d.value for d in tracker.planes["A1B2C3"].received_data[STORE_LAT]]
     assert min(lats) > true_lat - 0.1
 
 
@@ -76,7 +75,7 @@ def test_longitude_is_wrapped_across_the_antimeridian():
     msg = airborne_position("a1b2c3", 1.0, -179.99, 0)
     result = classify(msg, home, last_position=(1.0, 179.95))
     assert result is not None
-    lon = result.data[STORE_RECV_DATA][STORE_LONG]
+    lon = result.values[STORE_LONG]
     assert -180.0 <= lon < 180.0
     assert abs(lon - -179.99) < 0.001
 
@@ -90,7 +89,7 @@ def test_tracker_follows_aircraft_across_the_antimeridian():
         t += 0.5
     lat, lon = latest_position(tracker, "A1B2C3")
     assert abs(lon - -179.985) < 0.001
-    lons = [d.value for d in tracker.planes["A1B2C3"][STORE_RECV_DATA][STORE_LONG]]
+    lons = [d.value for d in tracker.planes["A1B2C3"].received_data[STORE_LONG]]
     assert all(-180.0 <= value < 180.0 for value in lons)
 
 

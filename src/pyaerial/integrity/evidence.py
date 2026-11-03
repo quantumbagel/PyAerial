@@ -20,16 +20,14 @@ from dataclasses import dataclass, field
 
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALC_DATA,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
     STORE_LAT,
     STORE_LONG,
-    STORE_RECV_DATA,
 )
 from pyaerial.integrity import geodesy
 from pyaerial.integrity.tdoa import TdoaObservation
-from pyaerial.models import nearest_datum
+from pyaerial.models import Plane, nearest_datum
 
 _SAMPLES = 400
 _TIMING_SAMPLES = 240
@@ -107,9 +105,9 @@ def trim(series: deque, cutoff: float) -> None:
         series.popleft()
 
 
-def latest_fix(plane: dict) -> tuple[float, float, float | None, float] | None:
+def latest_fix(plane: Plane) -> tuple[float, float, float | None, float] | None:
     """``(lat, lon, alt_m, time)`` of the newest position."""
-    recv = plane.get(STORE_RECV_DATA) or {}
+    recv = plane.received_data
     lat_series = recv.get(STORE_LAT) or []
     lon_series = recv.get(STORE_LONG) or []
     if not lat_series or not lon_series:
@@ -132,7 +130,7 @@ def _series_value(series: list, t: float, slack: float) -> float | None:
 
 
 def position_at(
-    plane: dict, t: float, max_gap: float = 2.0
+    plane: Plane, t: float, max_gap: float = 2.0
 ) -> tuple[float, float, float | None] | None:
     """Claimed ``(lat, lon, alt_m)`` at wall time *t*, dead-reckoned to *t*."""
     return PositionLookup(plane).at(t, max_gap)
@@ -140,12 +138,12 @@ def position_at(
 
 class PositionLookup:
     """:func:`position_at` for many times on one plane: the series are looked
-    up once (each ``Plane`` lookup is costly), not per call."""
+    up once, not per call."""
 
     __slots__ = ("_lat", "_lon", "_alt", "_plane", "_recv", "_motion")
 
-    def __init__(self, plane: dict):
-        recv = plane.get(STORE_RECV_DATA) or {}
+    def __init__(self, plane: Plane):
+        recv = plane.received_data
         self._plane = plane
         self._recv = recv
         self._lat = recv.get(STORE_LAT) or []
@@ -166,7 +164,7 @@ class PositionLookup:
         lat_v, lon_v = lat.value, lon.value
         if abs(gap) > 0.05:
             if self._motion is None:
-                calc = self._plane.get(STORE_CALC_DATA) or {}
+                calc = self._plane.calculated_data
                 recv = self._recv
                 self._motion = (
                     calc.get(STORE_HORIZ_SPEED) or recv.get(STORE_HORIZ_SPEED) or [],

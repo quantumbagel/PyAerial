@@ -14,18 +14,15 @@ from pyaerial.constants import (
     ALERT_CAT_ETA,
     CONFIG_COMP_FUNCTIONS,
     STORE_ALT,
-    STORE_CALC_DATA,
     STORE_DISTANCE,
     STORE_GNSS_HEIGHT,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_INFO,
     STORE_LAT,
     STORE_LONG,
-    STORE_RECV_DATA,
     STORE_VERT_SPEED,
 )
-from pyaerial.models import get_latest, sample_provenance
+from pyaerial.models import Plane, latest_datum, sample_provenance
 
 Resolver = Callable[[str], float | None]
 
@@ -70,7 +67,7 @@ ALTITUDE_GNSS = "gnss"
 
 
 def altitude_m(
-    plane: dict, at_time: float | None = None
+    plane: Plane, at_time: float | None = None
 ) -> tuple[float | None, str | None]:
     """``(metres, source)`` for ``altitude`` rules and alert payloads.
 
@@ -79,16 +76,16 @@ def altitude_m(
     which is *geometric* height above the WGS84 ellipsoid, not pressure
     altitude: the two can differ by tens to hundreds of metres.
     """
-    baro = get_latest(STORE_RECV_DATA, STORE_ALT, plane, at_time)
+    baro = latest_datum(plane.received_data, STORE_ALT, at_time)
     if baro is not None:
         return baro.value, ALTITUDE_BARO
-    gnss = get_latest(STORE_RECV_DATA, STORE_GNSS_HEIGHT, plane, at_time)
+    gnss = latest_datum(plane.received_data, STORE_GNSS_HEIGHT, at_time)
     if gnss is not None:
         return gnss.value, ALTITUDE_GNSS
     return None, None
 
 
-def integrity_score(plane: dict, at_time: float | None = None) -> float | None:
+def integrity_score(plane: Plane, at_time: float | None = None) -> float | None:
     """Integrity score backed by evidence, or None.
 
     An ``unknown`` (or missing) status publishes score 1.0 without any check
@@ -101,8 +98,8 @@ def integrity_score(plane: dict, at_time: float | None = None) -> float | None:
         score = verdict.get("integrity_score")
         status = verdict.get("integrity_status")
     else:
-        doc = (plane.get(STORE_INFO) or {}).get(_INTEGRITY_KEY)
-        if not isinstance(doc, dict):
+        doc = plane.info.integrity
+        if doc is None:
             return None
         score = doc.get("score")
         status = doc.get("status")
@@ -135,7 +132,7 @@ def _heading_in_range(
 
 
 def make_resolver(
-    plane: dict,
+    plane: Plane,
     eta: float,
     polygon: Polygon,
     position: tuple[float, float],
@@ -154,10 +151,10 @@ def make_resolver(
         if target_field == STORE_ALT:
             return altitude_m(plane, at_time)[0]
         if target_field in _RECV_FIELDS:
-            datum = get_latest(STORE_RECV_DATA, target_field, plane, at_time)
+            datum = latest_datum(plane.received_data, target_field, at_time)
             return datum.value if datum else None
         if target_field in _CALC_FIELDS:
-            datum = get_latest(STORE_CALC_DATA, target_field, plane, at_time)
+            datum = latest_datum(plane.calculated_data, target_field, at_time)
             return datum.value if datum else None
         if target_field == ALERT_CAT_ETA:
             return eta
@@ -189,7 +186,7 @@ def when_passes(when: dict[str, FieldConstraint], resolver: Resolver) -> bool:
 
 
 def make_predicted_resolver(
-    plane: dict,
+    plane: Plane,
     polygon: Polygon,
     position: tuple[float, float],
     heading: float,
@@ -241,7 +238,7 @@ def make_predicted_resolver(
             alt = altitude_m(plane)[0]
             if alt is None:
                 return None
-            vs = get_latest(STORE_RECV_DATA, STORE_VERT_SPEED, plane)
+            vs = latest_datum(plane.received_data, STORE_VERT_SPEED)
             if vs is not None:
                 return alt + vs.value * predict_seconds
             return alt
@@ -265,10 +262,10 @@ def make_predicted_resolver(
 
         # For speed, heading, vert_speed, etc. use current values
         if target_field in _RECV_FIELDS:
-            datum = get_latest(STORE_RECV_DATA, target_field, plane)
+            datum = latest_datum(plane.received_data, target_field)
             return datum.value if datum else None
         if target_field in _CALC_FIELDS:
-            datum = get_latest(STORE_CALC_DATA, target_field, plane)
+            datum = latest_datum(plane.calculated_data, target_field)
             return datum.value if datum else None
 
         return None

@@ -551,6 +551,7 @@ def try_parse_beast(
                 return None, start + 1 - offset
             return None, resync - offset
         return None, start - offset
+    assert next_index is not None  # set whenever a body was read
     clock = int.from_bytes(body[:6], "big")
     rssi = beast_rssi_dbfs(body[6])
     hex_msg = body[7:].hex()

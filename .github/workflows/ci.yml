@@ -29,6 +29,7 @@ jobs:
         run: >-
           pip install --no-deps -e . &&
           pip install pytest==9.2.0 httpx==0.28.1 ruff==0.17.3 import-linter==2.15
+          mypy==2.4.1
       - name: Tests
         run: pytest
       - name: Ruff
@@ -36,6 +37,9 @@ jobs:
       # Package layering ([tool.importlinter] in pyproject.toml).
       - name: Import layers
         run: lint-imports
+      # [tool.mypy] in pyproject.toml.
+      - name: Types
+        run: mypy
 
   package:
     # The wheel must carry the built portal: `pyaerial web` serves it from there.

@@ -10,13 +10,9 @@ import operator
 import os
 from pathlib import Path
 
-# --- Top-level buckets stored per plane ---------------------------------------
-STORE_INFO = "info"
-STORE_RECV_DATA = "received_data"
-STORE_CALC_DATA = "calculated_data"
-STORE_INTERNAL = "internal"
-
 # --- Telemetry / calculated data fields ---------------------------------------
+# Keys of Plane.received_data / calculated_data, and the field names of
+# telemetry documents and alert payloads.
 STORE_LAT = "latitude"
 STORE_LONG = "longitude"
 STORE_ALT = "altitude"
@@ -29,28 +25,9 @@ STORE_HORIZ_SPEED = "speed"
 STORE_HEADING = "heading"
 STORE_DISTANCE = "distance"
 
-# --- Plane information fields --------------------------------------------------
+# --- Alert meta fields --------------------------------------------------------
 STORE_ICAO = "icao"
 STORE_CALLSIGN = "callsign"
-STORE_PLANE_CATEGORY = "plane_category"
-
-# --- Internal bookkeeping fields ----------------------------------------------
-STORE_MOST_RECENT_PACKET = "last_update"
-STORE_TOTAL_PACKETS = "packets"
-STORE_PACKET_TYPE = "packet_type"
-STORE_FIRST_PACKET = "first_packet"
-# position-fix timestamp -> receivers that heard that frame, strongest first
-STORE_POSITION_RECEIVERS = "position_receivers"
-# Integrity verdict changes: [(time, score, status, flagged checks, checks doc)]
-STORE_INTEGRITY_LOG = "integrity_log"
-# When the engine first tracked this aircraft. Unlike STORE_FIRST_PACKET it is
-# kept when a long track is split into flight segments (max_flight_seconds).
-STORE_TRACK_STARTED = "track_started"
-# Internal counter of position fixes the CPR jump gate rejected (evidence of
-# two transmitters sharing an ICAO address).
-STORE_GATE_REJECTS = "gate_rejects"
-# info field holding the latest integrity verdict document.
-STORE_INTEGRITY = "integrity"
 
 # --- Alert payload fields -----------------------------------------------------
 ALERT_CAT_TYPE = "type"

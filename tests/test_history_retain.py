@@ -8,41 +8,30 @@ from pyaerial.calc.geo import build_polygons
 from pyaerial.config.schema import ArchiveConfig, ZoneConfig
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALC_DATA,
-    STORE_FIRST_PACKET,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import Datum, Verdict
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState, Verdict
 from pyaerial.store.history import HistoryStore
 
 RULES_ONLY = ArchiveConfig(flights="rules")
 
 
 def _plane():
-    return {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: {
+    return Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(first_packet=1.0, last_update=10.0),
+        received_data={
             STORE_LAT: [Datum(35.725, 1.0)],
             STORE_LONG: [Datum(-78.695, 1.0)],
         },
-        STORE_CALC_DATA: {
+        calculated_data={
             STORE_HEADING: [Datum(0.0, 1.0)],
             STORE_HORIZ_SPEED: [Datum(0.0, 1.0)],
         },
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 1.0,
-            STORE_MOST_RECENT_PACKET: 10.0,
-        },
-    }
+    )
 
 
 def test_retain_false_is_honored_even_with_alerts():
@@ -137,13 +126,13 @@ def test_retain_fallback_uses_matching_seconds_not_sample_count():
     )
     polygons = build_polygons(config.zones)
     plane = _plane()
-    plane[STORE_RECV_DATA][STORE_LAT] = [Datum(35.725, 1.0), Datum(35.725, 70.0)]
-    plane[STORE_RECV_DATA][STORE_LONG] = [Datum(-78.695, 1.0), Datum(-78.695, 70.0)]
-    plane[STORE_RECV_DATA][STORE_ALT] = [Datum(300.0, 1.0), Datum(300.0, 70.0)]
-    plane[STORE_CALC_DATA][STORE_HEADING] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
-    plane[STORE_CALC_DATA][STORE_HORIZ_SPEED] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
-    plane[STORE_INTERNAL][STORE_FIRST_PACKET] = 1.0
-    plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] = 70.0
+    plane.received_data[STORE_LAT] = [Datum(35.725, 1.0), Datum(35.725, 70.0)]
+    plane.received_data[STORE_LONG] = [Datum(-78.695, 1.0), Datum(-78.695, 70.0)]
+    plane.received_data[STORE_ALT] = [Datum(300.0, 1.0), Datum(300.0, 70.0)]
+    plane.calculated_data[STORE_HEADING] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
+    plane.calculated_data[STORE_HORIZ_SPEED] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
+    plane.track.first_packet = 1.0
+    plane.track.last_update = 70.0
     assert should_retain(plane, [], config, polygons, positions=1) is True
 
 
@@ -173,19 +162,19 @@ def test_retain_does_not_credit_whole_flight_from_one_match():
     )
     polygons = build_polygons(config.zones)
     plane = _plane()
-    plane[STORE_RECV_DATA][STORE_LAT] = [
+    plane.received_data[STORE_LAT] = [
         Datum(35.0, 1.0),
         Datum(35.725, 70.0),
     ]
-    plane[STORE_RECV_DATA][STORE_LONG] = [
+    plane.received_data[STORE_LONG] = [
         Datum(-78.0, 1.0),
         Datum(-78.695, 70.0),
     ]
-    plane[STORE_RECV_DATA][STORE_ALT] = [Datum(300.0, 1.0), Datum(300.0, 70.0)]
-    plane[STORE_CALC_DATA][STORE_HEADING] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
-    plane[STORE_CALC_DATA][STORE_HORIZ_SPEED] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
-    plane[STORE_INTERNAL][STORE_FIRST_PACKET] = 1.0
-    plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] = 70.0
+    plane.received_data[STORE_ALT] = [Datum(300.0, 1.0), Datum(300.0, 70.0)]
+    plane.calculated_data[STORE_HEADING] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
+    plane.calculated_data[STORE_HORIZ_SPEED] = [Datum(0.0, 1.0), Datum(0.0, 70.0)]
+    plane.track.first_packet = 1.0
+    plane.track.last_update = 70.0
     assert should_retain(plane, [], config, polygons, positions=1) is False
 
 
@@ -216,17 +205,17 @@ def test_retain_fallback_requires_continuous_dwell():
     )
     polygons = build_polygons(config.zones)
 
-    def plane_with(alts: list[float], times: list[float], last: float) -> dict:
+    def plane_with(alts: list[float], times: list[float], last: float) -> Plane:
         plane = _plane()
-        plane[STORE_RECV_DATA][STORE_LAT] = [Datum(35.725, t) for t in times]
-        plane[STORE_RECV_DATA][STORE_LONG] = [Datum(-78.695, t) for t in times]
-        plane[STORE_RECV_DATA][STORE_ALT] = [
+        plane.received_data[STORE_LAT] = [Datum(35.725, t) for t in times]
+        plane.received_data[STORE_LONG] = [Datum(-78.695, t) for t in times]
+        plane.received_data[STORE_ALT] = [
             Datum(a, t) for a, t in zip(alts, times, strict=True)
         ]
-        plane[STORE_CALC_DATA][STORE_HEADING] = [Datum(0.0, t) for t in times]
-        plane[STORE_CALC_DATA][STORE_HORIZ_SPEED] = [Datum(0.0, t) for t in times]
-        plane[STORE_INTERNAL][STORE_FIRST_PACKET] = times[0]
-        plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] = last
+        plane.calculated_data[STORE_HEADING] = [Datum(0.0, t) for t in times]
+        plane.calculated_data[STORE_HORIZ_SPEED] = [Datum(0.0, t) for t in times]
+        plane.track.first_packet = times[0]
+        plane.track.last_update = last
         return plane
 
     split = plane_with([300, 300, 5000, 300], [0, 40, 50, 90], last=120)
@@ -274,24 +263,20 @@ _PAD = Polygon([(35.72, -78.70), (35.73, -78.70), (35.73, -78.69), (35.72, -78.6
 _IN_PAD = (35.725, -78.695)
 
 
-def _retain_plane(log: list[Verdict], final: dict) -> dict:
+def _retain_plane(log: list[Verdict], final: dict) -> Plane:
     times = [0.0, 30.0, 60.0, 90.0]
-    return {
-        STORE_INFO: {STORE_ICAO: "abc123", "integrity": final},
-        STORE_RECV_DATA: {
+    return Plane(
+        info=AircraftInfo(icao="abc123", integrity=final),
+        track=TrackState(first_packet=0.0, last_update=95.0, integrity_log=log),
+        received_data={
             STORE_LAT: [Datum(_IN_PAD[0], t) for t in times],
             STORE_LONG: [Datum(_IN_PAD[1], t) for t in times],
         },
-        STORE_CALC_DATA: {
+        calculated_data={
             STORE_HEADING: [Datum(0.0, t) for t in times],
             STORE_HORIZ_SPEED: [Datum(0.0, t) for t in times],
         },
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 0.0,
-            STORE_MOST_RECENT_PACKET: 95.0,
-            STORE_INTEGRITY_LOG: log,
-        },
-    }
+    )
 
 
 def _retain_config(**when):

@@ -6,7 +6,7 @@ several receivers are what TDOA needs, repeats are what replay detection
 needs). Once a second, :meth:`IntegrityMonitor.evaluate` resolves new samples
 against each aircraft's claimed track, calibrates the station-wide models
 (signal strength vs. range, AoA bias, receiver clock offsets) on aircraft that
-currently look genuine, runs the checks, and writes ``info["integrity"]``.
+currently look genuine, runs the checks, and writes ``plane.info.integrity``.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import time
 import zlib
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from typing import cast
 
 from pyModeS.util import altcode as pms_altcode
 from pyModeS.util import icao as pms_icao
@@ -32,20 +33,10 @@ from pyaerial.classify import (
 from pyaerial.config.schema import Config
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALLSIGN,
-    STORE_FIRST_PACKET,
-    STORE_GATE_REJECTS,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_INFO,
-    STORE_INTEGRITY,
-    STORE_INTEGRITY_LOG,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_PACKET_TYPE,
-    STORE_RECV_DATA,
-    STORE_TRACK_STARTED,
     STORE_VERT_SPEED,
 )
 from pyaerial.integrity import checks, geodesy
@@ -72,7 +63,7 @@ from pyaerial.integrity.tdoa import (
     multilaterate,
     wrap_ticks,
 )
-from pyaerial.models import Verdict, nearest_datum
+from pyaerial.models import IntegrityDoc, Plane, TrackState, Verdict, nearest_datum
 from pyaerial.receivers.frames import (
     BEAST_CLOCK_HZ,
     BEAST_CLOCK_MOD,
@@ -89,6 +80,9 @@ STATUS_OK = "ok"
 STATUS_SUSPECT = "suspect"
 STATUS_SPOOFED = "spoofed"
 STATUS_UNKNOWN = "unknown"
+
+# A claimed (lat, lon, alt_m) position whose altitude is known.
+_Fix3D = tuple[float, float, float]
 
 # Each aircraft is re-evaluated this often, at a phase set by its address,
 # so every tick handles an even share; station-wide work runs this often too.
@@ -158,17 +152,15 @@ _RECOVER_SECONDS = 30.0
 _SEVERITY = {STATUS_UNKNOWN: 0, STATUS_OK: 0, STATUS_SUSPECT: 1, STATUS_SPOOFED: 2}
 
 
-def _track_started(internal: dict, now: float) -> float:
+def _track_started(track: TrackState) -> float:
     """When tracking of this aircraft began.
 
     The engine splits long flights and moves ``first_packet`` to the split;
     ``track_started`` survives it, so checks that wait for track age (message
     mix, cross-network, Mode S corroboration, the trust bootstrap) carry on.
     """
-    started = internal.get(STORE_TRACK_STARTED)
-    if started is None:
-        started = internal.get(STORE_FIRST_PACKET)
-    return now if started is None else started
+    started = track.track_started
+    return track.first_packet if started is None else started
 
 
 def _is_airborne_position(hex_msg: str) -> bool:
@@ -402,7 +394,9 @@ class IntegrityMonitor:
                         ev.mode_s_alt.append((t, feet * FT_TO_M))
         for hex_msg, rows in copies.items():
             if len(rows) >= 2:
-                self._pair_copies(self._evidence[addresses[hex_msg]], rows)
+                # Only frames with an address are collected in copies.
+                address = cast(str, addresses[hex_msg])
+                self._pair_copies(self._evidence[address], rows)
 
     @staticmethod
     def _pair_copies(ev: AircraftEvidence, rows: list[tuple[float, str, int]]) -> None:
@@ -454,7 +448,7 @@ class IntegrityMonitor:
     # --- evaluation ---------------------------------------------------------
 
     def evaluate(
-        self, planes: dict[str, dict], now: float | None = None, *, force: bool = False
+        self, planes: dict[str, Plane], now: float | None = None, *, force: bool = False
     ) -> None:
         """Score the share of *planes* that is due; call once per tick.
 
@@ -481,13 +475,13 @@ class IntegrityMonitor:
         }
 
         if station:
-            for icao, ev in list(self._evidence.items()):
+            for icao, held in list(self._evidence.items()):
                 if icao in planes:
                     continue  # trimmed in its own slot
-                if ev.last_seen < cutoff:
+                if held.last_seen < cutoff:
                     del self._evidence[icao]
                 else:
-                    self._trim(ev, now, cutoff)
+                    self._trim(held, now, cutoff)
             for icao in [icao for icao in self._cached if icao not in planes]:
                 self.forget(icao)
 
@@ -542,7 +536,7 @@ class IntegrityMonitor:
                 found = {**found, "emitter_cluster": flag}
             self._publish(icao, plane, found, emitter, now)
 
-    def _due(self, planes: dict[str, dict], now: float, force: bool) -> list[str]:
+    def _due(self, planes: dict[str, Plane], now: float, force: bool) -> list[str]:
         """Aircraft whose evaluation slot has come round since their last run."""
         due = []
         for icao in planes:
@@ -588,7 +582,7 @@ class IntegrityMonitor:
     def _resolve(
         self,
         ev: AircraftEvidence,
-        plane: dict,
+        plane: Plane,
         antennas: dict[str, ReceiverPosition],
     ) -> None:
         """Turn new raw RSSI / AoA samples into range and angle samples."""
@@ -640,11 +634,11 @@ class IntegrityMonitor:
             raw.clear()
 
     def _note_first_fix(
-        self, icao: str, plane: dict, ev: AircraftEvidence | None
+        self, icao: str, plane: Plane, ev: AircraftEvidence | None
     ) -> None:
         if icao in self._first_fix or ev is None:
             return
-        recv = plane.get(STORE_RECV_DATA) or {}
+        recv = plane.received_data
         lats = recv.get(STORE_LAT) or []
         lons = recv.get(STORE_LONG) or []
         if not lats or not lons:
@@ -667,7 +661,7 @@ class IntegrityMonitor:
             self._first_fix_km[receiver].append(km)
 
     def _sync_clocks(
-        self, planes: dict[str, dict], ecefs: dict[str, geodesy.Vec3]
+        self, planes: dict[str, Plane], ecefs: dict[str, geodesy.Vec3]
     ) -> None:
         """Feed frames from aircraft that currently look genuine into clock sync."""
         if len(ecefs) < 2:
@@ -686,11 +680,11 @@ class IntegrityMonitor:
                 pos = claimed.at(obs.time, max_gap=1.0)
                 if pos is None or pos[2] is None:
                     continue
-                self._sync.add_sync(obs, pos, ecefs, icao)
+                self._sync.add_sync(obs, cast(_Fix3D, pos), ecefs, icao)
             ev.tdoa_synced_until = newest
 
     def _tdoa_residuals(
-        self, ev: AircraftEvidence, plane: dict, ecefs: dict[str, geodesy.Vec3]
+        self, ev: AircraftEvidence, plane: Plane, ecefs: dict[str, geodesy.Vec3]
     ) -> None:
         """Test each new multi-receiver observation once against the claim."""
         if not ev.tdoa or len(ecefs) < 2:
@@ -707,7 +701,9 @@ class IntegrityMonitor:
             pos = claimed.at(obs.time, max_gap=1.0)
             if pos is None or pos[2] is None:
                 continue
-            residuals = self._sync.residuals_m(obs, pos, ecefs, max_spread)
+            residuals = self._sync.residuals_m(
+                obs, cast(_Fix3D, pos), ecefs, max_spread
+            )
             for residual in residuals:
                 ev.tdoa_resid.append((obs.time, residual))
             if residuals:
@@ -747,7 +743,7 @@ class IntegrityMonitor:
         return stats
 
     def _calibrate(
-        self, planes: dict[str, dict], stats: dict[str, _PlaneStats], now: float
+        self, planes: dict[str, Plane], stats: dict[str, _PlaneStats], now: float
     ) -> None:
         trusted = [icao for icao in planes if icao in stats and self._trusted(icao)]
         # Station signal model: rssi + 20 log10(range) is constant for one
@@ -788,6 +784,7 @@ class IntegrityMonitor:
                 direct = circular_median_deg(
                     [geodesy.angle_diff_deg(m, e) for m, e in recent_rows]
                 )
+                assert direct is not None  # recent_rows is not empty
                 if axis is None:
                     per_plane.append((direct,))
                     continue
@@ -799,6 +796,7 @@ class IntegrityMonitor:
                         for m, e in recent_rows
                     ]
                 )
+                assert mirrored is not None
                 per_plane.append((direct, mirrored))
             if len(per_plane) >= _MIN_BIAS_AIRCRAFT:
                 if axis is None:
@@ -828,11 +826,10 @@ class IntegrityMonitor:
         # currently failing aircraft never calibrates the station models.
         return self._statuses.get(icao) == STATUS_OK
 
-    def _corroboration_eligible(self, plane: dict, now: float) -> bool:
-        internal = plane.get(STORE_INTERNAL) or {}
-        if now - _track_started(internal, now) < _ELIGIBLE_SECONDS:
+    def _corroboration_eligible(self, plane: Plane, now: float) -> bool:
+        if now - _track_started(plane.track) < _ELIGIBLE_SECONDS:
             return False
-        pkt = internal.get(STORE_PACKET_TYPE) or {}
+        pkt = plane.track.packet_types
         return pkt.get(CAT_AIRBORNE_BARO, 0) + pkt.get(CAT_AIRBORNE_GNSS, 0) >= 20
 
     def _corrected_bearing(self, receiver: str, measured: float) -> float:
@@ -862,7 +859,7 @@ class IntegrityMonitor:
     def _check_plane(
         self,
         icao: str,
-        plane: dict,
+        plane: Plane,
         ev: AircraftEvidence | None,
         stats: _PlaneStats,
         antennas: dict[str, ReceiverPosition],
@@ -872,20 +869,20 @@ class IntegrityMonitor:
         cfg = self.cfg
         out: dict[str, CheckResult | None] = {}
         emitter: dict[str, float] | None = None
-        info = plane.get(STORE_INFO) or {}
-        internal = plane.get(STORE_INTERNAL) or {}
-        recv = plane.get(STORE_RECV_DATA) or {}
-        pkt = internal.get(STORE_PACKET_TYPE) or {}
-        first_packet = _track_started(internal, now)
+        info = plane.info
+        track = plane.track
+        recv = plane.received_data
+        pkt = track.packet_types
+        first_packet = _track_started(track)
         fix = latest_fix(plane)
         recent = now - _RECENT
 
         out["identity"] = checks.identity(
-            icao, info.get(STORE_CALLSIGN), info.get("registration")
+            icao, info.callsign, info.registration
         )
         positions = pkt.get(CAT_AIRBORNE_BARO, 0) + pkt.get(CAT_AIRBORNE_GNSS, 0)
         out["duplicate_icao"] = checks.duplicate_icao(
-            int(internal.get(STORE_GATE_REJECTS, 0)),
+            track.gate_rejects,
             positions + pkt.get(CAT_SURFACE, 0),
         )
         if now - first_packet >= _ELIGIBLE_SECONDS and pkt.get(CAT_SURFACE, 0) == 0:
@@ -1004,11 +1001,11 @@ class IntegrityMonitor:
         return all(t < now - _RECENT for t in ev.rx_last.values())
 
     def _kinematics(
-        self, plane: dict, fix: tuple[float, float, float | None, float] | None
+        self, plane: Plane, fix: tuple[float, float, float | None, float] | None
     ) -> CheckResult | None:
         if fix is None:
             return None
-        recv = plane.get(STORE_RECV_DATA) or {}
+        recv = plane.received_data
         lat_series = recv.get(STORE_LAT) or []
         lon_series = recv.get(STORE_LONG) or []
         t1 = fix[3]
@@ -1093,7 +1090,7 @@ class IntegrityMonitor:
     def _tdoa(
         self,
         icao: str,
-        plane: dict,
+        plane: Plane,
         ev: AircraftEvidence,
         fix: tuple[float, float, float | None, float] | None,
         ecefs: dict[str, geodesy.Vec3],
@@ -1231,7 +1228,7 @@ class IntegrityMonitor:
     def _publish(
         self,
         icao: str,
-        plane: dict,
+        plane: Plane,
         found: dict[str, CheckResult],
         emitter: dict[str, float] | None,
         now: float,
@@ -1252,7 +1249,7 @@ class IntegrityMonitor:
         # Status follows the published score, so the two never disagree.
         score = round(score, 2)
         rebroadcast = self._rebroadcast_only(self._evidence.get(icao), now)
-        first_packet = _track_started(plane.get(STORE_INTERNAL) or {}, now)
+        first_packet = _track_started(plane.track)
         min_checks = _TRUST_MIN_CHECKS_REBROADCAST if rebroadcast else _TRUST_MIN_CHECKS
         if now - first_packet >= _TRUST_MIN_SECONDS and len(weighted) >= min_checks:
             self._established.add(icao)
@@ -1279,7 +1276,6 @@ class IntegrityMonitor:
             self._held_at[icao] = now
         self._statuses[icao] = status
         if status == STATUS_SPOOFED and previous != STATUS_SPOOFED:
-            info = plane.get(STORE_INFO) or {}
             reasons = "; ".join(
                 f"{name}: {r.detail}"
                 for name, r in weighted.items()
@@ -1288,7 +1284,7 @@ class IntegrityMonitor:
             log.warning(
                 "Integrity: %s %s looks spoofed (score %.2f): %s",
                 icao,
-                info.get(STORE_CALLSIGN) or "",
+                plane.info.callsign or "",
                 score,
                 reasons,
             )
@@ -1322,7 +1318,7 @@ class IntegrityMonitor:
         # An unknown verdict has no meaningful score; publishing the 1.0
         # placeholder would archive unverified samples as fully consistent.
         published = None if status == STATUS_UNKNOWN else score
-        doc: dict[str, object] = {
+        doc: IntegrityDoc = {
             "score": published,
             "status": status,
             "checks": checks_doc,
@@ -1331,14 +1327,14 @@ class IntegrityMonitor:
             doc["emitter"] = emitter
         if signature[-1]:
             doc["rebroadcast"] = True
-        plane.setdefault(STORE_INFO, {})[STORE_INTEGRITY] = doc
+        plane.info.integrity = doc
         if not log_it:
             return
         self._logged[icao] = (status, signature, now)
         # The archive labels each telemetry sample with the verdict in effect
         # when it arrived, and keeps every verdict in the integrity table.
         flagged = tuple(name for name, r in checks_doc.items() if r["status"] != PASS)
-        plane.setdefault(STORE_INTERNAL, {}).setdefault(STORE_INTEGRITY_LOG, []).append(
+        plane.track.integrity_log.append(
             Verdict(now, published, status, flagged, checks_doc)
         )
 

@@ -1,8 +1,9 @@
 """
 ADS-B / Mode S message classification.
 
-Turns a raw hex message into structured plane data (info + received_data) and a
-typecode category used for internal bookkeeping.
+Turns a raw hex message into a :class:`ClassifiedMessage`: the aircraft's
+identity fields, received telemetry values, and a typecode category used for
+internal bookkeeping.
 """
 
 from __future__ import annotations
@@ -10,7 +11,8 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any, TypeGuard
 
 import pyModeS as pms
 from pyModeS.util import typecode as pms_typecode, icao as pms_icao
@@ -20,16 +22,11 @@ from pyaerial.constants import (
     MAX_CPR_JUMP_DEG,
     MAX_SPEED_MPS,
     STORE_ALT,
-    STORE_CALLSIGN,
     STORE_GNSS_HEIGHT,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_ICAO,
-    STORE_INFO,
     STORE_LAT,
     STORE_LONG,
-    STORE_PLANE_CATEGORY,
-    STORE_RECV_DATA,
     STORE_VERT_SPEED,
 )
 from pyaerial.units import FT_PER_MIN_TO_MPS, FT_TO_M, KT_TO_KMH
@@ -48,8 +45,17 @@ _M_PER_DEG_LAT = 111_320.0
 
 @dataclass(frozen=True, slots=True)
 class ClassifiedMessage:
-    data: dict
+    """One decoded message, ready to merge into a :class:`~pyaerial.models.Plane`."""
+
+    icao: str
     typecode_category: int
+    # received_data field (STORE_LAT, STORE_ALT, ...) -> decoded value; fields
+    # the message carries but could not decode are left out.
+    values: dict[str, Any] = field(default_factory=dict)
+    # Identification messages only: [typecode, ADS-B emitter category], and
+    # the callsign when it is not blank.
+    plane_category: list[Any] | None = None
+    callsign: str | None = None
 
 
 def max_jump_deg(elapsed_s: float | None) -> float:
@@ -125,8 +131,10 @@ def classify(
     if not _valid_icao(icao):
         return None
 
-    data: dict | None = None
+    values: dict[str, Any] | None = None
     category: int | None = None
+    plane_category: list[Any] | None = None
+    ident_callsign: str | None = None
 
     if 1 <= typecode <= 4:
         try:
@@ -136,16 +144,9 @@ def classify(
         ca = decoded.get("category")
         callsign = decoded.get("callsign") or ""
         callsign = callsign.replace("_", "").strip()
-        info = {
-            STORE_ICAO: icao,
-            STORE_PLANE_CATEGORY: [typecode, ca],
-        }
-        if callsign:
-            info[STORE_CALLSIGN] = callsign
-        data = {
-            STORE_INFO: info,
-            STORE_RECV_DATA: {},
-        }
+        plane_category = [typecode, ca]
+        ident_callsign = callsign or None
+        values = {}
         category = CAT_IDENT
 
     elif 5 <= typecode <= 8:
@@ -162,14 +163,11 @@ def classify(
             return None
         speed = decoded.get("groundspeed")
         angle = decoded.get("track")
-        data = {
-            STORE_INFO: {STORE_ICAO: icao},
-            STORE_RECV_DATA: {
-                STORE_LAT: lat,
-                STORE_LONG: lon,
-                STORE_HORIZ_SPEED: speed * KT_TO_KMH if speed is not None else None,
-                STORE_HEADING: angle,
-            },
+        values = {
+            STORE_LAT: lat,
+            STORE_LONG: lon,
+            STORE_HORIZ_SPEED: speed * KT_TO_KMH if speed is not None else None,
+            STORE_HEADING: angle,
         }
         category = CAT_SURFACE
 
@@ -190,7 +188,7 @@ def classify(
             if on_implausible is not None:
                 on_implausible()
             return None
-        recv = {STORE_LAT: lat, STORE_LONG: lon}
+        recv: dict[str, Any] = {STORE_LAT: lat, STORE_LONG: lon}
         if typecode <= 18:
             alt = decoded.get("altitude")
             recv[STORE_ALT] = alt * FT_TO_M if alt is not None else None
@@ -199,7 +197,7 @@ def classify(
             gnss_ft = _gnss_height_ft(msg)
             recv[STORE_GNSS_HEIGHT] = gnss_ft * FT_TO_M if gnss_ft is not None else None
             category = CAT_AIRBORNE_GNSS
-        data = {STORE_INFO: {STORE_ICAO: icao}, STORE_RECV_DATA: recv}
+        values = recv
 
     elif typecode == 19:
         try:
@@ -209,28 +207,31 @@ def classify(
         speed = decoded.get("groundspeed")
         angle = decoded.get("track")
         vert_rate = decoded.get("vertical_rate")
-        data = {
-            STORE_INFO: {STORE_ICAO: icao},
-            STORE_RECV_DATA: {
-                STORE_HORIZ_SPEED: speed * KT_TO_KMH if speed is not None else None,
-                STORE_HEADING: angle,
-                STORE_VERT_SPEED: vert_rate * FT_PER_MIN_TO_MPS
-                if vert_rate is not None
-                else None,
-            },
+        values = {
+            STORE_HORIZ_SPEED: speed * KT_TO_KMH if speed is not None else None,
+            STORE_HEADING: angle,
+            STORE_VERT_SPEED: vert_rate * FT_PER_MIN_TO_MPS
+            if vert_rate is not None
+            else None,
         }
         category = CAT_VELOCITY
 
     elif typecode in (28, 29, 31):
         return None
 
-    if data is None or category is None:
+    if values is None or category is None:
         log.debug("Unsupported typecode %s (msg=%s)", typecode, msg)
         return None
 
-    data = _strip_nulls(data)
-    log.debug("Classified typecode %s: %s", typecode, data)
-    return ClassifiedMessage(data=data, typecode_category=category)
+    classified = ClassifiedMessage(
+        icao=icao,
+        typecode_category=category,
+        values={k: v for k, v in values.items() if v is not None},
+        plane_category=plane_category,
+        callsign=ident_callsign,
+    )
+    log.debug("Classified typecode %s: %s", typecode, classified)
+    return classified
 
 
 def _gnss_height_ft(msg: str) -> int | None:
@@ -285,7 +286,7 @@ def _gray_to_int(n: int) -> int:
     return n
 
 
-def _valid_icao(icao: object) -> bool:
+def _valid_icao(icao: object) -> TypeGuard[str]:
     return isinstance(icao, str) and len(icao) == 6 and icao != "000000"
 
 
@@ -336,13 +337,3 @@ def _plausible_fix(
         and _lon_delta_deg(lon_f, last_position[1]) <= max(jump_deg, lon_jump)
     )
 
-
-def _strip_nulls(data: dict) -> dict:
-    cleaned = {}
-    for bucket, fields in data.items():
-        if not isinstance(fields, dict):
-            cleaned[bucket] = fields
-            continue
-        kept = {k: v for k, v in fields.items() if v is not None}
-        cleaned[bucket] = kept
-    return cleaned

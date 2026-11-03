@@ -12,25 +12,20 @@ from typing import Any
 from shapely import Polygon
 
 from pyaerial.calc import evaluate, geo
-from pyaerial.config.schema import Config
+from pyaerial.config.schema import Config, RuleConfig
 from pyaerial.constants import (
-    STORE_CALC_DATA,
-    STORE_FIRST_PACKET,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import get_latest
+from pyaerial.models import Plane, latest_datum
 
 _ETA_HORIZON = 10_000
 
 
 def should_retain(
-    plane: dict,
+    plane: Plane,
     alerts: list[dict[str, Any]],
     config: Config,
     polygons: dict[str, Polygon],
@@ -38,7 +33,7 @@ def should_retain(
     positions: int,
 ) -> bool:
     """Return True if the archive keeps this flight. *positions* is its sample count."""
-    rules_by_key: dict[tuple[str, str], Any] = {}
+    rules_by_key: dict[tuple[str, str], RuleConfig] = {}
     for zone_name, zone in config.zones.items():
         for rule in zone.rules:
             rules_by_key[(zone_name, rule.name)] = rule
@@ -48,21 +43,24 @@ def should_retain(
     # any episode of a retain=True rule is reason enough to keep the flight.
     # Re-measuring dwell from activated_at here dropped flights that fired.
     for alert in alerts:
-        rule = rules_by_key.get((alert.get("zone", ""), alert.get("rule", "")))
-        if rule is not None and rule.retain and alert.get("activated_at") is not None:
+        alerted = rules_by_key.get((alert.get("zone", ""), alert.get("rule", "")))
+        if (
+            alerted is not None
+            and alerted.retain
+            and alert.get("activated_at") is not None
+        ):
             return True
 
     if config.archive.flights == "all":
         return positions >= config.archive.min_positions
 
-    recv = plane.get(STORE_RECV_DATA, {})
-    calc = plane.get(STORE_CALC_DATA, {})
+    recv = plane.received_data
+    calc = plane.calculated_data
     if STORE_LAT not in recv or STORE_HEADING not in calc:
         return False
 
-    internal = plane[STORE_INTERNAL]
-    first_time = internal[STORE_FIRST_PACKET]
-    last_time = internal[STORE_MOST_RECENT_PACKET]
+    first_time = plane.track.first_packet
+    last_time = plane.track.last_update
 
     for zone_name, zone in config.zones.items():
         if not any(rule.retain for rule in zone.rules):
@@ -86,7 +84,7 @@ def should_retain(
 
 
 def _matching_seconds(
-    plane: dict,
+    plane: Plane,
     polygon: Polygon,
     when: dict,
     first_time: float,
@@ -97,7 +95,7 @@ def _matching_seconds(
     Continuous, like the live engine's dwell: separate short matches do not
     add up to ``dwell_seconds``.
     """
-    lat_series = plane.get(STORE_RECV_DATA, {}).get(STORE_LAT, [])
+    lat_series = plane.received_data.get(STORE_LAT, [])
     if not lat_series:
         return 0.0
     samples = [datum for datum in lat_series if first_time <= datum.time <= last_time]
@@ -106,10 +104,10 @@ def _matching_seconds(
     prev_time: float | None = None
     prev_match = False
     for lat in samples:
-        lon = get_latest(STORE_RECV_DATA, STORE_LONG, plane, lat.time)
-        heading = get_latest(STORE_CALC_DATA, STORE_HEADING, plane, lat.time)
-        speed = get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat.time)
-        if None in (lon, heading, speed):
+        lon = latest_datum(plane.received_data, STORE_LONG, lat.time)
+        heading = latest_datum(plane.calculated_data, STORE_HEADING, lat.time)
+        speed = latest_datum(plane.calculated_data, STORE_HORIZ_SPEED, lat.time)
+        if lon is None or heading is None or speed is None:
             prev_match = False
             run = 0.0
             prev_time = lat.time

@@ -18,16 +18,12 @@ from pyaerial.constants import (
     MAX_COAST_SECONDS,
     MAX_KALMAN_DT,
     MIN_SPEED_DT,
-    STORE_CALC_DATA,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
-    STORE_ICAO,
-    STORE_INFO,
     STORE_LAT,
     STORE_LONG,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import Datum, get_latest, patch_append
+from pyaerial.models import Datum, Plane, append_datum, latest_datum
 
 _ADS_B_TRUST_SECONDS = 10.0
 _HEADING_SMOOTH_ALPHA = 0.3
@@ -67,8 +63,8 @@ class Kinematics:
         self._smoothed_turn_rates.pop(key, None)
         self._last_fix_time.pop(key, None)
 
-    def update(self, plane: dict) -> KinematicUpdate | None:
-        recv = plane.get(STORE_RECV_DATA, {})
+    def update(self, plane: Plane) -> KinematicUpdate | None:
+        recv = plane.received_data
         if STORE_LAT not in recv or STORE_LONG not in recv:
             return None
 
@@ -79,15 +75,15 @@ class Kinematics:
 
         current_lat = lat_series[-1]
         current_lon = (
-            get_latest(STORE_RECV_DATA, STORE_LONG, plane, current_lat.time)
+            latest_datum(plane.received_data, STORE_LONG, current_lat.time)
             or lon_series[-1]
         )
         current = (current_lat.value, current_lon.value)
         current_time = current_lat.time
-        icao = plane[STORE_INFO][STORE_ICAO].lower()
+        icao = plane.icao
 
-        prev_speed_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HORIZ_SPEED, [])
-        prev_heading_series = plane.get(STORE_CALC_DATA, {}).get(STORE_HEADING, [])
+        prev_speed_series = plane.calculated_data.get(STORE_HORIZ_SPEED, [])
+        prev_heading_series = plane.calculated_data.get(STORE_HEADING, [])
         previous_calc_speed = prev_speed_series[-1].value if prev_speed_series else None
         previous_calc_heading = (
             prev_heading_series[-1].value if prev_heading_series else None
@@ -124,7 +120,7 @@ class Kinematics:
             else:
                 previous_lat = lat_series[-steps]
             previous_lon = (
-                get_latest(STORE_RECV_DATA, STORE_LONG, plane, previous_lat.time)
+                latest_datum(plane.received_data, STORE_LONG, previous_lat.time)
                 or lon_series[0]
             )
             previous = (previous_lat.value, previous_lon.value)
@@ -195,12 +191,16 @@ class Kinematics:
         )
 
         if final_speed is not None:
-            patch_append(
-                plane, STORE_CALC_DATA, STORE_HORIZ_SPEED, Datum(final_speed, speed_time)
+            append_datum(
+                plane.calculated_data,
+                STORE_HORIZ_SPEED,
+                Datum(final_speed, speed_time),
             )
         if final_heading is not None:
-            patch_append(
-                plane, STORE_CALC_DATA, STORE_HEADING, Datum(final_heading, speed_time)
+            append_datum(
+                plane.calculated_data,
+                STORE_HEADING,
+                Datum(final_heading, speed_time),
             )
 
         return self._coast(icao, current, current_time, motion)
@@ -237,29 +237,29 @@ class Kinematics:
         )
 
     def _choose_speed(
-        self, plane: dict, computed: float | None, current_time: float
+        self, plane: Plane, computed: float | None, current_time: float
     ) -> tuple[float | None, float]:
-        recv = plane.get(STORE_RECV_DATA, {})
+        recv = plane.received_data
         if STORE_HORIZ_SPEED not in recv:
             return computed, current_time
         reported = recv[STORE_HORIZ_SPEED][-1]
         if current_time - reported.time < _ADS_B_TRUST_SECONDS:
             # Stamp at the position time, not the velocity-packet time. ADS-B
             # speed/heading messages are sparse; reusing their timestamp made
-            # patch_append drop every subsequent sample and froze historical
+            # append_datum drop every subsequent sample and froze historical
             # tracks to a single speed/heading.
             return reported.value, current_time
         return computed, current_time
 
     def _turn_headings(
         self,
-        plane: dict,
+        plane: Plane,
         geodesic_heading: float,
         current_time: float,
         lat_series: list,
     ) -> tuple[float, float, float]:
         """Turn rate from one heading source: successive ADS-B tracks, else last two geodesics."""
-        recv = plane.get(STORE_RECV_DATA, {})
+        recv = plane.received_data
         adsb = recv.get(STORE_HEADING) or []
         if (
             len(adsb) >= 2
@@ -272,8 +272,8 @@ class Kinematics:
             )
         if len(lat_series) >= 3:
             def _point(idx: int) -> tuple[float, float] | None:
-                lon = get_latest(
-                    STORE_RECV_DATA, STORE_LONG, plane, lat_series[idx].time
+                lon = latest_datum(
+                    plane.received_data, STORE_LONG, lat_series[idx].time
                 )
                 if lon is None:
                     return None
@@ -289,9 +289,9 @@ class Kinematics:
         return geodesic_heading, geodesic_heading, 0.0
 
     def _choose_heading(
-        self, plane: dict, computed: float | None, current_time: float
+        self, plane: Plane, computed: float | None, current_time: float
     ) -> float | None:
-        recv = plane.get(STORE_RECV_DATA, {})
+        recv = plane.received_data
         if STORE_HEADING not in recv:
             return computed
         reported = recv[STORE_HEADING][-1]

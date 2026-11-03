@@ -35,14 +35,8 @@ from pyaerial.config.schema import (
 )
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_FIRST_PACKET,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
-from pyaerial.models import Datum
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 
 _EVENTS: list[dict] = []
 
@@ -165,14 +159,13 @@ def events(monkeypatch):
     engine = AlertEngine(config, build_polygons(config.zones))
     engine._dispatcher.close(timeout=0.0)
     engine._dispatcher = InlineDispatcher()  # type: ignore[assignment]
-    plane = {
-        STORE_INFO: {
-            STORE_ICAO: "abc123",
-            "integrity": {"score": 0.95, "status": "ok", "checks": {}},
-        },
-        STORE_RECV_DATA: {STORE_ALT: [Datum(800.0, t0)]},
-        STORE_INTERNAL: {STORE_FIRST_PACKET: t0, STORE_MOST_RECENT_PACKET: t0},
-    }
+    plane = Plane(
+        info=AircraftInfo(
+            icao="abc123", integrity={"score": 0.95, "status": "ok", "checks": {}}
+        ),
+        track=TrackState(first_packet=t0, last_update=t0),
+        received_data={STORE_ALT: [Datum(800.0, t0)]},
+    )
     motion = ResolvedMotion(heading_deg=0.0, speed_kph=_SPEED_KPH, turn_rate_deg_s=0.0)
     try:
         for t, lat in _track():

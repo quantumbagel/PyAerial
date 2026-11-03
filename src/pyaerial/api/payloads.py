@@ -79,12 +79,12 @@ def alert_id_for(doc: dict[str, Any], flight_id: Any = None) -> str:
 
 def _dump1090_format(args: dict[str, Any]) -> str:
     """The wire format :class:`Dump1090Receiver` uses for these arguments."""
-    fmt = args.get("format")
-    if fmt is not None:
-        return "beast" if str(fmt).lower() in {"beast", "binary"} else "avr"
-    port = args.get("tcp_connection_port")
-    # Beast unless the port is dump1090's AVR port (also when no port is set).
-    return "avr" if port is not None and str(port) == "30002" else "beast"
+    from pyaerial.receivers.dump1090 import Dump1090Receiver
+
+    try:
+        return Dump1090Receiver.endpoint(args).wire_format
+    except ValueError:  # a non-numeric port: validate rejects it, default Beast
+        return "beast"
 
 
 def antenna_payload(config: Config) -> dict[str, Any]:

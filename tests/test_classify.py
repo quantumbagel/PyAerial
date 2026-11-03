@@ -8,7 +8,7 @@ import pytest
 from helpers import with_crc
 from pyaerial.classify import _plausible_fix, ac12_altitude_ft, classify
 from pyaerial.config.schema import HomeConfig
-from pyaerial.constants import STORE_HORIZ_SPEED, STORE_RECV_DATA
+from pyaerial.constants import STORE_HORIZ_SPEED
 from pyaerial.units import KMH_TO_KT
 
 
@@ -62,7 +62,7 @@ def test_groundspeed_stored_as_kmh():
     msg = _encode_velocity("ABC123", 185.2, 90.0)
     result = classify(msg, home)
     assert result is not None
-    speed = result.data[STORE_RECV_DATA].get(STORE_HORIZ_SPEED)
+    speed = result.values.get(STORE_HORIZ_SPEED)
     assert speed is not None
     assert 180.0 < speed < 190.0
 

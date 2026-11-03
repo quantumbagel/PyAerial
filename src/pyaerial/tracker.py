@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import time
 from bisect import bisect_left
-from collections import defaultdict
 from operator import attrgetter
 from typing import TYPE_CHECKING
 
@@ -23,21 +22,8 @@ from pyaerial.classify import (
     max_jump_deg,
 )
 from pyaerial.config.schema import Config
-from pyaerial.constants import (
-    STORE_FIRST_PACKET,
-    STORE_GATE_REJECTS,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
-    STORE_LAT,
-    STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_PACKET_TYPE,
-    STORE_POSITION_RECEIVERS,
-    STORE_RECV_DATA,
-    STORE_TOTAL_PACKETS,
-)
-from pyaerial.models import Datum, Plane
+from pyaerial.constants import STORE_LAT, STORE_LONG
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 from pyaerial.receivers.frames import es_icao
 
 if TYPE_CHECKING:
@@ -70,19 +56,12 @@ _PACKET_TYPE_LABELS = (
 )
 
 
-def _format_packet_types(counts: dict) -> str:
+def _format_packet_types(counts: dict[int, int]) -> str:
     """``pos 81, vel 2, id 2`` from a ``{category: count}`` mapping."""
-    by_category: dict[int, int] = {}
-    for key, value in (counts or {}).items():
-        try:
-            category = int(key)  # JSON-restored planes have string keys
-        except (TypeError, ValueError):
-            continue
-        by_category[category] = by_category.get(category, 0) + int(value)
     return ", ".join(
-        f"{label} {by_category[category]}"
+        f"{label} {counts[category]}"
         for category, label in _PACKET_TYPE_LABELS
-        if by_category.get(category)
+        if counts.get(category)
     )
 
 
@@ -98,6 +77,14 @@ def _has_position_sample(plane: Plane, timestamp: float) -> bool:
 
 
 _datum_time = attrgetter("time")
+
+
+def _apply_identity(info: AircraftInfo, classified: ClassifiedMessage) -> None:
+    """Identification fields of *classified*; a blank callsign keeps the old one."""
+    if classified.plane_category is not None:
+        info.plane_category = classified.plane_category
+    if classified.callsign:
+        info.callsign = classified.callsign
 
 
 class Tracker:
@@ -181,10 +168,7 @@ class Tracker:
                 self._gate_rejects[icao] = self._gate_rejects.get(icao, 0) + 1
                 plane = self.planes.get(icao)
                 if plane is not None:
-                    internal = plane.setdefault(STORE_INTERNAL, {})
-                    internal[STORE_GATE_REJECTS] = (
-                        internal.get(STORE_GATE_REJECTS, 0) + 1
-                    )
+                    plane.track.gate_rejects += 1
 
             heard = receivers.get(msg_hex) or ()
             receiver = heard[0] if heard else None
@@ -208,7 +192,7 @@ class Tracker:
                 continue
             if classified is None:
                 continue
-            if STORE_LAT in classified.data.get(STORE_RECV_DATA, {}):
+            if STORE_LAT in classified.values:
                 self._gate_rejects.pop(icao, None)
             self._merge(classified, timestamp, heard=heard)
             processed += 1
@@ -277,13 +261,12 @@ class Tracker:
         threshold = self.config.tracking.remember_planes
         expired = []
         for icao, plane in self.planes.items():
-            last = plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET]
-            if now - last > threshold:
+            if now - plane.track.last_update > threshold:
                 expired.append(icao)
         return expired
 
-    def remove_planes(self, icaos: list[str]) -> list[dict]:
-        """Remove and return plane dicts for the given ICAO ids."""
+    def remove_planes(self, icaos: list[str]) -> list[Plane]:
+        """Remove and return the planes for the given ICAO ids."""
         removed = []
         for icao in icaos:
             self._gate_rejects.pop(icao, None)
@@ -299,11 +282,8 @@ class Tracker:
         if not self.planes or top_n == 0:
             return ""
 
-        by_packets = {
-            icao: plane[STORE_INTERNAL][STORE_TOTAL_PACKETS]
-            for icao, plane in self.planes.items()
-        }
-        sorted_planes = sorted(by_packets, key=by_packets.get, reverse=True)
+        by_packets = {icao: plane.track.packets for icao, plane in self.planes.items()}
+        sorted_planes = sorted(by_packets, key=by_packets.__getitem__, reverse=True)
         if top_n > 0:
             sorted_planes = sorted_planes[:top_n]
 
@@ -315,8 +295,8 @@ class Tracker:
                 parts.append(f"{icao} ({count})")
                 continue
             plane = self.planes[icao]
-            callsign = plane[STORE_INFO].get("callsign", "")
-            pkt_types = _format_packet_types(plane[STORE_INTERNAL][STORE_PACKET_TYPE])
+            callsign = plane.info.callsign
+            pkt_types = _format_packet_types(plane.track.packet_types)
             detail = f"{count}, {pkt_types}" if pkt_types else f"{count}"
             if callsign:
                 parts.append(f"{icao}/{callsign} ({detail})")
@@ -333,31 +313,27 @@ class Tracker:
         *,
         heard: tuple[str, ...] = (),
     ) -> None:
-        message_data = classified.data
-        typecode_cat = classified.typecode_category
-        icao = message_data[STORE_INFO][STORE_ICAO]
+        icao = classified.icao
+        values = classified.values
 
         # Position sample times dropped from the series (run end moved on).
         replaced: list[float] = []
-        if icao not in self.planes:
-            plane = Plane.from_mapping(message_data)
-            for field, value in list(plane.received_data.items()):
-                plane.received_data[field] = [Datum(value, timestamp)]
+        plane = self.planes.get(icao)
+        if plane is None:
+            info = AircraftInfo(icao=icao)
+            _apply_identity(info, classified)
+            plane = Plane(
+                info=info,
+                track=TrackState(first_packet=timestamp, last_update=timestamp),
+                received_data={
+                    field: [Datum(value, timestamp)] for field, value in values.items()
+                },
+            )
             self.planes[icao] = plane
         else:
-            plane = Plane.from_mapping(self.planes[icao])
-            self.planes[icao] = plane
-            info = plane[STORE_INFO]
-            for key, value in message_data[STORE_INFO].items():
-                if key == STORE_ICAO:
-                    info[key] = value
-                    continue
-                if value in ("", None, []) and info.get(key) not in (None, "", []):
-                    continue
-                info[key] = value
-
-            recv = plane.setdefault(STORE_RECV_DATA, {})
-            for field, value in message_data[STORE_RECV_DATA].items():
+            _apply_identity(plane.info, classified)
+            recv = plane.received_data
+            for field, value in values.items():
                 datum = Datum(value, timestamp)
                 series = recv.setdefault(field, [])
                 if not series:
@@ -377,32 +353,25 @@ class Tracker:
                     continue
                 series.append(datum)
 
-        internal = plane.internal
-        if STORE_FIRST_PACKET not in internal:
-            internal[STORE_FIRST_PACKET] = timestamp
-            internal[STORE_TOTAL_PACKETS] = 0
-            internal[STORE_PACKET_TYPE] = defaultdict(int)
-        previous = internal.get(STORE_MOST_RECENT_PACKET)
-        if previous is None or timestamp > previous:
-            internal[STORE_MOST_RECENT_PACKET] = timestamp
-        internal[STORE_TOTAL_PACKETS] += 1
-        pkt_types = internal[STORE_PACKET_TYPE]
-        if not isinstance(pkt_types, defaultdict):
-            pkt_types = defaultdict(int, pkt_types)
-            internal[STORE_PACKET_TYPE] = pkt_types
-        pkt_types[typecode_cat] += 1
+        track = plane.track
+        if timestamp > track.last_update:
+            track.last_update = timestamp
+        track.packets += 1
+        category = classified.typecode_category
+        track.packet_types[category] = track.packet_types.get(category, 0) + 1
 
         if heard:
-            plane[STORE_INFO]["receiver"] = heard[0]
-            seen = plane[STORE_INFO].setdefault("receivers", [])
+            info = plane.info
+            info.receiver = heard[0]
+            if info.receivers is None:
+                info.receivers = []
+            seen = info.receivers
             seen.extend(name for name in heard if name not in seen)
-            if STORE_LAT in message_data[STORE_RECV_DATA] and _has_position_sample(
-                plane, timestamp
-            ):
-                internal.setdefault(STORE_POSITION_RECEIVERS, {})[timestamp] = heard
+            if STORE_LAT in values and _has_position_sample(plane, timestamp):
+                track.position_receivers[timestamp] = heard
         # Keep the map to sample times only (archive provenance lookups), or a
         # repeated fix grows it by one entry per frame.
-        position_receivers = internal.get(STORE_POSITION_RECEIVERS)
+        position_receivers = track.position_receivers
         if position_receivers:
             for stale in replaced:
                 if stale in position_receivers and not _has_position_sample(
@@ -423,9 +392,9 @@ class Tracker:
         plane = self.planes.get(icao) or self.planes.get(icao.lower())
         if plane is None:
             return None
-        recv = plane.get(STORE_RECV_DATA) or {}
-        lat_series = recv.get(STORE_LAT) or []
-        lon_series = recv.get(STORE_LONG) or []
+        recv = plane.received_data
+        lat_series = recv.get(STORE_LAT)
+        lon_series = recv.get(STORE_LONG)
         if not lat_series or not lon_series:
             return None
         lat = lat_series[-1]

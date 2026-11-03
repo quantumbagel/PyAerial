@@ -10,25 +10,22 @@ from helpers import (
     tracker_at_home,
     with_crc,
 )
-from pyaerial.classify import CAT_AIRBORNE_BARO, CAT_IDENT, CAT_VELOCITY, classify
+from pyaerial.classify import (
+    CAT_AIRBORNE_BARO,
+    CAT_AIRBORNE_GNSS,
+    CAT_IDENT,
+    CAT_SURFACE,
+    CAT_VELOCITY,
+    classify,
+)
 from pyaerial.config.schema import HomeConfig
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_CALLSIGN,
-    STORE_FIRST_PACKET,
     STORE_GNSS_HEIGHT,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_PACKET_TYPE,
-    STORE_POSITION_RECEIVERS,
-    STORE_RECV_DATA,
-    STORE_TOTAL_PACKETS,
 )
-from pyaerial.models import Datum
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 from pyaerial.receivers.frames import es_icao
 from pyaerial.tracker import Tracker, _format_packet_types
 from pyaerial.units import FT_TO_M
@@ -42,29 +39,24 @@ def test_typecode_minus_one_is_ignored():
 
 def test_unchanged_value_refreshes_timestamp():
     tracker = Tracker(make_config())
-    plane = {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: {STORE_LAT: [Datum(35.7, 100.0)]},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 100.0,
-            STORE_MOST_RECENT_PACKET: 100.0,
-            STORE_TOTAL_PACKETS: 1,
-            STORE_PACKET_TYPE: {},
-        },
-    }
+    plane = Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(
+            first_packet=100.0, last_update=100.0, packets=1, packet_types={}
+        ),
+        received_data={STORE_LAT: [Datum(35.7, 100.0)]},
+    )
     tracker.planes["abc123"] = plane
 
     from pyaerial.classify import ClassifiedMessage
 
     classified = ClassifiedMessage(
-        data={
-            STORE_INFO: {STORE_ICAO: "abc123"},
-            STORE_RECV_DATA: {STORE_LAT: 35.7},
-        },
+        icao="abc123",
         typecode_category=3,
+        values={STORE_LAT: 35.7},
     )
     tracker._merge(classified, 150.0)
-    series = plane[STORE_RECV_DATA][STORE_LAT]
+    series = plane.received_data[STORE_LAT]
     assert len(series) == 2
     assert series[0].time == 100.0
     assert series[1].time == 150.0
@@ -73,90 +65,75 @@ def test_unchanged_value_refreshes_timestamp():
 
 def test_surface_without_altitude_does_not_clobber_baro():
     tracker = Tracker(make_config())
-    plane = {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: {
+    plane = Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(
+            first_packet=100.0, last_update=100.0, packets=1, packet_types={}
+        ),
+        received_data={
             STORE_LAT: [Datum(35.7, 100.0)],
             "altitude": [Datum(400.0, 100.0)],
         },
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 100.0,
-            STORE_MOST_RECENT_PACKET: 100.0,
-            STORE_TOTAL_PACKETS: 1,
-            STORE_PACKET_TYPE: {},
-        },
-    }
+    )
     tracker.planes["abc123"] = plane
 
     from pyaerial.classify import ClassifiedMessage
     from pyaerial.constants import STORE_ALT
 
     classified = ClassifiedMessage(
-        data={
-            STORE_INFO: {STORE_ICAO: "abc123"},
-            STORE_RECV_DATA: {STORE_LAT: 35.7, STORE_LONG: -78.7},
-        },
+        icao="abc123",
         typecode_category=2,
+        values={STORE_LAT: 35.7, STORE_LONG: -78.7},
     )
     tracker._merge(classified, 150.0)
-    alt_series = plane[STORE_RECV_DATA][STORE_ALT]
+    alt_series = plane.received_data[STORE_ALT]
     assert alt_series[-1].value == 400.0
 
 
 def test_value_change_appends():
     tracker = Tracker(make_config())
-    plane = {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: {STORE_LAT: [Datum(35.7, 100.0)]},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 100.0,
-            STORE_MOST_RECENT_PACKET: 100.0,
-            STORE_TOTAL_PACKETS: 1,
-            STORE_PACKET_TYPE: {},
-        },
-    }
+    plane = Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(
+            first_packet=100.0, last_update=100.0, packets=1, packet_types={}
+        ),
+        received_data={STORE_LAT: [Datum(35.7, 100.0)]},
+    )
     tracker.planes["abc123"] = plane
 
     from pyaerial.classify import ClassifiedMessage
 
     classified = ClassifiedMessage(
-        data={
-            STORE_INFO: {STORE_ICAO: "abc123"},
-            STORE_RECV_DATA: {STORE_LAT: 35.71},
-        },
+        icao="abc123",
         typecode_category=3,
+        values={STORE_LAT: 35.71},
     )
     tracker._merge(classified, 150.0)
-    series = plane[STORE_RECV_DATA][STORE_LAT]
+    series = plane.received_data[STORE_LAT]
     assert len(series) == 2
     assert series[-1].value == 35.71
 
 
 def test_older_packet_does_not_rewind_last_update():
     tracker = Tracker(make_config())
-    plane = {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: {STORE_LAT: [Datum(35.7, 150.0)]},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 100.0,
-            STORE_MOST_RECENT_PACKET: 150.0,
-            STORE_TOTAL_PACKETS: 1,
-            STORE_PACKET_TYPE: {},
-        },
-    }
+    plane = Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(
+            first_packet=100.0, last_update=150.0, packets=1, packet_types={}
+        ),
+        received_data={STORE_LAT: [Datum(35.7, 150.0)]},
+    )
     tracker.planes["abc123"] = plane
     from pyaerial.classify import ClassifiedMessage
 
     classified = ClassifiedMessage(
-        data={
-            STORE_INFO: {STORE_ICAO: "abc123"},
-            STORE_RECV_DATA: {STORE_LAT: 35.71},
-        },
+        icao="abc123",
         typecode_category=3,
+        values={STORE_LAT: 35.71},
     )
     tracker._merge(classified, 120.0)
-    assert plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] == 150.0
-    series = plane[STORE_RECV_DATA][STORE_LAT]
+    assert plane.track.last_update == 150.0
+    series = plane.received_data[STORE_LAT]
     assert len(series) == 1
     assert series[0].value == 35.7
     assert series[0].time == 150.0
@@ -167,28 +144,23 @@ def test_telemetry_series_are_not_clipped_to_live_window():
     from pyaerial.config.schema import TrackingConfig
 
     tracker = Tracker(make_config(tracking=TrackingConfig(telemetry_keep_seconds=5)))
-    plane = {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: {
+    plane = Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(
+            first_packet=100.0, last_update=110.0, packets=3, packet_types={}
+        ),
+        received_data={
             STORE_LAT: [Datum(35.7, 100.0), Datum(35.71, 101.0), Datum(35.72, 110.0)]
         },
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 100.0,
-            STORE_MOST_RECENT_PACKET: 110.0,
-            STORE_TOTAL_PACKETS: 3,
-            STORE_PACKET_TYPE: {},
-        },
-    }
+    )
     tracker.planes["abc123"] = plane
     classified = ClassifiedMessage(
-        data={
-            STORE_INFO: {STORE_ICAO: "abc123"},
-            STORE_RECV_DATA: {STORE_LAT: 35.73},
-        },
+        icao="abc123",
         typecode_category=3,
+        values={STORE_LAT: 35.73},
     )
     tracker._merge(classified, 112.0)
-    series = plane[STORE_RECV_DATA][STORE_LAT]
+    series = plane.received_data[STORE_LAT]
     assert [item.time for item in series] == [100.0, 101.0, 110.0, 112.0]
 
 
@@ -196,26 +168,22 @@ def test_blank_callsign_does_not_clobber_existing():
     from pyaerial.classify import ClassifiedMessage
 
     tracker = Tracker(make_config())
-    plane = {
-        STORE_INFO: {STORE_ICAO: "abc123", STORE_CALLSIGN: "SWA123"},
-        STORE_RECV_DATA: {},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 100.0,
-            STORE_MOST_RECENT_PACKET: 100.0,
-            STORE_TOTAL_PACKETS: 1,
-            STORE_PACKET_TYPE: {},
-        },
-    }
+    plane = Plane(
+        info=AircraftInfo(icao="abc123", callsign="SWA123"),
+        track=TrackState(
+            first_packet=100.0, last_update=100.0, packets=1, packet_types={}
+        ),
+        received_data={},
+    )
     tracker.planes["abc123"] = plane
     classified = ClassifiedMessage(
-        data={
-            STORE_INFO: {STORE_ICAO: "abc123", STORE_CALLSIGN: ""},
-            STORE_RECV_DATA: {},
-        },
+        icao="abc123",
         typecode_category=1,
+        values={},
+        callsign="",
     )
     tracker._merge(classified, 110.0)
-    assert plane[STORE_INFO][STORE_CALLSIGN] == "SWA123"
+    assert plane.info.callsign == "SWA123"
 
 
 def test_one_bad_fix_does_not_freeze_the_plane_forever():
@@ -226,19 +194,16 @@ def test_one_bad_fix_does_not_freeze_the_plane_forever():
     config.home.longitude = 3.9
     tracker = Tracker(config)
     bad = (52.2572 + 0.6, 3.9194)
-    tracker.planes["40621D"] = {
-        STORE_INFO: {STORE_ICAO: "40621D"},
-        STORE_RECV_DATA: {
+    tracker.planes["40621D"] = Plane(
+        info=AircraftInfo(icao="40621D"),
+        track=TrackState(
+            first_packet=100.0, last_update=100.0, packets=1, packet_types={}
+        ),
+        received_data={
             STORE_LAT: [Datum(bad[0], 100.0)],
             STORE_LONG: [Datum(bad[1], 100.0)],
         },
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: 100.0,
-            STORE_MOST_RECENT_PACKET: 100.0,
-            STORE_TOTAL_PACKETS: 1,
-            STORE_PACKET_TYPE: {},
-        },
-    }
+    )
     msg = "8D40621D58C382D690C8AC2863A7"  # true fix ~ (52.2572, 3.9194)
     for n in range(5):
         assert tracker.ingest([(msg, 101.0 + n * 0.1)]) == 0
@@ -246,7 +211,7 @@ def test_one_bad_fix_does_not_freeze_the_plane_forever():
     # The reset re-anchors from a global even/odd decode.
     odd = "8D40621D58C386435CC412692AD6"  # ~ (52.2658, 3.9389)
     assert tracker.ingest([(odd, 102.0)]) == 1
-    lat = tracker.planes["40621D"][STORE_RECV_DATA][STORE_LAT][-1].value
+    lat = tracker.planes["40621D"].received_data[STORE_LAT][-1].value
     assert abs(lat - 52.2658) < 0.001
     assert "40621D" not in tracker._gate_rejects
 
@@ -296,12 +261,12 @@ def test_first_fix_decodes_from_even_odd_pair_far_from_home():
     assert "40621D" not in tracker.planes  # one frame is ambiguous
     tracker.ingest([(odd, 1.5)], receivers={odd: ("nl", "be")})
     plane = tracker.planes["40621D"]
-    lat = plane[STORE_RECV_DATA][STORE_LAT][-1].value
-    lon = plane[STORE_RECV_DATA][STORE_LONG][-1].value
+    lat = plane.received_data[STORE_LAT][-1].value
+    lon = plane.received_data[STORE_LONG][-1].value
     assert abs(lat - 52.2658) < 0.001
     assert abs(lon - 3.9389) < 0.001
-    assert plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS] == {1.5: ("nl", "be")}
-    assert plane[STORE_INFO]["receivers"] == ["nl", "be"]
+    assert plane.track.position_receivers == {1.5: ("nl", "be")}
+    assert plane.info.receivers == ["nl", "be"]
 
 
 # --- CRC, DF18 and TIS-B filtering -------------------------------------------
@@ -379,7 +344,7 @@ def test_gate_reset_is_not_used_up_by_a_velocity_frame():
 def test_expired_planes_honours_explicit_zero_time():
     tracker = Tracker(make_config())
     tracker.ingest([(IDENT, 1_000.0)])
-    assert tracker.planes["4840D6"][STORE_INTERNAL][STORE_MOST_RECENT_PACKET] == 1_000.0
+    assert tracker.planes["4840D6"].track.last_update == 1_000.0
     # 0.0 is an explicit time, not "now": nothing is older than it.
     assert tracker.expired_planes(0.0) == []
     assert tracker.expired_planes(1_000.0 + 10_000) == ["4840D6"]
@@ -396,11 +361,11 @@ def test_position_receivers_only_kept_for_stored_samples():
         tracker.ingest([(msg, t)], receivers={msg: ("nc",)})
         t += 0.5
     plane = tracker.planes["A1B2C3"]
-    recv = plane[STORE_RECV_DATA]
+    recv = plane.received_data
     sample_times = {d.time for d in recv[STORE_LAT]} | {
         d.time for d in recv[STORE_LONG]
     }
-    receivers = plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS]
+    receivers = plane.track.position_receivers
     assert set(receivers) == sample_times
     assert len(receivers) < 10
 
@@ -412,7 +377,7 @@ def test_out_of_order_position_does_not_leave_receivers_entry():
     late = airborne_position("a1b2c3", 36.0005, -78.5, 0)
     for msg, t in ((first, 1.0), (second, 1.5), (late, 1.2)):
         tracker.ingest([(msg, t)], receivers={msg: ("nc",)})
-    receivers = tracker.planes["A1B2C3"][STORE_INTERNAL][STORE_POSITION_RECEIVERS]
+    receivers = tracker.planes["A1B2C3"].track.position_receivers
     assert set(receivers) == {1.5}
 
 
@@ -429,13 +394,13 @@ def test_gnss_height_is_stored_apart_from_baro_altitude():
     gnss = airborne_position("a1b2c3", 36.0, -78.5, 0, alt_ft=36000, tc=20)
     result = classify(gnss, HOME, last_position=(36.0, -78.5))
     assert result is not None
-    recv = result.data[STORE_RECV_DATA]
+    recv = result.values
     assert STORE_ALT not in recv
     # Same AC12 25-ft coding as baro (dump1090, readsb, rs1090), not metres.
     assert recv[STORE_GNSS_HEIGHT] == pytest.approx(36000 * FT_TO_M)
 
     baro = airborne_position("a1b2c3", 36.0, -78.5, 0, alt_ft=35000, tc=11)
-    recv = classify(baro, HOME, last_position=(36.0, -78.5)).data[STORE_RECV_DATA]
+    recv = classify(baro, HOME, last_position=(36.0, -78.5)).values
     assert recv[STORE_ALT] == pytest.approx(35000 * FT_TO_M)
     assert STORE_GNSS_HEIGHT not in recv
 
@@ -449,7 +414,7 @@ def test_gnss_positions_do_not_enter_the_baro_altitude_series():
         msg = airborne_position("a1b2c3", 36.0 + i * 0.001, -78.5, i % 2, alt_ft=alt, tc=tc)
         tracker.ingest([(msg, t)])
         t += 0.5
-    recv = tracker.planes["A1B2C3"][STORE_RECV_DATA]
+    recv = tracker.planes["A1B2C3"].received_data
     assert {round(d.value) for d in recv[STORE_ALT]} == {round(35000 * FT_TO_M)}
     assert {round(d.value) for d in recv[STORE_GNSS_HEIGHT]} == {round(35600 * FT_TO_M)}
 
@@ -461,7 +426,7 @@ def test_gnss_positions_do_not_enter_the_baro_altitude_series():
     "counts, text",
     [
         ({CAT_AIRBORNE_BARO: 81, CAT_VELOCITY: 2, CAT_IDENT: 2}, "pos 81, vel 2, id 2"),
-        ({"3": 5, "1": 1}, "pos 5, id 1"),  # restored from JSON
+        ({CAT_SURFACE: 0, CAT_AIRBORNE_GNSS: 3}, "gnss pos 3"),  # zero omitted
         ({}, ""),
     ],
 )
@@ -475,4 +440,4 @@ def test_status_line_has_no_defaultdict_repr():
     summary = tracker.top_planes_summary()
     assert "defaultdict" not in summary
     assert summary == "Top 1: 4840D6/KLM1023 (1, id 1)"
-    assert tracker.planes["4840D6"][STORE_INTERNAL][STORE_PACKET_TYPE]
+    assert tracker.planes["4840D6"].track.packet_types

@@ -26,17 +26,11 @@ from pyaerial.calc.motion import ResolvedMotion
 from pyaerial.config.schema import AlertActionConfig, WhileActiveConfig, ZoneConfig
 from pyaerial.constants import (
     STORE_ALT,
-    STORE_FIRST_PACKET,
-    STORE_ICAO,
-    STORE_INFO,
-    STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
-    STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
 from pyaerial.engine import Engine
-from pyaerial.models import Datum, flight_id_for_plane
+from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 from pyaerial.pipeline import PlaneCalculator
 from pyaerial.store.redis_live import LiveUnavailable, RedisLiveStore
 
@@ -74,22 +68,17 @@ def _restart_config(tmp_path=None):
     return config
 
 
-def _restart_plane(last: float | None = None, first: float = 1_700_000_000.0) -> dict:
+def _restart_plane(last: float | None = None, first: float = 1_700_000_000.0) -> Plane:
     last = time.time() if last is None else last
-    return {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_INTERNAL: {
-            STORE_FIRST_PACKET: first,
-            STORE_MOST_RECENT_PACKET: last,
-            "total_packets": 2,
-            "packet_type": {},
-        },
-        STORE_RECV_DATA: {
+    return Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(first_packet=first, last_update=last, packets=2),
+        received_data={
             STORE_LAT: [Datum(_INSIDE[0], last - 5), Datum(_INSIDE[0] + 0.0001, last)],
             STORE_LONG: [Datum(_INSIDE[1], last - 5), Datum(_INSIDE[1], last)],
             STORE_ALT: [Datum(400.0, last)],
         },
-    }
+    )
 
 
 class _RestartStore:
@@ -170,7 +159,7 @@ def test_orphan_of_removed_rule_is_closed_without_notification(caplog):
     assert "no longer configured" in caplog.text
 
 
-def _activate(engine: AlertEngine, plane: dict, monkeypatch) -> None:
+def _activate(engine: AlertEngine, plane: Plane, monkeypatch) -> None:
     mono = [1000.0]
     monkeypatch.setattr(time, "monotonic", lambda: mono[0])
     motion = ResolvedMotion(heading_deg=0.0, speed_kph=0.0, turn_rate_deg_s=0.0)
@@ -191,7 +180,7 @@ def test_deactivate_reports_why_the_episode_ended(monkeypatch, age, expected):
     try:
         plane = _restart_plane()
         _activate(engine, plane, monkeypatch)
-        plane[STORE_INTERNAL][STORE_MOST_RECENT_PACKET] = time.time() - age
+        plane.track.last_update = time.time() - age
         engine.deactivate(plane)
         _drain(engine)
     finally:
@@ -220,7 +209,7 @@ def _restart_engine(tmp_path) -> Engine:
     return Engine(_restart_config(tmp_path), aircraft_db_path=str(tmp_path / "aircraft.db"))
 
 
-def _run_until_active(engine: Engine, monkeypatch) -> dict:
+def _run_until_active(engine: Engine, monkeypatch) -> Plane:
     plane = _restart_plane(first=time.time() - 5)
     engine.tracker.planes["abc123"] = plane
     real = time.monotonic
@@ -332,17 +321,17 @@ def _identity_config(while_active: int | None = None):
     return config
 
 
-def _identity_plane(first: float, last: float | None = None) -> dict:
+def _identity_plane(first: float, last: float | None = None) -> Plane:
     last = time.time() if last is None else last
-    return {
-        STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_INTERNAL: {STORE_FIRST_PACKET: first, STORE_MOST_RECENT_PACKET: last},
-        STORE_RECV_DATA: {
+    return Plane(
+        info=AircraftInfo(icao="abc123"),
+        track=TrackState(first_packet=first, last_update=last),
+        received_data={
             STORE_LAT: [Datum(_INSIDE[0], last - 5), Datum(_INSIDE[0] + 0.0001, last)],
             STORE_LONG: [Datum(_INSIDE[1], last - 5), Datum(_INSIDE[1], last)],
             STORE_ALT: [Datum(400.0, last)],
         },
-    }
+    )
 
 
 @pytest.fixture
@@ -379,10 +368,10 @@ def test_orphan_of_old_flight_leaves_live_flight_alert_alone(clock):
         orphan = _identity_plane(first=1_700_000_000.0, last=1_700_000_500.0)
         assert engine.deactivate(orphan) is False
         assert list(engine._alert_state.values()) == [state]
-        assert live["active_alerts"]  # the live plane's list is untouched
+        assert live.active_alerts  # the live plane's list is untouched
         for _ in range(3):
             _tick(engine, live, clock)
-        live_alerts = store.get_alerts(flight_id=flight_id_for_plane(live))
+        live_alerts = store.get_alerts(flight_id=live.flight_id)
         assert [a["alert_id"] for a in live_alerts] == [state["alert_id"]]
     finally:
         engine.close()
@@ -464,7 +453,7 @@ def _segmented_run(clock, *, explicit: bool):
     engine = _alert_engine(_identity_config(while_active=4), store)
     t0 = time.time() - 600
     plane = _identity_plane(first=t0)
-    old_id = flight_id_for_plane(plane)
+    old_id = plane.flight_id
     seen: dict = {}
     try:
         for _ in range(4):  # activate at t=1, while_active at t=5
@@ -472,8 +461,8 @@ def _segmented_run(clock, *, explicit: bool):
         (state,) = engine._alert_state.values()
         seen["episode"], seen["activated_at"] = state["alert_id"], state["activated_at"]
         # max_flight_seconds reached: the same aircraft continues as a new flight.
-        plane[STORE_INTERNAL][STORE_FIRST_PACKET] = t0 + 300
-        new_id = flight_id_for_plane(plane)
+        plane.track.first_packet = t0 + 300
+        new_id = plane.flight_id
         if explicit:
             engine.handover(plane, old_id, new_id)
             engine.handover(plane, old_id, new_id)  # idempotent
@@ -529,7 +518,9 @@ def test_handover_without_alerts_or_store_is_harmless(clock):
     try:
         plane = _identity_plane(first=time.time() - 30)
         engine.handover(plane, "abc123-1", "abc123-2")
-        engine.handover({STORE_INFO: {}}, "x-1", "x-2")
+        engine.handover(
+            Plane(info=AircraftInfo(icao=""), track=TrackState(1.0, 1.0)), "x-1", "x-2"
+        )
         _tick(engine, plane, clock)
     finally:
         engine.close()
