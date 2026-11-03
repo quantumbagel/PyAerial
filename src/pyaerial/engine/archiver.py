@@ -483,6 +483,7 @@ class FlightArchiver:
         for item in items:
             track = item.plane.track
             track.checkpoint_at = now
+            track.in_archive = True
             if item.telemetry:
                 track.archived_through = item.telemetry[-1]["timestamp"]
             if item.integrity:

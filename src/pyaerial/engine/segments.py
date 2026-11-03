@@ -87,3 +87,4 @@ def start_new_segment(plane: Plane, new_first: float, *, keep_position: bool) ->
     track.archived_through = None
     track.verdicts_through = None
     track.checkpoint_at = None
+    track.in_archive = False

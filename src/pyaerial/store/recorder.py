@@ -106,6 +106,7 @@ class EpisodeRecorder:
             self._open[alert_id] = (plane, doc)
         else:
             self._open.pop(alert_id, None)
+        plane.track.in_archive = True  # the episode writes the flight's row
         self._write((flight_row(plane), doc))
         self._live.cache_episode(doc)
 

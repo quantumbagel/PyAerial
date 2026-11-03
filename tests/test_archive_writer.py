@@ -86,59 +86,6 @@ def test_finalize_writes_flight_telemetry_and_alerts(tmp_path):
     store.close()
 
 
-def test_finalize_does_not_replace_completed_telemetry(tmp_path):
-    store = _store(tmp_path)
-    archive = ArchiveReader(store.path)
-    alerts = [
-        {
-            "alert_id": "abc123-1:pad:warn",
-            "zone": "pad",
-            "rule": "warn",
-            "activated_at": 1.0,
-            "deactivated_at": 80.0,
-        }
-    ]
-    plane = _plane()
-    assert store.finalize_plane(plane, alerts=alerts) is True
-    first = archive.get_telemetry("abc123-1")
-    assert len(first) == 2
-    shorter = _plane()
-    shorter.received_data[STORE_LAT] = [Datum(35.726, 10.0)]
-    shorter.received_data[STORE_LONG] = [Datum(-78.694, 10.0)]
-    assert store.finalize_plane(shorter, alerts=alerts) is True
-    second = archive.get_telemetry("abc123-1")
-    assert len(second) == 2
-    assert second[0]["latitude"] == 35.725
-    archive.close()
-    store.close()
-
-
-def test_finalize_upgrades_when_incoming_telemetry_is_longer(tmp_path):
-    store = _store(tmp_path)
-    archive = ArchiveReader(store.path)
-    alerts = [
-        {
-            "alert_id": "abc123-1:pad:warn",
-            "zone": "pad",
-            "rule": "warn",
-            "activated_at": 1.0,
-            "deactivated_at": 80.0,
-        }
-    ]
-    short = _plane()
-    short.received_data[STORE_LAT] = [Datum(35.725, 1.0)]
-    short.received_data[STORE_LONG] = [Datum(-78.695, 1.0)]
-    assert store.finalize_plane(short, alerts=alerts) is True
-    assert len(archive.get_telemetry("abc123-1")) == 1
-    longer = _plane()
-    assert store.finalize_plane(longer, alerts=alerts) is True
-    points = archive.get_telemetry("abc123-1")
-    assert len(points) == 2
-    assert points[0]["latitude"] == 35.725
-    archive.close()
-    store.close()
-
-
 def test_retention_is_the_engines_decision(tmp_path):
     # The policy is the engine's; the store writes what it is told.
     engine = Engine(
@@ -428,40 +375,23 @@ def test_unavailable_history_logs_the_error_rate_limited(tmp_path, caplog, monke
     store.close()
 
 
-# --- Re-archive decisions ----------------------------------------------------
+# --- Finalize replaces what checkpoints wrote; a locked archive means retry ---
 
 
-def test_clipped_snapshot_never_replaces_a_fuller_archive(tmp_path, monkeypatch):
+def test_finalize_rewrites_the_whole_flight(tmp_path):
     store = ArchiveWriter(tmp_path / "pyaerial.db")
     archive = ArchiveReader(store.path)
-    full = fine_track_plane("abc123", 1_000.0, samples=100, step=10.0)  # 990 s
+    early = fine_track_plane("abc123", 1_000.0, samples=50)
+    assert store.finalize_plane(early, alerts=[]) is True
+    full = fine_track_plane("abc123", 1_000.0, samples=80)
     assert store.finalize_plane(full, alerts=[]) is True
-    # A crash-recovery snapshot: more points, but only the last 60 s.
-    clipped = fine_track_plane("abc123", 1_000.0, samples=300, step=0.2)
-    clipped.received_data[STORE_LAT] = [
-        Datum(d.value, d.time + 930.0) for d in clipped.received_data[STORE_LAT]
-    ]
-    clipped.received_data[STORE_LONG] = [
-        Datum(d.value, d.time + 930.0) for d in clipped.received_data[STORE_LONG]
-    ]
-    # Even if the old helper checks failed transiently, the decision is made
-    # inside the write transaction from the archive itself.
-    monkeypatch.setattr(
-        store, "has_completed_flight", lambda _fid: False, raising=False
-    )
-    monkeypatch.setattr(store, "telemetry_count", lambda _fid: 0, raising=False)
-    assert store.finalize_plane(clipped, alerts=[]) is True
-    points = archive.get_telemetry("abc123-1000")
-    assert len(points) == 100 and points[0]["timestamp"] == 1_000.0
-    # A longer series does upgrade it.
-    longer = fine_track_plane("abc123", 1_000.0, samples=150, step=10.0)
-    assert store.finalize_plane(longer, alerts=[]) is True
-    assert len(archive.get_telemetry("abc123-1000")) == 150
+    assert len(archive.get_telemetry("abc123-1000")) == 80
     archive.close()
     store.close()
 
 
-def test_rearchive_check_errors_mean_retry(tmp_path):
+
+def test_locked_archive_means_retry(tmp_path):
     store = ArchiveWriter(tmp_path / "pyaerial.db")
     archive = ArchiveReader(store.path)
     assert (

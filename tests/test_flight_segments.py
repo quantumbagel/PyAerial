@@ -423,3 +423,41 @@ def test_stale_last_position_does_not_overlap_segments(tmp_path, monkeypatch):
         assert len(reader.get_telemetry(old)) == 10
     finally:
         cleanup()
+
+
+# --- Alert rows always point at an archived flight -----------------------------
+
+
+@pytest.mark.parametrize(
+    ("flights", "retain", "expected"),
+    [
+        ("all", True, "final"),  # both kept: the row ends on the final segment
+        ("all", False, "first"),  # final segment too short: back to the first
+        ("rules", False, None),  # neither kept: the episode goes with them
+    ],
+)
+def test_episode_row_follows_the_kept_segments(
+    tmp_path, monkeypatch, flights, retain, expected
+):
+    engine, reader, plane, first, cleanup = _split_setup(
+        tmp_path, monkeypatch, retain=retain, archive=ArchiveConfig(flights=flights)
+    )
+    try:
+        old = _activate_in_pad(engine, plane, first)
+        engine.archiver.split_long_flights()
+        new = engine.tracker.planes["ABC123"].flight_id
+        engine.expire_planes(time.time() + 10_000)
+        with sqlite3.connect(reader.path) as conn:
+            rows = conn.execute(
+                "SELECT alert_id, flight_id, active FROM alerts"
+            ).fetchall()
+            orphans = conn.execute(
+                "SELECT COUNT(*) FROM alerts "
+                "WHERE flight_id NOT IN (SELECT flight_id FROM flights)"
+            ).fetchone()[0]
+        conn.close()
+        assert orphans == 0
+        where = {"final": new, "first": old}.get(expected)
+        assert rows == ([("A1", where, 0)] if where else [])
+    finally:
+        cleanup()

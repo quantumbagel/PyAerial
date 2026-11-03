@@ -163,6 +163,9 @@ class TrackState:
     archived_through: float | None = None
     verdicts_through: float | None = None
     checkpoint_at: float | None = None
+    # The archive may hold rows of this flight (a checkpoint or an alert
+    # episode wrote its live row), so dropping it must delete them.
+    in_archive: bool = False
     # The segment this flight continues (a split of a long track).
     previous_flight_id: str | None = None
 

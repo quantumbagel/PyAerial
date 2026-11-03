@@ -295,14 +295,14 @@ class ArchiveWriter(ArchiveConnection):
         alerts: list[dict[str, Any]] | None = None,
         retained: bool = True,
     ) -> bool:
-        """Write a completed flight, or record that it is not kept.
+        """Write a completed flight whole, or delete what it left if not kept.
 
         The caller decides whether the archive keeps the flight (the archive
-        policy lives with the engine); this only writes what it is told.
-        Returns True when it is safe to drop the live Redis copy: the flight
-        was written, was intentionally discarded, or persistence is disabled.
-        Returns False when the flight should have been written but SQLite was
-        unavailable.
+        policy lives with the engine); this only writes what it is told. A
+        kept flight replaces its live row, checkpointed samples and verdicts
+        (only finalize writes ``completed``). Returns True when the flight
+        was written, deleted, or persistence is disabled; False when SQLite
+        was unavailable (the caller keeps the flight for retry).
         """
         if self.disabled:
             return True
@@ -311,16 +311,10 @@ class ArchiveWriter(ArchiveConnection):
         icao = plane.icao
         if not retained:
             log.debug("Discarded flight %s (archive policy)", flight_id)
-            # A checkpointed flight, or one with alert episodes, has a live
-            # row (and samples, episodes) to delete.
-            written = plane.track.checkpoint_at is not None or bool(alert_docs)
-            if written and not self.discard_flight(flight_id):
-                return False
-            if not alert_docs:
-                return True
-            # Episodes carried over from an earlier, archived segment still
-            # get their final state, on the row that segment wrote.
-            return self._update_archived_alerts(alert_docs, flight_id, icao, plane)
+            # Its live row, samples and episodes go (a carried episode back
+            # to the segment where it began); never written: nothing to do.
+            written = plane.track.in_archive or bool(alert_docs)
+            return not written or self.discard_flight(flight_id)
         if not self._ensure_connected():
             return False
         telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
@@ -346,12 +340,7 @@ class ArchiveWriter(ArchiveConnection):
         try:
             with self._session("persist") as conn:
                 with conn:
-                    # Decided under the write lock, from the archive itself:
-                    # a failed check must mean "retry", never "not archived".
                     conn.execute("BEGIN IMMEDIATE")
-                    if not self._should_write(conn, flight_id, telemetry_docs):
-                        self._last_error = None
-                        return True
                     conn.execute(
                         """
                         INSERT INTO flights (
@@ -413,70 +402,6 @@ class ArchiveWriter(ArchiveConnection):
             log.error("Failed to persist completed flight %s: %s", flight_id, exc)
             self._last_error = f"archive write failed: {exc}"
             return False
-
-    def _update_archived_alerts(
-        self, alerts: list[dict[str, Any]], flight_id: str, icao: str, plane: Plane
-    ) -> bool:
-        """Update the rows of episodes already archived; insert nothing.
-
-        For a flight the policy discards: an episode carried over from an
-        earlier segment already has a row there (kept on that segment), while
-        an episode that began and ended in this flight is discarded with it.
-        False (retry) when SQLite fails.
-        """
-        callsign = plane.info.callsign or ""
-        rows = [_alert_row(alert, flight_id, icao, callsign) for alert in alerts]
-        try:
-            with self._session("alerts") as conn, conn:
-                conn.executemany(
-                    """
-                    UPDATE alerts SET icao = ?, callsign = ?, zone = ?, rule = ?,
-                        active = ?, activated_at = ?, deactivated_at = ?, eta = ?,
-                        reason = ?, last_updated = ?, latitude = ?, longitude = ?,
-                        altitude = ?
-                    WHERE alert_id = ?
-                    """,
-                    [(*row[2:], row[0]) for row in rows],
-                )
-        except (sqlite3.Error, HistoryUnavailable) as exc:
-            log.error("Failed to update archived alerts of %s: %s", flight_id, exc)
-            self._last_error = f"archive write failed: {exc}"
-            return False
-        self._last_error = None
-        return True
-
-    @staticmethod
-    def _should_write(
-        conn: sqlite3.Connection, flight_id: str, telemetry_docs: list[dict[str, Any]]
-    ) -> bool:
-        """Whether to (re)write a flight; caller holds the write transaction.
-
-        A completed flight is replaced only by a series covering a longer
-        time span. Point counts do not decide it: a crash-recovery snapshot is
-        clipped to the live window and can hold more points over less time.
-        """
-        row = conn.execute(
-            "SELECT status FROM flights WHERE flight_id = ?", (flight_id,)
-        ).fetchone()
-        if row is None or row["status"] != FLIGHT_STATUS_COMPLETED:
-            return True
-        lo, hi = conn.execute(
-            "SELECT MIN(timestamp), MAX(timestamp) FROM telemetry WHERE flight_id = ?",
-            (flight_id,),
-        ).fetchone()
-        old_span = hi - lo if lo is not None else -1.0
-        stamps = [doc["timestamp"] for doc in telemetry_docs]
-        new_span = max(stamps) - min(stamps) if stamps else -1.0
-        if new_span <= old_span:
-            log.debug("Already archived completed flight %s", flight_id)
-            return False
-        log.info(
-            "Upgrading archived flight %s (%.0f s -> %.0f s of telemetry)",
-            flight_id,
-            max(old_span, 0.0),
-            new_span,
-        )
-        return True
 
     # -- incremental (live) writes ------------------------------------------
 
