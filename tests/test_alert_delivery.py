@@ -129,6 +129,7 @@ def test_stored_alert_document_shape_is_unchanged():
         "last_updated",
         "position",
         "altitude",
+        "start_flight_id",
     }
 
 

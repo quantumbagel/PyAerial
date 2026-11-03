@@ -152,6 +152,7 @@ class EpisodeRecorder:
         deactivated_at: float | None = None,
     ) -> None:
         """Record an activation (or re-record at a handover) or a deactivation."""
+        previous = self._open.get(alert_id)
         doc = alert_episode_doc(
             plane,
             meta,
@@ -160,11 +161,13 @@ class EpisodeRecorder:
             activated_at=activated_at,
             active=active,
             deactivated_at=deactivated_at,
+            # Carried in the document, so an outbox entry or a handover can
+            # never lose the segment where the episode began.
+            start_flight_id=previous[1].get("start_flight_id") if previous else None,
         )
         if active:
             # Re-recording an ongoing episode (segment handover) must not
             # roll last_updated back to activated_at.
-            previous = self._open.get(alert_id)
             last_seen = previous[1].get("last_updated") if previous else None
             if isinstance(last_seen, (int, float)) and last_seen > (
                 doc.get("last_updated") or 0
@@ -195,6 +198,7 @@ class EpisodeRecorder:
             alert_id=alert_id,
             activated_at=activated_at if activated_at is not None else timestamp,
             active=True,
+            start_flight_id=previous[1].get("start_flight_id") if previous else None,
         )
         doc["last_updated"] = timestamp
         self._open[alert_id] = (plane, doc)

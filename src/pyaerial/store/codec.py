@@ -249,11 +249,13 @@ def alert_episode_doc(
     activated_at: float,
     active: bool,
     deactivated_at: float | None = None,
+    start_flight_id: str | None = None,
 ) -> dict[str, Any]:
     """One alert episode (live ``live:alerts:*`` member, archive ``alerts`` row).
 
     *meta* and *payload* are the alert engine's notification fields; only
-    named keys are copied.
+    named keys are copied. ``start_flight_id`` is the segment the episode
+    began on (default: the plane's flight, for a new episode).
     """
     return {
         "alert_id": alert_id,
@@ -273,6 +275,7 @@ def alert_episode_doc(
             "coordinates": [payload.get(STORE_LONG), payload.get(STORE_LAT)],
         },
         "altitude": payload.get(STORE_ALT),
+        "start_flight_id": start_flight_id or plane.flight_id,
     }
 
 

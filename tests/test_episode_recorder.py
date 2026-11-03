@@ -368,3 +368,27 @@ def test_valid_entry_rejects_incomplete_entries(mutate):
     assert valid_entry([dict(flight), dict(doc)]) is not None
     mutate(flight, doc)
     assert valid_entry([flight, doc]) is None
+
+
+def test_start_segment_survives_an_outage_across_a_handover(engine, monkeypatch):
+    """The activation waits in the outbox, the episode is handed over to the
+    next segment, and only its close reaches the archive: the row must still
+    name the segment where it began."""
+    plane = _plane(engine)
+    first = plane.flight_id
+    rec = engine.episodes
+    real = engine.history_store.upsert_episodes
+    monkeypatch.setattr(engine.history_store, "upsert_episodes", lambda e: False)
+    rec.record_alert_episode(plane, _META, {}, alert_id="A1", activated_at=100.0)
+    plane.track.first_packet += 3_600  # a segment split
+    rec.record_alert_episode(plane, _META, {}, alert_id="A1", activated_at=100.0)
+    rec.record_alert_episode(
+        plane, _META, {}, alert_id="A1", activated_at=100.0, active=False,
+        deactivated_at=200.0,
+    )
+    assert rec.outbox["A1"][1]["start_flight_id"] == first
+    monkeypatch.setattr(engine.history_store, "upsert_episodes", real)
+    assert rec.drain()
+    assert _rows(engine, "SELECT flight_id, start_flight_id, active FROM alerts") == [
+        (plane.flight_id, first, 0)
+    ]
