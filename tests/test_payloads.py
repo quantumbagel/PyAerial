@@ -196,6 +196,16 @@ def test_dump1090_format_matches_the_receiver():
     assert formats["raw"] == "avr"
 
 
+def test_readsb_reports_its_wire_format():
+    receivers = {
+        "readsb": ReceiverConfig(type="readsb"),
+        "readsb_avr": ReceiverConfig(type="readsb", port=30002),
+    }
+    payload = antenna_payload(make_config(receivers=receivers))
+    formats = {item["name"]: item.get("format") for item in payload["receivers"]}
+    assert formats == {"readsb": "beast", "readsb_avr": "avr"}
+
+
 def test_telemetry_point_passes_gnss_height_only_when_known():
     from pyaerial.api.payloads import telemetry_point
 

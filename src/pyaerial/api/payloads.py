@@ -108,7 +108,8 @@ def antenna_payload(config: Config) -> dict[str, Any]:
         item: dict[str, Any] = {"name": name, "type": receiver.type}
         if receiver.position is not None:
             item["position"] = receiver.position.model_dump()
-        if receiver.type == "dump1090":
+        if receiver.type in ("dump1090", "readsb"):
+            # readsb speaks the same Beast/AVR wire formats on the same ports.
             item["format"] = _dump1090_format(receiver.receiver_arguments())
         else:
             fmt = receiver.format or receiver.options.get("format")
