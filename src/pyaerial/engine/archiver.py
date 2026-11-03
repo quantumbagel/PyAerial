@@ -1,5 +1,6 @@
-"""Finished flights into the archive: finalize, deferred retries, recovery of
-flights a previous engine left behind, and segmentation of long tracks.
+"""Flights into the archive: checkpoints of live flights, finalize, deferred
+retries, recovery of flights a previous engine left behind, and segmentation
+of long tracks.
 
 A flight is written to the archive before its live copy is popped, so a
 SQLite outage cannot lose it. Tick thread only.
@@ -9,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -23,7 +24,12 @@ from pyaerial.constants import STORE_LAT, STORE_LONG
 from pyaerial.engine import segments
 from pyaerial.engine.guard import StageGuard
 from pyaerial.models import Plane
-from pyaerial.store.codec import plane_from_alert_docs
+from pyaerial.store.archive.writer import FlightCheckpoint
+from pyaerial.store.codec import (
+    build_telemetry_docs,
+    integrity_rows,
+    plane_from_alert_docs,
+)
 from pyaerial.store.live import LiveUnavailable, LiveWriteStore
 
 log = logging.getLogger("pyaerial.engine")
@@ -50,6 +56,15 @@ _HISTORY_RETRY_INTERVAL = 10.0
 ARCHIVE_TICK_BUDGET = 0.2
 # Refresh the heartbeat this often while archiving leftovers at startup.
 STARTUP_HEARTBEAT_INTERVAL = 1.0
+# Live flights are checkpointed into the archive this often: a crash loses
+# at most CHECKPOINT_SECONDS + SETTLE_SECONDS of each flight's samples.
+CHECKPOINT_SECONDS = 5.0
+# A sample is checkpointed once it is this old: the tracker still rewrites
+# the newest samples (a constant run keeps only its first and last datum,
+# nearest-neighbour fields change when a later datum arrives). Verdicts are
+# stamped when made and never change, so they need no settling. Finalize
+# rewrites the whole flight, so a completed flight never depends on it.
+SETTLE_SECONDS = 10.0
 
 
 def pending_cost(plane: Plane) -> int:
@@ -102,6 +117,14 @@ class FlightArchive(Protocol):
         *,
         alerts: list[dict[str, Any]] | None = None,
         retained: bool = True,
+    ) -> bool: ...
+
+    def checkpoint(
+        self,
+        flights: Iterable[FlightCheckpoint],
+        episodes: Sequence[tuple[Mapping[str, Any], Mapping[str, Any]]] = (),
+        *,
+        now: float,
     ) -> bool: ...
 
 
@@ -162,6 +185,7 @@ class FlightArchiver:
         self._pending_evicted = 0
         self._pending_evicted_total = 0
         self._history_retry_at = 0.0
+        self._next_checkpoint = 0.0
         self.max_flight_seconds = float(
             getattr(
                 config.tracking,
@@ -248,6 +272,56 @@ class FlightArchiver:
             self._guard.failed("archive")
             return False
 
+    # -- checkpoints ---------------------------------------------------------
+
+    def checkpoint(self, now: float | None = None, *, force: bool = False) -> bool:
+        """Write tracked flights' settled samples and new verdicts (one
+        transaction), at most every CHECKPOINT_SECONDS unless *force*.
+
+        Each flight with a position gets a ``live`` row; the cursors on its
+        :class:`~pyaerial.models.TrackState` advance only once the write
+        commits. Returns whether a checkpoint was written.
+        """
+        archive = self._archive
+        if archive.disabled:
+            return False
+        mono = time.monotonic()
+        if not force and mono < self._next_checkpoint:
+            return False
+        if not force and not self._history_retry_due():
+            return False
+        self._next_checkpoint = mono + CHECKPOINT_SECONDS
+        now = time.time() if now is None else now
+        until = now - SETTLE_SECONDS
+        items: list[FlightCheckpoint] = []
+        for plane in self._tracked().values():
+            if not _position_samples(plane):
+                continue
+            track = plane.track
+            flight_id, icao = plane.flight_id, plane.icao
+            items.append(
+                FlightCheckpoint(
+                    plane,
+                    build_telemetry_docs(
+                        plane, flight_id, icao, since=track.archived_through, until=until
+                    ),
+                    integrity_rows(plane, flight_id, icao, after=track.verdicts_through),
+                )
+            )
+        if not items:
+            return False
+        if not archive.checkpoint(items, now=now):
+            self.back_off()
+            return False
+        for item in items:
+            track = item.plane.track
+            track.checkpoint_at = now
+            if item.telemetry:
+                track.archived_through = item.telemetry[-1]["timestamp"]
+            if item.integrity:
+                track.verdicts_through = item.integrity[-1][1]
+        return True
+
     def retain(self, plane: Plane, alerts: list[dict], *, from_snapshot: bool) -> bool:
         """Whether the archive keeps this flight (``archive.flights`` policy).
 
@@ -324,6 +398,8 @@ class FlightArchiver:
             self.retry_pending(deadline)
         with self._guard("orphan archive"):
             self.sweep_orphans(deadline)
+        with self._guard("checkpoint"):
+            self.checkpoint()
 
     def retry_pending(self, deadline: float | None = None) -> None:
         """Archive deferred flights; with *deadline*, stop when it passes."""

@@ -158,9 +158,11 @@ class TrackState:
     # sharing an ICAO address).
     gate_rejects: int = 0
     # Archive checkpoint cursors: the newest sample timestamp and verdict
-    # time already written to this flight's ``live`` archive row.
+    # time already written to this flight's ``live`` archive row, and when
+    # that row was last checkpointed (None: the archive has no row yet).
     archived_through: float | None = None
     verdicts_through: float | None = None
+    checkpoint_at: float | None = None
     # The segment this flight continues (a split of a long track).
     previous_flight_id: str | None = None
 

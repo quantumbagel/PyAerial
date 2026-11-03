@@ -64,6 +64,7 @@ def start_new_segment(plane: Plane, new_first: float, *, keep_position: bool) ->
     next segment has no sample before its start.
     """
     track = plane.track
+    previous_flight_id = plane.flight_id
     for bucket in (plane.received_data, plane.calculated_data):
         for series in bucket.values():
             del series[:-1]
@@ -81,3 +82,8 @@ def start_new_segment(plane: Plane, new_first: float, *, keep_position: bool) ->
         in_effect = [v for v in verdicts if v.time <= new_first][-1:]
         verdicts[:] = in_effect + [v for v in verdicts if v.time > new_first]
     track.first_packet = new_first
+    # A new flight row in the archive, linked to the segment it continues.
+    track.previous_flight_id = previous_flight_id
+    track.archived_through = None
+    track.verdicts_through = None
+    track.checkpoint_at = None
