@@ -98,9 +98,16 @@ def _has_position(plane: Plane) -> bool:
 
 
 def _closed_alert(alert: dict) -> dict:
-    """Mark active episode closed with a deactivation timestamp."""
+    """Mark an episode still open at finalize closed (its deactivation failed:
+    no deactivate notification was sent for it)."""
     doc = dict(alert)
     if doc.get("active") and not doc.get("deactivated_at"):
+        log.warning(
+            "Closing alert %s of %s at finalize without a deactivate "
+            "notification (its deactivation failed)",
+            doc.get("alert_id"),
+            doc.get("flight_id"),
+        )
         doc["active"] = False
         doc["deactivated_at"] = time.time()
     return doc
@@ -557,7 +564,9 @@ class FlightArchiver:
            and is recorded closed at its last refresh.
         2. Each live flight is kept as ``interrupted`` (ending at its last
            checkpointed sample) or deleted, by the archive policy decided on
-           what the archive holds.
+           what the archive holds. A flight whose episode could not be
+           closed stays ``live`` for the next start, so the episode is
+           neither lost nor left pointing at a deleted flight.
 
         Idempotent: a crash part way repeats only the unfinished steps (and
         at most the one deactivate whose record had not committed).
@@ -579,6 +588,8 @@ class FlightArchiver:
                 if doc.get("flight_id") not in owned
             ]
             planes: dict[str, Plane] = {}
+            unclosed: set[str] = set()
+            closed = 0
             beat = time.monotonic()
             for doc in episodes:
                 flight_id = str(doc.get("flight_id") or "")
@@ -592,14 +603,22 @@ class FlightArchiver:
                     )
                 if plane is None:
                     log.warning("Cannot close alert %s of %s", doc.get("alert_id"), flight_id)
+                    unclosed.add(flight_id)
                     continue
                 planes[flight_id] = plane
-                with self._guard("restart alert"):
+                try:
                     self._alerts.alerts.close_restored(plane, doc)
+                except Exception:
+                    self._guard.failed("restart alert")
+                    unclosed.add(flight_id)
+                else:
+                    closed += 1
                 beat = self._keep_heartbeat(beat)
             # Closing an episode of a flight with no row gave it one.
             leftovers = [
-                doc for doc in archive.live_flights() if doc["flight_id"] not in owned
+                doc
+                for doc in archive.live_flights()
+                if doc["flight_id"] not in owned and doc["flight_id"] not in unclosed
             ]
             kept = 0
             for flight in leftovers:
@@ -620,13 +639,20 @@ class FlightArchiver:
             log.warning("Deferring recovery of interrupted flights: %s", exc)
             self.back_off()
             return False
-        if leftovers or episodes:
+        if leftovers or closed:
             log.warning(
                 "Recovered %d flight(s) a previous engine left open (%d kept as "
                 "interrupted) and closed %d alert(s) it left active",
                 len(leftovers),
                 kept,
-                len(episodes),
+                closed,
+            )
+        if unclosed:
+            log.error(
+                "Could not close the alerts of %d flight(s) a previous engine left "
+                "open; they stay live until the next start: %s",
+                len(unclosed),
+                ", ".join(sorted(unclosed)),
             )
         self._recovered = True
         return True

@@ -183,12 +183,29 @@ def test_discard_drops_a_carried_episode_whose_start_is_gone(tmp_path):
     first = track_plane(first=100.0, samples=3)
     second = track_plane(first=200.0, samples=3)
     store.upsert_episodes([_episode(first, "a1", active=True, at=101.0)])
-    store.discard_flight(first.flight_id)  # open episode is left alone
-    assert _rows(path, "SELECT flight_id FROM alerts") == [(first.flight_id,)]
+    # A split hands the open episode over to the next segment first...
+    store.upsert_episodes([_episode(second, "a1", active=True, at=101.0)])
+    store.discard_flight(first.flight_id)  # ...then the old one may go
+    assert _rows(path, "SELECT flight_id, start_flight_id FROM alerts") == [
+        (second.flight_id, first.flight_id)
+    ]
     store.upsert_episodes([_episode(second, "a1", active=False, at=101.0, last=250)])
     store.discard_flight(second.flight_id)
     assert _rows(path, "SELECT COUNT(*) FROM alerts") == [(0,)]
     assert _rows(path, "SELECT COUNT(*) FROM flights") == [(0,)]
+    store.close()
+
+
+def test_discard_keeps_a_flight_with_an_open_episode(tmp_path):
+    path = tmp_path / "a.db"
+    store = ArchiveWriter(path)
+    plane = track_plane(first=100.0, samples=3)
+    store.upsert_episodes([_episode(plane, "a1", active=True, at=101.0)])
+    assert store.checkpoint([_slice(plane)], now=300.0)
+    assert store.discard_flight(plane.flight_id)
+    assert _rows(path, "SELECT status FROM flights") == [("live",)]
+    assert _rows(path, "SELECT COUNT(*) FROM telemetry") == [(3,)]
+    assert _rows(path, "SELECT active FROM alerts") == [(1,)]
     store.close()
 
 

@@ -219,15 +219,20 @@ def test_an_alerter_bug_does_not_stop_recovery(tmp_path, monkeypatch):
         plane.info.icao = icao
         _previous_run(config.database.path, plane, alert_id=f"A{n}")
 
-    def boom(self, plane, doc, **_kw):
-        raise RuntimeError("alerter bug")
+    real = AlertEngine.close_restored
+
+    def boom(self, plane, doc, **kw):
+        if doc["alert_id"] == "A0":
+            raise RuntimeError("alerter bug")
+        return real(self, plane, doc, **kw)
 
     monkeypatch.setattr(AlertEngine, "close_restored", boom)
     engine = _engine(config)
     engine.shutdown()
-    assert _rows(config.database.path, "SELECT DISTINCT status FROM flights") == [
-        ("interrupted",)
-    ]
+    # The other flight is recovered; the one whose alert stayed open waits.
+    assert dict(
+        _rows(config.database.path, "SELECT icao, status FROM flights")
+    ) == {"aaa111": "live", "bbb222": "interrupted"}
 
 
 def test_recovery_waits_for_the_archive_and_skips_this_runs_flights(
@@ -412,3 +417,79 @@ def test_close_restored_uses_the_archived_row(tmp_path, notified):
         assert sent[0]["flight_id"] == plane.flight_id
     finally:
         engine.shutdown()
+
+
+# --- An episode that could not be closed is never orphaned --------------------
+
+
+def test_failed_deactivation_keeps_a_discarded_flight_until_next_start(
+    tmp_path, notified, monkeypatch, caplog
+):
+    """Finalize of a flight the policy discards, after its deactivation
+    failed: the flight stays live (not deleted under its open episode), and
+    the next start closes the episode with its one deactivate."""
+    config = _config(tmp_path, retain=False)
+    config.archive = ArchiveConfig(flights="all", min_positions=1000)
+    engine = _engine(config)
+    plane = _pad_plane(time.time() - 60)
+    engine.tracker.planes["ABC123"] = plane
+    engine.episodes.record_alert_episode(
+        plane,
+        {STORE_ICAO: "abc123", "zone": "pad", "type": "warn"},
+        {},
+        alert_id="X1",
+        activated_at=time.time() - 30,
+    )
+    engine.tracker.remove_planes(["ABC123"])
+
+    def broken(_plane):
+        raise RuntimeError("alerter bug")
+
+    monkeypatch.setattr(engine.calculator, "deactivate_plane", broken)
+    with caplog.at_level(logging.WARNING, logger="pyaerial"):
+        assert engine.archiver.finalize(plane)
+    assert "without a deactivate notification" in caplog.text
+    assert _rows(config.database.path, "SELECT status FROM flights") == [("live",)]
+    assert _rows(config.database.path, "SELECT alert_id, active FROM alerts") == [
+        ("X1", 1)
+    ]
+    engine.shutdown()
+
+    again = _engine(config)
+    again.shutdown()
+    assert notified == [("deactivate", "X1", "restart")]
+    # Now closed, the policy discards the flight with its episode.
+    assert _rows(config.database.path, "SELECT COUNT(*) FROM flights") == [(0,)]
+    assert _rows(config.database.path, "SELECT COUNT(*) FROM alerts") == [(0,)]
+
+
+def test_recovery_skips_a_flight_whose_alert_did_not_close(
+    tmp_path, notified, monkeypatch, caplog
+):
+    config = _config(tmp_path, retain=False)
+    config.archive = ArchiveConfig(flights="all", min_positions=100)
+    plane = _pad_plane(time.time() - 600)
+    _previous_run(config.database.path, plane, alert_id="A1")
+    real = AlertEngine.close_restored
+
+    def boom(self, plane, doc, **kw):
+        raise RuntimeError("bug in close_restored before the record")
+
+    monkeypatch.setattr(AlertEngine, "close_restored", boom)
+    with caplog.at_level(logging.WARNING, logger="pyaerial.engine"):
+        engine = _engine(config)
+        engine.shutdown()
+    assert "closed 1 alert" not in caplog.text
+    assert "Could not close the alerts of 1 flight(s)" in caplog.text
+    assert _rows(config.database.path, "SELECT status FROM flights") == [("live",)]
+    assert _rows(config.database.path, "SELECT active FROM alerts") == [(1,)]
+    assert _rows(
+        config.database.path,
+        "SELECT COUNT(*) FROM alerts WHERE flight_id NOT IN (SELECT flight_id FROM flights)",
+    ) == [(0,)]
+
+    monkeypatch.setattr(AlertEngine, "close_restored", real)
+    again = _engine(config)
+    again.shutdown()
+    assert ("deactivate", "A1", "restart") in notified
+    assert _rows(config.database.path, "SELECT COUNT(*) FROM alerts") == [(0,)]

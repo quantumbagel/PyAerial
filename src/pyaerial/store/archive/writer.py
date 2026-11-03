@@ -605,9 +605,11 @@ class ArchiveWriter(ArchiveConnection):
         Its flight, telemetry and verdict rows go, with the closed episodes
         that began on it. A closed episode carried over from an earlier
         segment goes back to that segment's row if it was kept (else it goes
-        too), so every alert row points at an existing flight. Open episodes
-        are left to the caller (a segment split carries them on). False when
-        the archive is unavailable.
+        too), so every alert row points at an existing flight. While an
+        episode on it is still open (its deactivation failed) nothing is
+        deleted: the flight stays ``live`` for the next start's recovery,
+        which closes the episode and decides again. False when the archive
+        is unavailable.
         """
         if self.disabled:
             return True
@@ -616,6 +618,17 @@ class ArchiveWriter(ArchiveConnection):
         try:
             with self._session("discard") as conn, conn:
                 conn.execute("BEGIN IMMEDIATE")
+                if conn.execute(
+                    "SELECT 1 FROM alerts WHERE flight_id = ? AND active = 1 LIMIT 1",
+                    (flight_id,),
+                ).fetchone():
+                    log.warning(
+                        "Keeping flight %s live: it has an alert episode still "
+                        "open (closed at the next start)",
+                        flight_id,
+                    )
+                    self._last_error = None
+                    return True
                 for table in ("telemetry", "integrity", "flights"):
                     conn.execute(
                         f"DELETE FROM {table} WHERE flight_id = ?", (flight_id,)
