@@ -42,7 +42,7 @@ graph TD
 - **Collect**: dump1090 or readsb feeds (Beast or AVR), angle-of-arrival receivers, and recorded captures, from any number of receivers. Copies of one transmission are merged, keeping the list of receivers that heard it. Decoding uses [`pyModeS`](https://github.com/junzis/pymodes).
 - **Verify**: every aircraft gets a 0-1 spoofing score from up to 16 checks: angle of arrival, TDOA with multilateration of the real transmitter, signal vs. range, radio horizon, Mode S cross-checks, timing, kinematics, replay, identity and more. Which checks run depends on your receivers.
 - **Archive**: every completed flight goes to SQLite. Suspected spoofs are labelled, not dropped. Each sample records which receivers heard it and the verdict at the time; raw frames are optional.
-- **Alert**: polygon zones (inline, KML, KMZ, GeoJSON) with conditions on altitude, speed, distance, ETA and integrity score. Every activation gets exactly one deactivation, even across engine crashes.
+- **Alert**: polygon zones (inline, KML, KMZ, GeoJSON) with conditions on altitude, speed, distance, ETA and integrity score. Every activation gets one deactivation, also across engine crashes (at most one duplicate or unpaired notification per crash; see Alerters in [CONFIGURATION.md](CONFIGURATION.md)).
 - **Watch**: a read-only portal with live map, alerts, raw frames, per-aircraft integrity and history. It flags a stale engine, unreachable Redis or quiet receivers, and re-serves frames as a Beast feed for OpenSky and similar networks. Registrations and photos come from HexDB and Planespotters.
 
 **Quick start: Docker**

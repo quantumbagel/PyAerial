@@ -36,6 +36,7 @@ Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading
 - `gnss_height` in the `telemetry` table and on WebSocket telemetry points.
 - Alert notifications carry `alert_id`, `flight_id` and `altitude_source`; deactivations carry `reason.ended_by` (`cleared`, `lost`, `shutdown`, `restart`), also on WebSocket alerts and in the portal. `print` lines show the hook and `alert_id`.
 - Archive health (`history`, `history_error`, `history_pending`) in the `live:engine` heartbeat.
+- An archive lease (`engine_lease` table): a second engine waits out a running one, and an engine that stalled and was replaced can no longer write the archive.
 - Archive checkpoints: every 5 s each tracked flight's samples (older than 10 s), new integrity verdicts and open alert episodes are written, so a crash loses at most about 15 s per flight (was everything older than the Redis telemetry window). New `flights.status` value `interrupted`; new columns `flights.checkpoint_at`, `flights.previous_flight_id`, `alerts.start_flight_id`. The API marks interrupted flights `interrupted: true` (status stays `completed`), and the portal's history shows a badge.
 - `counters` in the `live:engine` heartbeat: frames received and dropped, messages processed, deferred flights and outbox episodes dropped, receiver restarts, stage errors, tracked aircraft.
 - Replay of dump1090 Beast binary captures, and a bundled sample capture used by `examples/replay.yaml`.
@@ -68,7 +69,7 @@ Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading
 
 ### Fixed
 
-- Every alert activation gets exactly one deactivation, also across crashes (`ended_by: restart`).
+- Every alert activation gets one deactivation, also across crashes (`ended_by: restart`); a crash in the instant between a notification and its record can repeat one restart deactivate or leave one activation unpaired, and notifications still queued for delivery are lost with the process.
 - Frames that fail CRC are no longer tracked or re-served on `/ws/raw`, `/ws/beast` or Beast TCP.
 - A receiver clock jump (dump1090 restart, replay loop) resets that receiver's clock sync and `timing` check.
 - Zones that cross the antimeridian.

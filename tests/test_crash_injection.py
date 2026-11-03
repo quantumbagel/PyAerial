@@ -1,6 +1,7 @@
 """Crash injection: an engine (``tests/crash_engine.py``) over one archive is
-killed with SIGKILL at random points, restarted, and finally stopped
-gracefully; the archive and the alert notifications must stay consistent.
+killed with SIGKILL ``KILLS`` (10) times at random points, some during
+startup recovery, restarted each time, and finally stopped gracefully; the
+archive and the alert notifications must stay consistent.
 
 Invariants checked at the end:
 
@@ -13,7 +14,7 @@ Invariants checked at the end:
   checkpoint window before the kill;
 - flights of one aircraft never overlap.
 
-Slow (about a minute): ``pytest -m slow``; CI runs it as its own step.
+Slow (about 40 s): ``pytest -m slow``; CI runs it as its own step.
 """
 
 from __future__ import annotations

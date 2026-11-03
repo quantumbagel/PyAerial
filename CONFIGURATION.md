@@ -261,7 +261,7 @@ Bad options fail `pyaerial validate`. Other `method` values come from installed 
 
 Changes from 0.x: `schema` and `event` are new, every field is always present, and `icao` is lowercase. `type` and `reason.hook` remain for compatibility. Discord and Slack messages mark GNSS altitude "(GNSS)".
 
-Every activation gets exactly one deactivation, except episodes whose rule was removed from the config before a restart: those close silently.
+Every activation gets one deactivation, also across crashes and restarts (`ended_by: restart`), except episodes whose rule was removed from the config before a restart: those close silently. The engine sends a notification and then records it, so a crash in the instant between a notification and its record can repeat one restart deactivate or leave one activation unpaired, and notifications still queued for delivery are lost with the process.
 
 **`web`**
 
@@ -378,7 +378,7 @@ These keys are internal (see Compatibility in the [README](README.md)). They are
 | `live:telemetry:{flight_id}` | Sorted set (epoch score) | Track points within `telemetry_keep_seconds` |
 | `live:alerts:{flight_id}` | Hash (`alert_id` to JSON) | This flight's alert episodes |
 | `live:active_alerts` | Hash (`alert_id` to JSON) | Active episodes, all flights |
-| `live:alert_episodes` | Hash (`alert_id` to JSON) | All episodes |
+| `live:alert_episodes` | Hash (`alert_id` to JSON) | Episodes of the tracked flights, deleted with their flight (history keeps them) |
 | `live:engine` | String (JSON), 10 s TTL | Engine heartbeat, rewritten every tick (fields below) |
 | `live:episode_outbox` | Hash (`alert_id` to JSON) | Alert episodes the archive refused (it was down), until it accepts them; the next engine replays them after a crash. Empty in normal operation |
 | `live:raw` | Pub/Sub channel | Corrected receiver frames, served on `/ws/raw`, `/ws/beast` and Beast TCP |
