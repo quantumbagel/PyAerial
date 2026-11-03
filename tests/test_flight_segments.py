@@ -28,7 +28,7 @@ from pyaerial.constants import (
 from pyaerial.engine import Engine
 from pyaerial.models import Verdict
 from pyaerial.store.archive import ArchiveReader, ArchiveWriter
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.live import LiveWriter
 
 # --- Flights longer than tracking.max_flight_seconds -------------------------
 
@@ -319,7 +319,7 @@ def test_retained_continuation_moves_the_row_to_the_final_segment(
 
 
 def test_popping_the_old_segment_keeps_carried_episodes_in_redis(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     first = time.time() - 7_200
     plane = pad_plane(first, samples=3)
     old = plane.flight_id
@@ -345,7 +345,7 @@ def test_popping_the_old_segment_keeps_carried_episodes_in_redis(fake):
 
 
 def test_re_recording_an_active_episode_keeps_last_updated(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     plane = pad_plane(time.time(), samples=2)
     meta = {STORE_ICAO: "abc123", "zone": "pad", "type": "warn"}
     store.record_alert_episode(plane, meta, {}, alert_id="A1", activated_at=5.0)

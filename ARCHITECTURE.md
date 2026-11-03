@@ -59,7 +59,7 @@ A finished flight is written to the archive before its Redis copy is popped (`_f
 - `_archive_startup_live_flights`: archives live flights a previous engine left in Redis.
 - `_close_stray_active_alerts`: closes active alerts whose flight never reached Redis (`ended_by: restart`).
 - `_retry_orphan_live_flights`: each tick, archives Redis flights nobody tracks.
-- `RedisLiveStore.retry_pending_pops`: retries failed Redis deletes.
+- `LiveWriter.retry_pending_pops`: retries failed Redis deletes.
 
 The archive package `store/archive/`:
 
@@ -67,6 +67,13 @@ The archive package `store/archive/`:
 - `writer.py`: `ArchiveWriter`, for the engine and `pyaerial reset`. Creates and upgrades the schema, finalizes flights (a re-archive wins only with a longer time span, decided under `BEGIN IMMEDIATE`), writes and prunes raw frames, reports `health()`.
 - `reader.py`: `ArchiveReader`, for the portal. Opens the file `mode=ro`, never runs DDL, and reports `missing`, `needs_upgrade`, `incompatible` or `down` in `state`.
 - `_conn.py`: the connection, lock and reconnect backoff they share. Plane-to-row conversion is in `store/codec.py`.
+
+The live store package `store/live/` (Redis keys in CONFIGURATION.md):
+
+- `writer.py`: `LiveWriter`, for the engine (and `pyaerial reset` with `writer=False`, which never claims the heartbeat). Claims and refreshes `live:engine`, writes flights and telemetry in one pipeline per tick, publishes raw frames, and mirrors everything in memory (`store/memory.py`), replayed into Redis on reconnect. Alert episodes are in `episodes.py`, pops and finalize/recovery reads in `recovery.py`, the mirror and its fallback reads in `_mirror.py`. `memory_only=True` is the isolated mode: the mirror is the whole store.
+- `reader.py`: `LiveReader`, for the portal. Read-only queries, `engine_heartbeat()`, the `live:raw` subscription; no memory mirror, so it raises `LiveUnavailable` while Redis is down.
+- `keys.py` (key names, TTLs, heartbeat payload), `_conn.py` (client and reconnect backoff), `_reads.py` (Redis queries) and `_raw.py` (raw listeners and subscription) are shared. `lint-imports` keeps the reader from importing the writer side.
+- `protocols.py`: `LiveReadStore` (api/), `EpisodeStore` (alerts), `LiveWriteStore` (engine).
 
 **Adding a receiver or alerter**
 

@@ -23,12 +23,12 @@ from pyaerial.api.security import (
     origin_allowed,
 )
 from pyaerial.store.archive import HistoryUnavailable
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.live import LiveWriter
 from pyaerial.webapp import uvicorn_options
 
 
-def _memory_store() -> RedisLiveStore:
-    return RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+def _memory_store() -> LiveWriter:
+    return LiveWriter("redis://localhost:6379/0", memory_only=True)
 
 
 def _drain_snapshot(ws) -> None:

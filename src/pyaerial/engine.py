@@ -30,10 +30,10 @@ from pyaerial.pipeline import PlaneCalculator
 from pyaerial.receivers import RawFrame, Receiver, available_receivers, create_receiver
 from pyaerial.receivers.frames import es_crc_ok, merge_receiver_frames, raw_payload
 from pyaerial.receivers.positions import ReceiverPositions
-from pyaerial.store import ArchiveWriter, RedisLiveStore
+from pyaerial.store import ArchiveWriter
 from pyaerial.store.archive.writer import FRAME_PRUNE_BATCH
 from pyaerial.store.codec import plane_from_alert_docs
-from pyaerial.store.redis_live import LiveUnavailable
+from pyaerial.store.live import LiveUnavailable, LiveWriter, LiveWriteStore
 from pyaerial.tracker import Tracker
 
 log = logging.getLogger("pyaerial.engine")
@@ -184,7 +184,7 @@ class Engine:
         self.integrity = IntegrityMonitor(config, self.positions)
         self.polygons: dict[str, Polygon] = build_polygons(config.zones)
         self.aircraft_db = AircraftDB(aircraft_db_path)
-        self.live_store = RedisLiveStore(
+        self.live_store: LiveWriteStore = LiveWriter(
             config.database.redis_uri,
             memory_only=isolated,
             telemetry_keep_seconds=config.tracking.telemetry_keep_seconds,

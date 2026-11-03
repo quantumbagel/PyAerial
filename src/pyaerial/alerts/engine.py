@@ -32,7 +32,7 @@ from pyaerial.constants import (
     STORE_VERT_SPEED,
 )
 from pyaerial.models import Plane, latest_datum
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.live import EpisodeStore
 
 log = logging.getLogger("pyaerial.alerts")
 
@@ -109,7 +109,7 @@ class AlertEngine:
         self,
         config: Config,
         polygons: dict[str, Polygon],
-        store: RedisLiveStore | None = None,
+        store: EpisodeStore | None = None,
     ):
         self.config = config
         self.polygons = polygons
@@ -429,7 +429,7 @@ class AlertEngine:
           ``alerts`` table is keyed by alert_id alone. Its live record is
           upserted under *new_flight_id*, so ``live:active_alerts`` points at
           the new flight. The old segment's copy is the live store's job
-          (``RedisLiveStore.carry_active_alerts``, called by the engine).
+          (``LiveWriter.carry_active_alerts``, called by the engine).
         * Archive: each segment archived while the episode is active stores
           its row (so ``retain`` keeps it); a later segment's archive replaces
           that row, so the archive ends with one row per episode, on the

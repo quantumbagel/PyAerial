@@ -22,8 +22,7 @@ from pyaerial.api.queries import (
 )
 from pyaerial.api.spec import ALERTS_PUSH_MIN, WS_STREAMS, websocket_hello
 from pyaerial.enrich.aircraft_db import AircraftDB
-from pyaerial.store.live import LiveStore
-from pyaerial.store.redis_live import LiveUnavailable
+from pyaerial.store.live import LiveReadStore, LiveUnavailable
 import contextlib
 
 log = logging.getLogger("pyaerial.webapp")
@@ -332,7 +331,7 @@ class LiveBroadcaster:
 
     def __init__(
         self,
-        live_store: LiveStore | None,
+        live_store: LiveReadStore | None,
         aircraft_db: AircraftDB | None,
         history: Any | None = None,
     ):

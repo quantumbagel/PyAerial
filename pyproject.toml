@@ -127,6 +127,27 @@ modules = [
     "pyaerial.store.archive.writer",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Live reader and writer are independent"
+type = "independence"
+# The portal's read-only LiveReader never imports the engine's LiveWriter;
+# both share store.live._conn, _raw, _reads and keys.
+modules = [
+    "pyaerial.store.live.reader",
+    "pyaerial.store.live.writer",
+]
+
+[[tool.importlinter.contracts]]
+name = "Live reader has no memory mirror or write paths"
+type = "forbidden"
+source_modules = ["pyaerial.store.live.reader"]
+forbidden_modules = [
+    "pyaerial.store.live._mirror",
+    "pyaerial.store.live.episodes",
+    "pyaerial.store.live.recovery",
+    "pyaerial.store.memory",
+]
+
 [tool.mypy]
 # Unannotated functions are type-checked too (check_untyped_defs), though
 # missing annotations are not errors yet; third-party packages without stubs

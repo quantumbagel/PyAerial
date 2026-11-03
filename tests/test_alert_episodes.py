@@ -34,7 +34,7 @@ from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 from pyaerial.pipeline import PlaneCalculator
 from pyaerial.store.archive import ArchiveReader
-from pyaerial.store.redis_live import LiveUnavailable, RedisLiveStore
+from pyaerial.store.live import LiveUnavailable, LiveWriter
 
 # --- Engine restarts and crashes ---------------------------------------------
 # Episodes left active by a crashed or stopped engine are closed exactly once.
@@ -360,7 +360,7 @@ def _tick(engine, plane, clock, position=_INSIDE, seconds=1.0):
 
 def test_orphan_of_old_flight_leaves_live_flight_alert_alone(clock):
     _IDENTITY_EVENTS.clear()
-    store = RedisLiveStore("redis://localhost:1/0", memory_only=True, writer=True)
+    store = LiveWriter("redis://localhost:1/0", memory_only=True)
     engine = _alert_engine(_identity_config(), store)
     try:
         live = _identity_plane(first=time.time() - 30)
@@ -383,7 +383,7 @@ def test_orphan_of_old_flight_leaves_live_flight_alert_alone(clock):
 
 def test_orphan_still_closes_its_own_leftover_episode(clock):
     _IDENTITY_EVENTS.clear()
-    store = RedisLiveStore("redis://localhost:1/0", memory_only=True, writer=True)
+    store = LiveWriter("redis://localhost:1/0", memory_only=True)
     engine = _alert_engine(_identity_config(), store)
     try:
         orphan = _identity_plane(first=1_700_000_000.0, last=1_700_000_500.0)
@@ -451,7 +451,7 @@ def test_pending_match_survives_orphan_sweep(clock):
 
 def _segmented_run(clock, *, explicit: bool):
     _IDENTITY_EVENTS.clear()
-    store = RedisLiveStore("redis://localhost:1/0", memory_only=True, writer=True)
+    store = LiveWriter("redis://localhost:1/0", memory_only=True)
     engine = _alert_engine(_identity_config(while_active=4), store)
     t0 = time.time() - 600
     plane = _identity_plane(first=t0)
@@ -611,7 +611,7 @@ def test_stray_active_alerts_skip_flights_still_live(fake):
         "a2": _stray_alert("a2", "gone02-2", "gone02"),
         "a3": "{not json",
     }
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     strays = store.stray_active_alerts()
     assert [doc["alert_id"] for doc in strays] == ["a2"]
     # Unusable entries cannot be closed properly; they are dropped.

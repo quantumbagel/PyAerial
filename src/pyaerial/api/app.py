@@ -37,8 +37,7 @@ from pyaerial.api.ws import BadRequest, handle_ws_request
 from pyaerial.config.schema import Config
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.store.archive import ArchiveReader, HistoryUnavailable
-from pyaerial.store.live import LiveStore
-from pyaerial.store.redis_live import LiveUnavailable
+from pyaerial.store.live import LiveReadStore, LiveUnavailable
 
 log = logging.getLogger("pyaerial.webapp")
 
@@ -104,7 +103,7 @@ def create_app(
     *,
     config: Config,
     history: ArchiveReader | None = None,
-    live_store: LiveStore | None = None,
+    live_store: LiveReadStore | None = None,
     aircraft_db: AircraftDB | None = None,
 ) -> FastAPI:
     web = config.web

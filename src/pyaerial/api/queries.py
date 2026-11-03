@@ -19,8 +19,7 @@ from pyaerial.api.payloads import (
 from pyaerial.constants import LIVE_ENGINE_TTL_SECONDS
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.store.archive import ArchiveReader, HistoryUnavailable
-from pyaerial.store.live import LiveStore
-from pyaerial.store.redis_live import LiveUnavailable
+from pyaerial.store.live import LiveReadStore, LiveUnavailable
 
 log = logging.getLogger("pyaerial.webapp")
 
@@ -105,7 +104,7 @@ def _require_history(history: ArchiveReader | None) -> ArchiveReader | None:
 
 
 def get_live_flights(
-    live_store: LiveStore | None, aircraft_db: AircraftDB | None
+    live_store: LiveReadStore | None, aircraft_db: AircraftDB | None
 ) -> list[dict[str, Any]]:
     if live_store is None or not engine_is_live(live_store):
         return []
@@ -163,7 +162,7 @@ def get_history_flights(
 
 
 def get_live_alerts(
-    live_store: LiveStore | None,
+    live_store: LiveReadStore | None,
     *,
     since: float = 0.0,
     flight_id: str | None = None,
@@ -188,7 +187,7 @@ def get_live_alerts(
 
 
 def get_tracked_live_alerts(
-    live_store: LiveStore,
+    live_store: LiveReadStore,
     flights: list[dict[str, Any]],
     *,
     limit: int = 0,
@@ -217,7 +216,7 @@ def get_flight_detail(
     flight_id: str,
     view: str,
     *,
-    live_store: LiveStore | None,
+    live_store: LiveReadStore | None,
     history: ArchiveReader | None,
     aircraft_db: AircraftDB | None,
 ) -> dict[str, Any] | None:
@@ -290,7 +289,7 @@ def get_telemetry(
     view: str,
     since: float,
     *,
-    live_store: LiveStore | None,
+    live_store: LiveReadStore | None,
     history: ArchiveReader | None,
     limit: int | None = None,
 ) -> TelemetryPoints:
@@ -340,7 +339,7 @@ def get_alerts(
     q: str | None = None,
     limit: int = 0,
     skip: int = 0,
-    live_store: LiveStore | None,
+    live_store: LiveReadStore | None,
     history: ArchiveReader | None,
     active_only: bool | None = None,
 ) -> list[dict[str, Any]]:
@@ -375,7 +374,7 @@ def get_alerts(
 
 
 def get_stats(
-    live_store: LiveStore | None,
+    live_store: LiveReadStore | None,
     history: ArchiveReader | None,
 ) -> dict[str, Any]:
     live_flights = 0

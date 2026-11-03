@@ -22,7 +22,7 @@ from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.models import Plane
 
 if TYPE_CHECKING:
-    from pyaerial.store.redis_live import RedisLiveStore
+    from pyaerial.store.live import EpisodeStore
 
 log = logging.getLogger("pyaerial.pipeline")
 
@@ -37,7 +37,7 @@ class PlaneCalculator:
         config: Config,
         polygons: dict[str, Polygon],
         aircraft_db: AircraftDB | None = None,
-        store: RedisLiveStore | None = None,
+        store: EpisodeStore | None = None,
     ):
         self.config = config
         self.polygons = polygons

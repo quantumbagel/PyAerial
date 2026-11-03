@@ -1,4 +1,4 @@
-"""Tiny in-process stand-in for the redis-py calls RedisLiveStore makes."""
+"""Tiny in-process stand-in for the redis-py calls the live store makes."""
 
 from __future__ import annotations
 

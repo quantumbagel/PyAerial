@@ -8,7 +8,6 @@ gauges and counters. Engine numbers come from the ``live:engine`` heartbeat
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 import re
@@ -27,7 +26,6 @@ from pyaerial.api.broadcaster import LiveBroadcaster
 from pyaerial.api.queries import engine_is_live
 from pyaerial.api.security import origin_allowed
 from pyaerial.config.schema import Config
-from pyaerial.store.redis_live import _KEY_ENGINE
 
 log = logging.getLogger("pyaerial.webapp")
 
@@ -204,26 +202,17 @@ def _read_heartbeat(live_store: Any) -> tuple[bool, dict[str, Any] | None]:
         return False, None
     if not redis_up:
         return False, None
-    client = None if getattr(live_store, "memory_only", False) else getattr(
-        live_store, "client", None
-    )
-    if client is None:
-        # Memory-only or duck-typed stores: only the timestamp is available.
+    read = getattr(live_store, "engine_heartbeat", None)
+    if not callable(read):
+        # Duck-typed stores: only the timestamp is available.
         getter = getattr(live_store, "engine_seen_at", None)
         seen = getter() if callable(getter) else None
         return True, ({"seen_at": seen} if seen is not None else None)
     try:
-        raw = client.get(_KEY_ENGINE)
+        return True, read()
     except Exception as exc:
         log.debug("metrics: heartbeat read failed: %r", exc)
         return False, None
-    if not raw:
-        return True, None
-    try:
-        doc = json.loads(raw)
-    except (TypeError, ValueError):
-        return True, None
-    return True, doc if isinstance(doc, dict) else None
 
 
 def probe_backends(live_store: Any | None, history: Any | None) -> Backends:

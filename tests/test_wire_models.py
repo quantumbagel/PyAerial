@@ -68,7 +68,7 @@ from pyaerial.constants import (
 from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 from pyaerial.store.archive import ArchiveReader, ArchiveWriter
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.live import LiveWriter
 from pyaerial.webapp import create_app
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -211,7 +211,7 @@ def _quiet_plane(first: float) -> Plane:
 def stores(tmp_path, monkeypatch):
     config = make_config()
     config.zones["pad"].rules[0].dwell_seconds = 1
-    store = RedisLiveStore("redis://localhost:1/0", memory_only=True, writer=True)
+    store = LiveWriter("redis://localhost:1/0", memory_only=True)
     # Recent: the live store drops telemetry older than telemetry_keep_seconds.
     now = time.time()
     alerting = _alerting_plane(now - 5)

@@ -1,3 +1,6 @@
+"""LiveWriter, the engine's live store: flight and telemetry writes, writer
+claim, alert episodes, recovery reads and the memory mirror."""
+
 from __future__ import annotations
 
 import json
@@ -6,10 +9,7 @@ import threading
 import time
 
 import pytest
-import redis
-from redis.exceptions import ConnectionError as RedisConnectionError
 
-import pyaerial.store.redis_live as redis_live
 from fake_redis import FakePipeline, FakeRedis
 from helpers import (
     LOCAL_REDIS_URI,
@@ -36,8 +36,7 @@ from pyaerial.models import (
     sample_provenance,
 )
 from pyaerial.store.codec import build_telemetry_docs
-from pyaerial.store.redis_live import LiveUnavailable, RedisLiveStore
-from pyaerial.urls import redact_uri
+from pyaerial.store.live import LiveUnavailable, LiveWriter, keys, recovery
 
 URI = "redis://user:s3cret@redis.example:6380/0"
 
@@ -54,24 +53,8 @@ def _plane(icao: str = "abc123", t: float | None = None) -> Plane:
     )
 
 
-def test_redact_uri_hides_password():
-    assert redact_uri(URI) == "redis://user:***@redis.example:6380/0"
-    assert redact_uri("redis://:pw@h/0") == "redis://:***@h/0"
-    assert redact_uri("redis://localhost:6379/0") == "redis://localhost:6379/0"
-
-
-def test_connect_logs_never_contain_password(fake, caplog):
-    fake.fail.add("ping")
-    with caplog.at_level(logging.INFO, logger="pyaerial.store.redis"):
-        RedisLiveStore(URI)
-        fake.fail.clear()
-        RedisLiveStore(URI)
-    assert "s3cret" not in caplog.text
-    assert "redis.example" in caplog.text
-
-
 def test_get_flights_batches_round_trips_and_count_uses_scard(fake):
-    store = RedisLiveStore(URI, writer=True)
+    store = LiveWriter(URI)
     for n in range(20):
         store.write_live_planes({f"p{n}": _plane(f"a{n:05x}")})
     fake.calls.clear()
@@ -88,14 +71,14 @@ def test_get_flights_batches_round_trips_and_count_uses_scard(fake):
 
 
 def test_failed_upsert_marks_disconnected(fake):
-    store = RedisLiveStore(URI, writer=True)
+    store = LiveWriter(URI)
     fake.fail.add("execute")
     store.write_live_planes({"p": _plane()})
     assert store.client is None
 
 
 def test_failed_deactivation_does_not_leave_ghost_active_alert(fake):
-    store = RedisLiveStore(URI, writer=True)
+    store = LiveWriter(URI)
     assert store.claim_engine()
     plane = _plane()
     store.write_live_planes({"p": plane})
@@ -117,7 +100,7 @@ def test_failed_deactivation_does_not_leave_ghost_active_alert(fake):
 
 
 def test_stale_disconnect_does_not_drop_fresh_client(fake):
-    store = RedisLiveStore(URI, writer=True)
+    store = LiveWriter(URI)
     old = store.client
     replacement = FakeRedis()
     store.client = replacement
@@ -125,49 +108,8 @@ def test_stale_disconnect_does_not_drop_fresh_client(fake):
     assert store.client is replacement
 
 
-def test_reader_raises_live_unavailable_when_redis_down(fake):
-    fake.down = True
-    store = RedisLiveStore(URI, writer=False)
-    with pytest.raises(LiveUnavailable):
-        store.get_flights()
-    with pytest.raises(LiveUnavailable):
-        store.count_flights()
-
-
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        {},
-        {"active_only": False},
-        {"flight_id": "FID"},
-        {"flight_id": "FID", "active_only": False},
-        {"rule": "warn", "active_only": False},
-        {"since": 1.5, "active_only": False},
-    ],
-)
-def test_get_alerts_memory_and_redis_agree(fake, kwargs):
-    writer = RedisLiveStore(URI, writer=True)
-    mem = RedisLiveStore(URI, memory_only=True, writer=True)
-    plane = _plane(t=1_700_000_000.0)
-    fid = f"abc123-{int(1_700_000_000.0)}"
-    if kwargs.get("flight_id") == "FID":
-        kwargs = {**kwargs, "flight_id": fid}
-    for store in (writer, mem):
-        store.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=1.0)
-        store.record_alert_episode(plane, alert_meta(), {}, alert_id="a2", activated_at=2.0)
-        store.record_alert_episode(
-            plane, alert_meta(), {}, alert_id="a2", activated_at=2.0, active=False,
-            deactivated_at=3.0,
-        )
-    reader = RedisLiveStore(URI, writer=False)
-    from_redis = [a["alert_id"] for a in reader.get_alerts(**kwargs)]
-    from_mem = [a["alert_id"] for a in mem.get_alerts(**kwargs)]
-    assert from_redis == from_mem
-    assert from_redis
-
-
 def test_unchanged_flights_are_not_rewritten(fake):
-    store = RedisLiveStore(URI, writer=True)
+    store = LiveWriter(URI)
     planes = {f"p{n}": _plane(f"a{n:05x}", t=1000.0) for n in range(5)}
     store.write_live_planes(planes)
     assert fake.calls.count("execute") == 1  # one round trip for all five
@@ -181,7 +123,7 @@ def test_unchanged_flights_are_not_rewritten(fake):
 
 
 def test_snapshot_keeps_sample_receivers_and_integrity(fake):
-    store = RedisLiveStore(URI, writer=True)
+    store = LiveWriter(URI)
     t = time.time()
     plane = _plane(t=t)
     plane.received_data[STORE_LAT].append(Datum(35.1, t + 5))
@@ -203,7 +145,7 @@ def test_snapshot_keeps_sample_receivers_and_integrity(fake):
 
 def test_ensure_writer_survives_redis_error(fake):
     """A Redis outage hitting the per-tick claim must not look like a rival engine."""
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     assert store.claim_engine()
     fake.down = True  # Redis restarts; the last ping was < 2 s ago
     assert store.ensure_writer() is True
@@ -218,7 +160,7 @@ def test_ensure_writer_survives_redis_error(fake):
 
 
 def test_reconnect_claim_error_retries_instead_of_yielding(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     assert store.claim_engine()
     store._mark_disconnected(RuntimeError("drop"), store.client)
     fake.fail.add("set")  # PING works, but the claim write fails
@@ -235,72 +177,22 @@ def test_reconnect_claim_error_retries_instead_of_yielding(fake):
 
 
 def test_reconnect_still_yields_to_a_fresh_rival(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     assert store.claim_engine()
     store._mark_disconnected(RuntimeError("drop"), store.client)
     fake.kv.pop("live:engine")
-    rival = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    rival = LiveWriter(LOCAL_REDIS_URI)
     assert rival.claim_engine()
     store._last_connect_attempt = 0.0
     store.ping()
     assert store.writer is False
 
 
-# --- Redis reconnect does not block other callers ----------------------------
-
-
-class _SlowDownRedis(FakeRedis):
-    """Redis host unreachable: every connect attempt takes a while to fail."""
-
-    delay = 0.6
-
-    def ping(self) -> bool:
-        self.calls.append("ping")
-        time.sleep(self.delay)
-        raise RedisConnectionError("timed out")
-
-
-def test_reconnect_does_not_block_other_threads(monkeypatch):
-    client = _SlowDownRedis()
-    attempts: list[int] = []
-
-    def from_url(*_a, **_k):
-        attempts.append(1)
-        return client
-
-    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(from_url))
-    store = RedisLiveStore(LOCAL_REDIS_URI)  # a portal reader
-    monkeypatch.setattr(redis_live, "_RECONNECT_DELAY", 0.05)
-    store._last_connect_attempt = 0.0
-    attempts.clear()
-
-    reconnecting = threading.Thread(target=store.ping)
-    reconnecting.start()
-    time.sleep(0.15)  # the reconnect is in flight and past its cooldown
-    started = time.monotonic()
-    with pytest.raises(LiveUnavailable):
-        store.get_flights()
-    assert store.ping() is False
-    assert time.monotonic() - started < 0.2
-    reconnecting.join()
-    assert attempts == [1]  # one reconnect at a time
-
-
-def test_reconnect_failure_is_still_reported(monkeypatch, caplog):
-    client = _SlowDownRedis()
-    client.delay = 0.0
-    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(lambda *a, **k: client))
-    with caplog.at_level("WARNING", logger="pyaerial.store.redis"):
-        store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
-    assert store.client is None
-    assert "Redis unavailable" in caplog.text
-
-
 # --- Safety-net TTL on per-flight live keys ----------------------------------
 
 
 def test_live_flight_keys_carry_a_refreshed_safety_ttl(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     assert store.claim_engine()
     plane = heading_plane("abc123", time.time())
     fid = f"abc123-{int(plane.track.first_packet)}"
@@ -308,7 +200,7 @@ def test_live_flight_keys_carry_a_refreshed_safety_ttl(fake):
     store.record_alert_episode(
         plane, {STORE_ICAO: "abc123"}, {}, alert_id="a1", activated_at=1.0
     )
-    ttl = redis_live.LIVE_FLIGHT_TTL_SECONDS
+    ttl = keys.LIVE_FLIGHT_TTL_SECONDS
     # Must outlive any engine downtime we still want to archive after.
     assert ttl >= 3 * 86_400
     for key in (f"live:flight:{fid}", f"live:telemetry:{fid}", f"live:alerts:{fid}"):
@@ -328,7 +220,7 @@ def test_live_flight_keys_carry_a_refreshed_safety_ttl(fake):
 
 
 def test_reconnect_backfill_sets_ttls(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     assert store.claim_engine()
     plane = heading_plane("abc123", time.time())
     fid = f"abc123-{int(plane.track.first_packet)}"
@@ -339,17 +231,17 @@ def test_reconnect_backfill_sets_ttls(fake):
     store._mark_disconnected(RuntimeError("restart"), store.client)
     store._last_connect_attempt = 0.0
     assert store.ping()
-    assert fake.ttls[f"live:flight:{fid}"] == redis_live.LIVE_FLIGHT_TTL_SECONDS
-    assert fake.ttls[f"live:telemetry:{fid}"] == redis_live.LIVE_FLIGHT_TTL_SECONDS
+    assert fake.ttls[f"live:flight:{fid}"] == keys.LIVE_FLIGHT_TTL_SECONDS
+    assert fake.ttls[f"live:telemetry:{fid}"] == keys.LIVE_FLIGHT_TTL_SECONDS
 
 
 def test_crash_recovery_still_rebuilds_flights_before_the_ttl(fake):
-    crashed = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    crashed = LiveWriter(LOCAL_REDIS_URI)
     plane = heading_plane("abc123", time.time(), samples=3)
     crashed.write_live_planes({"ABC123": plane})
     fid = f"abc123-{int(plane.track.first_packet)}"
 
-    restarted = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    restarted = LiveWriter(LOCAL_REDIS_URI)
     rebuilt = restarted.planes_for_finalize()
     assert [p.info.icao for p in rebuilt] == ["abc123"]
     assert len(rebuilt[0].received_data[STORE_LAT]) == 3
@@ -357,7 +249,7 @@ def test_crash_recovery_still_rebuilds_flights_before_the_ttl(fake):
 
 
 def test_expired_flight_remnants_are_cleaned_not_retried(fake):
-    crashed = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    crashed = LiveWriter(LOCAL_REDIS_URI)
     plane = heading_plane("abc123", time.time())
     fid = f"abc123-{int(plane.track.first_packet)}"
     crashed.write_live_planes({"ABC123": plane})
@@ -368,7 +260,7 @@ def test_expired_flight_remnants_are_cleaned_not_retried(fake):
     # shared set and alert hashes still name the flight.
     fake.lapse(f"live:flight:{fid}", f"live:telemetry:{fid}", f"live:alerts:{fid}")
 
-    restarted = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    restarted = LiveWriter(LOCAL_REDIS_URI)
     assert restarted.planes_for_finalize() == []
     assert fid not in fake.sets.get("live:flights", set())
     assert "a1" not in fake.hashes.get("live:active_alerts", {})
@@ -379,7 +271,7 @@ def test_expired_flight_remnants_are_cleaned_not_retried(fake):
 
 
 def test_redis_error_during_snapshot_does_not_drop_the_flight(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     plane = heading_plane("abc123", time.time())
     fid = f"abc123-{int(plane.track.first_packet)}"
     store.write_live_planes({"ABC123": plane})
@@ -397,7 +289,7 @@ def test_redis_error_during_snapshot_does_not_drop_the_flight(fake):
 
 
 def test_live_telemetry_and_crash_snapshot_keep_gnss_height(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True, telemetry_keep_seconds=0)
+    store = LiveWriter(LOCAL_REDIS_URI, telemetry_keep_seconds=0)
     assert store.claim_engine()
     plane = gnss_then_baro_plane(time.time())
     first = plane.track.first_packet
@@ -408,7 +300,7 @@ def test_live_telemetry_and_crash_snapshot_keep_gnss_height(fake):
     assert "gnss_height" not in points[-1]
     assert any("gnss_height" in p for p in store.get_live_telemetry())
 
-    restarted = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    restarted = LiveWriter(LOCAL_REDIS_URI)
     rebuilt = restarted.plane_for_finalize(fid)
     docs = build_telemetry_docs(rebuilt, fid, "abc123")
     assert docs[0]["gnss_height"] == 10972.8
@@ -420,9 +312,9 @@ def test_live_telemetry_and_crash_snapshot_keep_gnss_height(fake):
 
 def _live_store_with_points(
     count: int, *, memory_only: bool = False
-) -> tuple[RedisLiveStore, str]:
-    store = RedisLiveStore(
-        LOCAL_REDIS_URI, writer=True, memory_only=memory_only, telemetry_keep_seconds=0
+) -> tuple[LiveWriter, str]:
+    store = LiveWriter(
+        LOCAL_REDIS_URI, memory_only=memory_only, telemetry_keep_seconds=0
     )
     store.claim_engine()
     plane = track_plane("abc123", 1_000.0, samples=count)
@@ -511,7 +403,7 @@ def test_live_flight_detail_uses_latest_point_only(fake, monkeypatch):
 
 
 def test_backfill_survives_concurrent_live_writes(fake, monkeypatch):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True, telemetry_keep_seconds=0)
+    store = LiveWriter(LOCAL_REDIS_URI, telemetry_keep_seconds=0)
     assert store.claim_engine()
     for n in range(5):
         store.write_live_planes({f"P{n}": track_plane(f"a{n:05d}", 1_000.0 + n)})
@@ -551,7 +443,7 @@ def test_corrupt_live_doc_is_skipped_after_first_sweep(fake, caplog):
     fake.sets["live:flights"] = {"bad111-1", "noicao-1"}
     fake.kv["live:flight:bad111-1"] = "{not json"
     fake.kv["live:flight:noicao-1"] = '{"info": {}}'
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     with caplog.at_level(logging.WARNING, logger="pyaerial.store.redis"):
         assert store.planes_for_finalize() == []
         fake.calls.clear()
@@ -565,10 +457,8 @@ def test_corrupt_live_doc_is_skipped_after_first_sweep(fake, caplog):
 
 
 def test_unreadable_flight_memory_is_bounded(fake, monkeypatch):
-    import pyaerial.store.redis_live as redis_live
-
-    monkeypatch.setattr(redis_live, "_UNREADABLE_FLIGHTS_MAX", 3)
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    monkeypatch.setattr(recovery, "_UNREADABLE_FLIGHTS_MAX", 3)
+    store = LiveWriter(LOCAL_REDIS_URI)
     for n in range(5):
         fake.kv[f"live:flight:x{n}-1"] = "garbage"
         store.plane_for_finalize(f"x{n}-1")
@@ -579,11 +469,11 @@ def test_unreadable_flight_memory_is_bounded(fake, monkeypatch):
 
 
 def test_live_snapshot_rebuilds_scoreless_verdicts(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True, telemetry_keep_seconds=0)
+    store = LiveWriter(LOCAL_REDIS_URI, telemetry_keep_seconds=0)
     plane = with_unknown_then_ok(track_plane("abc123", time.time()))
     fid = f"abc123-{int(plane.track.first_packet)}"
     store.write_live_planes({"ABC123": plane})
-    restarted = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    restarted = LiveWriter(LOCAL_REDIS_URI)
     rebuilt = restarted.plane_for_finalize(fid)
     verdicts = rebuilt.track.integrity_log
     assert [(v.score, v.status) for v in verdicts] == [(None, "unknown"), (0.9, "ok")]
@@ -599,8 +489,8 @@ def test_live_snapshot_rebuilds_scoreless_verdicts(fake):
 
 @pytest.mark.parametrize("memory_only", [False, True])
 def test_live_telemetry_push_keeps_provenance(fake, memory_only):
-    store = RedisLiveStore(
-        LOCAL_REDIS_URI, writer=True, memory_only=memory_only, telemetry_keep_seconds=0
+    store = LiveWriter(
+        LOCAL_REDIS_URI, memory_only=memory_only, telemetry_keep_seconds=0
     )
     plane = with_unknown_then_ok(track_plane("abc123", time.time()))
     plane.track.integrity_log.append(
@@ -620,7 +510,7 @@ def test_live_telemetry_push_keeps_provenance(fake, memory_only):
     assert points[-1]["integrity_score"] == 0.4
     assert points[-1]["integrity_flags"] == ["aoa"]
     # No verdict yet: the fields stay absent rather than null.
-    bare = RedisLiveStore(LOCAL_REDIS_URI, writer=True, memory_only=True, telemetry_keep_seconds=0)
+    bare = LiveWriter(LOCAL_REDIS_URI, memory_only=True, telemetry_keep_seconds=0)
     bare.write_live_planes({"DEF456": track_plane("def456", time.time())})
     assert "integrity_status" not in bare.get_live_telemetry()[0]
 
@@ -629,7 +519,7 @@ def test_live_telemetry_push_keeps_provenance(fake, memory_only):
 
 
 def test_get_alerts_merges_redis_and_memory_episodes(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     plane = fine_track_plane("abc123", 1_700_000_000.0)
     fid = plane.flight_id
     fake.hashes[f"live:alerts:{fid}"] = {
@@ -654,7 +544,7 @@ def test_get_alerts_merges_redis_and_memory_episodes(fake):
 
 
 def test_writer_raises_instead_of_returning_no_alerts(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     fid = "abc123-1700000000"
     fake.hashes[f"live:alerts:{fid}"] = {
         "a1": alert_doc("a1", fid, active=False, at=1.0)
@@ -688,7 +578,7 @@ def test_writer_raises_instead_of_returning_no_alerts(fake):
 
 
 def test_active_alert_refresh_is_batched_without_reads(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     plane = fine_track_plane("abc123", time.time())
     store.write_live_planes({"ABC123": plane})
     store.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=5.0)
@@ -704,7 +594,7 @@ def test_active_alert_refresh_is_batched_without_reads(fake):
 
 
 def test_deactivation_is_not_overwritten_by_a_pending_refresh(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     plane = fine_track_plane("abc123", time.time())
     store.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=5.0)
     store.update_active_alert(plane, "a1", alert_meta(), {}, 10.0)
@@ -724,7 +614,7 @@ def test_deactivation_is_not_overwritten_by_a_pending_refresh(fake):
 
 
 def test_popped_flight_refresh_is_dropped(fake):
-    store = RedisLiveStore(LOCAL_REDIS_URI, writer=True)
+    store = LiveWriter(LOCAL_REDIS_URI)
     plane = fine_track_plane("abc123", time.time())
     store.record_alert_episode(plane, alert_meta(), {}, alert_id="a1", activated_at=5.0)
     store.update_active_alert(plane, "a1", alert_meta(), {}, 10.0)

@@ -30,7 +30,7 @@ from pyaerial.config.schema import ArchiveConfig
 from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState, Verdict
 from pyaerial.store.archive.writer import FRAME_PRUNE_BATCH
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.live import LiveWriter
 
 # --- Main loop stage isolation ----------------------------------------------
 
@@ -546,13 +546,13 @@ def test_startup_archive_keeps_the_heartbeat_fresh(fake, tmp_path, monkeypatch):
             }
         )
     beats: list[float] = []
-    real_touch = RedisLiveStore.touch_engine
+    real_touch = LiveWriter.touch_engine
 
     def touch(self):
         beats.append(time.monotonic())
         return real_touch(self)
 
-    monkeypatch.setattr(RedisLiveStore, "touch_engine", touch)
+    monkeypatch.setattr(LiveWriter, "touch_engine", touch)
     monkeypatch.setattr(engine_mod, "_STARTUP_HEARTBEAT_INTERVAL", 0.0)
     engine = Engine(pad_config(tmp_path), aircraft_db_path=str(tmp_path / "a.db"))
     try:

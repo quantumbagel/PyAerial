@@ -30,7 +30,7 @@ from pyaerial.api.metrics import (
     render,
 )
 from pyaerial.config.schema import ReceiverConfig
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.live import LiveReader, LiveWriter
 
 # --- A small strict parser for the exposition format --------------------------
 
@@ -189,8 +189,8 @@ class _History:
 
 
 @pytest.fixture
-def store(fake) -> RedisLiveStore:
-    return RedisLiveStore("redis://:hunter2@localhost:6379/0")
+def store(fake) -> LiveReader:
+    return LiveReader("redis://:hunter2@localhost:6379/0")
 
 
 def _scrape(app, **kwargs) -> tuple[str, dict[str, Family]]:
@@ -290,7 +290,7 @@ def test_one_redis_get_per_scrape(fake, store):
 
 
 def test_memory_only_store_uses_engine_seen_at():
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     app = create_app(config=_config(), history=None, live_store=store)
     _text, fams = _scrape(app)
     assert value(fams, "pyaerial_engine_up") == 0

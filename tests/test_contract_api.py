@@ -44,7 +44,7 @@ from pyaerial.constants import (
     STORE_LONG,
 )
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.live import LiveWriter
 from pyaerial.webapp import create_app
 from test_contract_webhook import check_golden
 
@@ -117,7 +117,7 @@ def _plane() -> Plane:
 def _pushed_messages(monkeypatch) -> dict[str, dict]:
     config = make_config()
     config.zones["pad"].rules[0].dwell_seconds = 1
-    store = RedisLiveStore("redis://localhost:1/0", memory_only=True, writer=True)
+    store = LiveWriter("redis://localhost:1/0", memory_only=True)
     engine = AlertEngine(config, build_polygons(config.zones), store)
     plane = _plane()
     motion = ResolvedMotion(heading_deg=0.0, speed_kph=185.2, turn_rate_deg_s=0.0)

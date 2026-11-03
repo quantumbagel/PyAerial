@@ -19,7 +19,7 @@ from pyaerial.api.queries import (
 from pyaerial.enrich.aircraft_db import AircraftDB
 from pyaerial.config.schema import Config
 from pyaerial.store.archive import ArchiveReader
-from pyaerial.store.live import LiveStore
+from pyaerial.store.live import LiveReadStore
 
 _MAX_LIMIT = 200
 _MAX_SKIP = 10_000
@@ -80,7 +80,7 @@ def handle_ws_request(
     *,
     config: Config,
     history: ArchiveReader | None,
-    live_store: LiveStore | None,
+    live_store: LiveReadStore | None,
     aircraft_db: AircraftDB | None,
 ) -> Any:
     if not isinstance(params, dict):

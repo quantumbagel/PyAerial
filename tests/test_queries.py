@@ -13,11 +13,11 @@ from pyaerial.api.queries import (
     get_telemetry,
 )
 from pyaerial.store.archive import HistoryUnavailable
-from pyaerial.store.redis_live import LiveUnavailable, RedisLiveStore
+from pyaerial.store.live import LiveReader, LiveUnavailable, LiveWriter
 
 
 def test_get_stats_reports_store_health_and_engine_heartbeat():
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     stats = get_stats(store, None)
     assert stats["live_flights"] == 0
     assert stats["redis"] is True
@@ -31,13 +31,13 @@ def test_get_stats_reports_store_health_and_engine_heartbeat():
 
 
 def test_reader_skips_redis_backfill():
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=False)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True, writer=False)
     store.client = object()
     store._backfill_redis_from_mem()
 
 
 def test_claim_engine_fails_when_redis_down():
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     store.memory_only = False
     store.client = None
     store._reported_down = True
@@ -46,7 +46,7 @@ def test_claim_engine_fails_when_redis_down():
 
 
 def test_live_queries_hide_flights_when_engine_heartbeat_is_stale():
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     from pyaerial.constants import (
     STORE_LAT,
     STORE_LONG,
@@ -71,7 +71,7 @@ def test_live_queries_hide_flights_when_engine_heartbeat_is_stale():
 
 
 def test_memory_store_claim_engine_succeeds():
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     assert store.claim_engine() is True
     assert store.other_engine_is_live() is False
 
@@ -97,7 +97,7 @@ class _FakeRedis:
 
 
 def _writer_on_fake():
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     store.memory_only = False
     store.client = _FakeRedis()
     store._reported_down = False
@@ -176,11 +176,16 @@ def test_history_queries_error_when_archive_down():
         get_telemetry("x", "history", 0.0, live_store=None, history=down)
 
 
-def test_reader_get_flights_errors_when_redis_down():
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=False)
-    store.memory_only = False
-    store.client = None
-    store._reported_down = True
+@pytest.mark.parametrize("role", ["portal", "maintenance"])
+def test_reader_get_flights_errors_when_redis_down(fake, role):
+    if role == "portal":
+        fake.down = True
+        store = LiveReader("redis://localhost:6379/0")
+    else:  # pyaerial reset's handle
+        store = LiveWriter("redis://localhost:6379/0", memory_only=True, writer=False)
+        store.memory_only = False
+        store.client = None
+        store._reported_down = True
     store._last_connect_attempt = time.monotonic()
     with pytest.raises(LiveUnavailable):
         store.get_flights()
@@ -191,12 +196,12 @@ def test_reader_get_flights_errors_when_redis_down():
 
 
 def test_memory_writer_get_flights_when_redis_down():
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     assert store.get_flights() == []
 
 
 def test_reader_pop_flight_deletes_redis():
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True, writer=False)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True, writer=False)
     store.memory_only = False
     store.client = object()
     store._reported_down = False
@@ -323,10 +328,10 @@ def test_ws_fetch_telemetry_reports_truncation():
     from fastapi.testclient import TestClient
 
     from helpers import make_config
-    from pyaerial.store.redis_live import RedisLiveStore
+    from pyaerial.store.live import LiveWriter
     from pyaerial.webapp import create_app
 
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     store.touch_engine()
     total = queries.DEFAULT_TELEMETRY_POINTS + 10
     store._mem.telemetry["f1"] = [

@@ -12,7 +12,7 @@ from pyaerial.api.queries import (
     get_live_flights,
     get_telemetry,
 )
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.live import LiveWriter
 from pyaerial.webapp import create_app
 
 
@@ -65,7 +65,7 @@ def test_health_and_api(monkeypatch):
 def test_websocket_hello_snapshot_and_subscribe():
     from fastapi.testclient import TestClient
 
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
@@ -120,7 +120,7 @@ def test_subscribe_sends_a_snapshot_of_added_streams():
 
     from fastapi.testclient import TestClient
 
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
@@ -156,7 +156,7 @@ def test_websocket_beast_endpoint_and_publish():
 
     from pyaerial.receivers.frames import BeastParser
 
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
@@ -184,7 +184,7 @@ def test_websocket_beast_endpoint_and_publish():
 def test_websocket_raw_endpoint_and_publish():
     from fastapi.testclient import TestClient
 
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
@@ -211,7 +211,7 @@ def test_websocket_raw_endpoint_and_publish():
 def test_websocket_live_ignores_beast_stream():
     from fastapi.testclient import TestClient
 
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None
     )
@@ -254,7 +254,7 @@ def test_beast_tcp_streams_frames():
     config = make_config()
     config.web.beast_host = "127.0.0.1"
     config.web.beast_port = 0
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     app = create_app(
         config=config, history=None, live_store=store, aircraft_db=None
     )
@@ -336,7 +336,7 @@ def test_websocket_rejects_disallowed_origin():
 def test_ready_uses_live_store_ping():
     from fastapi.testclient import TestClient
 
-    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store = LiveWriter("redis://localhost:6379/0", memory_only=True)
     assert store.ping() is True
     app = create_app(
         config=make_config(), history=None, live_store=store, aircraft_db=None

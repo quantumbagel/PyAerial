@@ -5,7 +5,7 @@ from __future__ import annotations
 from pyaerial.config import load_config
 from pyaerial.config.schema import Config
 from pyaerial.store.archive import ArchiveReader
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.live import LiveReader
 
 
 def open_portal_history(config: Config) -> ArchiveReader:
@@ -17,13 +17,13 @@ def open_portal_history(config: Config) -> ArchiveReader:
     return ArchiveReader(config.database.path)
 
 
-def open_portal_stores(config: Config) -> tuple[ArchiveReader, RedisLiveStore]:
-    return open_portal_history(config), RedisLiveStore(config.database.redis_uri)
+def open_portal_stores(config: Config) -> tuple[ArchiveReader, LiveReader]:
+    return open_portal_history(config), LiveReader(config.database.redis_uri)
 
 
 def connect_stores(
     config_path: str,
-) -> tuple[Config, ArchiveReader, RedisLiveStore]:
+) -> tuple[Config, ArchiveReader, LiveReader]:
     config = load_config(config_path)
     history, live_store = open_portal_stores(config)
     return config, history, live_store

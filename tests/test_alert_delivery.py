@@ -100,7 +100,7 @@ def test_every_hook_carries_one_stable_alert_id(monkeypatch):
 
 
 def test_stored_alert_document_shape_is_unchanged():
-    from pyaerial.store.redis_live import RedisLiveStore
+    from pyaerial.store.live import LiveWriter
 
     plane = Plane(
         info=AircraftInfo(icao="abc123"),
@@ -113,7 +113,7 @@ def test_stored_alert_document_shape_is_unchanged():
         "zone": "z",
         "type": "r",
     }
-    doc = RedisLiveStore._alert_doc(
+    doc = LiveWriter._alert_doc(
         None,
         plane,
         meta,

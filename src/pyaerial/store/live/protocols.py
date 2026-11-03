@@ -1,4 +1,13 @@
-"""Live store interface protocol shared across engine, API, and CLI components."""
+"""What each consumer of the live store depends on.
+
+- :class:`LiveReadStore`: the portal (``api/``); read-only.
+- :class:`EpisodeStore`: the alert engine; records and reads alert episodes.
+- :class:`LiveWriteStore`: the tracking engine; claim, heartbeat, writes and
+  recovery.
+
+:class:`~pyaerial.store.live.reader.LiveReader` implements the first,
+:class:`~pyaerial.store.live.writer.LiveWriter` all three.
+"""
 
 from __future__ import annotations
 
@@ -7,9 +16,10 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from pyaerial.constants import LIVE_ENGINE_TTL_SECONDS
+from pyaerial.models import Plane
 
 
-class LiveStore(Protocol):
+class LiveReadStore(Protocol):
     def get_flights(self) -> list[dict[str, Any]]: ...
 
     def count_flights(self) -> int: ...
@@ -44,21 +54,79 @@ class LiveStore(Protocol):
 
     def engine_is_live(self) -> bool: ...
 
-    def touch_engine(self) -> None: ...
-
-    def clear_engine(self) -> None: ...
-
-    def publish_raw(self, messages: list[dict[str, Any]]) -> None: ...
-
-    def add_raw_listener(
-        self, callback: Callable[[dict[str, Any]], None]
-    ) -> Callable[[], None]: ...
+    def engine_heartbeat(self) -> dict[str, Any] | None: ...
 
     def start_raw_pubsub(
         self, on_payload: Callable[[dict[str, Any]], None]
     ) -> None: ...
 
     def stop_raw_pubsub(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class EpisodeStore(Protocol):
+    def record_alert_episode(
+        self,
+        plane: Plane,
+        meta: dict[str, Any],
+        payload: dict[str, Any],
+        *,
+        alert_id: str,
+        activated_at: float,
+        active: bool = True,
+        deactivated_at: float | None = None,
+    ) -> None: ...
+
+    def update_active_alert(
+        self,
+        plane: Plane,
+        alert_id: str,
+        meta: dict[str, Any],
+        payload: dict[str, Any],
+        timestamp: float,
+    ) -> None: ...
+
+    def get_alerts(
+        self,
+        *,
+        since: float = 0.0,
+        flight_id: str | None = None,
+        rule: str | None = None,
+        active_only: bool = True,
+    ) -> list[dict[str, Any]]: ...
+
+
+class LiveWriteStore(EpisodeStore, Protocol):
+    def ping(self) -> bool: ...
+
+    def claim_engine(self) -> bool: ...
+
+    def ensure_writer(self) -> bool: ...
+
+    def touch_engine(self) -> None: ...
+
+    def clear_engine(self) -> None: ...
+
+    def set_engine_health(self, **fields: Any) -> None: ...
+
+    def write_live_planes(self, planes: dict[str, Plane]) -> None: ...
+
+    def carry_active_alerts(self, old_flight_id: str, new_flight_id: str) -> int: ...
+
+    def publish_raw(self, messages: list[dict[str, Any]]) -> None: ...
+
+    def pop_flight(self, flight_id: str) -> dict[str, Any]: ...
+
+    def retry_pending_pops(self) -> None: ...
+
+    def flight_ids(self) -> set[str]: ...
+
+    def planes_for_finalize(self) -> list[Plane]: ...
+
+    def plane_for_finalize(self, flight_id: str) -> Plane | None: ...
+
+    def stray_active_alerts(self) -> list[dict[str, Any]]: ...
 
     def close(self) -> None: ...
 

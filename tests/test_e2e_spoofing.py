@@ -41,7 +41,7 @@ from integrity_world import HOME, Aircraft, Antenna, World
 from pyaerial.config import load_config
 from pyaerial.engine import Engine
 from pyaerial.integrity import geodesy
-from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.store.live import LiveReader
 
 FACTOR = 8.0
 SKY_SECONDS = 160.0  # generated; the test stops as soon as verdicts settle
@@ -145,7 +145,7 @@ def _run_scenario(tmp_path, monkeypatch) -> dict:
         config = load_config(config_path)
         monkeypatch.setattr(time, "time", FastClock(FACTOR))
         engine = Engine(config, aircraft_db_path=str(tmp_path / "aircraft.db"))
-        reader = RedisLiveStore(config.database.redis_uri)
+        reader = LiveReader(config.database.redis_uri)
         runner = EngineThread(engine).start()
         settled: dict[str, dict] = {}
         try:
