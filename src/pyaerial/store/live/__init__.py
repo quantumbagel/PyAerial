@@ -1,8 +1,10 @@
 """Redis live store: live flights, telemetry rings, alert episodes, the
 engine heartbeat and the raw frame channel.
 
-- :class:`LiveWriter`: the engine (and ``pyaerial reset``); owns the keys,
-  claims ``live:engine``, publishes what it tracks as a cache.
+- :class:`~pyaerial.store.live.writer.LiveWriter`: the engine (and
+  ``pyaerial reset``); owns the keys, claims ``live:engine``, publishes what
+  it tracks as a cache. Import it from its module: the package does not
+  export it, so the portal never loads it.
 - :class:`NullLiveWriter`: an isolated engine's; writes nothing.
 - :class:`LiveReader`: the portal; read-only queries, heartbeat and raw
   subscription.
@@ -20,7 +22,6 @@ from pyaerial.store.live.protocols import (
 )
 from pyaerial.store.live.null import NullLiveWriter
 from pyaerial.store.live.reader import LiveReader
-from pyaerial.store.live.writer import LiveWriter
 
 __all__ = [
     "EpisodeStore",
@@ -28,7 +29,6 @@ __all__ = [
     "LiveReader",
     "LiveUnavailable",
     "LiveWriteStore",
-    "LiveWriter",
     "NullLiveWriter",
     "engine_is_live",
 ]

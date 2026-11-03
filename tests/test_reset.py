@@ -214,7 +214,7 @@ def test_reset_reports_locked_database_cleanly(capsys):
 
 def test_store_engine_is_live_is_tristate(fake):
     from pyaerial.store.live import engine_is_live
-    from pyaerial.store.live import LiveWriter
+    from pyaerial.store.live.writer import LiveWriter
 
     class _Fresh:
         def engine_seen_at(self):

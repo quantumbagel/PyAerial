@@ -14,7 +14,8 @@ from pyaerial.api.queries import (
 )
 from helpers import LOCAL_REDIS_URI
 from pyaerial.store.archive import HistoryUnavailable
-from pyaerial.store.live import LiveReader, LiveUnavailable, LiveWriter
+from pyaerial.store.live import LiveReader, LiveUnavailable
+from pyaerial.store.live.writer import LiveWriter
 
 
 def test_get_stats_reports_store_health_and_engine_heartbeat(fake):

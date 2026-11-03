@@ -6,7 +6,8 @@ import sys
 from typing import Any, Literal
 
 from pyaerial.config import load_config
-from pyaerial.store.archive import ArchiveWriter, HistoryUnavailable
+from pyaerial.store.archive import HistoryUnavailable
+from pyaerial.store.archive.writer import ArchiveWriter
 from pyaerial.store.live import engine_is_live
 from pyaerial.view.store import open_live_session
 

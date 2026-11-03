@@ -14,7 +14,7 @@ from pyaerial.constants import (
     STORE_LONG,
 )
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState, Verdict
-from pyaerial.store.archive import ArchiveWriter
+from pyaerial.store.archive.writer import ArchiveWriter
 
 RULES_ONLY = ArchiveConfig(flights="rules")
 

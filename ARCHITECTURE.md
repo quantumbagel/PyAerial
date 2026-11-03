@@ -47,7 +47,7 @@ pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls | pyaeri
 - `core.py`: `Engine`, the tick loop, stage guards, status line, heartbeat counters, signals, startup and shutdown order; `run_engine`.
 - `supervisor.py`: `ReceiverSupervisor`, receiver threads (start, restart with back-off, stop), the bounded intake queue (sized from `tracking.hz`, drop-oldest), the merge-window hold-back, merge/de-dup, raw publish and raw frame archive.
 - `archiver.py`: `FlightArchiver`, checkpoints, finalize, the archive policy (`retain`), deferred flights and their memory budget, retry back-off and the per-tick budget, startup recovery, segmentation (pure helpers in `segments.py`).
-- `guard.py`: `StageGuard`. `lint-imports` keeps `core` above `supervisor | archiver` (independent of each other) above `segments | guard`. Both components take narrow protocols (`FrameArchive`, `RawPublisher`, `FrameDeduper`; `FlightArchive`, `LiveWriteStore`, `AlertHooks`, `EpisodeLog`), not the `Engine`.
+- `guard.py`: `StageGuard`. `lint-imports` keeps `core` above `supervisor | archiver` (independent of each other) above `segments | guard`. Both components take narrow protocols (`FrameArchive`, `RawPublisher`, `FrameDeduper`; `FlightArchive`, `LiveCache`, `AlertHooks`, `EpisodeLog`), not the `Engine`.
 - Test seams: `Engine.tick()`, `process_frames()`, `expire_planes()`, `log_status(now=)`, `request_stop()`, the `history_store=` argument (a real archive behind `isolated=True`); `supervisor.enqueue(frame)`, `drain()`, `held`, `receivers`, `queue`; `archiver.pending`, `checkpoint(now, force=)`, `defer()`, `clear_pending()`, `retry_now()`, `back_off()`, `max_flight_seconds`. Prefer them to private attributes.
 
 **Threads**
@@ -80,7 +80,7 @@ The live store package `store/live/` (Redis keys in CONFIGURATION.md):
 - `writer.py`: `LiveWriter`, for the engine (and `pyaerial reset` with `writer=False`, which never claims the heartbeat). Claims and refreshes `live:engine`, publishes the tracked flights, telemetry and episodes in one pipeline per tick (deleting flights no longer tracked; everything again after a failure or reconnect), keeps the episode outbox copy, publishes raw frames. It holds nothing recovery needs.
 - `null.py`: `NullLiveWriter`, the isolated engine's (replay, profiling, tests): writes nothing.
 - `reader.py`: `LiveReader`, for the portal. Read-only queries (`_queries.py`, shared with the writer), `engine_heartbeat()`, the `live:raw` subscription; raises `LiveUnavailable` while Redis is down.
-- `keys.py` (key names, TTLs, heartbeat payload), `_conn.py` (client and reconnect backoff), `_reads.py` (Redis queries) and `_raw.py` (raw listeners and subscription) are shared. `lint-imports` keeps the portal's readers from importing any writer.
+- `keys.py` (key names, TTLs, heartbeat payload), `_conn.py` (client and reconnect backoff), `_reads.py` (Redis queries) and `_raw.py` (raw listeners and subscription) are shared. `lint-imports` keeps the portal's readers, and everything `pyaerial.api` / `pyaerial.webapp` import, from reaching a writer: the `store` packages do not re-export `ArchiveWriter` or `LiveWriter`; import them from `store.archive.writer` and `store.live.writer`.
 - `protocols.py`: `LiveReadStore` (api/), `EpisodeStore` (alerts), `LiveWriteStore` (engine).
 
 **Adding a receiver or alerter**

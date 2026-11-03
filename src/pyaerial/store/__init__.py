@@ -1,13 +1,17 @@
-"""Unified persistence layer for PyAerial."""
+"""Unified persistence layer for PyAerial.
 
-from pyaerial.store.archive import ArchiveReader, ArchiveWriter, HistoryUnavailable
-from pyaerial.store.live import LiveReader, LiveUnavailable, LiveWriter
+The package exports only what the read-only portal may use. The engine's
+writers live in their own modules, which the portal never imports:
+:mod:`pyaerial.store.archive.writer` (``ArchiveWriter``) and
+:mod:`pyaerial.store.live.writer` (``LiveWriter``).
+"""
+
+from pyaerial.store.archive import ArchiveReader, HistoryUnavailable
+from pyaerial.store.live import LiveReader, LiveUnavailable
 
 __all__ = [
     "ArchiveReader",
-    "ArchiveWriter",
     "HistoryUnavailable",
     "LiveReader",
     "LiveUnavailable",
-    "LiveWriter",
 ]

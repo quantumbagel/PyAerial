@@ -32,7 +32,8 @@ from pyaerial.models import (
     Verdict,
 )
 from pyaerial.store.codec import alert_episode_doc
-from pyaerial.store.live import LiveUnavailable, LiveWriter, keys
+from pyaerial.store.live import LiveUnavailable, keys
+from pyaerial.store.live.writer import LiveWriter
 
 URI = "redis://user:s3cret@redis.example:6380/0"
 

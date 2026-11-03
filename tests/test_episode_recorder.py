@@ -13,7 +13,8 @@ import pytest
 from helpers import make_config, track_plane
 from pyaerial.constants import STORE_ICAO
 from pyaerial.engine import Engine
-from pyaerial.store.archive import ArchiveReader, ArchiveWriter
+from pyaerial.store.archive import ArchiveReader
+from pyaerial.store.archive.writer import ArchiveWriter
 
 _META = {STORE_ICAO: "abc123", "zone": "pad", "type": "warn"}
 
@@ -173,7 +174,7 @@ def test_outbox_is_bounded_and_counts_drops(engine, monkeypatch):
 
 def test_outbox_is_copied_to_redis_until_archived(fake, tmp_path, monkeypatch):
     from helpers import LOCAL_REDIS_URI
-    from pyaerial.store.live import LiveWriter
+    from pyaerial.store.live.writer import LiveWriter
     from pyaerial.store.recorder import EpisodeRecorder
 
     archive = ArchiveWriter(tmp_path / "a.db")

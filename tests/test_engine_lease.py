@@ -12,7 +12,8 @@ import pytest
 
 from helpers import make_config, track_plane
 from pyaerial.engine import Engine
-from pyaerial.store.archive import ArchiveWriter, LeaseLost
+from pyaerial.store.archive import LeaseLost
+from pyaerial.store.archive.writer import ArchiveWriter
 from pyaerial.store.archive import writer as writer_mod
 from pyaerial.store.archive.writer import FlightCheckpoint
 from pyaerial.store.codec import build_telemetry_docs, flight_row, integrity_rows

@@ -40,7 +40,7 @@ from pyaerial.config.schema import (  # noqa: E402
 from pyaerial.engine import Engine  # noqa: E402
 from pyaerial.engine import archiver as archiver_mod  # noqa: E402
 from pyaerial.receivers.frames import RawFrame  # noqa: E402
-from pyaerial.store import ArchiveWriter  # noqa: E402
+from pyaerial.store.archive.writer import ArchiveWriter  # noqa: E402
 from pyaerial.store.archive import writer as archive_writer  # noqa: E402
 
 archiver_mod.CHECKPOINT_SECONDS = 1.0

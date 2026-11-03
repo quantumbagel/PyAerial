@@ -17,7 +17,8 @@ from helpers import LOCAL_REDIS_URI, alert_meta, track_plane
 from pyaerial.constants import STORE_LAT, STORE_LONG
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 from pyaerial.store.codec import alert_episode_doc
-from pyaerial.store.live import LiveReader, LiveUnavailable, LiveWriter, _conn
+from pyaerial.store.live import LiveReader, LiveUnavailable, _conn
+from pyaerial.store.live.writer import LiveWriter
 from pyaerial.urls import redact_uri
 
 URI = "redis://user:s3cret@redis.example:6380/0"

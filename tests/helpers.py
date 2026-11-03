@@ -32,7 +32,7 @@ from pyaerial.constants import (
 from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, Series, TrackState, Verdict
 from pyaerial.receivers.positions import ReceiverPositions
-from pyaerial.store.archive import ArchiveWriter
+from pyaerial.store.archive.writer import ArchiveWriter
 from pyaerial.store.recorder import EpisodeRecorder
 from pyaerial.tracker import Tracker
 

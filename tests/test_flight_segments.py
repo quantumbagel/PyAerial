@@ -25,7 +25,8 @@ from pyaerial.constants import (
 )
 from pyaerial.engine import Engine
 from pyaerial.models import Verdict
-from pyaerial.store.archive import ArchiveReader, ArchiveWriter
+from pyaerial.store.archive import ArchiveReader
+from pyaerial.store.archive.writer import ArchiveWriter
 
 # --- Flights longer than tracking.max_flight_seconds -------------------------
 

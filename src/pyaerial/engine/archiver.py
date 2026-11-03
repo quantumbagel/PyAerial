@@ -28,7 +28,6 @@ from pyaerial.store.archive import HistoryUnavailable
 from pyaerial.store.archive.schema import LIFECYCLE_SCHEMA_VERSION
 from pyaerial.store.archive.writer import FlightCheckpoint
 from pyaerial.store.codec import build_telemetry_docs, integrity_rows, plane_from_rows
-from pyaerial.store.live import LiveWriteStore
 
 log = logging.getLogger("pyaerial.engine")
 
@@ -132,9 +131,11 @@ def _flight_id_plane(flight_id: str, callsign: str) -> Plane | None:
 
 
 class FlightArchive(Protocol):
-    """The flight side of :class:`~pyaerial.store.ArchiveWriter`."""
+    """The flight side of :class:`~pyaerial.store.archive.writer.ArchiveWriter`."""
 
     disabled: bool
+    #: Schema version the file had when first opened (None: not opened yet).
+    schema_found: int | None
 
     def ping(self) -> bool: ...
 
@@ -169,10 +170,13 @@ class FlightArchive(Protocol):
     def discard_flight(self, flight_id: str) -> bool: ...
 
 
-class _EpisodeCloser(Protocol):
-    def close_restored(
-        self, plane: Plane, doc: Mapping[str, Any], *, now: float | None = None
-    ) -> None: ...
+class LiveCache(Protocol):
+    """What the archiver needs from the live store: the heartbeat during long
+    startup work, and dropping a previous process's cache."""
+
+    def touch_engine(self) -> None: ...
+
+    def clear_cache(self) -> int: ...
 
 
 class EpisodeLog(Protocol):
@@ -196,10 +200,9 @@ class EpisodeLog(Protocol):
 class AlertHooks(Protocol):
     """What the archiver needs from the pipeline (``PlaneCalculator``)."""
 
-    @property
-    def alerts(self) -> _EpisodeCloser: ...
-
     def deactivate_plane(self, plane: Plane) -> None: ...
+
+    def close_restored(self, plane: Plane, doc: Mapping[str, Any]) -> None: ...
 
     def handover(self, plane: Plane, old_flight_id: str, new_flight_id: str) -> None: ...
 
@@ -231,7 +234,7 @@ class FlightArchiver:
         guard: StageGuard,
         *,
         archive: FlightArchive,
-        live: LiveWriteStore,
+        live: LiveCache,
         alerts: AlertHooks,
         tracked: Callable[[], Mapping[str, Plane]],
         episodes: EpisodeLog | None = None,
@@ -553,7 +556,7 @@ class FlightArchiver:
         stale = 0
         with self._guard("live cache"):
             stale = self._live.clear_cache()
-        found = getattr(self._archive, "schema_found", None)
+        found = self._archive.schema_found
         if stale and found is not None and found < LIFECYCLE_SCHEMA_VERSION:
             log.warning(
                 "Discarded %d live flight(s) a pre-1.0 PyAerial left in Redis "
@@ -613,7 +616,7 @@ class FlightArchiver:
                     continue
                 planes[flight_id] = plane
                 try:
-                    self._alerts.alerts.close_restored(plane, doc)
+                    self._alerts.close_restored(plane, doc)
                 except Exception:
                     self._guard.failed("restart alert")
                     unclosed.add(flight_id)

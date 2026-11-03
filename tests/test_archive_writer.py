@@ -27,7 +27,8 @@ from pyaerial.constants import (
 from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState, Verdict
 from pyaerial.receivers.frames import RawFrame
-from pyaerial.store.archive import ArchiveReader, ArchiveWriter, HistoryUnavailable
+from pyaerial.store.archive import ArchiveReader, HistoryUnavailable
+from pyaerial.store.archive.writer import ArchiveWriter
 from pyaerial.store.codec import build_telemetry_docs
 
 

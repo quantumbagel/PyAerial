@@ -17,7 +17,8 @@ from helpers import (
     with_unknown_then_ok,
 )
 from pyaerial.receivers.frames import RawFrame
-from pyaerial.store.archive import ArchiveReader, ArchiveWriter, schema
+from pyaerial.store.archive import ArchiveReader, schema
+from pyaerial.store.archive.writer import ArchiveWriter
 
 # --- Schema migration -------------------------------------------------------
 

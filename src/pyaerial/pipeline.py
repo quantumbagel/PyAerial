@@ -11,6 +11,7 @@ import logging
 import queue
 import threading
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from shapely import Polygon
@@ -130,6 +131,11 @@ class PlaneCalculator:
         ICAO and simply carry on.
         """
         self.alerts.handover(plane, old_flight_id, new_flight_id)
+
+    def close_restored(self, plane: Plane, doc: Mapping[str, Any]) -> None:
+        """Close an episode a previous engine process left open; see
+        :meth:`AlertEngine.close_restored`."""
+        self.alerts.close_restored(plane, doc)
 
     def forget_motion(self, icao: str) -> None:
         self.kinematics.forget(icao)

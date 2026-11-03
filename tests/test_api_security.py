@@ -23,7 +23,7 @@ from pyaerial.api.security import (
     origin_allowed,
 )
 from pyaerial.store.archive import HistoryUnavailable
-from pyaerial.store.live import LiveWriter
+from pyaerial.store.live.writer import LiveWriter
 from pyaerial.webapp import uvicorn_options
 
 

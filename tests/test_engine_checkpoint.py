@@ -13,7 +13,8 @@ from helpers import make_config, make_plane, track_plane, with_unknown_then_ok
 from pyaerial.config.schema import ArchiveConfig
 from pyaerial.engine import Engine
 from pyaerial.engine import archiver as archiver_mod
-from pyaerial.store.archive import ArchiveReader, ArchiveWriter
+from pyaerial.store.archive import ArchiveReader
+from pyaerial.store.archive.writer import ArchiveWriter
 
 
 @pytest.fixture

@@ -273,7 +273,7 @@ def main() -> int:
     import pyaerial.enrich.aircraft_db as aircraft_db_mod
     from pyaerial.engine import Engine
     from pyaerial.engine.archiver import CHECKPOINT_SECONDS
-    from pyaerial.store import ArchiveWriter
+    from pyaerial.store.archive.writer import ArchiveWriter
 
     def _offline(*_a, **_k):
         raise requests.ConnectionError("profiling: network disabled")

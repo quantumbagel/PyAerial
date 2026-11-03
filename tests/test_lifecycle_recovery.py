@@ -21,7 +21,8 @@ from pyaerial.config.schema import AlertActionConfig, ArchiveConfig, ZoneConfig
 from pyaerial.constants import STORE_ICAO
 from pyaerial.engine import Engine
 from pyaerial.engine import archiver as archiver_mod
-from pyaerial.store.archive import ArchiveReader, ArchiveWriter
+from pyaerial.store.archive import ArchiveReader
+from pyaerial.store.archive.writer import ArchiveWriter
 from pyaerial.store.archive.writer import FlightCheckpoint
 from pyaerial.store.codec import build_telemetry_docs, flight_row, integrity_rows
 

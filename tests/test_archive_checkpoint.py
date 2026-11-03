@@ -7,7 +7,8 @@ import sqlite3
 
 from helpers import track_plane, with_unknown_then_ok
 from pyaerial.constants import STORE_LAT
-from pyaerial.store.archive import ArchiveReader, ArchiveWriter
+from pyaerial.store.archive import ArchiveReader
+from pyaerial.store.archive.writer import ArchiveWriter
 from pyaerial.store.archive.rows import flight_from_row, telemetry_from_row
 from pyaerial.store.archive.writer import FlightCheckpoint
 from pyaerial.store.codec import (

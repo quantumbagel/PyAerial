@@ -219,7 +219,7 @@ def test_one_bad_plane_does_not_stop_alerting_for_others(caplog):
 
 
 def test_registration_reaches_plane_info_and_live_summary(fake):
-    from pyaerial.store.live import LiveWriter
+    from pyaerial.store.live.writer import LiveWriter
 
     class _Db:
         available = True

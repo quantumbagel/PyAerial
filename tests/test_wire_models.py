@@ -73,8 +73,9 @@ from pyaerial.constants import (
 )
 from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
-from pyaerial.store.archive import ArchiveReader, ArchiveWriter
-from pyaerial.store.live import LiveWriter
+from pyaerial.store.archive import ArchiveReader
+from pyaerial.store.archive.writer import ArchiveWriter
+from pyaerial.store.live.writer import LiveWriter
 from pyaerial.webapp import create_app
 
 ROOT = Path(__file__).resolve().parent.parent

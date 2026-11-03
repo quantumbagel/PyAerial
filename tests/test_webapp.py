@@ -12,7 +12,7 @@ from pyaerial.api.queries import (
     get_live_flights,
     get_telemetry,
 )
-from pyaerial.store.live import LiveWriter
+from pyaerial.store.live.writer import LiveWriter
 from pyaerial.webapp import create_app
 
 

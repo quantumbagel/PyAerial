@@ -181,6 +181,21 @@ forbidden_modules = [
     "pyaerial.store.recorder",
 ]
 
+[[tool.importlinter.contracts]]
+name = "The portal never loads a writer"
+type = "forbidden"
+# `pyaerial web` opens Redis and the archive read-only: no import chain from
+# the API or the web app reaches the engine's writers (the store packages do
+# not re-export them; the engine imports them from their modules).
+source_modules = [
+    "pyaerial.api",
+    "pyaerial.webapp",
+]
+forbidden_modules = [
+    "pyaerial.store.archive.writer",
+    "pyaerial.store.live.writer",
+]
+
 [tool.mypy]
 # Unannotated functions are type-checked too (check_untyped_defs), though
 # missing annotations are not errors yet; third-party packages without stubs

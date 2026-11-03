@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from pyaerial.store.live import LiveWriter
+from pyaerial.store.live.writer import LiveWriter
 from pyaerial.urls import redact_uri
 
 log = logging.getLogger("pyaerial.view")

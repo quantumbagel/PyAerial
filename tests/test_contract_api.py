@@ -44,7 +44,7 @@ from pyaerial.constants import (
     STORE_LONG,
 )
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
-from pyaerial.store.live import LiveWriter
+from pyaerial.store.live.writer import LiveWriter
 from pyaerial.webapp import create_app
 from test_contract_webhook import check_golden
 

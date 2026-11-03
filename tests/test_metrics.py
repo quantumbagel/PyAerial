@@ -30,7 +30,8 @@ from pyaerial.api.metrics import (
     render,
 )
 from pyaerial.config.schema import ReceiverConfig
-from pyaerial.store.live import LiveReader, LiveWriter
+from pyaerial.store.live import LiveReader
+from pyaerial.store.live.writer import LiveWriter
 
 # --- A small strict parser for the exposition format --------------------------
 

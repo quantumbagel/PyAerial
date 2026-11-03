@@ -31,7 +31,7 @@ from pyaerial.constants import (
 from pyaerial.engine import Engine
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
 from pyaerial.store.archive import ArchiveReader, HistoryUnavailable
-from pyaerial.store.live import LiveWriter
+from pyaerial.store.live.writer import LiveWriter
 
 # --- Engine restarts and crashes ---------------------------------------------
 # Episodes left active by a crashed or stopped engine are closed exactly once.

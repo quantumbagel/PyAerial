@@ -31,7 +31,8 @@ from pyaerial.constants import (
     STORE_LONG,
 )
 from pyaerial.models import AircraftInfo, Datum, Plane, TrackState
-from pyaerial.store.archive import ArchiveReader, ArchiveWriter, HistoryUnavailable
+from pyaerial.store.archive import ArchiveReader, HistoryUnavailable
+from pyaerial.store.archive.writer import ArchiveWriter
 
 
 def _plane(*, icao: str = "abc123", callsign: str = "SWA123"):
