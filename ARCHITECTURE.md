@@ -4,22 +4,22 @@ Internals for contributors. Users start at the [README](README.md).
 
 **Processes**
 
-- `pyaerial run` (engine, `engine.py`) is the only writer of Redis and the SQLite archive. At start it claims the `live:engine` heartbeat; a second engine refuses to start, and an engine that loses the heartbeat yields.
+- `pyaerial run` (engine, `engine/`) is the only writer of Redis and the SQLite archive. At start it claims the `live:engine` heartbeat; a second engine refuses to start, and an engine that loses the heartbeat yields.
 - `pyaerial web` (portal, `webapp.py` and `api/`) reads Redis and opens the archive read-only. It never tracks.
 
 **Pipeline**
 
-`Engine._tick` runs `tracking.hz` times a second:
+`Engine.tick` (`engine/core.py`) runs `tracking.hz` times a second:
 
-1. Drain the receiver intake queue and hold back copies that may still merge.
+1. Drain the receiver intake queue and hold back copies that may still merge (`ReceiverSupervisor.drain`).
 2. `IntegrityMonitor.observe_frames` sees every receiver copy, as does the raw frame archive (`archive.raw_frames`).
 3. Merge copies, drop duplicates and CRC failures, publish to `live:raw`.
 4. `Tracker.ingest` decodes and updates `tracker.planes`.
 5. `IntegrityMonitor.evaluate` scores aircraft. `PlaneCalculator.calculate_all` (`pipeline.py`) runs kinematics, enrichment and the alert engine.
 6. Write live state and the heartbeat to Redis.
-7. Expire idle aircraft, split long flights, retry deferred archive work.
+7. Expire idle aircraft, split long flights, retry deferred archive work (`FlightArchiver`).
 
-Each stage runs under `Engine._guard`: an exception is logged (one traceback per stage per interval), counted in `counters.stage_errors`, and the tick continues.
+Each stage runs under a `StageGuard` (`engine/guard.py`, one instance shared by the engine, supervisor and archiver): an exception is logged (one traceback per stage per interval), counted in `counters.stage_errors`, and the tick continues.
 
 **Layers**
 
@@ -42,6 +42,14 @@ pyaerial.models | pyaerial.logging_setup
 pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls | pyaerial.plugins
 ```
 
+**Engine package**
+
+- `core.py`: `Engine`, the tick loop, stage guards, status line, heartbeat counters, signals, startup and shutdown order; `run_engine`.
+- `supervisor.py`: `ReceiverSupervisor`, receiver threads (start, restart with back-off, stop), the bounded intake queue (sized from `tracking.hz`, drop-oldest), the merge-window hold-back, merge/de-dup, raw publish and raw frame archive.
+- `archiver.py`: `FlightArchiver`, finalize and persist, the archive policy (`retain`), deferred flights and their memory budget, retry back-off and the per-tick budget, the orphan sweep, startup recovery, segmentation (pure helpers in `segments.py`).
+- `guard.py`: `StageGuard`. `lint-imports` keeps `core` above `supervisor | archiver` (independent of each other) above `segments | guard`. Both components take narrow protocols (`FrameArchive`, `RawPublisher`, `FrameDeduper`; `FlightArchive`, `LiveWriteStore`, `AlertHooks`), not the `Engine`.
+- Test seams: `Engine.tick()`, `process_frames()`, `expire_planes()`, `log_status(now=)`, `request_stop()`, the `history_store=` argument; `supervisor.enqueue(frame)`, `drain()`, `held`, `receivers`, `queue`; `archiver.pending`, `defer()`, `clear_pending()`, `retry_now()`, `back_off()`, `max_flight_seconds`. Prefer them to private attributes.
+
 **Threads**
 
 - The tick loop (main thread) owns `tracker.planes`.
@@ -53,12 +61,12 @@ pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls | pyaeri
 
 **Persistence and recovery**
 
-A finished flight is written to the archive before its Redis copy is popped (`_finalize_plane`, then `_archive_and_pop`), so a SQLite outage cannot lose it. Recovery paths in `engine.py`:
+A finished flight is written to the archive before its Redis copy is popped (`FlightArchiver.finalize`, then `_archive_and_pop`), so a SQLite outage cannot lose it. Recovery paths in `engine/archiver.py`:
 
-- `_retry_pending_finalizes`: flights that failed to archive wait in memory (bounded; overflow counted as `pending_evicted`) and are retried with backoff.
-- `_archive_startup_live_flights`: archives live flights a previous engine left in Redis.
-- `_close_stray_active_alerts`: closes active alerts whose flight never reached Redis (`ended_by: restart`).
-- `_retry_orphan_live_flights`: each tick, archives Redis flights nobody tracks.
+- `retry_pending`: flights that failed to archive wait in memory (bounded; overflow counted as `pending_evicted`) and are retried with backoff.
+- `recover_on_startup` (`_archive_startup_live_flights`): archives live flights a previous engine left in Redis.
+- `recover_on_startup` (`_close_stray_active_alerts`): closes active alerts whose flight never reached Redis (`ended_by: restart`).
+- `sweep_orphans`: each tick, archives Redis flights nobody tracks.
 - `LiveWriter.retry_pending_pops`: retries failed Redis deletes.
 
 The archive package `store/archive/`:

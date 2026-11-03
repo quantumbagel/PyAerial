@@ -47,7 +47,7 @@ def _plane(*, icao: str = "abc123", callsign: str = "SWA123"):
 
 
 def _store(tmp_path, **kwargs) -> ArchiveWriter:
-    # The archive policy is decided by the engine (Engine._retain); the store
+    # The archive policy is decided by the engine (FlightArchiver.retain); the store
     # writes what it is told.
     return ArchiveWriter(tmp_path / "pyaerial.db", **kwargs)
 
@@ -148,8 +148,8 @@ def test_snapshot_finalize_keeps_uninteresting_track(tmp_path):
         aircraft_db_path=str(tmp_path / "aircraft.db"),
     )
     try:
-        assert engine._retain(_plane(), [], from_snapshot=False) is False
-        assert engine._retain(_plane(), [], from_snapshot=True) is True
+        assert engine.archiver.retain(_plane(), [], from_snapshot=False) is False
+        assert engine.archiver.retain(_plane(), [], from_snapshot=True) is True
     finally:
         engine.shutdown()
     store = _store(tmp_path)

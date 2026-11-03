@@ -37,11 +37,14 @@ def test_long_flight_is_archived_as_a_segment_and_tracking_continues(
     tmp_path, monkeypatch
 ):
     config = pad_config(tmp_path)
-    engine = Engine(config, isolated=True, aircraft_db_path=str(tmp_path / "a.db"))
     store = ArchiveWriter(config.database.path)
     reader = ArchiveReader(config.database.path)
-    real_history = engine.history_store
-    engine.history_store = store
+    engine = Engine(
+        config,
+        isolated=True,
+        aircraft_db_path=str(tmp_path / "a.db"),
+        history_store=store,
+    )
     notifications: list[str] = []
     monkeypatch.setattr(
         AlertEngine,
@@ -55,7 +58,7 @@ def test_long_flight_is_archived_as_a_segment_and_tracking_continues(
         lambda plane, ended_by=None: deactivations.append(1),
     )
     try:
-        engine._max_flight_seconds = 3_600.0
+        engine.archiver.max_flight_seconds = 3_600.0
         now = 1_800_000_000.0
         first = now - 2 * 3_600
         plane = fine_track_plane("abc123", first, samples=721, step=10.0)  # 2 h at 10 s
@@ -70,7 +73,7 @@ def test_long_flight_is_archived_as_a_segment_and_tracking_continues(
             plane, alert_meta(), {}, alert_id="a1", activated_at=first + 100
         )
 
-        engine._split_long_flights()
+        engine.archiver.split_long_flights()
 
         # Segment 1 is archived whole.
         assert len(reader.get_telemetry(old_fid)) == 721
@@ -95,13 +98,12 @@ def test_long_flight_is_archived_as_a_segment_and_tracking_continues(
             == first + 100
         )
         # Not split again while it is short.
-        engine._split_long_flights()
+        engine.archiver.split_long_flights()
         assert engine.tracker.planes["ABC123"].flight_id == new_fid
     finally:
-        engine.history_store = real_history
+        engine.shutdown()
         reader.close()
         store.close()
-        engine.shutdown()
 
 
 def test_max_flight_seconds_zero_disables_segmentation(tmp_path):
@@ -109,10 +111,10 @@ def test_max_flight_seconds_zero_disables_segmentation(tmp_path):
         make_config(), isolated=True, aircraft_db_path=str(tmp_path / "a.db")
     )
     try:
-        engine._max_flight_seconds = 0.0
+        engine.archiver.max_flight_seconds = 0.0
         plane = fine_track_plane("abc123", 0.0, samples=3, step=40_000.0)
         engine.tracker.planes["ABC123"] = plane
-        engine._split_long_flights()
+        engine.archiver.split_long_flights()
         assert engine.tracker.planes["ABC123"] is plane
         assert plane.flight_id == "abc123-0"
     finally:
@@ -125,7 +127,7 @@ def test_max_flight_seconds_reads_the_config(tmp_path):
     )
     try:
         expected = getattr(engine.config.tracking, "max_flight_seconds", 14_400.0)
-        assert engine._max_flight_seconds == expected
+        assert engine.archiver.max_flight_seconds == expected
     finally:
         engine.shutdown()
 
@@ -154,12 +156,15 @@ def _split_setup(tmp_path, monkeypatch, *, retain: bool = True, archive=None):
     )
     config.database.path = str(tmp_path / "pyaerial.db")
     monkeypatch.setattr(AlertEngine, "_run_actions", lambda self, *a, **k: None)
-    engine = Engine(config, isolated=True, aircraft_db_path=str(tmp_path / "a.db"))
     store = ArchiveWriter(config.database.path)
     reader = ArchiveReader(config.database.path)
-    real = engine.history_store
-    engine.history_store = store
-    engine._max_flight_seconds = 3_600.0
+    engine = Engine(
+        config,
+        isolated=True,
+        aircraft_db_path=str(tmp_path / "a.db"),
+        history_store=store,
+    )
+    engine.archiver.max_flight_seconds = 3_600.0
     now = time.time()
     first = now - 7_200
     plane = pad_plane(first)
@@ -167,11 +172,10 @@ def _split_setup(tmp_path, monkeypatch, *, retain: bool = True, archive=None):
     engine.live_store.write_live_planes(engine.tracker.planes)
 
     def cleanup():
-        engine.history_store = real
+        engine.archiver.clear_pending()
+        engine.shutdown()
         reader.close()
         store.close()
-        engine._pending_finalize.clear()
-        engine.shutdown()
 
     return engine, reader, plane, first, cleanup
 
@@ -213,7 +217,7 @@ def test_segment_is_archived_when_an_alert_step_fails(tmp_path, monkeypatch, bro
             monkeypatch.setattr(engine.calculator, "handover", boom)
         else:
             monkeypatch.setattr(engine.live_store, "carry_active_alerts", boom)
-        engine._split_long_flights()
+        engine.archiver.split_long_flights()
         assert len(reader.get_telemetry(old)) == 721
         assert engine.tracker.planes["ABC123"].flight_id != old
     finally:
@@ -225,8 +229,8 @@ def test_segment_is_kept_for_retry_when_the_archive_fails(tmp_path, monkeypatch)
     try:
         old = plane.flight_id
         monkeypatch.setattr(engine.history_store, "finalize_plane", lambda *a, **k: False)
-        engine._split_long_flights()
-        pending = engine._pending_finalize[old]
+        engine.archiver.split_long_flights()
+        pending = engine.archiver.pending[old]
         assert len(pending.received_data[STORE_LAT]) == 721
         assert old in engine.live_store.flight_ids()  # live copy not popped
     finally:
@@ -234,7 +238,7 @@ def test_segment_is_kept_for_retry_when_the_archive_fails(tmp_path, monkeypatch)
 
 
 def test_segment_is_archived_when_trimming_the_live_plane_fails(tmp_path, monkeypatch):
-    import pyaerial.engine as engine_mod
+    import pyaerial.engine.segments as segments_mod
 
     engine, reader, plane, _first, cleanup = _split_setup(tmp_path, monkeypatch)
     try:
@@ -243,8 +247,8 @@ def test_segment_is_archived_when_trimming_the_live_plane_fails(tmp_path, monkey
         def broken_trim(*_a, **_k):
             raise RuntimeError("trim bug")
 
-        monkeypatch.setattr(engine_mod.Engine, "_start_new_segment", broken_trim)
-        engine._split_long_flights()
+        monkeypatch.setattr(segments_mod, "start_new_segment", broken_trim)
+        engine.archiver.split_long_flights()
         assert len(reader.get_telemetry(old)) == 721
     finally:
         cleanup()
@@ -260,7 +264,7 @@ def test_old_segment_keeps_the_episode_and_its_retain_evidence(tmp_path, monkeyp
     )
     try:
         old = _activate_in_pad(engine, plane, first)
-        engine._split_long_flights()
+        engine.archiver.split_long_flights()
         assert reader.get_flight(old) is not None
         assert [a["alert_id"] for a in reader.get_alerts(flight_id=old)] == ["A1"]
         # The live episode continues on the new flight, start time unchanged.
@@ -279,10 +283,10 @@ def test_discarded_continuation_still_updates_the_episode_row(tmp_path, monkeypa
     )
     try:
         old = _activate_in_pad(engine, plane, first)
-        engine._split_long_flights()
+        engine.archiver.split_long_flights()
         new = engine.tracker.planes["ABC123"].flight_id
         # Goes silent right after the split: one sample, below min_positions.
-        engine._expire_planes(time.time() + 10_000)
+        engine.expire_planes(time.time() + 10_000)
         assert reader.get_flight(new) is None
         rows = (
             sqlite3.connect(reader.path)
@@ -305,9 +309,9 @@ def test_retained_continuation_moves_the_row_to_the_final_segment(
     )
     try:
         _activate_in_pad(engine, plane, first)
-        engine._split_long_flights()
+        engine.archiver.split_long_flights()
         new = engine.tracker.planes["ABC123"].flight_id
-        engine._expire_planes(time.time() + 10_000)
+        engine.expire_planes(time.time() + 10_000)
         rows = (
             sqlite3.connect(reader.path)
             .execute("SELECT alert_id, flight_id FROM alerts")
@@ -364,9 +368,9 @@ def test_re_recording_an_active_episode_keeps_last_updated(fake):
 def test_track_started_is_set_once_and_kept_across_splits(tmp_path, monkeypatch):
     engine, _store, plane, first, cleanup = _split_setup(tmp_path, monkeypatch)
     try:
-        engine._mark_track_started()
+        engine.process_frames([])  # marks track starts
         assert plane.track.track_started == first
-        engine._split_long_flights()
+        engine.archiver.split_long_flights()
         live = engine.tracker.planes["ABC123"]
         assert live.track.first_packet > first
         assert live.track.track_started == first
@@ -386,10 +390,10 @@ def test_engine_marks_track_started_for_new_planes(tmp_path, monkeypatch):
             position_frame("abc123", 35.72, -78.69, 300.0, 0),
             position_frame("abc123", 35.7201, -78.6901, 300.0, 1),
         ]
-        engine._process_frames([])  # no planes yet: nothing to mark
+        engine.process_frames([])  # no planes yet: nothing to mark
         from pyaerial.receivers.frames import RawFrame
 
-        engine._process_frames(
+        engine.process_frames(
             [
                 RawFrame(hex=hx, timestamp=t + n * 0.4, receiver="a")
                 for n, hx in enumerate(frames)
@@ -408,7 +412,7 @@ def test_new_segment_is_live_before_the_old_one_is_popped(tmp_path, monkeypatch)
     engine, _store, plane, _first, cleanup = _split_setup(tmp_path, monkeypatch)
     try:
         old = plane.flight_id
-        engine._split_long_flights()
+        engine.archiver.split_long_flights()
         new = engine.tracker.planes["ABC123"].flight_id
         ids = engine.live_store.flight_ids()
         assert new in ids and old not in ids
@@ -430,7 +434,7 @@ def test_stale_last_position_does_not_overlap_segments(tmp_path, monkeypatch):
         recv[STORE_LONG] = recv[STORE_LONG][:10]
         internal.last_update = first + 7_200
         old = plane.flight_id
-        engine._split_long_flights()
+        engine.archiver.split_long_flights()
         live = engine.tracker.planes["ABC123"]
         assert live.track.first_packet == first + 7_200
         assert not live.received_data.get(STORE_LAT)

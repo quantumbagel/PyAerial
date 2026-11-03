@@ -667,7 +667,9 @@ def test_persist_defers_when_alerts_cannot_be_read(fake, tmp_path, monkeypatch):
 
         monkeypatch.setattr(engine.live_store, "get_alerts", unreadable)
         assert (
-            engine._persist(fid, fine_track_plane("abc123", 1_700_000_000.0), from_snapshot=True)
+            engine.archiver.finalize(
+                fine_track_plane("abc123", 1_700_000_000.0), from_snapshot=True
+            )
             is False
         )
         with contextlib.closing(ArchiveReader(engine.history_store.path)) as archive:

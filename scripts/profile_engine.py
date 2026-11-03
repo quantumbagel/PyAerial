@@ -4,7 +4,7 @@
 Builds a sky of genuine aircraft heard by several receivers (valid CRCs, real
 CPR positions, velocity, identification, operational status and Mode S
 replies, light-time and per-antenna 12 MHz clocks), then drives
-``Engine._tick`` in isolated mode (no Redis, no SQLite, no receiver threads)
+``Engine.tick`` in isolated mode (no Redis, no SQLite, no receiver threads)
 on a simulated clock: each tick advances ``time.time()`` by ``1 / hz``.
 
 Reports per-stage time per tick, whether the tick budget holds, and the
@@ -204,16 +204,17 @@ def build(aircraft: int, receivers: int, hz: float, seed: int):
 # --- driver --------------------------------------------------------------------------
 
 
+# "drain" includes the merge-window hold-back (ReceiverSupervisor.drain).
 _STAGES = {
-    "drain": ("engine", "_drain_messages"),
+    "drain": ("supervisor", "drain"),
     "integrity.observe_frames": ("integrity", "observe_frames"),
-    "merge/dedup": ("engine", "_outgoing_frames"),
-    "raw publish": ("engine", "_publish_raw"),
+    "merge/dedup": ("supervisor", "merge"),
+    "raw publish": ("supervisor", "publish_raw"),
     "tracker.ingest": ("tracker", "ingest"),
     "integrity.evaluate": ("integrity", "evaluate"),
     "calculator.calculate_all": ("calculator", "calculate_all"),
     "live_store.write_live_planes": ("live_store", "write_live_planes"),
-    "expiry/archive": ("engine", "_expire_planes"),
+    "expiry/archive": ("engine", "expire_planes"),
 }
 
 
@@ -221,6 +222,7 @@ def _instrument(engine, timings: dict[str, list[float]]) -> dict[str, float]:
     current: dict[str, float] = defaultdict(float)
     owners = {
         "engine": engine,
+        "supervisor": engine.supervisor,
         "integrity": engine.integrity,
         "tracker": engine.tracker,
         "calculator": engine.calculator,
@@ -283,12 +285,7 @@ def main() -> int:
     timings: dict[str, list[float]] = defaultdict(list)
     current = _instrument(engine, timings)
     totals: list[float] = []
-    dropped = [0]
-
-    def _count_drops(count: int) -> None:
-        dropped[0] += count
-
-    engine._note_dropped = _count_drops
+    dropped = 0
     frames_in = 0
     profiler = cProfile.Profile() if not args.no_profile else None
     processed = 0
@@ -303,23 +300,18 @@ def main() -> int:
             frames_in += len(frames)
             for frame in frames:
                 # The receivers' path: drop-oldest when the bounded queue is full.
-                engine._enqueue_message(
-                    frame.hex,
-                    frame.timestamp,
-                    frame.receiver,
-                    rssi=frame.rssi,
-                    clock=frame.clock,
-                )
+                engine.supervisor.enqueue(frame)
             current.clear()
             start = time.perf_counter()
             if profiler is not None:
                 profiler.enable()
-            processed += engine._tick()
+            processed += engine.tick()
             if profiler is not None:
                 profiler.disable()
             totals.append(time.perf_counter() - start)
             for stage in _STAGES:
                 timings[stage].append(current.get(stage, 0.0))
+        dropped = engine.supervisor.counters()["frames_dropped"]
         tracked = len(engine.tracker.planes)
         positions = sum(
             1 for plane in engine.tracker.planes.values() if plane.received_data.get("latitude")
@@ -339,10 +331,10 @@ def main() -> int:
         f"{processed / args.seconds:,.0f} msgs/s ingested, "
         f"{tracked} planes tracked ({positions} with positions)"
     )
-    if dropped[0]:
+    if dropped:
         print(
-            f"WARNING: engine message queue overflowed; {dropped[0]:,} frames "
-            f"({dropped[0] / frames_in:.1%}) dropped"
+            f"WARNING: engine message queue overflowed; {dropped:,} frames "
+            f"({dropped / frames_in:.1%}) dropped"
         )
     print(
         f"(cProfile overhead included: {'yes' if profiler else 'no'}; "

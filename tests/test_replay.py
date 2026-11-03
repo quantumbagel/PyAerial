@@ -261,6 +261,7 @@ def test_replay_example_tracks_every_aircraft_as_genuine(tmp_path, monkeypatch):
     every aircraft is tracked and none is flagged by the integrity checks."""
     import pyaerial.enrich.aircraft_db as aircraft_db
     from pyaerial.engine import Engine
+    from pyaerial.receivers.frames import RawFrame
 
     def offline(*_args, **_kwargs):
         raise requests.ConnectionError("offline test")
@@ -285,10 +286,12 @@ def test_replay_example_tracks_every_aircraft_as_genuine(tmp_path, monkeypatch):
             while index < len(frames) and start + frames[index].stamp <= clock["now"]:
                 frame = frames[index]
                 index += 1
-                engine._enqueue_message(
-                    frame.hex, start + frame.stamp, "recorded", clock=frame.clock
+                engine.supervisor.enqueue(
+                    RawFrame(
+                        frame.hex, start + frame.stamp, "recorded", clock=frame.clock
+                    )
                 )
-            engine._tick()
+            engine.tick()
             for icao, plane in engine.tracker.planes.items():
                 status = (plane.info.integrity or {}).get("status")
                 if status in ("suspect", "spoofed"):

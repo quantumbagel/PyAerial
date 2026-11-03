@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-import pyaerial.engine as engine_mod
+import pyaerial.engine.archiver as archiver_mod
 from helpers import (
     fine_track_plane,
     heading_plane,
@@ -39,17 +39,17 @@ def _run_ticks(engine: Engine, ticks: int, monkeypatch) -> None:
     """Run the real main loop (no receivers) until *ticks* ticks have started."""
     seen = {"n": 0}
     done = threading.Event()
-    real = engine._restart_dead_receivers
+    real = engine.supervisor.restart_dead
 
     def counting():
         seen["n"] += 1
         if seen["n"] >= ticks:
             done.set()
-            engine._shutdown.set()
+            engine.request_stop()
         real()
 
     monkeypatch.setattr(engine, "start_receivers", lambda: None)
-    monkeypatch.setattr(engine, "_restart_dead_receivers", counting)
+    monkeypatch.setattr(engine.supervisor, "restart_dead", counting)
     engine.config.tracking.hz = 50
     runner = threading.Thread(target=engine.run, daemon=True)
     runner.start()
@@ -117,14 +117,14 @@ def test_finalize_exception_keeps_flight_and_other_planes(tmp_path, monkeypatch)
             return True
 
         monkeypatch.setattr(engine.history_store, "finalize_plane", finalize)
-        engine._finalize_plane(one_fix_plane("bad"))
-        engine._finalize_plane(one_fix_plane("good"))
+        engine.archiver.finalize(one_fix_plane("bad"))
+        engine.archiver.finalize(one_fix_plane("good"))
         assert popped == ["good-1"]
         # Kept (full in-memory copy) for retry; its live copy is not popped.
-        assert list(engine._pending_finalize) == ["bad-1"]
+        assert list(engine.archiver.pending) == ["bad-1"]
     finally:
         monkeypatch.undo()
-        engine._pending_finalize.clear()
+        engine.archiver.clear_pending()
         engine.shutdown()
 
 
@@ -138,7 +138,7 @@ def test_alert_deactivation_failure_still_archives(tmp_path, monkeypatch):
             raise RuntimeError("alerter bug")
 
         monkeypatch.setattr(engine.calculator, "deactivate_plane", broken)
-        engine._finalize_plane(one_fix_plane())
+        engine.archiver.finalize(one_fix_plane())
         assert popped == ["abc123-1"]
     finally:
         monkeypatch.undo()
@@ -184,11 +184,11 @@ def test_startup_archive_survives_a_bad_leftover(tmp_path, monkeypatch):
             return True
 
         monkeypatch.setattr(engine.history_store, "finalize_plane", finalize)
-        engine._archive_startup_live_flights()
+        engine.archiver.recover_on_startup()
         assert archived == ["good"]
     finally:
         monkeypatch.undo()
-        engine._pending_finalize.clear()
+        engine.archiver.clear_pending()
         engine.shutdown()
 
 
@@ -209,22 +209,22 @@ def test_pending_retries_back_off_while_writes_fail(tmp_path, monkeypatch):
 
         monkeypatch.setattr(engine.history_store, "finalize_plane", failing)
         for icao in ("aaa", "bbb", "ccc"):
-            engine._pending_finalize[f"{icao}-1"] = one_fix_plane(icao)
+            engine.archiver.defer(f"{icao}-1", one_fix_plane(icao))
 
-        engine._retry_pending_finalizes()
+        engine.archiver.retry_pending()
         assert attempts == ["aaa"]
-        engine._retry_pending_finalizes()
+        engine.archiver.retry_pending()
         assert attempts == ["aaa"]  # backing off
 
         # After the back-off the next flight goes first, so one flight that
         # keeps failing cannot block the rest.
-        engine._history_retry_at = 0.0
-        engine._retry_pending_finalizes()
+        engine.archiver.retry_now()
+        engine.archiver.retry_pending()
         assert attempts == ["aaa", "bbb"]
-        assert set(engine._pending_finalize) == {"aaa-1", "bbb-1", "ccc-1"}
+        assert set(engine.archiver.pending) == {"aaa-1", "bbb-1", "ccc-1"}
     finally:
         monkeypatch.undo()
-        engine._pending_finalize.clear()
+        engine.archiver.clear_pending()
         engine.shutdown()
 
 
@@ -248,12 +248,12 @@ def test_orphan_sweep_stops_at_first_failure(tmp_path, monkeypatch):
             return False
 
         monkeypatch.setattr(engine.history_store, "finalize_plane", failing)
-        engine._retry_orphan_live_flights()
-        engine._retry_orphan_live_flights()
+        engine.archiver.sweep_orphans()
+        engine.archiver.sweep_orphans()
         assert len(attempts) == 1
     finally:
         monkeypatch.undo()
-        engine._pending_finalize.clear()
+        engine.archiver.clear_pending()
         engine.shutdown()
 
 
@@ -267,8 +267,8 @@ def test_shutdown_retries_pending_despite_back_off(tmp_path, monkeypatch):
         "finalize_plane",
         lambda plane, **_k: archived.append(plane.info.icao) or True,
     )
-    engine._pending_finalize["aaa-1"] = one_fix_plane("aaa")
-    engine._history_retry_at = time.monotonic() + 3600
+    engine.archiver.defer("aaa-1", one_fix_plane("aaa"))
+    engine.archiver.back_off()
     engine.shutdown()
     assert archived == ["aaa"]
 
@@ -276,7 +276,7 @@ def test_shutdown_retries_pending_despite_back_off(tmp_path, monkeypatch):
 # --- Raw frame pruning -------------------------------------------------------
 
 
-def test_frame_prune_keeps_going_while_backlogged(tmp_path):
+def test_frame_prune_keeps_going_while_backlogged(tmp_path, monkeypatch):
     """One batch per 10 minutes cannot keep up with a busy site."""
 
     class _Recorder:
@@ -296,16 +296,15 @@ def test_frame_prune_keeps_going_while_backlogged(tmp_path):
 
     config_archive = ArchiveConfig(raw_frames=True, raw_frames_keep_hours=1)
     engine = make_engine(tmp_path, archive=config_archive)
-    real = engine.history_store
     recorder = _Recorder()
-    engine.history_store = recorder
+    monkeypatch.setattr(engine.history_store, "write_frames", recorder.write_frames)
+    monkeypatch.setattr(engine.history_store, "prune_frames", recorder.prune_frames)
     try:
         for _ in range(6):
-            engine._archive_frames([])
+            engine.supervisor.archive_frames([])
         # Three full batches, then the one that found the backlog cleared.
         assert recorder.pruned == 4
     finally:
-        engine.history_store = real
         engine.shutdown()
 
 
@@ -326,7 +325,7 @@ def test_first_signal_shuts_down_and_restores_default_handlers(tmp_path):
         handler = signal.getsignal(signal.SIGTERM)
         assert callable(handler)
         handler(signal.SIGTERM, None)
-        assert engine._shutdown.is_set()
+        assert engine.stop_requested
         assert signal.getsignal(signal.SIGINT) is signal.SIG_DFL
         assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
         engine._restore_signal_handlers()
@@ -345,7 +344,9 @@ _SIGNAL_SCRIPT = textwrap.dedent(
     from helpers import heading_plane
 
     slow = sys.argv[1] == "slow"
-    engine = Engine(make_config(), isolated=True, aircraft_db_path=sys.argv[2])
+    config = make_config()
+    config.enrichment.enabled = False  # no hexdb.io lookup for abc123
+    engine = Engine(config, isolated=True, aircraft_db_path=sys.argv[2])
     engine.start_receivers = lambda: None
 
     def finalize(plane, **_kwargs):
@@ -357,7 +358,7 @@ _SIGNAL_SCRIPT = textwrap.dedent(
     engine.history_store.finalize_plane = finalize
     engine.tracker.planes["ABC123"] = heading_plane("abc123", time.time())
     engine.tracker.expired_planes = lambda now: []
-    real_tick = engine._tick
+    real_tick = engine.tick
     ready = []
 
     def tick():
@@ -366,7 +367,7 @@ _SIGNAL_SCRIPT = textwrap.dedent(
             print("ready", flush=True)
         return real_tick()
 
-    engine._tick = tick
+    engine.tick = tick
     engine.run()
     print("clean exit", flush=True)
     """
@@ -426,26 +427,26 @@ def test_pending_finalize_is_bounded_by_memory(tmp_path, monkeypatch):
             engine.history_store, "finalize_plane", lambda *a, **k: False
         )
         monkeypatch.setattr(engine.live_store, "pop_flight", lambda flight_id: None)
-        long_flight = engine_mod._pending_cost(heading_plane("big", 1.0, samples=2_000))
-        short_flight = engine_mod._pending_cost(heading_plane("small", 1.0, samples=10))
+        long_flight = archiver_mod.pending_cost(heading_plane("big", 1.0, samples=2_000))
+        short_flight = archiver_mod.pending_cost(heading_plane("small", 1.0, samples=10))
         assert long_flight > 50 * short_flight  # cost tracks flight length
         monkeypatch.setattr(
-            engine_mod, "_PENDING_FINALIZE_BUDGET_BYTES", long_flight + 3 * short_flight
+            archiver_mod, "PENDING_FINALIZE_BUDGET_BYTES", long_flight + 3 * short_flight
         )
         # Far more short flights than the old count cap would allow per byte...
-        engine._finalize_plane(heading_plane("big", 1.0, samples=2_000))
+        engine.archiver.finalize(heading_plane("big", 1.0, samples=2_000))
         for n in range(3):
-            engine._finalize_plane(heading_plane(f"s{n:05d}", 1.0, samples=10))
-        assert len(engine._pending_finalize) == 4
-        assert engine._pending_evicted == 0
+            engine.archiver.finalize(heading_plane(f"s{n:05d}", 1.0, samples=10))
+        assert len(engine.archiver.pending) == 4
+        assert engine.archiver.counters()["pending_evicted"] == 0
         # ...and over budget the oldest go first (their live copy stays).
-        engine._finalize_plane(heading_plane("s99999", 1.0, samples=10))
-        assert "big-1" not in engine._pending_finalize
-        assert engine._pending_evicted == 1
-        assert len(engine._pending_finalize) == 4
+        engine.archiver.finalize(heading_plane("s99999", 1.0, samples=10))
+        assert "big-1" not in engine.archiver.pending
+        assert engine.archiver.counters()["pending_evicted"] == 1
+        assert len(engine.archiver.pending) == 4
     finally:
         monkeypatch.undo()
-        engine._pending_finalize.clear()
+        engine.archiver.clear_pending()
         engine.shutdown()
 
 
@@ -500,10 +501,10 @@ def test_pending_cost_tracks_measured_memory():
     plane = _tracker_like_plane(3_600)  # a 30 min flight
     measured, _ = tracemalloc.get_traced_memory()
     tracemalloc.stop()
-    estimate = engine_mod._pending_cost(plane)
+    estimate = archiver_mod.pending_cost(plane)
     assert 0.7 * measured < estimate < 1.5 * measured
     # The default budget keeps far more than the old 256-flight cap of these.
-    assert engine_mod._PENDING_FINALIZE_BUDGET_BYTES // estimate >= 256
+    assert archiver_mod.PENDING_FINALIZE_BUDGET_BYTES // estimate >= 256
 
 
 # --- Catch-up after a history outage is spread over ticks --------------------
@@ -522,10 +523,10 @@ def test_catch_up_is_capped_per_tick_but_not_at_shutdown(tmp_path, monkeypatch):
 
     monkeypatch.setattr(engine.history_store, "finalize_plane", slow_finalize)
     for n in range(40):
-        engine._pending_finalize[f"p{n:05d}-1"] = fine_track_plane(f"p{n:05d}")
+        engine.archiver.defer(f"p{n:05d}-1", fine_track_plane(f"p{n:05d}"))
     started = time.monotonic()
-    engine._catch_up_archive(time.monotonic() + engine_mod._ARCHIVE_TICK_BUDGET)
-    assert time.monotonic() - started < engine_mod._ARCHIVE_TICK_BUDGET + 0.1
+    engine.archiver.tick()  # capped at ARCHIVE_TICK_BUDGET
+    assert time.monotonic() - started < archiver_mod.ARCHIVE_TICK_BUDGET + 0.1
     assert 0 < len(archived) < 40
     engine.shutdown()  # the final attempt is not capped
     assert len(archived) == 40
@@ -553,7 +554,7 @@ def test_startup_archive_keeps_the_heartbeat_fresh(fake, tmp_path, monkeypatch):
         return real_touch(self)
 
     monkeypatch.setattr(LiveWriter, "touch_engine", touch)
-    monkeypatch.setattr(engine_mod, "_STARTUP_HEARTBEAT_INTERVAL", 0.0)
+    monkeypatch.setattr(archiver_mod, "STARTUP_HEARTBEAT_INTERVAL", 0.0)
     engine = Engine(pad_config(tmp_path), aircraft_db_path=str(tmp_path / "a.db"))
     try:
         assert len(beats) >= 5

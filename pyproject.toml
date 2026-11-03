@@ -118,6 +118,29 @@ layers = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "Engine package is layered"
+type = "layers"
+# core (Engine: tick loop, lifecycle) orchestrates the receiver supervisor
+# and the flight archiver; neither imports core. segments holds the
+# archiver's pure split helpers, guard the stage guards all three share.
+containers = ["pyaerial.engine"]
+layers = [
+    "core",
+    "supervisor | archiver",
+    "segments | guard",
+]
+
+[[tool.importlinter.contracts]]
+name = "Receiver supervisor and flight archiver are independent"
+type = "independence"
+# They meet only in Engine.tick: frames go to the tracker, finished flights
+# come from it. Keeps the archiver free to change without the intake path.
+modules = [
+    "pyaerial.engine.supervisor",
+    "pyaerial.engine.archiver",
+]
+
+[[tool.importlinter.contracts]]
 name = "Archive reader and writer are independent"
 type = "independence"
 # The portal's read-only ArchiveReader never imports the writer (and so
