@@ -54,9 +54,11 @@ _HISTORY_RETRY_INTERVAL = 10.0
 ARCHIVE_TICK_BUDGET = 0.2
 # Refresh the heartbeat this often during startup recovery.
 STARTUP_HEARTBEAT_INTERVAL = 1.0
-# Each live flight is checkpointed into the archive this often (spread over
-# the ticks): a crash loses at most about CHECKPOINT_SECONDS + SETTLE_SECONDS
-# (plus a tick) of each flight's samples.
+# Each live flight is checkpointed into the archive this often, spread over
+# the ticks: each tick writes the most overdue share of the flights, sized
+# from the time since the last tick, so slow ticks write more per tick and
+# every flight still goes out every CHECKPOINT_SECONDS. A crash loses at most
+# CHECKPOINT_SECONDS + SETTLE_SECONDS plus one tick (~15 s) per flight.
 CHECKPOINT_SECONDS = 5.0
 # A sample is checkpointed once it is this old: the tracker still rewrites
 # the newest samples (a constant run keeps only its first and last datum,
@@ -251,9 +253,8 @@ class FlightArchiver:
         self._pending_evicted = 0
         self._pending_evicted_total = 0
         self._history_retry_at = 0.0
-        self._ticks_per_checkpoint = max(
-            1, round(CHECKPOINT_SECONDS * float(config.tracking.hz))
-        )
+        # Wall time of the previous checkpoint call (slice sizing).
+        self._last_checkpoint_call = time.time()
         # Whether the archive holds nothing left open by another process
         # (startup recovery done, and redone after evictions).
         self._recovered = True
@@ -461,9 +462,11 @@ class FlightArchiver:
         episodes (one transaction). Returns whether anything was written.
 
         A flight is due CHECKPOINT_SECONDS after its last checkpoint. Each
-        tick takes the most overdue slice of ``1 / (CHECKPOINT_SECONDS * hz)``
-        of the tracked flights, so the work is spread over the ticks instead
-        of one burst every CHECKPOINT_SECONDS (p95 ~90 ms at 300 aircraft).
+        call takes the most overdue ``elapsed / CHECKPOINT_SECONDS`` share of
+        the tracked flights (*elapsed*: wall time since the previous call),
+        so the work is spread over the ticks instead of one burst every
+        CHECKPOINT_SECONDS (p95 ~90 ms at 300 aircraft), and slow ticks do
+        not stretch the interval.
         *force* writes every tracked flight now. The cursors on each
         :class:`~pyaerial.models.TrackState` advance only once the write
         commits; a flight gets its ``live`` row with its first checkpoint.
@@ -481,6 +484,8 @@ class FlightArchiver:
         now = time.time() if now is None else now
         until = now - SETTLE_SECONDS
         planes = [plane for plane in self._tracked().values() if _has_position(plane)]
+        elapsed = min(max(now - self._last_checkpoint_call, 0.0), CHECKPOINT_SECONDS)
+        self._last_checkpoint_call = now
         if not force:
             due = [
                 plane
@@ -489,7 +494,8 @@ class FlightArchiver:
                 or not 0 <= now - plane.track.checkpoint_at < CHECKPOINT_SECONDS
             ]
             due.sort(key=lambda plane: plane.track.checkpoint_at or -math.inf)
-            planes = due[: math.ceil(len(planes) / self._ticks_per_checkpoint)]
+            share = math.ceil(len(planes) * elapsed / CHECKPOINT_SECONDS)
+            planes = due[: max(1, share)]
         items: list[FlightCheckpoint] = []
         for plane in planes:
             track = plane.track

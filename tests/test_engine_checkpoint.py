@@ -139,23 +139,41 @@ def test_split_starts_a_new_live_row_linked_to_the_segment(engine):
 
 
 def test_checkpoints_are_spread_over_the_ticks(engine):
-    """At 2 Hz each tick writes the most overdue tenth of the flights, so every
-    flight is checkpointed every CHECKPOINT_SECONDS without one big burst."""
+    """Each call writes the most overdue share of the flights for the time
+    since the previous one, so every flight is checkpointed every
+    CHECKPOINT_SECONDS without one big burst, at any tick rate."""
     now = time.time()
     for n in range(20):
         engine.tracker.planes[f"A{n:05d}"] = track_plane(
             f"a{n:05d}", first=now - 30, samples=30
         )
-    ticks = round(archiver_mod.CHECKPOINT_SECONDS * engine.config.tracking.hz)
-    assert ticks == 10
+    period = archiver_mod.CHECKPOINT_SECONDS
+    engine.archiver._last_checkpoint_call = now - 0.5
     sizes = []
-    for tick in range(ticks):
+    for tick in range(10):  # 2 Hz: a tenth of the flights each
         before = len(_rows(engine, "SELECT flight_id FROM flights"))
         assert engine.archiver.checkpoint(now + tick * 0.5)
         sizes.append(len(_rows(engine, "SELECT flight_id FROM flights")) - before)
     assert sizes == [2] * 10
     # Nothing is due again until CHECKPOINT_SECONDS after its last one.
     assert not engine.archiver.checkpoint(now + 4.9)
-    assert engine.archiver.checkpoint(now + archiver_mod.CHECKPOINT_SECONDS)
-    first = engine.tracker.planes["A00000"].track.checkpoint_at
-    assert first == now + archiver_mod.CHECKPOINT_SECONDS
+    assert engine.archiver.checkpoint(now + period)
+    assert engine.tracker.planes["A00000"].track.checkpoint_at == now + period
+
+
+def test_slow_ticks_write_bigger_slices(engine):
+    """Ticks running at 0.5 Hz instead of 2 Hz still checkpoint every flight
+    within CHECKPOINT_SECONDS (the loss bound does not stretch)."""
+    now = time.time()
+    for n in range(20):
+        engine.tracker.planes[f"A{n:05d}"] = track_plane(
+            f"a{n:05d}", first=now - 30, samples=30
+        )
+    period = archiver_mod.CHECKPOINT_SECONDS
+    engine.archiver._last_checkpoint_call = now - 2.0
+    for tick in range(3):
+        engine.archiver.checkpoint(now + tick * 2.0)
+    # 2 s of a 5 s period per call: 8, 8, then the last 4.
+    assert len(_rows(engine, "SELECT flight_id FROM flights")) == 20
+    for plane in engine.tracker.planes.values():
+        assert plane.track.checkpoint_at - now <= period
