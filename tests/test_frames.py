@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import logging
+
+from helpers import (
+    IDENT,
+    with_crc,
+)
 from pyaerial.receivers.dump1090 import Dump1090Receiver
 from pyaerial.receivers.frames import (
     BEAST_ESC,
@@ -10,6 +16,9 @@ from pyaerial.receivers.frames import (
     correct_receiver_frames,
     encode_beast,
     encode_beast_messages,
+    es_crc_ok,
+    es_icao,
+    frame_fields,
     merge_receiver_frames,
     parse_avr_line,
     raw_payload,
@@ -422,3 +431,87 @@ def test_beast_parser_same_frames_for_any_chunking():
         split.extend(parser.feed(stream[i : i + 1]))
     assert [f[0] for f in whole] == [h for h, _c, _s in frames_in]
     assert split == whole
+
+
+# --- Beast framing ----------------------------------------------------------
+
+
+def test_beast_escaped_esc_pair_while_resyncing_is_not_a_frame_start():
+    """Mid-frame ``1a 1a`` is an escaped data byte; the second ESC must not be
+    taken as the start of a (bogus) long frame."""
+    good_hex = "8d406b902015a678d4d220aa4bda"
+    good = bytes([BEAST_ESC, 0x33]) + bytes(7) + bytes.fromhex(good_hex)
+    garbage = bytes([0x00, BEAST_ESC, BEAST_ESC, 0x33]) + bytes(range(1, 22))
+    frames = BeastParser().feed(garbage + good)
+    assert [frame[0] for frame in frames] == [good_hex]
+
+
+def test_receiver_merge_keeps_crc_valid_copy_over_stronger_corrupted_one():
+    corrupted = IDENT[:12] + ("0" if IDENT[12] != "0" else "1") + IDENT[13:]
+    merged = merge_receiver_frames(
+        [
+            RawFrame(IDENT, 1.0, "weak", rssi=-20.0),
+            RawFrame(corrupted, 1.01, "strong", rssi=-5.0),
+        ]
+    )
+    assert len(merged) == 1
+    frame, heard = merged[0]
+    assert frame.hex == IDENT
+    assert heard == ("weak", "strong")
+    # Order of arrival does not matter.
+    merged = merge_receiver_frames(
+        [
+            RawFrame(corrupted, 1.0, "strong", rssi=-5.0),
+            RawFrame(IDENT, 1.01, "weak", rssi=-20.0),
+        ]
+    )
+    assert [frame.hex for frame, _heard in merged] == [IDENT]
+
+
+def test_frame_fields_reports_comm_d_as_df24():
+    assert frame_fields("c" + "0" * 27)["df"] == 24
+    assert frame_fields("f" + "0" * 27)["df"] == 24
+    assert frame_fields(IDENT)["df"] == 17
+
+
+# --- Beast re-encoding survives bad items ------------------------------------
+
+
+def test_encode_beast_messages_skips_bad_items(caplog):
+    good = {"hex": IDENT, "rssi": -10.0, "timestamp": 100.0}
+    batch = [
+        "not a dict",
+        None,
+        {"hex": 12345},
+        {"hex": "zz"},
+        {"hex": IDENT, "timestamp": float("inf")},
+        {"hex": IDENT, "timestamp": float("nan")},
+        good,
+    ]
+    with caplog.at_level(logging.DEBUG, logger="pyaerial.receivers.frames"):
+        data = encode_beast_messages(batch)
+    assert data == encode_beast(IDENT, rssi=-10.0, timestamp=100.0)
+    assert any("Skipping" in r.getMessage() for r in caplog.records)
+
+
+# --- Shared extended-squitter CRC helper -------------------------------------
+
+
+def test_es_crc_ok():
+    assert es_crc_ok(IDENT)
+    assert es_crc_ok(IDENT.upper())
+    corrupted = IDENT[:-1] + ("9" if IDENT[-1] != "9" else "8")
+    assert not es_crc_ok(corrupted)
+    df18 = with_crc("90" + IDENT[2:22] + "000000")
+    assert es_crc_ok(df18)
+    assert not es_crc_ok(df18[:-1] + "0" if df18[-1] != "0" else df18[:-1] + "1")
+    # A DF17 header on a short or non-hex frame is not a clean squitter.
+    assert not es_crc_ok(IDENT[:14])
+    assert not es_crc_ok(IDENT[:20] + "zz" + IDENT[22:])
+    # Formats whose parity cannot be checked pass.
+    assert es_crc_ok("5d484fdea248f5")  # DF11
+    assert es_crc_ok("20001838ca3e51")  # DF4
+    assert es_crc_ok("zz")
+    # The tracker shares the check.
+    assert es_icao(IDENT) == "4840D6"
+    assert es_icao(corrupted) is None

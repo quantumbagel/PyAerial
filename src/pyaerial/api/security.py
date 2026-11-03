@@ -6,8 +6,8 @@ import ipaddress
 import re
 import time
 from collections import Counter
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 from urllib.parse import urlparse
 
 from starlette.datastructures import Headers, MutableHeaders
@@ -15,7 +15,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-_SAFE_HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:.]+\](:\d{1,5})?$")
+_SAFE_HOST_RE = re.compile(
+    r"^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:.]+\](:\d{1,5})?$"
+)
 
 Origin = tuple[str, str, int]
 
@@ -124,15 +126,15 @@ def localhost_origin_regex() -> str:
     return r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 
 
-# Everything the built portal loads: its own bundle, Google Fonts (index.html),
+# Everything the built portal loads: its own bundle (system fonts only),
 # OpenFreeMap vector style/tiles/glyphs/sprites (MapView.tsx), MapLibre's blob:
 # web worker, and aircraft photo thumbnails (https only; see payloads.https_url).
 # Leaflet/plane icons set inline style attributes, hence 'unsafe-inline' styles.
 _CSP_BASE = (
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' data: https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
     "img-src 'self' data: blob: https:",
     "worker-src 'self' blob:",
     "child-src 'self' blob:",
@@ -167,7 +169,9 @@ class SecurityHeadersMiddleware:
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                headers.setdefault("Content-Security-Policy", content_security_policy(host))
+                headers.setdefault(
+                    "Content-Security-Policy", content_security_policy(host)
+                )
                 headers.setdefault("X-Content-Type-Options", "nosniff")
                 headers.setdefault("Referrer-Policy", "no-referrer")
                 headers.setdefault("X-Frame-Options", "DENY")
@@ -202,6 +206,10 @@ class ConnectionLimiter:
         self._per_ip[ip] += 1
         return None
 
+    def count(self, ip: str) -> int:
+        """Open connections from ``ip``."""
+        return self._per_ip.get(ip, 0)
+
     def release(self, ip: str) -> None:
         if self._per_ip[ip] > 0:
             self._per_ip[ip] -= 1
@@ -231,6 +239,11 @@ class TokenBucket:
         self._last = now
         self._tokens = min(self.burst, self._tokens + elapsed * self.rate)
 
+    def full(self) -> bool:
+        """Refilled to the full burst (no debt, nothing spent)."""
+        self._refill()
+        return self._tokens >= self.burst
+
     def take(self) -> bool:
         """Consume a token if one is available right now."""
         self._refill()
@@ -254,6 +267,78 @@ class TokenBucket:
             return None
         self._tokens -= 1.0
         return delay
+
+
+class BucketRegistry:
+    """Per-key token buckets that outlive the connections using them.
+
+    Dropping a bucket when its client disconnects would let the client reset
+    its burst and any throttle debt by reconnecting. A bucket is evicted only
+    once nothing uses it and it has refilled (it then holds no state a new
+    bucket would not). At ``max_entries`` the least recently used idle bucket
+    goes even if not refilled, so the map stays bounded. Event loop only.
+    """
+
+    def __init__(
+        self,
+        rate: float,
+        burst: int,
+        *,
+        max_entries: int = 4096,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.rate = rate
+        self.burst = burst
+        self.max_entries = max_entries
+        self._clock = clock
+        self._buckets: dict[str, TokenBucket] = {}
+        self._users: Counter[str] = Counter()
+        self._last_used: dict[str, float] = {}
+
+    def __len__(self) -> int:
+        return len(self._buckets)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._buckets
+
+    def acquire(self, key: str) -> TokenBucket:
+        bucket = self._buckets.get(key)
+        if bucket is None:
+            if len(self._buckets) >= self.max_entries:
+                self.sweep()
+                self._evict_lru()
+            bucket = self._buckets[key] = TokenBucket(
+                self.rate, self.burst, clock=self._clock
+            )
+        self._users[key] += 1
+        self._last_used[key] = self._clock()
+        return bucket
+
+    def release(self, key: str) -> None:
+        if self._users[key] > 0:
+            self._users[key] -= 1
+        if self._users[key] <= 0:
+            self._users.pop(key, None)
+        self._last_used[key] = self._clock()
+        bucket = self._buckets.get(key)
+        if bucket is not None and key not in self._users and bucket.full():
+            self._forget(key)
+
+    def sweep(self) -> None:
+        """Evict idle buckets that have refilled."""
+        for key in [k for k, b in self._buckets.items() if k not in self._users and b.full()]:
+            self._forget(key)
+
+    def _evict_lru(self) -> None:
+        while len(self._buckets) >= self.max_entries:
+            idle = [k for k in self._buckets if k not in self._users]
+            if not idle:
+                return  # every bucket is in use: bounded by the connection caps
+            self._forget(min(idle, key=lambda k: self._last_used.get(k, 0.0)))
+
+    def _forget(self, key: str) -> None:
+        self._buckets.pop(key, None)
+        self._last_used.pop(key, None)
 
 
 def client_ip(connection: Any) -> str:

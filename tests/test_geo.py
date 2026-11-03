@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import math
+import random
 
+import pytest
+from geopy.distance import geodesic
 from shapely import Polygon
 
 from pyaerial.calc import geo
@@ -58,3 +61,74 @@ def test_predict_seconds_straight_when_curved_disabled():
         plane, polygon, (35.70, -78.695), 0.0, 400.0, 10.0, 30.0, curved=False
     )
     assert curved("eta") != straight("eta") or curved("distance") != straight("distance")
+
+
+# --- Antimeridian geofences and invalid polygons -----------------------------
+
+
+def _box(lat0, lat1, lon0, lon1) -> Polygon:
+    return Polygon(
+        [(lat0, lon0), (lat1, lon0), (lat1, lon1), (lat0, lon1), (lat0, lon0)]
+    )
+
+
+def test_eta_and_distance_to_zone_across_the_antimeridian():
+    position = (35.0, 179.8)
+    zone = _box(34.9, 35.1, -179.7, -179.5)
+    distance = geo.distance_to_polygon(zone, position)
+    expected = geodesic(position, (35.0, -179.7)).km
+    assert distance == pytest.approx(expected, rel=0.01)
+    eta = geo.time_to_enter_geofence(position, 90.0, 900.0, zone, 600)
+    assert eta == pytest.approx(expected / 900.0 * 3600, rel=0.02)
+    curved = geo.time_to_enter_geofence_curved(position, 90.0, 900.0, 0.5, zone, 600)
+    assert math.isfinite(curved)
+    assert curved <= eta + 1e-6
+
+
+def test_zone_straddling_the_antimeridian():
+    zone = _box(34.9, 35.1, 179.9, -179.9)
+    assert geo.distance_to_polygon(zone, (35.0, 179.95)) == 0.0
+    assert geo.distance_to_polygon(zone, (35.0, -179.95)) == 0.0
+    assert geo.time_to_enter_geofence((35.0, -179.95), 0.0, 500.0, zone, 600) == 0.0
+    # Planar math put the far side of the globe "inside" this zone.
+    assert geo.distance_to_polygon(zone, (35.0, 0.0)) > 10_000
+    assert geo.time_to_enter_geofence((35.0, 0.0), 90.0, 900.0, zone, 600) == math.inf
+    near = geo.distance_to_polygon(zone, (35.0, 179.0))
+    assert near == pytest.approx(geodesic((35.0, 179.0), (35.0, 179.9)).km, rel=0.01)
+
+
+def test_geofence_math_unchanged_away_from_the_antimeridian():
+    zone = _box(35.72, 35.73, -78.70, -78.69)
+    position = (35.70, -78.695)
+    assert geo.distance_to_polygon(zone, position) == pytest.approx(
+        geodesic(position, (35.72, -78.695)).km, rel=0.01
+    )
+    eta = geo.time_to_enter_geofence(position, 0.0, 360.0, zone, 600)
+    assert eta == pytest.approx(
+        geodesic(position, (35.72, -78.695)).km / 360 * 3600, rel=0.02
+    )
+
+
+# --- Short distances and the shared geodesic ---------------------------------
+
+
+def test_short_distance_matches_the_geodesic():
+    rng = random.Random(5)
+    for _ in range(2000):
+        lat = rng.uniform(-89.0, 89.0)
+        lon = rng.uniform(-180.0, 180.0)
+        km = rng.choice([0.01, 0.2, 5.0, 40.0, 300.0])
+        p = geodesic(kilometers=km).destination((lat, lon), rng.uniform(0, 360))
+        b = (p.latitude, p.longitude)
+        expected = geodesic((lat, lon), b).m
+        assert geo._short_distance_m((lat, lon), b) == pytest.approx(expected, rel=1e-5)
+    # Across the antimeridian.
+    assert geo._short_distance_m((35.0, 179.999), (35.0, -179.999)) == pytest.approx(
+        geodesic((35.0, 179.999), (35.0, -179.999)).m, rel=1e-6
+    )
+
+
+def test_geofence_helpers_use_kilometres_with_the_shared_geodesic():
+    assert geo.calculate_speed(
+        (35.0, -78.0), (35.01, -78.0), 0.0, 10.0
+    ) == pytest.approx(geodesic((35.0, -78.0), (35.01, -78.0)).m / 10.0 * 3.6, rel=1e-5)

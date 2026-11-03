@@ -9,6 +9,12 @@ x-hardening: &hardening
     - no-new-privileges:true
   cap_drop:
     - ALL
+  # Bounded logs: Docker's default json-file driver never rotates.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
 
 services:
   dump1090:
@@ -31,7 +37,19 @@ services:
     expose:
       - "30002"
       - "30005"
-    command: ["/opt/dump1090/dump1090", "--net", "--raw", "--quiet"]
+    # Outputs only: the raw (30001) and Beast (30004/30104) *input* ports would
+    # let anyone on the network inject frames into what the engine reads.
+    command:
+      [
+        "/opt/dump1090/dump1090",
+        "--net",
+        "--net-ri-port",
+        "0",
+        "--net-bi-port",
+        "0",
+        "--raw",
+        "--quiet",
+      ]
   pyaerial:
     <<: *hardening
     image: pyaerial:latest
@@ -41,7 +59,7 @@ services:
       context: .
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -52,35 +70,81 @@ services:
       PYAERIAL_START_DUMP1090: "0"
       PYAERIAL_HISTORY: /data/pyaerial.db
       PYAERIAL_AIRCRAFT_DB: /data/aircraft.db
-      PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
+      PYAERIAL_REDIS: redis://redis:6379/0
+      PYAERIAL_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       # Without --profile sdr there is no dump1090 container; default to a host feeder.
       # With --profile sdr, set DUMP1090_HOST=dump1090.
       DUMP1090_HOST: ${DUMP1090_HOST:-host.docker.internal}
     command: ["pyaerial", "run", "-c", "/opt/PyAerial/config.yaml"]
+    # Shutdown archives in-flight flights and sends final alert notifications
+    # (the alert dispatcher alone may take 5 s); the default 10 s can cut it off.
+    stop_grace_period: 20s
+    # The Redis password comes from the redis_password secret file, so it is not
+    # in PYAERIAL_REDIS (visible in `docker inspect`).
+    secrets:
+      - source: redis_password
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      # Webhook URLs are secrets too. Put one in ./secrets/webhook_url, uncomment
+      # this and the top-level `webhook_url` secret, and reference it in
+      # config.yaml as  url: "${file:/run/secrets/webhook_url}"
+      # - source: webhook_url
+      #   uid: "10001"
+      #   gid: "10001"
+      #   mode: 0400
+    # Healthy while the engine's live:engine heartbeat exists (written every tick,
+    # expires 10 s after the engine stops) and reports the archive writable
+    # ("history": "ok"; "down" means flights are queueing unarchived). The
+    # password is read from the secret file, never put on the command line.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import os, sys, redis; pw = open(os.environ['PYAERIAL_REDIS_PASSWORD_FILE']).read().splitlines()[0]; import json; hb = redis.Redis.from_url(os.environ['PYAERIAL_REDIS'], password=pw, socket_timeout=2).get('live:engine'); sys.exit(0 if hb and json.loads(hb).get('history') in ('ok', 'disabled') else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
   web:
     <<: *hardening
     image: pyaerial:latest
     container_name: pyaerial_web
     restart: always
     depends_on:
-      - redis
-      - pyaerial
+      redis:
+        condition: service_healthy
+      pyaerial:
+        condition: service_started
     volumes:
       - pyaerial_data:/data
       - ./config.yaml:/opt/PyAerial/config.yaml:ro
+    # Generous: the WebSocket send queues alone are capped at 256 MB.
+    mem_limit: 1g
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
     ports:
       - "127.0.0.1:10090:10090"
-      - "127.0.0.1:30005:30005"
+      # The portal's Beast feed is 30105 (in the container and on the host):
+      # dump1090, which the engine reads, owns 30005. Override the host side
+      # with BEAST_PUBLISH_PORT.
+      - "127.0.0.1:${BEAST_PUBLISH_PORT:-30105}:30105"
     environment:
       PYAERIAL_CONFIG: /opt/PyAerial/config.yaml
       PYAERIAL_START_DUMP1090: "0"
       PYAERIAL_HISTORY: /data/pyaerial.db
       PYAERIAL_AIRCRAFT_DB: /data/aircraft.db
-      PYAERIAL_REDIS: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
+      PYAERIAL_REDIS: redis://redis:6379/0
+      PYAERIAL_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       # Listen on all interfaces inside the container; the host-side binding above
       # decides who can actually reach it.
       PYAERIAL_BEAST_HOST: "0.0.0.0"
-      PYAERIAL_BEAST_PORT: "30005"
+      PYAERIAL_BEAST_PORT: "30105"
     command:
       [
         "pyaerial",
@@ -92,20 +156,77 @@ services:
         "--port",
         "10090",
       ]
+    # The Redis password comes from the redis_password secret file, so it is not
+    # in PYAERIAL_REDIS (visible in `docker inspect`).
+    secrets:
+      - source: redis_password
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:10090/ready')"]
+      # /ready: 503 when Redis is unreachable; body is only status booleans.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:10090/ready', timeout=2)"]
       interval: 15s
       timeout: 3s
+      start_period: 20s
       retries: 5
+  redis-config:
+    # One-shot: renders the Redis config from the redis_password secret. Docker
+    # cannot copy a secret into a read-only container, so Redis itself only
+    # mounts the result (read-only). The password is never in an argv, the
+    # environment, or `docker inspect`; it lives in the root-only volume, as it
+    # already does in .env.
+    <<: *hardening
+    image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    container_name: pyaerial_redis_config
+    restart: "no"
+    user: "999:1000"
+    secrets:
+      - source: redis_password
+        uid: "999"
+        gid: "1000"
+        mode: 0400
+    volumes:
+      - redis_conf:/data
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        umask 077 &&
+        { [ -s /run/secrets/redis_password ] || { echo "REDIS_PASSWORD is empty" >&2; exit 1; }; } &&
+        printf 'requirepass %s\n' "$$(cat /run/secrets/redis_password)" > /data/redis.conf.new &&
+        mv /data/redis.conf.new /data/redis.conf
   redis:
     <<: *hardening
     image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     container_name: pyaerial_redis
     restart: always
     # Run as the image's redis user directly so the entrypoint needs no setuid/chown
-    # capabilities (persistence is off, so /data is never written).
+    # capabilities.
     user: "999:1000"
-    command: redis-server --save "" --appendonly no --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    # Persistence is off, so Redis writes nothing: the whole filesystem is read-only.
+    read_only: true
+    mem_limit: 1g
+    depends_on:
+      redis-config:
+        condition: service_completed_successfully
+    volumes:
+      - redis_conf:/data:ro
+    entrypoint: ["redis-server", "/data/redis.conf", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      # redis-cli takes the password from REDISCLI_AUTH, set only inside the check.
+      # A wrong password still exits 0 (NOAUTH), so match on PONG.
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(sed -n 's/^requirepass //p' /data/redis.conf)\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   pyaerial_data:
+  redis_conf:
+
+secrets:
+  redis_password:
+    environment: REDIS_PASSWORD
+  # webhook_url:
+  #   file: ./secrets/webhook_url

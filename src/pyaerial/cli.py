@@ -10,10 +10,11 @@ Command-line interface for PyAerial tracking, validation, maintenance, and porta
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 from pyaerial import __version__
-from pyaerial.config import ConfigError, load_config
+from pyaerial.config import Config, ConfigError, load_config
 from pyaerial.constants import DEFAULT_AIRCRAFT_DB, DEFAULT_CONFIG_FILE
 from pyaerial.engine import run_engine
 from pyaerial.logging_setup import setup_logging
@@ -24,9 +25,46 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        parser.print_help()
-        sys.exit(0)
+        parser.print_help(sys.stderr)
+        sys.exit(2)
     args.func(args)
+
+
+_ICAO_RE = re.compile(r"^[0-9a-fA-F]{6}$")
+_AIRCRAFT_DB_HELP = (
+    "SQLite aircraft metadata cache (default: aircraft.db in the working "
+    "directory, or $PYAERIAL_AIRCRAFT_DB)"
+)
+
+
+def _icao(value: str) -> str:
+    if not _ICAO_RE.match(value):
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not an ICAO address (6 hex digits, e.g. a1b2c3)"
+        )
+    return value.lower()
+
+
+def _port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError:
+        port = -1
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a TCP port (1-65535)")
+    return port
+
+
+def _setup_logging_or_exit(config: Config) -> None:
+    try:
+        setup_logging(config.logging.level, log_file=config.logging.file)
+    except OSError as exc:
+        print(
+            f"Configuration error:\nlogging.file: cannot open {config.logging.file}: "
+            f"{exc.strerror or exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -50,7 +88,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--aircraft-db",
         default=DEFAULT_AIRCRAFT_DB,
-        help=f"SQLite aircraft metadata cache (default: {DEFAULT_AIRCRAFT_DB})",
+        help=_AIRCRAFT_DB_HELP,
     )
     run_p.set_defaults(func=_cmd_run)
 
@@ -77,6 +115,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "icao",
         nargs="?",
         default=None,
+        type=_icao,
         help="target single ICAO address for deletion instead of full database",
     )
     reset_p.add_argument(
@@ -102,7 +141,7 @@ def _build_parser() -> argparse.ArgumentParser:
     web_p.add_argument(
         "--aircraft-db",
         default=DEFAULT_AIRCRAFT_DB,
-        help=f"SQLite aircraft metadata cache (default: {DEFAULT_AIRCRAFT_DB})",
+        help=_AIRCRAFT_DB_HELP,
     )
     web_p.add_argument(
         "--host",
@@ -110,7 +149,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="network interface to bind (default: 127.0.0.1; use 0.0.0.0 for LAN/WAN)",
     )
     web_p.add_argument(
-        "-p", "--port", type=int, default=10090, help="listening port (default: 10090)"
+        "-p", "--port", type=_port, default=10090, help="listening port (default: 10090)"
     )
     web_p.set_defaults(func=_cmd_web)
 
@@ -123,6 +162,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
     except ConfigError as exc:
         print(f"Configuration error:\n{exc}", file=sys.stderr)
         sys.exit(1)
+    # run_engine sets logging up again (idempotent); fail cleanly here first.
+    _setup_logging_or_exit(config)
     try:
         run_engine(config, aircraft_db_path=args.aircraft_db)
     except RuntimeError as exc:
@@ -159,7 +200,7 @@ def _cmd_web(args: argparse.Namespace) -> None:
     except ConfigError as exc:
         print(f"Configuration error:\n{exc}", file=sys.stderr)
         sys.exit(1)
-    setup_logging(config.logging.level, log_file=config.logging.file)
+    _setup_logging_or_exit(config)
     from pyaerial.webapp import run_webapp
 
     run_webapp(

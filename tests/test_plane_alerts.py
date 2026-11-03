@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import time
 
+from helpers import make_config
 from pyaerial.calc.geo import build_polygons
-from pyaerial.calc.plane import PlaneCalculator
+from pyaerial.pipeline import PlaneCalculator
 from pyaerial.constants import (
     STORE_ALT,
     STORE_CALC_DATA,
@@ -17,7 +18,6 @@ from pyaerial.constants import (
     STORE_RECV_DATA,
 )
 from pyaerial.models import Datum
-from helpers import make_config
 
 
 def _plane(lat: float = 35.725, lon: float = -78.695, t: float | None = None):
@@ -101,7 +101,9 @@ def test_metadata_lookup_failure_is_retried():
             return False
 
     config = make_config()
-    calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=_FailingDb())
+    calc = PlaneCalculator(
+        config, build_polygons(config.zones), aircraft_db=_FailingDb()
+    )
     try:
         plane = _plane()
         icao = plane[STORE_INFO][STORE_ICAO]
@@ -125,7 +127,9 @@ def test_deactivate_clears_lookup_state_and_discards_inflight_result():
             return False
 
     config = make_config()
-    calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=_FailingDb())
+    calc = PlaneCalculator(
+        config, build_polygons(config.zones), aircraft_db=_FailingDb()
+    )
     try:
         plane = _plane()
         icao = plane[STORE_INFO][STORE_ICAO]
@@ -150,8 +154,8 @@ def test_deactivate_clears_lookup_state_and_discards_inflight_result():
 
 
 def test_hysteresis_delays_activation():
-    from pyaerial.config.schema import ZoneConfig
     from helpers import make_rule
+    from pyaerial.config.schema import ZoneConfig
 
     config = make_config(
         zones={
@@ -194,6 +198,196 @@ def test_deactivate_clears_motion_and_alerts():
         assert "abc123" not in calc._kalman_filters
     finally:
         calc.close()
+
+
+def test_one_bad_plane_does_not_stop_alerting_for_others(caplog):
+    config = make_config()
+    config.zones["pad"].rules[0].dwell_seconds = 1
+    calc = PlaneCalculator(config, build_polygons(config.zones))
+    real_check = calc.alerts.check
+
+    def check(plane, *args):
+        if plane[STORE_INFO][STORE_ICAO] == "bad001":
+            # e.g. shapely rejecting a non-finite projected point
+            raise ValueError("Point coordinates must be finite")
+        return real_check(plane, *args)
+
+    calc.alerts.check = check  # type: ignore[method-assign]
+    try:
+        bad = _plane()
+        bad[STORE_INFO][STORE_ICAO] = "bad001"
+        good = _plane()
+        planes = {"bad001": bad, "abc123": good}
+        with caplog.at_level("ERROR", logger="pyaerial.pipeline"):
+            calc.calculate_all(planes)
+            calc.calculate_all(planes)
+        assert any(key[0] == "abc123" for key in calc._pending_match)
+        # Logged with a traceback once, not every tick.
+        assert sum("bad001" in r.getMessage() for r in caplog.records) == 1
+    finally:
+        calc.close()
+
+
+def test_registration_reaches_plane_info_and_live_summary():
+    from pyaerial.store.redis_live import RedisLiveStore
+
+    class _Db:
+        available = True
+
+        def lookup_cached(self, icao: str):
+            return {
+                "registration": "HB-JZA",
+                "model": "A320 214",
+                "owner": "E2E Air",
+                "country": "Switzerland",
+                "typecode": "A320",
+            }
+
+        def is_cached(self, icao: str) -> bool:
+            return True
+
+    config = make_config()
+    store = RedisLiveStore("redis://localhost:1/0", memory_only=True, writer=True)
+    calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=_Db())
+    try:
+        plane = _plane()
+        calc._bg_lookup_metadata("abc123", "N123AB")
+        calc.calculate_plane(plane)
+        info = plane[STORE_INFO]
+        assert info["registration"] == "HB-JZA"
+        assert info["aircraft_type"] == "A320"
+        assert info["callsign"] == "N123AB"  # live callsign kept
+        store.write_live_planes({"abc123": plane})
+        (summary,) = store.get_flights()
+        assert summary["registration"] == "HB-JZA"
+    finally:
+        calc.close()
+        store.close()
+
+
+def _enrichment_disabled_config():
+    config = make_config()
+    config.enrichment.enabled = False
+    return config
+
+
+class _CacheOnlyDb:
+    """Fails the test if the online lookup path is taken."""
+
+    available = True
+
+    def __init__(self, cached: dict) -> None:
+        self.cached = cached
+
+    def lookup_cached(self, icao: str):
+        raise AssertionError("online lookup with enrichment disabled")
+
+    def is_cached(self, icao: str) -> bool:
+        raise AssertionError("retry bookkeeping with enrichment disabled")
+
+    def lookup_cached_fast(self, icao: str):
+        return self.cached.get(icao)
+
+
+def test_enrichment_disabled_reads_local_cache_only():
+    db = _CacheOnlyDb({"abc123": {"registration": "N123AB", "typecode": "C172"}})
+    config = _enrichment_disabled_config()
+    calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=db)
+    try:
+        calc._bg_lookup_metadata("abc123", "")
+        calc._bg_lookup_metadata("def456", "")  # not cached: final, no backoff
+        assert calc._pending_results["abc123"]["registration"] == "N123AB"
+        assert calc._pending_results["abc123"]["resolved"] is True
+        assert calc._pending_results["def456"]["resolved"] is True
+        assert "def456" not in calc._lookup_backoff_until
+    finally:
+        calc.close()
+
+
+def test_enrichment_enabled_by_default_uses_online_lookup():
+    db = _CacheOnlyDb({})
+    config = make_config()
+    calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=db)
+    try:
+        calc._bg_lookup_metadata("abc123", "")
+        # The AssertionError from lookup_cached is caught as a failed lookup.
+        assert calc._pending_results["abc123"]["resolved"] is False
+    finally:
+        calc.close()
+
+
+class _SlowDb:
+    available = True
+
+    def __init__(self, delay: float):
+        import threading
+
+        self.delay = delay
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def lookup_cached(self, icao: str):
+        self.started.set()
+        self.release.wait(self.delay)
+        return {"callsign": "LATE", "model": "X"}
+
+    def is_cached(self, icao: str) -> bool:
+        return True
+
+
+def test_close_does_not_wait_for_inflight_lookup_and_drops_late_result():
+    db = _SlowDb(delay=10.0)
+    config = make_config()
+    calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=db)
+    plane = _plane()
+    calc._resolve_callsign(plane)
+    assert db.started.wait(2.0)
+    started = time.monotonic()
+    calc.close()
+    assert time.monotonic() - started < 1.0
+    db.release.set()  # the lookup now finishes after close
+    for thread in calc._lookup_threads:
+        thread.join(2.0)
+    assert calc._pending_results == {}
+    # No new lookups are started once closed.
+    other = _plane()
+    other[STORE_INFO][STORE_ICAO] = "def456"
+    calc._resolve_callsign(other)
+    assert "def456" not in calc._pending_lookups
+
+
+def test_inflight_lookup_does_not_delay_interpreter_exit():
+    """SIGTERM must not stall on an HTTP lookup (Docker kills after 10 s)."""
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    script = textwrap.dedent(
+        """
+        import sys, threading, time
+        sys.path.insert(0, %r)
+        from helpers import make_config
+        from pyaerial.calc.geo import build_polygons
+        from pyaerial.pipeline import PlaneCalculator
+        started = threading.Event()
+        class Db:
+            available = True
+            def lookup_cached(self, icao):
+                started.set()
+                time.sleep(30)
+            def is_cached(self, icao):
+                return True
+        config = make_config()
+        calc = PlaneCalculator(config, build_polygons(config.zones), aircraft_db=Db())
+        calc._resolve_callsign({"info": {"icao": "abc123"}})
+        started.wait(5)
+        calc.close()
+        """
+    ) % str(Path(__file__).parent)
+    started = time.monotonic()
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=25)
+    assert time.monotonic() - started < 10.0
 
 
 def test_single_position_still_calculates():

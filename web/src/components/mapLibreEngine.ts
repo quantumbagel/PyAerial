@@ -3,7 +3,7 @@
  * the bundle) downloads in parallel with, not before, the app's first render.
  */
 import { Map, Popup, setWorkerUrl } from 'maplibre-gl';
-import type { GeoJSONSource } from 'maplibre-gl';
+import type { GeoJSONSource, StyleSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 // MapLibre 6 otherwise derives `./maplibre-gl-worker.mjs` from its own module
 // URL at runtime, a file Vite never emits (404 => no tiles). `?worker&url`
@@ -64,6 +64,45 @@ export const EMPTY_FC: GeoJSON.FeatureCollection = { type: 'FeatureCollection', 
 
 const ZONE_FONT = ['Noto Sans Regular'];
 
+/** Plain background used when the basemap style can't be fetched. */
+export const FALLBACK_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {},
+  layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#1a1a1a' } }],
+};
+/** How long the basemap style may take before we stop waiting for it. */
+export const STYLE_TIMEOUT_MS = 15_000;
+
+/**
+ * MapLibre only fires `load` (where the overlays are added) once a style has
+ * loaded, so an unreachable basemap (offline station, tile host down) would
+ * otherwise leave the map without aircraft, zones or paths, silently.
+ */
+function fallBackWhenStyleFails(map: Map): void {
+  let settled = false;
+  const fallBack = (reason: unknown) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    console.warn('Basemap style unavailable; drawing overlays without a basemap.', reason);
+    map.setStyle(FALLBACK_STYLE, { diff: false });
+  };
+  const timer = setTimeout(() => fallBack('timed out'), STYLE_TIMEOUT_MS);
+  map.once('style.load', () => {
+    settled = true;
+    clearTimeout(timer);
+  });
+  map.once('remove', () => {
+    settled = true;
+    clearTimeout(timer);
+  });
+  map.on('error', (event: { error?: unknown }) => {
+    // A listener replaces MapLibre's own logging, so keep reporting the rest.
+    if (settled) console.error(event.error ?? event);
+    else fallBack(event.error);
+  });
+}
+
 export function createMap(container: HTMLElement): Map {
   const map = new Map({
     container,
@@ -80,6 +119,7 @@ export function createMap(container: HTMLElement): Map {
     fadeDuration: 0,
   });
   map.touchZoomRotate.disableRotation();
+  fallBackWhenStyleFails(map);
   return map;
 }
 
@@ -124,26 +164,29 @@ export function addOverlayLayers(map: Map): void {
       'line-opacity': 0.9,
     },
   });
-  map.addLayer({
-    id: LYR.zonesLabel,
-    type: 'symbol',
-    source: SRC.zones,
-    layout: {
-      'text-field': ['upcase', ['get', 'name']],
-      'text-font': ZONE_FONT,
-      'text-size': 12,
-      'text-letter-spacing': 0.06,
-      'text-anchor': 'center',
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
-      'text-max-width': 14,
-    },
-    paint: {
-      'text-color': '#a1a1aa',
-      'text-halo-color': 'rgba(26, 26, 26, 0.85)',
-      'text-halo-width': 1.4,
-    },
-  });
+  // Labels need the style's glyphs (the fallback style has none).
+  if (map.getGlyphs()) {
+    map.addLayer({
+      id: LYR.zonesLabel,
+      type: 'symbol',
+      source: SRC.zones,
+      layout: {
+        'text-field': ['upcase', ['get', 'name']],
+        'text-font': ZONE_FONT,
+        'text-size': 12,
+        'text-letter-spacing': 0.06,
+        'text-anchor': 'center',
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+        'text-max-width': 14,
+      },
+      paint: {
+        'text-color': '#a1a1aa',
+        'text-halo-color': 'rgba(26, 26, 26, 0.85)',
+        'text-halo-width': 1.4,
+      },
+    });
+  }
 
   map.addLayer({
     id: LYR.pathsHit,

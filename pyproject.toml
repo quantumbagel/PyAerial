@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,20 +9,23 @@ description = "ADS-B receiver network with spoofing checks, a labelled research 
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Julian Reder", email = "quantumbagel@example.com" }]
-license = { text = "GPL-3.0-or-later" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 keywords = ["ads-b", "modes", "aviation", "geofence", "tracking"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: GIS",
 ]
 dependencies = [
-    "shapely>=2.0",
+    # 2.0.4 is the first release that works with NumPy 2 (2.0.3 pins numpy<2).
+    "shapely>=2.0.4",
     "geopy>=2.5.0",
     "pyModeS>=3.0.0",
     "requests>=2.33.0",
@@ -38,11 +41,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "httpx>=0.27", "ruff>=0.8"]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "ruff>=0.8",
+    "import-linter==2.15",
+    "mypy==2.4.1",
+]
 
 [project.urls]
 Homepage = "https://github.com/quantumbagel/PyAerial"
 Repository = "https://github.com/quantumbagel/PyAerial"
+Issues = "https://github.com/quantumbagel/PyAerial/issues"
+Changelog = "https://github.com/quantumbagel/PyAerial/blob/master/CHANGELOG.md"
 
 [project.scripts]
 pyaerial = "pyaerial.cli:main"
@@ -51,11 +62,58 @@ pyaerial = "pyaerial.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pyaerial = ["examples/*", "static/*", "static/**/*", "static/assets/*"]
+# Listed explicitly so the wheel does not depend on MANIFEST.in grafts.
+pyaerial = [
+    "examples/*",
+    "examples/captures/*",
+    "static/*",
+    "static/**/*",
+    "static/assets/*",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["tests"]
 testpaths = ["tests"]
+
+[tool.importlinter]
+root_package = "pyaerial"
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture"
+type = "layers"
+# Higher layers may import lower ones, never the reverse; `|` siblings are
+# independent of each other. `lint-imports` checks it (CI python job).
+# - alerts sits above store: the alert engine records episodes in the live
+#   store; the store depends on no domain logic (the archive policy is
+#   decided by the engine and passed to HistoryStore.finalize_plane).
+# - config.loader sits above the domain layers it validates against
+#   (receiver/alerter registries, zone polygons via calc) and below the
+#   entry points that load the config; config.schema is near the bottom.
+layers = [
+    "pyaerial.cli",
+    "pyaerial.engine | pyaerial.webapp | pyaerial.view",
+    "pyaerial.api | pyaerial.pipeline",
+    "pyaerial.config.loader",
+    "pyaerial.alerts",
+    "pyaerial.alerters | pyaerial.store | pyaerial.enrich",
+    "pyaerial.calc",
+    "pyaerial.integrity",
+    "pyaerial.tracker",
+    "pyaerial.classify",
+    "pyaerial.receivers",
+    "pyaerial.config.schema | pyaerial.config.geofence_file",
+    "pyaerial.models | pyaerial.logging_setup",
+    "pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls",
+]
+
+[tool.mypy]
+# Lenient start: bodies of unannotated functions are not checked yet
+# (check_untyped_defs is off); third-party packages without stubs are Any.
+python_version = "3.11"
+files = ["src/pyaerial"]
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_unused_configs = true
 
 [tool.ruff]
 src = ["src", "tests"]
@@ -63,5 +121,16 @@ target-version = "py311"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "B", "ASYNC", "RUF006", "SIM105", "UP035", "UP041", "PLW2901"]
+select = [
+    "E",
+    "F",
+    "W",
+    "B",
+    "ASYNC",
+    "RUF006",
+    "SIM105",
+    "UP035",
+    "UP041",
+    "PLW2901",
+]
 ignore = ["E501"]

@@ -50,8 +50,9 @@
     --radius-pill: 999px;
 
     /* Type: nothing smaller than 0.75rem */
-    --font-sans: 'Outfit', system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    /* System fonts only: the portal loads no third-party font CSS or files. */
+    --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
     --font-xs: 0.75rem;
     --font-sm: 0.75rem;
     --font-meta: 0.75rem;

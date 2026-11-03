@@ -16,11 +16,14 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketState
 
 from pyaerial.api.beast import BeastHub
+from pyaerial.api.broadcaster import _CLIENT_QUEUE_BYTES as CLIENT_QUEUE_BYTES
 from pyaerial.api.broadcaster import LiveBroadcaster
-from pyaerial.api.payloads import sanitize_for_json
+from pyaerial.jsonutil import dumps as json_dumps
+from pyaerial.api.payloads import OfflineAircraftDB
 from pyaerial.api.queries import engine_is_live
 from pyaerial.api.security import (
     ConnectionLimiter,
+    BucketRegistry,
     SecurityHeadersMiddleware,
     TokenBucket,
     client_ip,
@@ -104,6 +107,10 @@ def create_app(
     aircraft_db: AircraftDB | None = None,
 ) -> FastAPI:
     web = config.web
+    if aircraft_db is not None and not config.enrichment.enabled:
+        # Every portal lookup then stays in the local cache: nothing is sent
+        # to hexdb.io or Planespotters.
+        aircraft_db = OfflineAircraftDB(aircraft_db)  # type: ignore[assignment]
     broadcaster = LiveBroadcaster(
         live_store,
         aircraft_db,
@@ -114,6 +121,7 @@ def create_app(
         host=web.beast_host,
         port=web.beast_port,
         max_clients=web.beast_max_clients,
+        max_clients_per_ip=web.beast_max_clients_per_ip,
     )
     # Request handlers get their own bounded pool so a burst of history
     # queries cannot starve the broadcaster's asyncio.to_thread() work.
@@ -121,6 +129,10 @@ def create_app(
         max_workers=web.ws_request_workers, thread_name_prefix="pyaerial-ws"
     )
     limiter = ConnectionLimiter(web.ws_max_connections, web.ws_max_connections_per_ip)
+    # One request budget per client IP, shared by all of its connections (a
+    # client could otherwise multiply the per-connection rate by opening more).
+    # Kept after disconnect until refilled, so reconnecting resets nothing.
+    ip_buckets = BucketRegistry(web.ws_rate_limit_per_ip, web.ws_rate_burst_per_ip)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -157,7 +169,8 @@ def create_app(
         hosts = list(dict.fromkeys([*web.allowed_hosts, "localhost", "127.0.0.1"]))
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
 
-    def ws_request_handler(action: str, params: dict[str, Any]) -> Any:
+    def ws_request_handler(req_id: Any, action: str, params: dict[str, Any]) -> str:
+        """Run one RPC and return the serialized response message."""
         result = handle_ws_request(
             action,
             params,
@@ -166,8 +179,20 @@ def create_app(
             live_store=live_store,
             aircraft_db=aircraft_db,
         )
-        # Sanitising large telemetry lists is CPU work; keep it off the loop.
-        return sanitize_for_json(result)
+        if action == "fetchFlight" and result is None:
+            return json_dumps(_error(req_id, "not_found", "not found"))
+        response: dict[str, Any] = {
+            "type": "response",
+            "id": req_id,
+            "success": True,
+            "data": result,
+        }
+        if action == "fetchTelemetry":
+            # Beside ``data`` so it stays a plain array for existing clients.
+            response["truncated"] = bool(getattr(result, "truncated", False))
+        # Sanitising and serializing large telemetry lists is CPU work; keep
+        # it off the event loop. The text is queued as-is (counted in bytes).
+        return json_dumps(response)
 
     @app.get("/health")
     def health():
@@ -206,8 +231,12 @@ def create_app(
                 "ws_max_inflight": web.ws_max_inflight,
                 "ws_rate_limit": web.ws_rate_limit,
                 "ws_rate_burst": web.ws_rate_burst,
+                "ws_rate_limit_per_ip": web.ws_rate_limit_per_ip,
+                "ws_rate_burst_per_ip": web.ws_rate_burst_per_ip,
                 "ws_max_message_bytes": 64 * 1024,
+                "ws_client_queue_bytes": CLIENT_QUEUE_BYTES,
                 "beast_max_clients": web.beast_max_clients,
+                "beast_max_clients_per_ip": web.beast_max_clients_per_ip,
             },
         )
 
@@ -245,38 +274,39 @@ def create_app(
     ) -> None:
         try:
             loop = asyncio.get_running_loop()
-            res_data = await loop.run_in_executor(
-                request_pool, ws_request_handler, action, params
-            )
-            if action == "fetchFlight" and res_data is None:
-                broadcaster.send(websocket, _error(req_id, "not_found", "not found"))
-                return
-            broadcaster.send(
-                websocket,
-                {"type": "response", "id": req_id, "success": True, "data": res_data},
-            )
-        except BadRequest as exc:
-            log.debug("Bad WS request %r: %s", action, exc)
-            broadcaster.send(websocket, _error(req_id, "bad_request", str(exc)))
-        except HistoryUnavailable:
-            log.warning("WS action %r: history archive unavailable", action, exc_info=True)
-            broadcaster.send(
-                websocket,
-                _error(req_id, "history_unavailable", "History archive unavailable"),
-            )
-        except LiveUnavailable:
-            log.warning("WS action %r: live store unavailable", action, exc_info=True)
-            broadcaster.send(
-                websocket, _error(req_id, "live_unavailable", "Live store unavailable")
-            )
-        except (ValueError, TypeError):
-            log.warning("WS action %r rejected its parameters", action, exc_info=True)
-            broadcaster.send(
-                websocket, _error(req_id, "bad_request", "Invalid request parameters")
-            )
-        except Exception:
-            log.exception("Error executing WS action %r", action)
-            broadcaster.send(websocket, _error(req_id, "internal_error", "Request failed"))
+            try:
+                text = await loop.run_in_executor(
+                    request_pool, ws_request_handler, req_id, action, params
+                )
+            except BadRequest as exc:
+                log.debug("Bad WS request %r: %s", action, exc)
+                text = json_dumps(_error(req_id, "bad_request", str(exc)))
+            except HistoryUnavailable:
+                log.warning(
+                    "WS action %r: history archive unavailable", action, exc_info=True
+                )
+                text = json_dumps(
+                    _error(req_id, "history_unavailable", "History archive unavailable")
+                )
+            except LiveUnavailable:
+                log.warning("WS action %r: live store unavailable", action, exc_info=True)
+                text = json_dumps(
+                    _error(req_id, "live_unavailable", "Live store unavailable")
+                )
+            except (ValueError, TypeError):
+                log.warning("WS action %r rejected its parameters", action, exc_info=True)
+                text = json_dumps(
+                    _error(req_id, "bad_request", "Invalid request parameters")
+                )
+            except Exception:
+                log.exception("Error executing WS action %r", action)
+                text = json_dumps(_error(req_id, "internal_error", "Request failed"))
+            # Hold the in-flight slot until the writer has actually sent the
+            # response: a client that stops reading then stops being served,
+            # instead of piling finished responses up in server memory.
+            sent = broadcaster.send_response(websocket, text)
+            if sent is not None:
+                await sent
         finally:
             slots.release()
 
@@ -296,7 +326,7 @@ def create_app(
             },
         )
 
-    async def _serve_live(websocket: WebSocket) -> None:
+    async def _serve_live(websocket: WebSocket, ip_bucket: TokenBucket) -> None:
         slots = asyncio.Semaphore(web.ws_max_inflight)
         bucket = TokenBucket(web.ws_rate_limit, web.ws_rate_burst)
         tasks: set[asyncio.Task] = set()
@@ -324,11 +354,13 @@ def create_app(
                 # Over the rate, requests are delayed (we stop reading the
                 # socket meanwhile); only an unreasonably long wait is refused.
                 delay = bucket.reserve(_MAX_THROTTLE_SECONDS)
-                if delay is None:
+                ip_delay = ip_bucket.reserve(_MAX_THROTTLE_SECONDS)
+                if delay is None or ip_delay is None:
                     broadcaster.send(
                         websocket, _error(req_id, "rate_limited", "Rate limit exceeded")
                     )
                     continue
+                delay = max(delay, ip_delay)
                 if delay > 0:
                     await asyncio.sleep(delay)
                 action = req.get("action")
@@ -363,10 +395,12 @@ def create_app(
         ip = await _admit(websocket)
         if ip is None:
             return
+        ip_bucket = ip_buckets.acquire(ip)
         try:
-            await _serve_live(websocket)
+            await _serve_live(websocket, ip_bucket)
         finally:
             limiter.release(ip)
+            ip_buckets.release(ip)
 
     async def ws_beast(websocket: WebSocket):
         ip = await _admit(websocket)

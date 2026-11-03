@@ -3,7 +3,7 @@ import type { ComponentProps, RefObject } from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlightSummary } from '../api/types';
 import { MapView, type MapViewHandle } from './MapView';
-import { SRC } from './mapLibreEngine';
+import { FALLBACK_STYLE, SRC } from './mapLibreEngine';
 
 type SourceStub = {
   data: { type: string; features: Array<{ properties: Record<string, unknown> }> };
@@ -12,8 +12,10 @@ type SourceStub = {
 
 type EaseToOpts = { center?: [number, number]; zoom?: number; offset?: [number, number] };
 
-const { maps, MapMock, PopupMock, setWorkerUrl } = vi.hoisted(() => {
+const { maps, mapBehaviour, MapMock, PopupMock, setWorkerUrl } = vi.hoisted(() => {
   const maps: MapMock[] = [];
+  /** `styleFails`: the basemap style request errors (offline station). */
+  const mapBehaviour = { styleFails: false };
 
   class MapMock {
     container: HTMLElement;
@@ -23,14 +25,51 @@ const { maps, MapMock, PopupMock, setWorkerUrl } = vi.hoisted(() => {
     lastEaseTo: EaseToOpts | null = null;
     lastJumpTo: EaseToOpts | null = null;
     removed = false;
+    style: unknown;
     touchZoomRotate = { disableRotation: vi.fn() };
     private listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
-    constructor(options: { container: HTMLElement; zoom?: number }) {
+    constructor(options: { container: HTMLElement; zoom?: number; style?: unknown }) {
       this.container = options.container;
       this.zoom = options.zoom ?? 8;
+      this.style = options.style;
       maps.push(this);
-      queueMicrotask(() => this.emit('load'));
+      if (mapBehaviour.styleFails) {
+        queueMicrotask(() => this.emit('error', { error: new Error('Failed to fetch') }));
+      } else {
+        queueMicrotask(() => this.loadStyle());
+      }
+    }
+
+    private loadStyle() {
+      this.emit('style.load');
+      this.emit('load');
+    }
+
+    setStyle(style: unknown) {
+      this.style = style;
+      queueMicrotask(() => this.loadStyle());
+      return this;
+    }
+
+    getGlyphs() {
+      return typeof this.style === 'string' ? 'https://glyphs.example/{fontstack}/{range}.pbf' : null;
+    }
+
+    once(type: string, fn: (...args: unknown[]) => void) {
+      const wrapped = (...args: unknown[]) => {
+        this.off(type, wrapped);
+        fn(...args);
+      };
+      return this.on(type, wrapped);
+    }
+
+    off(type: string, fn: (...args: unknown[]) => void) {
+      this.listeners.set(
+        type,
+        (this.listeners.get(type) ?? []).filter((h) => h !== fn),
+      );
+      return this;
     }
 
     on(type: string, layerOrFn: unknown, maybeFn?: unknown) {
@@ -43,8 +82,8 @@ const { maps, MapMock, PopupMock, setWorkerUrl } = vi.hoisted(() => {
       return this;
     }
 
-    emit(type: string) {
-      for (const handler of this.listeners.get(type) ?? []) handler();
+    emit(type: string, ...args: unknown[]) {
+      for (const handler of [...(this.listeners.get(type) ?? [])]) handler(...args);
     }
 
     addSource(id: string, spec: { data?: SourceStub['data'] }) {
@@ -95,6 +134,7 @@ const { maps, MapMock, PopupMock, setWorkerUrl } = vi.hoisted(() => {
     resize() {}
     remove() {
       this.removed = true;
+      this.emit('remove');
     }
     project() {
       return { x: 0, y: 0 };
@@ -125,7 +165,7 @@ const { maps, MapMock, PopupMock, setWorkerUrl } = vi.hoisted(() => {
     }
   }
 
-  return { maps, MapMock, PopupMock, setWorkerUrl: vi.fn() };
+  return { maps, mapBehaviour, MapMock, PopupMock, setWorkerUrl: vi.fn() };
 });
 
 vi.mock('maplibre-gl', () => ({
@@ -148,6 +188,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   maps.length = 0;
+  mapBehaviour.styleFails = false;
 });
 
 const flight = (overrides: Partial<FlightSummary> = {}): FlightSummary => ({
@@ -284,5 +325,24 @@ describe('MapView handle', () => {
     await readyMap();
     mapRef.current.panToAlert(35.2, -78.2);
     expect(maps[0].lastEaseTo).toMatchObject({ center: [-78.2, 35.2], zoom: 14 });
+  });
+});
+
+describe('MapView without a basemap', () => {
+  it('still draws aircraft when the basemap style cannot be fetched', async () => {
+    mapBehaviour.styleFails = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(<MapView {...props([flight()])} />);
+    await readyMap();
+    expect(maps[0].style).toBe(FALLBACK_STYLE);
+    expect(planeProperties()?.flightId).toBe('f1');
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('keeps the configured basemap when it loads', async () => {
+    render(<MapView {...props([flight()])} />);
+    await readyMap();
+    expect(maps[0].style).toEqual(expect.any(String));
   });
 });

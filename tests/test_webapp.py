@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 
+from helpers import make_config
+from pyaerial.api import static
 from pyaerial.api.queries import (
     get_alerts,
     get_flight_detail,
@@ -11,7 +14,6 @@ from pyaerial.api.queries import (
 )
 from pyaerial.store.redis_live import RedisLiveStore
 from pyaerial.webapp import create_app
-from helpers import make_config
 
 
 def test_history_queries_tolerate_missing_db():
@@ -112,8 +114,46 @@ def test_websocket_hello_snapshot_and_subscribe():
             assert ws.receive_json()["type"] == "hello"
 
 
+def test_subscribe_sends_a_snapshot_of_added_streams():
+    """Subscribing to alerts delivers the current alerts, not just later changes."""
+    import time
+
+    from fastapi.testclient import TestClient
+
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    app = create_app(
+        config=make_config(), history=None, live_store=store, aircraft_db=None
+    )
+    with TestClient(app) as client:
+        # Pretend the empty lists were already pushed, so no tick re-sends them.
+        app.state.broadcaster._last_flights_sig = ()
+        app.state.broadcaster._last_alerts_sig = ()
+        with client.websocket_connect("/ws/live?streams=stats") as ws:
+            assert ws.receive_json()["type"] == "hello"
+            assert ws.receive_json()["type"] == "stats"
+            ws.send_json(
+                {
+                    "type": "request",
+                    "id": "s",
+                    "action": "subscribe",
+                    "params": {"streams": ["stats", "alerts"]},
+                }
+            )
+            time.sleep(0.3)
+            ws.send_json({"type": "request", "id": "z", "action": "fetchZones"})
+            seen = []
+            while True:
+                message = ws.receive_json()
+                seen.append(message.get("type"))
+                if message.get("type") == "response" and message.get("id") == "z":
+                    break
+            assert "alerts" in seen
+            assert "flights" not in seen
+
+
 def test_websocket_beast_endpoint_and_publish():
     from fastapi.testclient import TestClient
+
     from pyaerial.receivers.frames import BeastParser
 
     store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
@@ -208,6 +248,7 @@ def test_beast_tcp_streams_frames():
     import asyncio
 
     from fastapi.testclient import TestClient
+
     from pyaerial.receivers.frames import BeastParser
 
     config = make_config()
@@ -325,3 +366,26 @@ def test_allowed_hosts_keeps_loopback_reachable():
     for base in ("http://127.0.0.1:10090", "http://localhost:5173", "http://portal.example"):
         with TestClient(app, base_url=base) as client:
             assert client.get("/health").status_code == 200, base
+
+
+# --- SPA static serving ------------------------------------------------------
+# Missing files 404, the shell is never cached.
+
+
+def test_spa_fallback_and_missing_files(tmp_path, monkeypatch):
+    (tmp_path / "index.html").write_text("<html>shell</html>")
+    (tmp_path / "robots.txt").write_text("User-agent: *")
+    monkeypatch.setattr(static, "STATIC_DIR", tmp_path)
+    app = create_app(config=make_config())
+    with TestClient(app) as client:
+        for path in ("/", "/index.html", "/some/client/route"):
+            response = client.get(path)
+            assert response.status_code == 200, path
+            assert response.text == "<html>shell</html>"
+            assert response.headers["cache-control"] == "no-store", path
+        assert client.get("/robots.txt").text == "User-agent: *"
+        # A missing file must not come back as the HTML shell (a stale bundle
+        # would then fail with a MIME-type error instead of a clean 404).
+        for path in ("/missing.js", "/nested/missing.css"):
+            assert client.get(path).status_code == 404, path
+        assert client.get("/..%2f..%2fpyproject.toml").status_code == 404

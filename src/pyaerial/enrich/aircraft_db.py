@@ -58,20 +58,38 @@ class AircraftDB:
             path = (Path.cwd() / path).resolve()
 
         self.path = path
-        # Ensure parent directory exists
-        if self.path.parent:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-
         self._lock = threading.Lock()
-        # Open in read-write mode to allow dynamic caching, and allow shared thread access
-        with self._lock:
-            self._conn = sqlite3.connect(self.path, check_same_thread=False)
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.execute(
-                "CREATE TABLE IF NOT EXISTS aircraft (icao TEXT PRIMARY KEY, data TEXT)"
+        self._conn: sqlite3.Connection | None = None
+        # Open in read-write mode to allow dynamic caching, and allow shared
+        # thread access. The cache is optional enrichment: an unwritable or
+        # corrupt file disables it instead of stopping the engine.
+        conn: sqlite3.Connection | None = None
+        try:
+            if self.path.parent:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(self.path, check_same_thread=False)
+            conn.execute("PRAGMA busy_timeout=5000")
+            # DDL only for a new file: CREATE ... IF NOT EXISTS still takes
+            # the write lock, so the portal waited out the engine's writes.
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'aircraft'"
+            ).fetchone()
+            if not exists:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS aircraft (icao TEXT PRIMARY KEY, data TEXT)"
+                )
+                conn.commit()
+        except (sqlite3.Error, OSError) as exc:
+            log.warning(
+                "Aircraft metadata cache %s unavailable (%s); lookups disabled",
+                self.path,
+                exc,
             )
-            self._conn.commit()
+            if conn is not None:
+                conn.close()
+            return
+        self._conn = conn
 
     @property
     def available(self) -> bool:
@@ -146,7 +164,13 @@ class AircraftDB:
         return normalize_record_photos(record) if record is not None else None
 
     def _read_cached_record(self, icao: str) -> dict | None | object:
-        """Return cached record, None for a negative cache entry, or _MISSING."""
+        """Return cached record, None for a negative cache entry, or _MISSING.
+
+        Caller holds ``self._lock``; the connection may have been closed since
+        the caller's availability check.
+        """
+        if self._conn is None:
+            return _MISSING
         try:
             row = self._conn.execute(
                 "SELECT data FROM aircraft WHERE icao = ?", (icao,)

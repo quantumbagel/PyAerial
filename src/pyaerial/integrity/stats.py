@@ -4,19 +4,42 @@ from __future__ import annotations
 
 import math
 import statistics
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 
 def median(values: Sequence[float]) -> float | None:
-    return statistics.median(values) if values else None
+    return fast_median(values) if values else None
+
+
+def fast_median(values: Iterable[float]) -> float:
+    """``statistics.median`` without its overhead (same algorithm and result)."""
+    data = sorted(values)
+    n = len(data)
+    if n == 0:
+        raise statistics.StatisticsError("no median for empty data")
+    if n % 2 == 1:
+        return data[n // 2]
+    i = n // 2
+    return (data[i - 1] + data[i]) / 2
+
+
+def pstdev(values: Sequence[float]) -> float:
+    """Population standard deviation in floating point (two-pass).
+
+    ``statistics.pstdev`` computes in exact fractions, about 15x slower; this
+    agrees with it to within an ulp or two, far below any threshold here.
+    """
+    n = len(values)
+    mean = math.fsum(values) / n
+    return math.sqrt(math.fsum((v - mean) ** 2 for v in values) / n)
 
 
 def mad(values: Sequence[float]) -> float:
     """Median absolute deviation (unscaled)."""
     if not values:
         return 0.0
-    centre = statistics.median(values)
-    return statistics.median(abs(v - centre) for v in values)
+    centre = fast_median(values)
+    return fast_median(abs(v - centre) for v in values)
 
 
 def linear_fit(xs: Sequence[float], ys: Sequence[float]) -> tuple[float, float] | None:
@@ -68,4 +91,4 @@ def circular_median_deg(values: Sequence[float]) -> float | None:
     c = sum(math.cos(math.radians(v)) for v in values)
     centre = math.degrees(math.atan2(s, c))
     offsets = [((v - centre + 180.0) % 360.0) - 180.0 for v in values]
-    return (centre + statistics.median(offsets)) % 360.0
+    return (centre + fast_median(offsets)) % 360.0

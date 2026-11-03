@@ -27,6 +27,15 @@ def safe_static_path(full_path: str) -> Path | None:
     return candidate
 
 
+def _index_response() -> FileResponse:
+    index = STATIC_DIR / "index.html"
+    if not index.is_file():
+        raise HTTPException(503, FRONTEND_HINT)
+    # The shell names content-hashed bundles; a cached copy outlives them
+    # after an upgrade and the portal then fails to load.
+    return FileResponse(index, headers={"Cache-Control": "no-store"})
+
+
 def mount_spa(app: FastAPI) -> None:
     assets_dir = STATIC_DIR / "assets"
     if assets_dir.is_dir():
@@ -34,10 +43,7 @@ def mount_spa(app: FastAPI) -> None:
 
     @app.get("/")
     def serve_index():
-        index = STATIC_DIR / "index.html"
-        if not index.is_file():
-            raise HTTPException(503, FRONTEND_HINT)
-        return FileResponse(index, headers={"Cache-Control": "no-store"})
+        return _index_response()
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
@@ -46,12 +52,11 @@ def mount_spa(app: FastAPI) -> None:
         if ".." in Path(full_path).parts:
             raise HTTPException(404)
         file_path = safe_static_path(full_path)
-        if file_path is None:
-            if full_path and "." in full_path.rsplit("/", 1)[-1]:
-                raise HTTPException(404)
-        elif file_path.is_file():
+        if file_path is not None and file_path.is_file():
+            if file_path.name == "index.html":
+                return _index_response()
             return FileResponse(file_path)
-        index = STATIC_DIR / "index.html"
-        if index.is_file():
-            return FileResponse(index)
-        raise HTTPException(503, FRONTEND_HINT)
+        # Client routes have no extension; a missing file is a 404, not the shell.
+        if "." in full_path.rsplit("/", 1)[-1]:
+            raise HTTPException(404)
+        return _index_response()

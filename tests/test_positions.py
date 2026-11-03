@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from helpers import make_config
-from pyaerial.config.schema import ReceiverConfig, ReceiverPositionConfig
+from pyaerial.config.schema import (
+    ReceiverConfig,
+    ReceiverPositionConfig,
+)
 from pyaerial.receivers.aoa import parse_aoa_line
 from pyaerial.receivers.positions import (
     SOURCE_CONFIG,
@@ -75,3 +78,15 @@ def test_parse_aoa_line():
     assert parse_aoa_line('{"hex": "zz"}') is None
     assert parse_aoa_line("not json") is None
     assert parse_aoa_line('{"hex": "8d4840d6202cc371c32ce0576098", "elevation": 120}')["elevation"] is None
+
+
+# --- receiver.json validation ------------------------------------------------
+
+
+def test_receiver_json_rejects_booleans():
+    assert parse_receiver_json({"lat": True, "lon": True}) is None
+    assert parse_receiver_json({"lat": 35.0, "lon": -78.0, "alt_m_amsl": True}) == (
+        35.0,
+        -78.0,
+        None,
+    )

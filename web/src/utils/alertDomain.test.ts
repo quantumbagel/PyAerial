@@ -109,3 +109,11 @@ describe('API errors', () => {
     expect(describeError(new ApiError('rejected', 'no'), 'f')).toMatch(/web\.allowed_hosts/);
   });
 });
+
+describe('alert colours from config', () => {
+  it('does not treat inherited object keys as configured colours', () => {
+    const visual = alertVisual({ zone: 'RDU', rule: 'constructor' }, zones, { warning: '#ff0000' });
+    expect(typeof visual.color).toBe('string');
+    expect(visual.color).toBe('#14b8a6');
+  });
+});

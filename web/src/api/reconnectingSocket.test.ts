@@ -142,6 +142,17 @@ describe('ReconnectingSocket', () => {
     expect(FakeSocket.instances).toHaveLength(2);
   });
 
+  it('gives up on a socket that never finishes connecting', () => {
+    const { sock, onClose } = makeSocket({ idleTimeoutMs: 45_000 });
+    sock.start();
+    const stuck = FakeSocket.instances[0];
+    vi.advanceTimersByTime(45_000);
+    expect(onClose).toHaveBeenCalledWith(IDLE_TIMEOUT_CODE, 'Idle timeout');
+    expect(stuck.onopen).toBeNull();
+    vi.advanceTimersByTime(1000);
+    expect(FakeSocket.instances).toHaveLength(2);
+  });
+
   it('ignores events from a socket it already replaced', () => {
     const { sock, onMessage } = makeSocket({ idleTimeoutMs: 1000 });
     sock.start();

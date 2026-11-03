@@ -318,6 +318,12 @@
     overflow: auto;
 }
 
+.tel-note {
+    margin: 0 0 6px;
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+}
+
 .tel-table {
     width: 100%;
     min-width: 520px;

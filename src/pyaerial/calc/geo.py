@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import math
 
+import shapely
 from geopy.distance import geodesic
 from shapely import LineString, Point, Polygon
 from shapely.ops import nearest_points
+from shapely.validation import explain_validity
 
 from pyaerial.constants import (
     MAX_SPEED_MPS,
@@ -20,6 +22,11 @@ from pyaerial.constants import (
     MIN_SPEED_DT,
 )
 from pyaerial.units import KMH_TO_MPS, MPS_TO_KMH
+
+# One shared instance: geopy rebuilds the ellipsoid model on every
+# ``geodesic(...)`` call, which was ~40% of each distance/destination call.
+# ``measure`` returns km; ``destination`` takes km. Stateless after setup.
+_GEODESIC = geodesic()
 
 
 def meters_per_deg_lon(lat: float) -> float:
@@ -42,8 +49,41 @@ def build_polygons(zones: dict) -> dict[str, Polygon]:
         coordinates = zone.coordinates
         if not coordinates:
             raise ValueError(f"zone {name!r} has no coordinates")
-        polygons[name] = Polygon(coordinates)
+        poly = Polygon(coordinates)
+        # A bowtie or zero-area ring makes every intersects/covers test
+        # meaningless (shapely answers, but not about the drawn zone).
+        if not poly.is_valid or poly.area <= 0:
+            reason = explain_validity(poly)
+            if poly.is_valid:
+                reason = "zero area"
+            raise ValueError(f"zone {name!r}: {reason}")
+        polygons[name] = poly
     return polygons
+
+
+def _local_frame(polygon: Polygon, lon0: float) -> Polygon:
+    """*polygon* as the copy nearest longitude *lon0*, never wrapping the globe.
+
+    Zone math is planar in (lat, lon). Near the antimeridian a zone a few
+    km across 180 deg sits ~360 deg away in that plane, and a zone whose
+    vertices straddle 180 deg spans the rest of the globe. Each vertex is
+    taken the short way from the first (zones are far narrower than 180
+    deg), then the whole zone is moved by a multiple of 360 deg so its
+    centre is within 180 deg of the aircraft.
+    """
+    _min_lat, min_lon, _max_lat, max_lon = polygon.bounds
+    if max_lon - min_lon < 180.0 and lon0 - 180.0 < min_lon and max_lon <= lon0 + 180.0:
+        return polygon
+
+    def shift(coords):  # (N, 2) array of (lat, lon)
+        out = coords.copy()
+        ref = coords[0, 1]
+        lons = ref + ((coords[:, 1] - ref + 180.0) % 360.0) - 180.0
+        centre = (lons.min() + lons.max()) / 2.0
+        out[:, 1] = lons + 360.0 * round((lon0 - centre) / 360.0)
+        return out
+
+    return shapely.transform(polygon, shift)
 
 
 def calculate_heading(
@@ -75,17 +115,52 @@ def calculate_speed(
     elapsed = current_time - previous_time
     if elapsed < MIN_SPEED_DT:
         return None
-    speed_mps = geodesic(previous, current).m / elapsed
+    speed_mps = _short_distance_m(previous, current) / elapsed
     return min(speed_mps, MAX_SPEED_MPS) * MPS_TO_KMH
+
+
+# WGS84, for the local-ellipsoid short-distance formula.
+_WGS84_A = 6_378_137.0
+_WGS84_E2 = (1 / 298.257223563) * (2 - 1 / 298.257223563)
+# Below this separation (deg) the local formula is within ~1e-5 of the
+# geodesic (checked against geographiclib up to 20 km, |lat| <= 80).
+_SHORT_DISTANCE_DEG = 0.15
+
+
+def _short_distance_m(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Ellipsoidal distance (m), fast for the short hops between fixes.
+
+    Uses the meridian and prime-vertical radii at the mid-latitude; falls
+    back to the full geodesic for longer or near-polar separations.
+    """
+    dlat_deg = b[0] - a[0]
+    dlon_deg = shortest_lon_delta(b[1], a[1])
+    mid = (a[0] + b[0]) / 2.0
+    if (
+        abs(dlat_deg) > _SHORT_DISTANCE_DEG
+        or abs(dlon_deg) > _SHORT_DISTANCE_DEG
+        or abs(mid) > 80.0
+    ):
+        return _GEODESIC.measure(a, b) * 1000.0
+    lat = math.radians(mid)
+    sin_lat = math.sin(lat)
+    w = math.sqrt(1.0 - _WGS84_E2 * sin_lat * sin_lat)
+    meridian = _WGS84_A * (1.0 - _WGS84_E2) / (w * w * w)
+    prime = _WGS84_A / w
+    return math.hypot(
+        math.radians(dlat_deg) * meridian,
+        math.radians(dlon_deg) * prime * math.cos(lat),
+    )
 
 
 def distance_to_polygon(polygon: Polygon, position: tuple[float, float]) -> float:
     """Shortest distance (km) from ``position`` to the edge of ``polygon``."""
+    polygon = _local_frame(polygon, position[1])
     point = Point(position)
     if polygon.intersects(point) or polygon.covers(point):
         return 0.0
     nearest = nearest_points(polygon, point)[0]
-    return geodesic((nearest.x, nearest.y), position).km
+    return _GEODESIC.measure((nearest.x, nearest.y), position)
 
 
 def _bbox_min_distance_km(polygon: Polygon, position: tuple[float, float]) -> float:
@@ -112,6 +187,7 @@ def time_to_enter_geofence(
     Estimate the seconds until a plane at ``position`` (heading/speed) enters the
     geofence, or ``math.inf`` if the projected path never intersects it.
     """
+    polygon = _local_frame(polygon, position[1])
     point = Point(position)
     if polygon.intersects(point) or polygon.covers(point):
         return 0.0
@@ -124,8 +200,9 @@ def time_to_enter_geofence(
         return math.inf
 
     # 2. Continuous ray calculation without discretized steps
-    dest = geodesic(kilometers=distance_approx).destination(position, heading)
-    ray = LineString([point, Point(dest.latitude, dest.longitude)])
+    dest = _GEODESIC.destination(position, heading, distance=distance_approx)
+    dest_lon = position[1] + shortest_lon_delta(dest.longitude, position[1])
+    ray = LineString([point, Point(dest.latitude, dest_lon)])
 
     # 3. Robust entry calculation using nearest_points to support multi-part geometries
     intersection = ray.intersection(polygon)
@@ -134,7 +211,7 @@ def time_to_enter_geofence(
 
     _, entry_point = nearest_points(point, intersection)
     entry = (entry_point.x, entry_point.y)
-    return geodesic(position, entry).km / speed * 3600
+    return _GEODESIC.measure(position, entry) / speed * 3600
 
 
 def time_to_enter_geofence_curved(
@@ -159,6 +236,7 @@ def time_to_enter_geofence_curved(
     reported instead so transient heading noise or the start of a maneuver never
     erases alert forewarning.
     """
+    polygon = _local_frame(polygon, position[1])
     point = Point(position)
     if polygon.intersects(point) or polygon.covers(point):
         return 0.0

@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import contextlib
 import logging
 import queue
 import threading
 import time
 import zlib
+from collections.abc import Callable
 
 log = logging.getLogger("pyaerial.alerts")
 
-#: How long shutdown waits for queued notifications. One webhook can take
-#: ~16 s (3 attempts x 5 s timeout + backoff), so this covers a final
-#: deactivate per alert without letting Ctrl-C hang indefinitely.
-SHUTDOWN_GRACE_SECONDS = 30.0
+#: How long shutdown waits for queued notifications (the final deactivates).
+#: A healthy endpoint is done in well under a second; this covers a timed-out
+#: first attempt (5 s) plus backoff and most of a retry. Engine.shutdown runs
+#: it after receivers stop and every flight is archived, so with
+#: docker-compose's stop_grace_period: 20s about 12 s remain for those steps;
+#: a supervisor killing the process mid-wait loses only the queued
+#: notifications. Raise both together if needed.
+SHUTDOWN_GRACE_SECONDS = 8.0
 
 _Job = tuple[Callable[..., None], tuple]
 
@@ -99,7 +103,9 @@ class AlertDispatcher:
                 if job is not None:
                     discarded += 1
         if discarded:
-            log.warning("Discarded %d queued alert notification(s) at shutdown", discarded)
+            log.warning(
+                "Discarded %d queued alert notification(s) at shutdown", discarded
+            )
         for thread in self._threads:
             thread.join(0.1)
 

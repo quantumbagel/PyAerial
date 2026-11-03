@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 
+from helpers import make_config
 from pyaerial.alerters import Alerter, register_alerter
 from pyaerial.alerts.dispatch import AlertDispatcher
 from pyaerial.alerts.engine import AlertEngine
@@ -18,7 +19,6 @@ from pyaerial.constants import (
     STORE_RECV_DATA,
 )
 from pyaerial.models import Datum
-from helpers import make_config
 
 
 def test_dispatcher_preserves_order_per_key():
@@ -110,6 +110,19 @@ def test_deactivate_without_position_reports_none_not_null_island():
     assert payload["longitude"] is None
 
 
+def test_print_alerter_distinguishes_activate_from_deactivate(caplog):
+    from pyaerial.alerters import create_alerter
+
+    printer = create_alerter("print", {})
+    meta = {"icao": "abc123", "type": "warn", "zone": "pad", "eta": None}
+    with caplog.at_level("INFO", logger="pyaerial.alerter.print"):
+        printer.alert({**meta, "reason": {"hook": "activate"}}, {})
+        printer.alert({**meta, "reason": {"hook": "deactivate"}}, {})
+    lines = [r.getMessage() for r in caplog.records]
+    assert "'hook': 'activate'" in lines[0]
+    assert "'hook': 'deactivate'" in lines[1]
+
+
 def test_activation_hold_uses_monotonic_clock(monkeypatch):
     """A wall-clock jump must not satisfy the dwell hold."""
     from pyaerial.calc.motion import ResolvedMotion
@@ -124,7 +137,10 @@ def test_activation_hold_uses_monotonic_clock(monkeypatch):
     plane = {
         STORE_INFO: {STORE_ICAO: "abc123"},
         STORE_RECV_DATA: {"altitude": [Datum(400.0, wall[0])]},
-        STORE_INTERNAL: {STORE_FIRST_PACKET: wall[0], STORE_MOST_RECENT_PACKET: wall[0]},
+        STORE_INTERNAL: {
+            STORE_FIRST_PACKET: wall[0],
+            STORE_MOST_RECENT_PACKET: wall[0],
+        },
     }
     motion = ResolvedMotion(heading_deg=0.0, speed_kph=0.0, turn_rate_deg_s=0.0)
     position = (35.725, -78.695)

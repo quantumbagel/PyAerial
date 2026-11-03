@@ -11,7 +11,6 @@ before an aircraft reads as spoofed.
 from __future__ import annotations
 
 import math
-import statistics
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -21,9 +20,11 @@ from pyaerial.integrity.identity import (
     is_us_address,
     looks_like_n_number,
 )
-from pyaerial.integrity.stats import circular_median_deg, linear_fit
-from pyaerial.integrity.tdoa import wrap_ticks
-from pyaerial.receivers.frames import BEAST_CLOCK_HZ
+from pyaerial.integrity.stats import circular_median_deg, fast_median, linear_fit, pstdev
+from pyaerial.integrity.tdoa import CLOCK_JUMP_DRIFT, CLOCK_JUMP_SECONDS
+from pyaerial.receivers.frames import BEAST_CLOCK_HZ, BEAST_CLOCK_MOD
+
+_HALF_MOD = BEAST_CLOCK_MOD // 2
 
 PASS = "pass"
 WARN = "warn"
@@ -73,11 +74,13 @@ def radio_horizon(
     """*distances*: ``(receiver, ground_km, horizon_km)`` for receivers that heard it."""
     if not distances:
         return None
-    name, dist, limit = max(distances, key=lambda item: item[1] / max(item[2], 1e-6))
+    # The range cap applies to every receiver, not just the worst ratio.
+    name, dist, _limit = max(distances, key=lambda item: item[1])
     if dist > max_range_km:
         return CheckResult(
             FAIL, f"{name} heard it at {dist:.0f} km, beyond {max_range_km:.0f} km", dist
         )
+    name, dist, limit = max(distances, key=lambda item: item[1] / max(item[2], 1e-6))
     ratio = dist / limit if limit > 0 else math.inf
     detail = f"{name}: {dist:.0f} km, radio horizon {limit:.0f} km"
     return CheckResult(FAIL if ratio > 1 else PASS, detail, ratio)
@@ -125,7 +128,7 @@ def aoa(
     """Median |measured - expected| angle of arrival."""
     if len(bearing_errors) < 5:
         return None
-    err = statistics.median(abs(e) for e in bearing_errors)
+    err = fast_median(abs(e) for e in bearing_errors)
     result = graded(
         err,
         tolerance_deg,
@@ -133,7 +136,7 @@ def aoa(
         f"{receiver}: bearing off by {err:.0f}° from claimed position",
     )
     if len(elevation_errors) >= 5:
-        elev = statistics.median(abs(e) for e in elevation_errors)
+        elev = fast_median(abs(e) for e in elevation_errors)
         if elev > 10.0 and _RANK[result.status] < _RANK[FAIL]:
             return CheckResult(
                 FAIL, f"{receiver}: elevation off by {elev:.0f}° from claimed position", elev
@@ -144,7 +147,7 @@ def aoa(
 def tdoa(residuals_m: list[float], tolerance_m: float) -> CheckResult | None:
     if len(residuals_m) < 3:
         return None
-    err = statistics.median(abs(r) for r in residuals_m)
+    err = fast_median(abs(r) for r in residuals_m)
     return graded(
         err,
         tolerance_m,
@@ -159,7 +162,7 @@ def tdoa(residuals_m: list[float], tolerance_m: float) -> CheckResult | None:
 def mode_s_altitude(diffs_m: list[float], tolerance_m: float) -> CheckResult | None:
     if len(diffs_m) < 3:
         return None
-    err = statistics.median(abs(d) for d in diffs_m)
+    err = fast_median(abs(d) for d in diffs_m)
     return graded(
         err,
         tolerance_m,
@@ -189,18 +192,35 @@ def duplicate_icao(rejects: int, positions: int) -> CheckResult | None:
     return CheckResult(PASS, detail, rejects)
 
 
-def timing(clock_rows: list[tuple[int, int]]) -> CheckResult | None:
+def timing(clock_rows: list[tuple[float, int, int]]) -> CheckResult | None:
     """Airborne position squitter spacing from one receiver's 12 MHz clock.
 
     Transponders send position at random 0.4-0.6 s intervals, alternating
     even/odd CPR encoding. Generated traffic is often perfectly periodic or
-    breaks the alternation.
+    breaks the alternation. *clock_rows* are ``(wall_time, clock, cpr_odd)``
+    in arrival order; only the run since the clock's last discontinuity is
+    used, since clocks from before a restart or replay loop interleave.
     """
     if len(clock_rows) < 16:
         return None
-    base = clock_rows[0][0]
+    # Inlined tdoa.clock_jump_seconds / wrap_ticks (same arithmetic): this
+    # runs over every row of every aircraft's timing check.
+    start = 0
+    prev_t, prev_clock, _odd = clock_rows[0]
+    for i in range(1, len(clock_rows)):
+        t, clock, _odd = clock_rows[i]
+        wall = t - prev_t
+        error = ((clock - prev_clock + _HALF_MOD) % BEAST_CLOCK_MOD - _HALF_MOD) / BEAST_CLOCK_HZ - wall
+        if abs(error) > max(CLOCK_JUMP_SECONDS, CLOCK_JUMP_DRIFT * abs(wall)):
+            start = i
+        prev_t, prev_clock = t, clock
+    segment = clock_rows[start:]
+    if len(segment) < 16:
+        return None
+    base = segment[0][1] - _HALF_MOD
     rows = sorted(
-        (wrap_ticks(clock - base) / BEAST_CLOCK_HZ, odd) for clock, odd in clock_rows
+        (((clock - base) % BEAST_CLOCK_MOD - _HALF_MOD) / BEAST_CLOCK_HZ, odd)
+        for _t, clock, odd in segment
     )
     adjacent: list[float] = []
     same_parity = 0
@@ -211,7 +231,7 @@ def timing(clock_rows: list[tuple[int, int]]) -> CheckResult | None:
             same_parity += f0 == f1
     if len(adjacent) < 15:
         return None
-    spread = statistics.pstdev(adjacent)
+    spread = pstdev(adjacent)
     outside = sum(1 for gap in adjacent if not 0.38 <= gap <= 0.62) / len(adjacent)
     parity = same_parity / len(adjacent)
     detail = (

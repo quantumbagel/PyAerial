@@ -31,7 +31,8 @@ home:
 #   origins: []              # default: the portal's own origin only; add exact
 #                            # scheme://host[:port] entries, or ["*"] for any
 #   beast_host: "127.0.0.1"  # default; 0.0.0.0 to accept remote Beast feeders
-#   beast_port: 30005        # dump1090-compatible Beast TCP (OpenSky feeder)
+#   beast_port: 30105        # dump1090-compatible Beast TCP (OpenSky feeder);
+#                            # not 30005, where the engine reads dump1090
 
 receivers:
   main:
@@ -52,7 +53,7 @@ receivers:
 # Tie a rule to this zone with eta, distance, or proximity.
 # Units: altitude metres (not feet), speed km/h, eta seconds to the polygon
 # boundary along the current track (0 if already inside), distance km,
-# proximity metres. See UNITS.md.
+# proximity metres. See "Units" in CONFIGURATION.md.
 zones:
   main:
     # Inline [latitude, longitude] rings, or:

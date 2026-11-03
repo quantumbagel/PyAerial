@@ -22,12 +22,14 @@ export interface IntegrityCheck {
 
 /** Spoofing checks from the engine's integrity monitor (see CONFIGURATION.md). */
 export interface Integrity {
-  /** 0-1; 1 means consistent with every check that had evidence. */
-  score: number;
+  /** 0-1; 1 means consistent with every check that had evidence. Null when `unknown`. */
+  score: number | null;
   status: IntegrityStatus;
   checks: Record<string, IntegrityCheck>;
   /** Multilaterated transmitter location, for targets that fail TDOA. */
   emitter?: { latitude: number; longitude: number; offset_km: number };
+  /** Only ground rebroadcasts (TIS-B/ADS-R) heard lately: receiver RF checks don't apply. */
+  rebroadcast?: boolean;
 }
 
 export interface FlightSummary {
@@ -42,6 +44,7 @@ export interface FlightSummary {
   owner?: string | null;
   country?: string | null;
   aircraft_type?: string | null;
+  registration?: string | null;
   latitude?: number | null;
   longitude?: number | null;
   altitude?: number | null;
@@ -55,7 +58,6 @@ export interface FlightSummary {
 }
 
 export interface FlightDetail extends FlightSummary {
-  registration?: string | null;
   photo_url?: string | null;
   photo_photographer?: string | null;
   photo_link?: string | null;
@@ -66,6 +68,8 @@ export interface TelemetryPoint {
   latitude?: number | null;
   longitude?: number | null;
   altitude?: number | null;
+  /** Metres above the WGS84 ellipsoid (GNSS, TC 20-22 only); `altitude` is barometric. */
+  gnss_height?: number | null;
   speed?: number | null;
   heading?: number | null;
   flight_id?: string;
@@ -74,7 +78,7 @@ export interface TelemetryPoint {
   /** Receivers that heard this position, strongest copy first. */
   receivers?: string[];
   /** Integrity verdict in effect when the sample arrived. */
-  integrity_score?: number;
+  integrity_score?: number | null;
   integrity_status?: string;
   integrity_flags?: string[];
 }
@@ -89,6 +93,8 @@ export interface Alert {
   active?: boolean;
   activated_at?: number;
   deactivated_at?: number | null;
+  /** Why an ended episode ended: cleared | lost | shutdown | restart (absent if active or older). */
+  ended_by?: string | null;
   eta?: number | null;
   altitude?: number | null;
   latitude?: number | null;

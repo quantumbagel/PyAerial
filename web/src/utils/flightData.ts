@@ -1,13 +1,13 @@
 import type { FlightSummary, TelemetryPoint } from '../api/types';
 import { flightAlertLabel } from './alertData';
 import {
-  EMPTY,
   formatAltitudeCompact,
   formatDateTime,
   formatNumber,
   formatTimeRange,
   isFlightLive,
 } from './format';
+import { integrityScore } from './integrity';
 import { sortBy, sortValueLabel, type SortDirection, type SortField } from './sort';
 
 export type FlightSortField = 'last_seen' | 'callsign' | 'altitude' | 'integrity' | 'alerts';
@@ -65,8 +65,8 @@ export const FLIGHT_SORT_FIELDS: readonly SortField<FlightSummary, FlightSortFie
     id: 'integrity',
     label: 'Integrity',
     defaultDirection: 'desc',
-    value: (flight) => flight.integrity?.score,
-    display: (flight) => (flight.integrity ? formatNumber(flight.integrity.score, 2) : EMPTY),
+    value: (flight) => integrityScore(flight.integrity),
+    display: (flight) => formatNumber(integrityScore(flight.integrity), 2),
   },
   {
     id: 'alerts',
@@ -108,8 +108,11 @@ export function mergeLiveFlights(existing: FlightSummary[], incoming: FlightSumm
       aircraft_type: newFlight.aircraft_type ?? current.aircraft_type,
       owner: newFlight.owner ?? current.owner,
       country: newFlight.country ?? current.country,
+      registration: newFlight.registration ?? current.registration,
       active_alerts: newFlight.active_alerts,
       alert_stats: newFlight.alert_stats,
+      // The verdict is re-scored every few seconds, independent of position.
+      integrity: newFlight.integrity ?? current.integrity,
       is_live: newFlight.is_live ?? current.is_live,
       ...(useIncomingKinematics
         ? {

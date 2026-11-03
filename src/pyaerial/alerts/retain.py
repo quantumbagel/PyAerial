@@ -92,14 +92,17 @@ def _matching_seconds(
     first_time: float,
     last_time: float,
 ) -> float:
-    """Wall-clock seconds during which ``when`` held, using sample timestamps."""
+    """Longest continuous stretch (s) during which ``when`` held, by sample time.
+
+    Continuous, like the live engine's dwell: separate short matches do not
+    add up to ``dwell_seconds``.
+    """
     lat_series = plane.get(STORE_RECV_DATA, {}).get(STORE_LAT, [])
     if not lat_series:
         return 0.0
-    samples = [
-        datum for datum in lat_series if first_time <= datum.time <= last_time
-    ]
-    matched_seconds = 0.0
+    samples = [datum for datum in lat_series if first_time <= datum.time <= last_time]
+    longest = 0.0
+    run = 0.0
     prev_time: float | None = None
     prev_match = False
     for lat in samples:
@@ -108,6 +111,7 @@ def _matching_seconds(
         speed = get_latest(STORE_CALC_DATA, STORE_HORIZ_SPEED, plane, lat.time)
         if None in (lon, heading, speed):
             prev_match = False
+            run = 0.0
             prev_time = lat.time
             continue
         position = (lat.value, lon.value)
@@ -116,10 +120,13 @@ def _matching_seconds(
         )
         resolver = evaluate.make_resolver(plane, eta, polygon, position, lat.time)
         matched = evaluate.when_passes(when, resolver)
-        if matched and prev_match and prev_time is not None:
-            matched_seconds += max(0.0, lat.time - prev_time)
+        if not matched:
+            run = 0.0
+        elif prev_match and prev_time is not None:
+            run += max(0.0, lat.time - prev_time)
+        longest = max(longest, run)
         prev_match = matched
         prev_time = lat.time
     if prev_match and prev_time is not None:
-        matched_seconds += max(0.0, last_time - prev_time)
-    return matched_seconds
+        longest = max(longest, run + max(0.0, last_time - prev_time))
+    return longest

@@ -16,6 +16,7 @@ from pyaerial.constants import LOGGING_LEVELS
 _LOG_FORMAT = "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 _OWNED = "_pyaerial_handler"
+_HTTP_CLIENT_LOGGERS = ("urllib3", "requests")
 
 
 def setup_logging(
@@ -60,7 +61,9 @@ def setup_logging(
         setattr(file_handler, _OWNED, True)
         root.addHandler(file_handler)
 
-    # Quiet down noisy third-party libraries unless we are debugging.
-    if numeric_level > logging.DEBUG:
-        for noisy in ("urllib3",):
-            logging.getLogger(noisy).setLevel(logging.WARNING)
+    # HTTP client loggers stay at INFO or above even when debugging: at DEBUG,
+    # urllib3 logs every request line with its full path, and webhook URLs
+    # (Discord/Slack tokens) are secrets that must never reach a log file.
+    http_level = logging.WARNING if numeric_level > logging.DEBUG else logging.INFO
+    for name in _HTTP_CLIENT_LOGGERS:
+        logging.getLogger(name).setLevel(http_level)

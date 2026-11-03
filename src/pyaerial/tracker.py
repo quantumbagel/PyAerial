@@ -4,13 +4,28 @@ from __future__ import annotations
 
 import logging
 import time
+from bisect import bisect_left
 from collections import defaultdict
+from operator import attrgetter
 from typing import TYPE_CHECKING
 
-from pyaerial.classify import ClassifiedMessage, classify, max_jump_deg
+from pyModeS.position import airborne_position_pair
+
+from pyaerial.classify import (
+    CAT_AIRBORNE_BARO,
+    CAT_AIRBORNE_GNSS,
+    CAT_IDENT,
+    CAT_SURFACE,
+    CAT_VELOCITY,
+    ClassifiedMessage,
+    airborne_cpr,
+    classify,
+    max_jump_deg,
+)
 from pyaerial.config.schema import Config
 from pyaerial.constants import (
     STORE_FIRST_PACKET,
+    STORE_GATE_REJECTS,
     STORE_ICAO,
     STORE_INFO,
     STORE_INTERNAL,
@@ -23,36 +38,66 @@ from pyaerial.constants import (
     STORE_TOTAL_PACKETS,
 )
 from pyaerial.models import Datum, Plane
+from pyaerial.receivers.frames import es_icao
 
 if TYPE_CHECKING:
     from pyaerial.receivers.positions import ReceiverPositions
 
 log = logging.getLogger("pyaerial.tracker")
 
-# Internal counter of position fixes the CPR jump gate rejected (evidence of
-# two transmitters sharing an ICAO address).
-STORE_GATE_REJECTS = "gate_rejects"
 
 # After this many consecutive position fixes fail the jump gate, the last
-# accepted fix is presumed bad and the gate is reset (decode from home).
+# accepted fix is presumed bad and the gate is reset (re-anchor from an
+# even/odd pair).
 _GATE_RESET_AFTER = 5
 
+# Even/odd airborne frames further apart than this may straddle a CPR zone
+# (DO-260B global decoding window).
+_CPR_PAIR_SECONDS = 10.0
 
-def es_icao(msg_hex: str) -> str | None:
-    """ICAO of a DF17/18 extended squitter, or ``None`` for any other frame.
+# A last fix older than this is no longer a safe local-decode reference: at
+# MAX_SPEED_MPS the aircraft may have moved half of the 180 NM local range.
+_LOCAL_REF_SECONDS = 180.0
 
-    Reads the DF from the first byte so short Mode S replies never reach the
-    CRC-based address recovery or the ADS-B decoder.
-    """
-    if len(msg_hex) != 28:
-        return None
-    try:
-        df = int(msg_hex[:2], 16) >> 3
-    except ValueError:
-        return None
-    if df not in (17, 18):
-        return None
-    return msg_hex[2:8].upper()
+
+# Status-line labels for the classify packet-type buckets, in display order.
+_PACKET_TYPE_LABELS = (
+    (CAT_AIRBORNE_BARO, "pos"),
+    (CAT_AIRBORNE_GNSS, "gnss pos"),
+    (CAT_SURFACE, "surface"),
+    (CAT_VELOCITY, "vel"),
+    (CAT_IDENT, "id"),
+)
+
+
+def _format_packet_types(counts: dict) -> str:
+    """``pos 81, vel 2, id 2`` from a ``{category: count}`` mapping."""
+    by_category: dict[int, int] = {}
+    for key, value in (counts or {}).items():
+        try:
+            category = int(key)  # JSON-restored planes have string keys
+        except (TypeError, ValueError):
+            continue
+        by_category[category] = by_category.get(category, 0) + int(value)
+    return ", ".join(
+        f"{label} {by_category[category]}"
+        for category, label in _PACKET_TYPE_LABELS
+        if by_category.get(category)
+    )
+
+
+def _has_position_sample(plane: Plane, timestamp: float) -> bool:
+    """Whether a latitude or longitude sample is stored at exactly *timestamp*."""
+    recv = plane.received_data
+    for field in (STORE_LAT, STORE_LONG):
+        series = recv.get(field) or []
+        index = bisect_left(series, timestamp, key=_datum_time)
+        if index < len(series) and series[index].time == timestamp:
+            return True
+    return False
+
+
+_datum_time = attrgetter("time")
 
 
 class Tracker:
@@ -71,6 +116,9 @@ class Tracker:
         self._recent: dict[str, float] = {}
         # icao -> consecutive position fixes rejected by the CPR jump gate
         self._gate_rejects: dict[str, int] = {}
+        # icao -> CPR parity (1 = odd) -> newest airborne (lat, lon, time) raw
+        # CPR fields, for global even/odd decoding
+        self._cpr_frames: dict[str, dict[int, tuple[int, int, float]]] = {}
 
     def ingest(
         self,
@@ -85,31 +133,58 @@ class Tracker:
         """
         processed = 0
         receivers = receivers or {}
+        latest: float | None = None
         for msg_hex, timestamp in messages:
             icao = es_icao(msg_hex)
             if icao is None:
                 continue
-            last_fix = self._fix_for(icao)
+            if latest is None or timestamp > latest:
+                latest = timestamp
+            typecode = int(msg_hex[8:10], 16) >> 3
+            is_position = 5 <= typecode <= 18 or 20 <= typecode <= 22
+            cpr = airborne_cpr(msg_hex)
+            pair_position = (
+                self._pair_position(icao, cpr, timestamp) if cpr is not None else None
+            )
             last_position: tuple[float, float] | None = None
             jump = max_jump_deg(None)
-            if last_fix is not None and icao is not None:
-                if self._gate_rejects.get(icao, 0) >= _GATE_RESET_AFTER:
+            reset_gate = False
+            stale_fix = False
+            if is_position:
+                last_fix = self._fix_for(icao)
+                if last_fix is not None:
+                    stale_fix = timestamp - last_fix[2] > _LOCAL_REF_SECONDS
+                    if self._gate_rejects.get(icao, 0) >= _GATE_RESET_AFTER:
+                        reset_gate = True
+                    else:
+                        last_position = (last_fix[0], last_fix[1])
+                        jump = max_jump_deg(timestamp - last_fix[2])
+                if (
+                    cpr is not None
+                    and pair_position is None
+                    and (last_position is None or stale_fix)
+                ):
+                    # Local decoding aliases by a whole CPR zone (~360 NM)
+                    # when the reference is over 180 NM off, and that fix would
+                    # anchor every later decode. Without a recent fix (first
+                    # fix, gate reset, long gap) an airborne fix needs a pair.
+                    continue
+                if reset_gate:
                     log.info(
                         "Resetting position gate for %s after %d rejected fixes",
                         icao,
                         self._gate_rejects[icao],
                     )
                     self._gate_rejects.pop(icao, None)
-                else:
-                    last_position = (last_fix[0], last_fix[1])
-                    jump = max_jump_deg(timestamp - last_fix[2])
 
             def _rejected(icao: str = icao) -> None:
                 self._gate_rejects[icao] = self._gate_rejects.get(icao, 0) + 1
                 plane = self.planes.get(icao)
                 if plane is not None:
                     internal = plane.setdefault(STORE_INTERNAL, {})
-                    internal[STORE_GATE_REJECTS] = internal.get(STORE_GATE_REJECTS, 0) + 1
+                    internal[STORE_GATE_REJECTS] = (
+                        internal.get(STORE_GATE_REJECTS, 0) + 1
+                    )
 
             heard = receivers.get(msg_hex) or ()
             receiver = heard[0] if heard else None
@@ -126,6 +201,7 @@ class Tracker:
                     on_implausible=_rejected,
                     icao=icao,
                     reference=reference,
+                    pair_position=pair_position,
                 )
             except (ValueError, KeyError, IndexError, TypeError) as exc:
                 log.debug("Could not classify message %s: %s", msg_hex, exc)
@@ -136,7 +212,37 @@ class Tracker:
                 self._gate_rejects.pop(icao, None)
             self._merge(classified, timestamp, heard=heard)
             processed += 1
+        if latest is not None and self._cpr_frames:
+            cutoff = latest - _CPR_PAIR_SECONDS
+            self._cpr_frames = {
+                icao: frames
+                for icao, frames in self._cpr_frames.items()
+                if max(frame[2] for frame in frames.values()) >= cutoff
+            }
         return processed
+
+    def _pair_position(
+        self, icao: str, cpr: tuple[int, int, int], timestamp: float
+    ) -> tuple[float, float] | None:
+        """Record an airborne CPR frame; globally decode it if its partner is fresh.
+
+        Returns this frame's position from the even/odd pair, which (unlike a
+        local decode) needs no reference within 180 NM.
+        """
+        odd, lat_raw, lon_raw = cpr
+        frames = self._cpr_frames.setdefault(icao, {})
+        held = frames.get(odd)
+        if held is None or timestamp >= held[2]:
+            frames[odd] = (lat_raw, lon_raw, timestamp)
+        other = frames.get(1 - odd)
+        if other is None or abs(timestamp - other[2]) > _CPR_PAIR_SECONDS:
+            return None
+        even, odd_frame = (
+            (other, (lat_raw, lon_raw)) if odd else ((lat_raw, lon_raw), other)
+        )
+        return airborne_position_pair(
+            even[0], even[1], odd_frame[0], odd_frame[1], even_is_newer=not odd
+        )
 
     def collect_new_messages(
         self, incoming: list[tuple[str, float]]
@@ -167,7 +273,7 @@ class Tracker:
 
     def expired_planes(self, current_time: float | None = None) -> list[str]:
         """Return ICAO ids of planes not updated within ``remember_planes`` seconds."""
-        now = current_time or time.time()
+        now = time.time() if current_time is None else current_time
         threshold = self.config.tracking.remember_planes
         expired = []
         for icao, plane in self.planes.items():
@@ -181,6 +287,7 @@ class Tracker:
         removed = []
         for icao in icaos:
             self._gate_rejects.pop(icao, None)
+            self._cpr_frames.pop(icao, None)
             plane = self.planes.pop(icao, None)
             if plane is not None:
                 removed.append(plane)
@@ -209,11 +316,12 @@ class Tracker:
                 continue
             plane = self.planes[icao]
             callsign = plane[STORE_INFO].get("callsign", "")
-            pkt_types = plane[STORE_INTERNAL][STORE_PACKET_TYPE]
+            pkt_types = _format_packet_types(plane[STORE_INTERNAL][STORE_PACKET_TYPE])
+            detail = f"{count}, {pkt_types}" if pkt_types else f"{count}"
             if callsign:
-                parts.append(f"{icao}/{callsign} ({count}, {pkt_types})")
+                parts.append(f"{icao}/{callsign} ({detail})")
             else:
-                parts.append(f"{icao} ({count}, {pkt_types})")
+                parts.append(f"{icao} ({detail})")
 
         label = "All" if top_n == -1 else f"Top {min(top_n, len(sorted_planes))}"
         return f"{label}: {', '.join(parts)}"
@@ -229,6 +337,8 @@ class Tracker:
         typecode_cat = classified.typecode_category
         icao = message_data[STORE_INFO][STORE_ICAO]
 
+        # Position sample times dropped from the series (run end moved on).
+        replaced: list[float] = []
         if icao not in self.planes:
             plane = Plane.from_mapping(message_data)
             for field, value in list(plane.received_data.items()):
@@ -257,6 +367,8 @@ class Tracker:
                 if last.value == datum.value:
                     if timestamp > last.time:
                         if len(series) >= 2 and series[-2].value == last.value:
+                            if field in (STORE_LAT, STORE_LONG):
+                                replaced.append(last.time)
                             last.time = timestamp
                         else:
                             series.append(Datum(last.value, timestamp))
@@ -284,8 +396,19 @@ class Tracker:
             plane[STORE_INFO]["receiver"] = heard[0]
             seen = plane[STORE_INFO].setdefault("receivers", [])
             seen.extend(name for name in heard if name not in seen)
-            if STORE_LAT in message_data[STORE_RECV_DATA]:
+            if STORE_LAT in message_data[STORE_RECV_DATA] and _has_position_sample(
+                plane, timestamp
+            ):
                 internal.setdefault(STORE_POSITION_RECEIVERS, {})[timestamp] = heard
+        # Keep the map to sample times only (archive provenance lookups), or a
+        # repeated fix grows it by one entry per frame.
+        position_receivers = internal.get(STORE_POSITION_RECEIVERS)
+        if position_receivers:
+            for stale in replaced:
+                if stale in position_receivers and not _has_position_sample(
+                    plane, stale
+                ):
+                    del position_receivers[stale]
 
         # Live Redis trims to telemetry_keep_seconds. The in-memory series is
         # the archive source for SQLite on expire, so it is not clipped here.

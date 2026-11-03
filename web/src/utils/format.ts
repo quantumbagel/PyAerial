@@ -46,7 +46,8 @@ export function formatNumber(value: unknown, digits = 0): string {
     });
     numberFormats.set(digits, fmt);
   }
-  return fmt.format(n);
+  // Intl keeps the sign of values that round to zero ("-0 m").
+  return fmt.format(Math.abs(n) < 0.5 * 10 ** -digits ? 0 : n);
 }
 
 // ── Kinematics ───────────────────────────────────────────────
@@ -77,9 +78,10 @@ export function formatSpeedCompact(kmh: unknown): string {
   return v == null ? EMPTY : `${formatNumber(v)} km/h`;
 }
 
+/** Whole degrees in 0-359 (359.6 is "0°", not "360°"). */
 export function formatHeading(degrees: unknown): string {
   const d = toFinite(degrees);
-  return d == null ? EMPTY : `${formatNumber(d)}°`;
+  return d == null ? EMPTY : `${formatNumber(((Math.round(d) % 360) + 360) % 360)}°`;
 }
 
 /** Latitude or longitude, always 5 decimals (~1 m). */
@@ -107,9 +109,11 @@ export function formatDuration(seconds: unknown): string {
   return `${secs}s`;
 }
 
-/** Time to reach a zone, same style as durations. */
+/** Time to reach a zone, same style as durations; the engine sends 0 once inside. */
 export function formatEta(eta: unknown): string {
-  return formatDuration(eta);
+  const s = toFinite(eta);
+  if (s != null && s <= 0) return 'Inside zone';
+  return formatDuration(s);
 }
 
 export function formatEpisodeDuration(

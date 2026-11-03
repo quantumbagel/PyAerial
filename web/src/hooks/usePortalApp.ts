@@ -29,7 +29,7 @@ const EMPTY_MAP_HANDLE: MapViewHandle = {
 type PathLiveApi = {
   appendFlightPositions: (flights: FlightSummary[]) => void;
   appendLiveTelemetry: (points: TelemetryPoint[]) => void;
-  refetchActivePath: () => void;
+  resyncPaths: () => void;
 };
 
 export function usePortalApp() {
@@ -46,7 +46,7 @@ export function usePortalApp() {
   const pathLive = useRef<PathLiveApi>({
     appendFlightPositions: () => {},
     appendLiveTelemetry: () => {},
-    refetchActivePath: () => {},
+    resyncPaths: () => {},
   });
 
   useEffect(() => {
@@ -80,9 +80,14 @@ export function usePortalApp() {
       pathLive.current.appendLiveTelemetry(points);
     },
     onAlertsActivated: noteActivatedAlerts,
+    // Both mean live points were missed: backfill the drawer and the paths.
     onReconnect: () => {
       void selection.refreshSelectedTelemetry();
-      pathLive.current.refetchActivePath();
+      pathLive.current.resyncPaths();
+    },
+    onResume: () => {
+      void selection.refreshSelectedTelemetry();
+      pathLive.current.resyncPaths();
     },
   });
 
@@ -125,6 +130,7 @@ export function usePortalApp() {
             return [
               flight.callsign,
               flight.icao,
+              flight.registration,
               flight.model,
               flight.aircraft_type,
               flight.owner,
@@ -140,7 +146,7 @@ export function usePortalApp() {
     pathLive.current = {
       appendFlightPositions: paths.appendFlightPositions,
       appendLiveTelemetry: paths.appendLiveTelemetry,
-      refetchActivePath: paths.refetchActivePath,
+      resyncPaths: paths.resyncPaths,
     };
   });
 

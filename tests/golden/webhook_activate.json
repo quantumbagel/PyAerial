@@ -1,0 +1,52 @@
+{
+  "activated_at": 1750000001.0,
+  "aircraft_type": "C172",
+  "alert_id": "a1b2c3-1749999400:airport:low_approach:00000000000040008000000000000001",
+  "callsign": "N123AB",
+  "color": "#ef4444",
+  "country": "United States",
+  "deactivated_at": null,
+  "ended_by": null,
+  "eta": 43.135322,
+  "event": "activate",
+  "flight_id": "a1b2c3-1749999400",
+  "icao": "a1b2c3",
+  "manufacturer": null,
+  "manufacturer_name": null,
+  "map_links": {
+    "google_maps": "https://www.google.com/maps?q=35.7,-78.695",
+    "openstreetmap": "https://www.openstreetmap.org/?mlat=35.7&mlon=-78.695&zoom=14"
+  },
+  "model": "Cessna 172S",
+  "operator_callsign": null,
+  "owner": "Example Flying Club",
+  "photo_url": null,
+  "reason": {
+    "hook": "activate",
+    "rule": "low_approach",
+    "zones": {
+      "airport": 43.135322,
+      "tower": null
+    }
+  },
+  "registration": "N123AB",
+  "rule": "low_approach",
+  "schema": "pyaerial.alert/1",
+  "telemetry": {
+    "altitude": 457.2,
+    "altitude_source": "baro",
+    "heading": 0.0,
+    "latitude": 35.7,
+    "longitude": -78.695,
+    "speed": 185.2,
+    "vertical_speed": -2.54
+  },
+  "timestamp": 1750000001.0,
+  "tracker_links": {
+    "adsbexchange": "https://globe.adsbexchange.com/?icao=a1b2c3",
+    "flightaware": "https://flightaware.com/live/flight/N123AB",
+    "radarbox": "https://www.radarbox.com/data/registration/N123AB"
+  },
+  "type": "low_approach",
+  "zone": "airport"
+}

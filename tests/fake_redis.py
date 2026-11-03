@@ -13,6 +13,7 @@ class FakeRedis:
         self.sets: dict[str, set[str]] = {}
         self.hashes: dict[str, dict[str, str]] = {}
         self.zsets: dict[str, dict[str, float]] = {}
+        self.ttls: dict[str, float] = {}  # key -> seconds from the last SET EX / EXPIRE
         self.calls: list[str] = []
         self.fail: set[str] = set()  # command names that raise
         self.down = False
@@ -42,17 +43,48 @@ class FakeRedis:
         self._hit("get")
         return self.kv.get(key)
 
-    def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
+    def set(
+        self, key: str, value: str, ex: int | None = None, nx: bool = False
+    ) -> bool:
         self._hit("set")
         if nx and key in self.kv:
             return False
         self.kv[key] = value
+        if ex is not None:
+            self.ttls[key] = ex
+        else:
+            self.ttls.pop(key, None)
         return True
+
+    def expire(self, key: str, seconds: int) -> bool:
+        self._hit("expire")
+        if not any(
+            key in store for store in (self.kv, self.sets, self.hashes, self.zsets)
+        ):
+            return False
+        self.ttls[key] = seconds
+        return True
+
+    def ttl(self, key: str) -> int:
+        self._hit("ttl")
+        if not any(
+            key in store for store in (self.kv, self.sets, self.hashes, self.zsets)
+        ):
+            return -2
+        return int(self.ttls.get(key, -1))
+
+    def lapse(self, *keys: str) -> None:
+        """Simulate the TTL running out (no round trip)."""
+        for key in keys:
+            self.ttls.pop(key, None)
+            for store in (self.kv, self.sets, self.hashes, self.zsets):
+                store.pop(key, None)
 
     def delete(self, *keys: str) -> int:
         self._hit("delete")
         n = 0
         for key in keys:
+            self.ttls.pop(key, None)
             for store in (self.kv, self.sets, self.hashes, self.zsets):
                 if store.pop(key, None) is not None:
                     n += 1
@@ -94,6 +126,11 @@ class FakeRedis:
             self.hashes.get(key, {}).pop(field, None)
         return len(fields)
 
+    def hmget(self, key: str, fields: list[str]) -> list[str | None]:
+        self._hit("hmget")
+        stored = self.hashes.get(key, {})
+        return [stored.get(field) for field in fields]
+
     def hvals(self, key: str) -> list[str]:
         self._hit("hvals")
         return list(self.hashes.get(key, {}).values())
@@ -121,10 +158,53 @@ class FakeRedis:
         items = [m for m, _ in reversed(self._sorted(key))]
         return items[start : None if end == -1 else end + 1]
 
-    def zrangebyscore(self, key: str, low: str, high: str) -> list[str]:
+    @staticmethod
+    def _bound(text: str | float) -> tuple[float, bool]:
+        """(value, exclusive) from a Redis score bound like '(1.5' or '+inf'."""
+        text = str(text)
+        exclusive = text.startswith("(")
+        return float(text.lstrip("(")), exclusive
+
+    def _in_range(self, score: float, low: str, high: str) -> bool:
+        lo, lo_ex = self._bound(low)
+        hi, hi_ex = self._bound(high)
+        above = score > lo if lo_ex else score >= lo
+        below = score < hi if hi_ex else score <= hi
+        return above and below
+
+    def zrangebyscore(
+        self,
+        key: str,
+        low: str,
+        high: str,
+        start: int | None = None,
+        num: int | None = None,
+    ) -> list[str]:
         self._hit("zrangebyscore")
-        lo = float(low.lstrip("("))
-        return [m for m, score in self._sorted(key) if score > lo]
+        items = [
+            m for m, score in self._sorted(key) if self._in_range(score, low, high)
+        ]
+        if start is not None and num is not None:
+            items = items[start : start + num]
+        return items
+
+    def zrevrangebyscore(
+        self,
+        key: str,
+        high: str,
+        low: str,
+        start: int | None = None,
+        num: int | None = None,
+    ) -> list[str]:
+        self._hit("zrevrangebyscore")
+        items = [
+            m
+            for m, score in reversed(self._sorted(key))
+            if self._in_range(score, low, high)
+        ]
+        if start is not None and num is not None:
+            items = items[start : start + num]
+        return items
 
     def zremrangebyscore(self, key: str, low: str, high: float) -> int:
         self._hit("zremrangebyscore")

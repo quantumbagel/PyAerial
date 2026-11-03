@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Integrity } from '../api/types';
-import { checkLabel, integrityLabel, isFlagged, sortedChecks } from './integrity';
+import { checkLabel, integrityLabel, integrityScore, isFlagged, sortedChecks } from './integrity';
 
 const doc: Integrity = {
   score: 0.3,
@@ -30,5 +30,27 @@ describe('integrity utils', () => {
     expect(integrityLabel(null)).toBe('Not enough evidence');
     expect(checkLabel('aoa')).toBe('Angle of arrival');
     expect(checkLabel('new_check')).toBe('new check');
+  });
+});
+
+describe('integrityScore', () => {
+  it('is null when no check had evidence (status unknown) or the score is missing', () => {
+    expect(integrityScore({ score: 1, status: 'unknown', checks: {} })).toBeNull();
+    expect(integrityScore(null)).toBeNull();
+    expect(integrityScore({ ...doc, score: Number.NaN })).toBeNull();
+    expect(integrityScore(doc)).toBe(0.3);
+  });
+
+  it('orders checks with an unexpected status after the known ones', () => {
+    const odd: Integrity = {
+      score: 0.5,
+      status: 'suspect',
+      checks: {
+        zeta: { status: 'other' as 'pass', detail: '' },
+        aoa: { status: 'fail', detail: '' },
+        timing: { status: 'pass', detail: '' },
+      },
+    };
+    expect(sortedChecks(odd).map(([name]) => name)).toEqual(['aoa', 'timing', 'zeta']);
   });
 });

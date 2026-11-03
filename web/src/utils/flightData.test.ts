@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FlightSummary } from '../api/types';
-import { applyTelemetryPoint, sortFlightsBy } from './flightData';
+import { applyTelemetryPoint, flightSortValueLabel, mergeLiveFlights, sortFlightsBy } from './flightData';
 
 function flight(overrides: Partial<FlightSummary>): FlightSummary {
   return {
@@ -135,5 +135,55 @@ describe('applyTelemetryPoint', () => {
     });
     expect(next[0].speed).toBe(180);
     expect(next[0].latitude).toBe(35.7);
+  });
+});
+
+describe('mergeLiveFlights', () => {
+  it('takes the integrity verdict from each new snapshot', () => {
+    const base: FlightSummary = {
+      flight_id: 'f1',
+      icao: 'abc123',
+      is_live: true,
+      timestamp: 100,
+      integrity: { score: 1, status: 'ok', checks: {} },
+    };
+    const next: FlightSummary = {
+      ...base,
+      timestamp: 101,
+      integrity: { score: 0.2, status: 'spoofed', checks: {} },
+    };
+    const [merged] = mergeLiveFlights([base], [next]);
+    expect(merged.integrity?.status).toBe('spoofed');
+    // A snapshot older than the kinematics we hold still updates the verdict.
+    const [stale] = mergeLiveFlights([next], [{ ...base, timestamp: 50 }]);
+    expect(stale.integrity?.status).toBe('ok');
+    expect(stale.timestamp).toBe(101);
+  });
+});
+
+describe('integrity sorting', () => {
+  it('sorts unscored ("unknown") aircraft last instead of as perfectly consistent', () => {
+    const unknown = flight({ flight_id: 'u', integrity: { score: 1, status: 'unknown', checks: {} } });
+    const ok = flight({ flight_id: 'ok', integrity: { score: 0.95, status: 'ok', checks: {} } });
+    const bad = flight({ flight_id: 'bad', integrity: { score: 0.2, status: 'spoofed', checks: {} } });
+    expect(sortFlightsBy([unknown, bad, ok], 'integrity', 'desc').map((f) => f.flight_id)).toEqual([
+      'ok',
+      'bad',
+      'u',
+    ]);
+    expect(sortFlightsBy([unknown, bad, ok], 'integrity', 'asc').map((f) => f.flight_id)).toEqual([
+      'bad',
+      'ok',
+      'u',
+    ]);
+    expect(flightSortValueLabel(unknown, 'integrity')).toBe('—');
+  });
+});
+
+describe('mergeLiveFlights metadata', () => {
+  it('picks up a registration that arrives after the first snapshot', () => {
+    const first = flight({ is_live: true, registration: null });
+    const [merged] = mergeLiveFlights([first], [{ ...first, registration: 'N123AA' }]);
+    expect(merged.registration).toBe('N123AA');
   });
 });

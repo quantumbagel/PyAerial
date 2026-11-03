@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
+
+from pyModeS.util import crc as pms_crc
+
+log = logging.getLogger("pyaerial.receivers.frames")
 
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
@@ -57,7 +62,8 @@ def frame_fields(hex_msg: str) -> dict[str, object]:
         df = (int(hex_msg[:2], 16) >> 3) & 0x1F
     except ValueError:
         return fields
-    fields["df"] = df
+    # Comm-D (DF24) is identified by its first two bits alone.
+    fields["df"] = min(df, 24)
     if df in (17, 18) and len(hex_msg) >= 8:
         fields["icao"] = hex_msg[2:8]
     return fields
@@ -87,8 +93,93 @@ def _rssi_rank(frame: RawFrame) -> float:
     return _MISSING_RSSI
 
 
+def es_crc_ok(hex_msg: str) -> bool:
+    """Whether a frame passes the only CRC check a receiver can make.
+
+    ``False`` when the frame claims DF17/18 (extended squitter) and is not a
+    CRC-clean 112-bit frame: wrong length, non-hex body, or a non-zero
+    parity remainder. ``True`` for every other format, whose parity cannot
+    be checked without the address: DF0/4/5/16/20/21 overlay it (or a BDS)
+    on the parity and DF11 may carry an interrogator code. ``True`` also for
+    an unparseable first byte, which no format check can classify.
+    """
+    try:
+        df = int(hex_msg[:2], 16) >> 3
+    except ValueError:
+        return True
+    if df not in (17, 18):
+        return True
+    if len(hex_msg) != 28:
+        return False
+    try:
+        return pms_crc(hex_msg) == 0
+    except ValueError:
+        return False
+
+
+# DF18 control fields whose AA is an ICAO address and whose ME is a standard
+# ADS-B message: 0 non-transponder ADS-B, 2 fine TIS-B, 6 ADS-R. CF 1 and 5
+# carry non-ICAO addresses, 3 is coarse TIS-B, 4 management, 7 reserved.
+_DF18_ICAO_CF = frozenset({0, 2, 6})
+
+
+def _tisb_imf(msg_hex: str) -> bool:
+    """IMF bit of a fine TIS-B / ADS-R message (set: address is not ICAO).
+
+    It sits in ME bit 21 (surface position), 8 (airborne position) or 9
+    (velocity), 1-indexed from the ME's first bit.
+    """
+    me = int(msg_hex[8:22], 16)
+    typecode = me >> 51
+    if 5 <= typecode <= 8:
+        bit = 21
+    elif 9 <= typecode <= 18 or 20 <= typecode <= 22:
+        bit = 8
+    elif typecode == 19:
+        bit = 9
+    else:
+        return False
+    return bool((me >> (56 - bit)) & 1)
+
+
+def es_icao(msg_hex: str) -> str | None:
+    """ICAO of a CRC-valid DF17/18 extended squitter, or ``None``.
+
+    Reads the DF from the first byte so short Mode S replies never reach the
+    CRC-based address recovery or the ADS-B decoder. A corrupted frame (a bit
+    error in the address would create a ghost aircraft) and DF18 frames
+    without an ICAO address or a standard ME field are rejected.
+    """
+    if len(msg_hex) != 28:
+        return None
+    try:
+        first = int(msg_hex[:2], 16)
+        df = first >> 3
+        if df not in (17, 18):
+            return None
+        if df == 18:
+            cf = first & 0x07
+            if cf not in _DF18_ICAO_CF or (cf != 0 and _tisb_imf(msg_hex)):
+                return None
+        if not es_crc_ok(msg_hex):
+            return None
+    except ValueError:
+        return None
+    return msg_hex[2:8].upper()
+
+
 def _better_copy(candidate: RawFrame, current: RawFrame) -> bool:
-    """Prefer stronger RSSI; break ties with a hardware clock."""
+    """Prefer a copy that passes CRC, then stronger RSSI; break ties with a
+    hardware clock.
+
+    Two CRC-valid frames differ in more than ``_CORRECT_HAMMING`` bits, so a
+    near-identical pair is one good copy and one corrupted copy, and the
+    corrupted one can be the stronger.
+    """
+    if candidate.hex != current.hex:
+        cand_ok = es_crc_ok(candidate.hex)
+        if cand_ok != es_crc_ok(current.hex):
+            return cand_ok
     cand_rssi = _rssi_rank(candidate)
     cur_rssi = _rssi_rank(current)
     if cand_rssi != cur_rssi:
@@ -178,11 +269,13 @@ def merge_receiver_frames(
             continue
         bins = buckets.setdefault((len(payload), *_frame_identity(frame.hex)), {})
         time_bin = _time_bin(frame.timestamp, window)
-        candidates = sorted({
-            index
-            for offset in (-1, 0, 1)
-            for index in bins.get(time_bin + offset, ())
-        })
+        candidates = sorted(
+            {
+                index
+                for offset in (-1, 0, 1)
+                for index in bins.get(time_bin + offset, ())
+            }
+        )
         merged = False
         for index in candidates:
             other = kept[index]
@@ -277,19 +370,30 @@ def encode_beast_messages(messages: list[dict[str, object]]) -> bytes:
     """
     out = bytearray()
     for item in messages:
-        hex_msg = item.get("hex")
-        if not isinstance(hex_msg, str) or not hex_msg:
-            continue
-        rssi = item.get("rssi")
-        timestamp = item.get("timestamp")
-        out.extend(
-            encode_beast(
+        # One malformed item must not cost the rest of the batch.
+        try:
+            hex_msg = item.get("hex")
+            if not isinstance(hex_msg, str) or not hex_msg:
+                raise ValueError(f"no hex string: {hex_msg!r}")
+            rssi = item.get("rssi")
+            timestamp = item.get("timestamp")
+            if isinstance(timestamp, (int, float)) and not math.isfinite(timestamp):
+                raise ValueError(f"non-finite timestamp {timestamp!r}")
+            encoded = encode_beast(
                 hex_msg,
                 clock=None,
                 rssi=rssi if isinstance(rssi, (int, float)) else None,
                 timestamp=timestamp if isinstance(timestamp, (int, float)) else None,
             )
-        )
+        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+            log.debug("Skipping raw frame for Beast output (%s): %r", exc, item)
+            continue
+        if not encoded:
+            log.debug(
+                "Skipping raw frame for Beast output (not a Beast frame): %r", item
+            )
+            continue
+        out.extend(encoded)
     return bytes(out)
 
 
@@ -433,7 +537,8 @@ def try_parse_beast(
 
     kind = buffer[start + 1]
     if kind == BEAST_ESC:
-        return None, start + 1 - offset
+        # An escaped 0x1a data byte (we are mid-frame); neither ESC starts a frame.
+        return None, start + 2 - offset
     msg_len = BEAST_MSG_LEN.get(kind)
     if msg_len is None:
         return None, start + 1 - offset

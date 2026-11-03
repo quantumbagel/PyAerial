@@ -56,15 +56,24 @@ def elevation_deg(
     lat1: float, lon1: float, alt1: float, lat2: float, lon2: float, alt2: float
 ) -> float:
     """Elevation angle of point 2 seen from point 1, degrees above the horizon."""
-    a = ecef(lat1, lon1, alt1)
-    b = ecef(lat2, lon2, alt2)
+    return elevation_between(
+        ecef(lat1, lon1, alt1), ecef(lat2, lon2, alt2), up_vector(lat1, lon1)
+    )
+
+
+def up_vector(lat: float, lon: float) -> Vec3:
+    """Unit ellipsoid normal (local up) at a geodetic position, in ECEF."""
+    phi = math.radians(lat)
+    lam = math.radians(lon)
+    return (math.cos(phi) * math.cos(lam), math.cos(phi) * math.sin(lam), math.sin(phi))
+
+
+def elevation_between(a: Vec3, b: Vec3, up: Vec3) -> float:
+    """:func:`elevation_deg` from precomputed ECEF points and *a*'s up vector."""
     d = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
     rng = math.hypot(*d)
     if rng == 0:
         return 90.0
-    phi = math.radians(lat1)
-    lam = math.radians(lon1)
-    up = (math.cos(phi) * math.cos(lam), math.cos(phi) * math.sin(lam), math.sin(phi))
     dot = d[0] * up[0] + d[1] * up[1] + d[2] * up[2]
     return math.degrees(math.asin(max(-1.0, min(1.0, dot / rng))))
 

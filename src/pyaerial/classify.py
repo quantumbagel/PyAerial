@@ -21,6 +21,7 @@ from pyaerial.constants import (
     MAX_SPEED_MPS,
     STORE_ALT,
     STORE_CALLSIGN,
+    STORE_GNSS_HEIGHT,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
     STORE_ICAO,
@@ -63,6 +64,23 @@ def max_jump_deg(elapsed_s: float | None) -> float:
     return max(MAX_CPR_JUMP_DEG, elapsed_s * MAX_SPEED_MPS / _M_PER_DEG_LAT)
 
 
+def airborne_cpr(msg: str) -> tuple[int, int, int] | None:
+    """``(odd, lat, lon)`` raw CPR fields of a DF17/18 airborne position frame.
+
+    ``None`` for any other typecode. The caller has checked DF and CRC.
+    """
+    if len(msg) != 28:
+        return None
+    try:
+        me = int(msg[8:22], 16)
+    except ValueError:
+        return None
+    typecode = me >> 51
+    if not (9 <= typecode <= 18 or 20 <= typecode <= 22):
+        return None
+    return (me >> 34) & 1, (me >> 17) & 0x1FFFF, me & 0x1FFFF
+
+
 def classify(
     msg: str,
     home: HomeConfig,
@@ -72,18 +90,23 @@ def classify(
     on_implausible: Callable[[], None] | None = None,
     icao: str | None = None,
     reference: tuple[float, float] | None = None,
+    pair_position: tuple[float, float] | None = None,
 ) -> ClassifiedMessage | None:
     """
     Classify a single ADS-B message.
 
-    Assumes downlink format 17 or 18. Returns ``None`` for messages that should
-    be ignored (invalid ICAO, unsupported typecode, etc.). A position further
-    than ``jump_deg`` from ``last_position`` is dropped and ``on_implausible``
-    is called so the caller can count consecutive rejections.
+    Assumes downlink format 17 or 18 with a valid CRC (the tracker checks).
+    Returns ``None`` for messages that should be ignored (invalid ICAO,
+    unsupported typecode, etc.). A position further than ``jump_deg`` from
+    ``last_position`` is dropped and ``on_implausible`` is called so the
+    caller can count consecutive rejections.
 
     *icao* skips re-deriving the address when the caller already has it.
-    *reference* is the CPR reference when there is no last position (the
-    receiving antenna); ``home`` otherwise.
+    *pair_position* is this airborne frame's position from a global even/odd
+    CPR decode; it is the preferred airborne reference because it is valid at
+    any range. Otherwise the last position is the reference, then *reference*
+    (the receiving antenna), then ``home``. Local decoding is only correct
+    within 180 NM (airborne) / 45 NM (surface) of the reference.
     """
     try:
         typecode = pms_typecode(msg)
@@ -132,7 +155,7 @@ def classify(
         except Exception:
             return None
         lat = decoded.get("latitude")
-        lon = decoded.get("longitude")
+        lon = _wrap_longitude(decoded.get("longitude"))
         if not _plausible_fix(lat, lon, last_position, jump_deg):
             if on_implausible is not None:
                 on_implausible()
@@ -151,27 +174,32 @@ def classify(
         category = CAT_SURFACE
 
     elif 9 <= typecode <= 18 or 20 <= typecode <= 22:
-        ref = last_position or reference or (home.latitude, home.longitude)
+        ref = (
+            pair_position
+            or last_position
+            or reference
+            or (home.latitude, home.longitude)
+        )
         try:
             decoded = pms.decode(msg, reference=ref)
         except Exception:
             return None
         lat = decoded.get("latitude")
-        lon = decoded.get("longitude")
+        lon = _wrap_longitude(decoded.get("longitude"))
         if not _plausible_fix(lat, lon, last_position, jump_deg):
             if on_implausible is not None:
                 on_implausible()
             return None
-        alt = decoded.get("altitude")
-        data = {
-            STORE_INFO: {STORE_ICAO: icao},
-            STORE_RECV_DATA: {
-                STORE_LAT: lat,
-                STORE_LONG: lon,
-                STORE_ALT: alt * FT_TO_M if alt is not None else None,
-            },
-        }
-        category = CAT_AIRBORNE_BARO if typecode <= 18 else CAT_AIRBORNE_GNSS
+        recv = {STORE_LAT: lat, STORE_LONG: lon}
+        if typecode <= 18:
+            alt = decoded.get("altitude")
+            recv[STORE_ALT] = alt * FT_TO_M if alt is not None else None
+            category = CAT_AIRBORNE_BARO
+        else:
+            gnss_ft = _gnss_height_ft(msg)
+            recv[STORE_GNSS_HEIGHT] = gnss_ft * FT_TO_M if gnss_ft is not None else None
+            category = CAT_AIRBORNE_GNSS
+        data = {STORE_INFO: {STORE_ICAO: icao}, STORE_RECV_DATA: recv}
 
     elif typecode == 19:
         try:
@@ -205,6 +233,58 @@ def classify(
     return ClassifiedMessage(data=data, typecode_category=category)
 
 
+def _gnss_height_ft(msg: str) -> int | None:
+    """GNSS height (HAE, ft) of a TC 20-22 airborne position.
+
+    The 12-bit field uses the same AC coding as barometric altitude (25 ft
+    with Q=1), as decoded by dump1090, readsb and rs1090. pyModeS reads it
+    as whole metres instead.
+    """
+    return ac12_altitude_ft((int(msg[8:22], 16) >> 36) & 0xFFF)
+
+
+def ac12_altitude_ft(ac: int) -> int | None:
+    """Decode a 12-bit ADS-B altitude code (ME bits 9-20) to feet.
+
+    Bit layout, MSB first: C1 A1 C2 A2 C4 A4 B1 Q B2 D2 B4 D4 (the 13-bit
+    Mode S AC field without its M bit). Q=1 is 25 ft steps from -1000 ft;
+    Q=0 is 100 ft Gillham (Gray) code. ``None`` for "no altitude" (all
+    zero) and for invalid Gillham codes. Matches pyModeS's decoder for all
+    4096 codes.
+    """
+    if ac == 0:
+        return None
+    if ac & 0x10:
+        return (((ac & 0xFE0) >> 1) | (ac & 0xF)) * 25 - 1000
+
+    def bit(pos: int) -> int:
+        return (ac >> (11 - pos)) & 1
+
+    c1, a1, c2, a2, c4, a4, b1 = (bit(pos) for pos in range(7))
+    b2, d2, b4, d4 = bit(8), bit(9), bit(10), bit(11)
+    gc500 = (
+        (d2 << 7) | (d4 << 6) | (a1 << 5) | (a2 << 4)
+        | (a4 << 3) | (b1 << 2) | (b2 << 1) | b4
+    )
+    n500 = _gray_to_int(gc500)
+    n100 = _gray_to_int((c1 << 2) | (c2 << 1) | c4)
+    if n100 in (0, 5, 6):
+        return None
+    if n100 == 7:
+        n100 = 5
+    if n500 % 2:
+        n100 = 6 - n100
+    return n500 * 500 + n100 * 100 - 1300
+
+
+def _gray_to_int(n: int) -> int:
+    n ^= n >> 8
+    n ^= n >> 4
+    n ^= n >> 2
+    n ^= n >> 1
+    return n
+
+
 def _valid_icao(icao: object) -> bool:
     return isinstance(icao, str) and len(icao) == 6 and icao != "000000"
 
@@ -216,6 +296,18 @@ def _finite_coord(value: object) -> float | None:
     if not math.isfinite(number):
         return None
     return number
+
+
+def _wrap_longitude(value: object) -> object:
+    """Fold a finite longitude into [-180, 180).
+
+    Local CPR decoding returns a longitude within half a zone of the
+    reference, so near the antimeridian it can exceed +/-180.
+    """
+    number = _finite_coord(value)
+    if number is None:
+        return value
+    return ((number + 180.0) % 360.0) - 180.0
 
 
 def _lon_delta_deg(a: float, b: float) -> float:

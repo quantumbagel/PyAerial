@@ -212,7 +212,7 @@ export function Sidebar({
             sidebarTab === 'raw'
               ? 'Search hex or ICAO…'
               : isLive
-                ? 'Search callsign, ICAO, model, or alert…'
+                ? 'Search callsign, ICAO, registration, model, or alert…'
                 : 'Search callsign, ICAO, or flight ID…'
           }
           value={searchQuery}

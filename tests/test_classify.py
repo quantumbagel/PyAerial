@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import math
 
-from pyaerial.classify import _plausible_fix, classify
+import pyModeS as pms
+import pytest
+
+from helpers import with_crc
+from pyaerial.classify import _plausible_fix, ac12_altitude_ft, classify
 from pyaerial.config.schema import HomeConfig
 from pyaerial.constants import STORE_HORIZ_SPEED, STORE_RECV_DATA
 from pyaerial.units import KMH_TO_KT
@@ -79,3 +83,40 @@ def test_lon_gate_widens_with_latitude():
     # 0.7 deg of longitude at 70N is ~27 km, well within a 0.5-deg-of-lat move.
     assert _plausible_fix(70.0, 10.7, (70.0, 10.0)) is True
     assert _plausible_fix(0.0, 10.7, (0.0, 10.0)) is False
+
+
+# --- Local 12-bit (AC12) altitude decoding -----------------------------------
+
+
+def _tc11_with_ac12(ac: int) -> str:
+    me = (11 << 51) | (ac << 36)
+    return with_crc(f"8da1b2c3{me:014x}000000")
+
+
+def test_ac12_altitude_matches_pymodes_for_every_code():
+    mismatches = []
+    for ac in range(4096):
+        expected = pms.decode(_tc11_with_ac12(ac)).get("altitude")
+        if ac12_altitude_ft(ac) != expected:
+            mismatches.append((ac, ac12_altitude_ft(ac), expected))
+    assert mismatches == []
+
+
+@pytest.mark.parametrize(
+    "ac, feet",
+    [
+        (0x000, None),  # no altitude
+        (0x010, -1000),  # Q=1, N=0
+        (0xC38, 38000),  # 1090 MHz Riddle example (Q=1)
+        (0x058, 0),
+    ],
+)
+def test_ac12_altitude_known_values(ac, feet):
+    assert ac12_altitude_ft(ac) == feet
+
+
+def test_ac12_gillham_codes_step_by_100_ft():
+    gillham = {ac12_altitude_ft(ac) for ac in range(4096) if not ac & 0x10}
+    gillham.discard(None)
+    assert gillham
+    assert all(feet % 100 == 0 for feet in gillham)

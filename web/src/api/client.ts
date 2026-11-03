@@ -1,4 +1,4 @@
-import { sendWsRequest } from './liveSocket';
+import { sendWsRequest, sendWsRequestFull } from './liveSocket';
 import type { Alert, AppConfig, FlightDetail, FlightSummary, PortalView, ServerStats, TelemetryPoint, ZonesData } from './types';
 
 export type HistoryListOpts = {
@@ -33,12 +33,27 @@ export function fetchFlight(flightId: string, view: PortalView): Promise<FlightD
   return sendWsRequest<FlightDetail>('fetchFlight', { flightId, view });
 }
 
+export interface TelemetryPage {
+  points: TelemetryPoint[];
+  /** The server's cap (5000 by default) left older points out. */
+  truncated: boolean;
+}
+
+export async function fetchTelemetryPage(
+  flightId: string,
+  view: PortalView,
+  since = 0,
+): Promise<TelemetryPage> {
+  const res = await sendWsRequestFull<TelemetryPoint[]>('fetchTelemetry', { flightId, view, since });
+  return { points: Array.isArray(res.data) ? res.data : [], truncated: res.truncated === true };
+}
+
 export function fetchTelemetry(
   flightId: string,
   view: PortalView,
   since = 0,
 ): Promise<TelemetryPoint[]> {
-  return sendWsRequest<TelemetryPoint[]>('fetchTelemetry', { flightId, view, since });
+  return fetchTelemetryPage(flightId, view, since).then((page) => page.points);
 }
 
 export function fetchAlerts(

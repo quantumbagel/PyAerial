@@ -3,8 +3,9 @@
  *
  * - Jittered exponential backoff between attempts (reset after a successful open).
  * - The pending reconnect timer is stored, so stop() really cancels it.
- * - Optional idle timeout: if nothing arrives for `idleTimeoutMs` the socket is
- *   treated as dead (half-open TCP, sleeping laptop, proxy drop) and replaced.
+ * - Optional idle timeout: if nothing arrives for `idleTimeoutMs` (counting from
+ *   the connect attempt) the socket is treated as dead (half-open TCP,
+ *   sleeping laptop, proxy drop) and replaced.
  * - Close code 1008 (policy violation, e.g. origin rejected) stops retrying.
  */
 
@@ -145,6 +146,9 @@ export class ReconnectingSocket {
     }
     if (this.opts.binaryType) ws.binaryType = this.opts.binaryType;
     this.ws = ws;
+    // The idle deadline also bounds the handshake: a black-holed connection
+    // can sit in CONNECTING for minutes before the browser gives up.
+    this.touch();
 
     ws.onopen = () => {
       if (this.ws !== ws) return;

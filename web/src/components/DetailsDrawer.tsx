@@ -14,6 +14,7 @@ import {
   formatDuration,
   formatHeading,
   formatSpeed,
+  isFiniteNumber,
   isFlightLive,
   safeHttpsUrl,
 } from '../utils/format';
@@ -21,7 +22,7 @@ import { FlightAlertBadges } from './AlertBadges';
 import { AlertTimeline } from './AlertTimeline';
 import { ExternalLinks } from './ExternalLinks';
 import { IntegritySection } from './IntegritySection';
-import { TelemetryTable } from './TelemetryTable';
+import { GNSS_HEIGHT_TITLE, TelemetryTable } from './TelemetryTable';
 import { Button, Chip, StateView, Tab, TabList, TabPanel, useTabIds } from './ui';
 
 type DrawerTab = 'alerts' | 'telemetry';
@@ -33,6 +34,8 @@ interface DetailsDrawerProps {
   activeAlertId: string | null;
   flightAlerts: Alert[];
   flightTelemetry: TelemetryPoint[];
+  /** The server left the oldest telemetry points out. */
+  telemetryTruncated?: boolean;
   drawerTab: DrawerTab;
   selectedTelemetryPoint: TelemetryPoint | null;
   appConfig: AppConfig | null;
@@ -86,7 +89,10 @@ function seenRange(
   };
 }
 
-type Kinematics = Pick<TelemetryPoint, 'altitude' | 'speed' | 'heading' | 'latitude' | 'longitude'>;
+type Kinematics = Pick<
+  TelemetryPoint,
+  'altitude' | 'gnss_height' | 'speed' | 'heading' | 'latitude' | 'longitude'
+>;
 
 export function DetailsDrawer({
   open,
@@ -95,6 +101,7 @@ export function DetailsDrawer({
   activeAlertId,
   flightAlerts,
   flightTelemetry,
+  telemetryTruncated = false,
   drawerTab,
   selectedTelemetryPoint,
   appConfig,
@@ -222,7 +229,10 @@ export function DetailsDrawer({
   );
   const lastPoint = flightTelemetry.length > 0 ? flightTelemetry[flightTelemetry.length - 1] : null;
   const readingPoint: Kinematics | null = selectedTelemetryPoint ?? lastPoint;
-  const reading = (key: keyof Kinematics) => readingPoint?.[key] ?? displayFlight?.[key];
+  const reading = (key: Exclude<keyof Kinematics, 'gnss_height'>) =>
+    readingPoint?.[key] ?? displayFlight?.[key];
+  // Only GNSS (TC 20-22) positions carry it; shown beside, never instead of, baro altitude.
+  const gnssHeight = isFiniteNumber(readingPoint?.gnss_height) ? readingPoint?.gnss_height : null;
   const { first: firstSeen, last: lastSeen } = seenRange(flightDetail, flightSummary, flightTelemetry);
   const remember = appConfig?.remember_planes ?? null;
   const secsAgo = lastSeen != null ? Math.max(0, now - lastSeen) : null;
@@ -350,8 +360,19 @@ export function DetailsDrawer({
                     </dd>
                   </>
                 )}
-                <dt className="ui-field-label">Altitude</dt>
+                <dt className="ui-field-label">{gnssHeight != null ? 'Baro altitude' : 'Altitude'}</dt>
                 <dd className="ui-field-value">{formatAltitude(reading('altitude'))}</dd>
+                {gnssHeight != null && (
+                  <>
+                    <dt className="ui-field-label" title={GNSS_HEIGHT_TITLE}>
+                      GNSS height
+                    </dt>
+                    <dd className="ui-field-value">
+                      {formatAltitude(gnssHeight)}
+                      <span className="ui-field-sub">Geometric, above the WGS84 ellipsoid</span>
+                    </dd>
+                  </>
+                )}
                 <dt className="ui-field-label">Speed</dt>
                 <dd className="ui-field-value">{formatSpeed(reading('speed'))}</dd>
                 <dt className="ui-field-label">Heading</dt>
@@ -413,6 +434,7 @@ export function DetailsDrawer({
                 selectedTelemetryPoint={selectedTelemetryPoint}
                 onSelectTelemetryPoint={onSelectTelemetryPoint}
                 containerRef={tableContainerRef}
+                truncated={telemetryTruncated}
               />
             </TabPanel>
           </>

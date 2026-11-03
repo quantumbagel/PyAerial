@@ -58,7 +58,9 @@ COPY --from=pybuild /opt/venv /opt/venv
 COPY --from=dump1090build /src/dump1090/dump1090 /opt/dump1090/dump1090
 RUN ! ldd /opt/dump1090/dump1090 | grep 'not found'
 COPY --chmod=0755 scripts/run-engine.sh /opt/PyAerial/scripts/run-engine.sh
-COPY config.yaml /opt/PyAerial/config.yaml
+# The packaged example, never the local config.yaml (it may hold webhook URLs,
+# which would then live in an image layer). Bind-mount your own config.
+COPY src/pyaerial/examples/config.yaml /opt/PyAerial/config.yaml
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \

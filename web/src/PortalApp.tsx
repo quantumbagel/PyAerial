@@ -177,6 +177,7 @@ export function PortalApp() {
             activeAlertId={selection.activeAlertId}
             flightAlerts={selection.flightAlerts}
             flightTelemetry={selection.flightTelemetry}
+            telemetryTruncated={selection.telemetryTruncated}
             drawerTab={drawerTab}
             selectedTelemetryPoint={selection.selectedTelemetryPoint}
             appConfig={appConfig}

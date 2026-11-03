@@ -34,6 +34,7 @@ type EpisodeLike = {
   active?: boolean;
   activated_at?: number | null;
   deactivated_at?: number | null;
+  ended_by?: string | null;
 };
 
 /** The one definition of "this episode is still active". */
@@ -56,6 +57,8 @@ export function mergeEpisode<T extends EpisodeLike>(existing: T, update: T): T {
     ...update,
     activated_at: starts.length ? Math.min(...starts) : (update.activated_at ?? existing.activated_at),
     deactivated_at: deactivated_at ?? undefined,
+    // Like "ended", the reason is never taken back by a snapshot that lacks it.
+    ended_by: update.ended_by ?? existing.ended_by ?? undefined,
     active: !ended,
   };
 }
@@ -100,6 +103,26 @@ export function mergeAlertsByEpisode(existing: Alert[], updates: Alert[]): Alert
     if (!seen.has(id)) merged.push(alert);
   }
   return merged;
+}
+
+const ENDED_BY_LABELS: Record<string, string> = {
+  cleared: 'left zone / conditions cleared',
+  lost: 'aircraft lost',
+  shutdown: 'engine shutdown',
+  restart: 'engine restart',
+};
+
+/** Why an ended episode ended, or null (still active, or not recorded). */
+export function endedByLabel(alert: {
+  ended_by?: string | null;
+  active?: boolean;
+  deactivated_at?: number | null;
+}): string | null {
+  const reason = typeof alert.ended_by === 'string' ? alert.ended_by.trim() : '';
+  if (!reason || isAlertActive(alert)) return null;
+  return Object.prototype.hasOwnProperty.call(ENDED_BY_LABELS, reason)
+    ? ENDED_BY_LABELS[reason]
+    : reason.replace(/_/g, ' ');
 }
 
 // ── Severity & colour ────────────────────────────────────────
@@ -215,7 +238,8 @@ export function alertTooltip(alert: Alert, now = Date.now() / 1000): string {
     `Activated: ${formatDateTime(alert.activated_at, { withSeconds: true })}`,
   ];
   if (!active && alert.deactivated_at) {
-    lines.push(`Ended: ${formatDateTime(alert.deactivated_at, { withSeconds: true })}`);
+    const why = endedByLabel(alert);
+    lines.push(`Ended: ${formatDateTime(alert.deactivated_at, { withSeconds: true })}${why ? ` (${why})` : ''}`);
   }
   lines.push(`Position: ${formatPosition(alert.latitude, alert.longitude)}`);
   lines.push(`Altitude: ${formatAltitude(alert.altitude)}`);

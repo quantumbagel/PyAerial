@@ -70,7 +70,8 @@ def websocket_api_spec(
             "({\"type\": \"raw\", \"frames\": [...]}, no handshake) and re-encoded "
             "as dump1090 Beast binary on /ws/beast (binary WebSocket) and, when "
             "web.beast_port is set, a TCP listener compatible with OpenSky "
-            "Network's feeder (BEASTHOST/BEASTPORT, default dump1090 port 30005). "
+            "Network's feeder (BEASTHOST/BEASTPORT, default port 30105; dump1090 itself "
+            "uses 30005, which the engine reads). "
             "Raw and Beast are not /ws/live subscribe streams."
         ),
         "streams": {
@@ -146,7 +147,12 @@ def websocket_api_spec(
                     "since": 0,
                     "limit": None,
                 },
-                "notes": "History responses are capped at 20000 points.",
+                "notes": (
+                    "Live and history responses hold at most limit points "
+                    "(default 5000, max 20000): the newest ones, or with since > 0 "
+                    "the oldest ones after since. The response carries "
+                    "truncated: true beside data when points were left out."
+                ),
             },
             "fetchAlerts": {
                 "params": {

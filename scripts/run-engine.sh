@@ -30,7 +30,8 @@ watch_dump1090() {
   local backoff=1
   while true; do
     echo "Starting dump1090 (${DUMP1090_BIN})"
-    "${DUMP1090_BIN}" --net --raw --quiet &
+    # Output ports only: no raw/Beast input listeners to inject frames through.
+    "${DUMP1090_BIN}" --net --net-ri-port 0 --net-bi-port 0 --raw --quiet &
     local child=$!
     wait "${child}" || true
     echo "dump1090 exited; restarting in ${backoff}s"

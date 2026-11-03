@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from pyaerial.store.redis_live import RedisLiveStore, redact_uri
+from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.urls import redact_uri
 
 log = logging.getLogger("pyaerial.view")
 

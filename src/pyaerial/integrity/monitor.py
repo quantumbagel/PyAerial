@@ -19,7 +19,8 @@ import zlib
 from collections import defaultdict, deque
 from dataclasses import dataclass
 
-from pyModeS.util import altcode as pms_altcode, icao as pms_icao
+from pyModeS.util import altcode as pms_altcode
+from pyModeS.util import icao as pms_icao
 
 from pyaerial.classify import (
     CAT_AIRBORNE_BARO,
@@ -33,51 +34,78 @@ from pyaerial.constants import (
     STORE_ALT,
     STORE_CALLSIGN,
     STORE_FIRST_PACKET,
+    STORE_GATE_REJECTS,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
     STORE_INFO,
+    STORE_INTEGRITY,
     STORE_INTEGRITY_LOG,
     STORE_INTERNAL,
     STORE_LAT,
     STORE_LONG,
     STORE_PACKET_TYPE,
     STORE_RECV_DATA,
+    STORE_TRACK_STARTED,
     STORE_VERT_SPEED,
 )
 from pyaerial.integrity import checks, geodesy
 from pyaerial.integrity.checks import FAIL, PASS, WARN, CheckResult
 from pyaerial.integrity.evidence import (
+    GEO_SPACING,
+    TIMING_MAX_SAMPLES,
     AircraftEvidence,
+    PositionLookup,
     _series_value,
     latest_fix,
     position_at,
+    rows_since,
     series_window,
     trim,
 )
 from pyaerial.integrity.network import NetworkChecker
-from pyaerial.integrity.stats import circular_median_deg
-from pyaerial.integrity.tdoa import ClockSync, TdoaObservation, multilaterate
+from pyaerial.integrity.stats import circular_median_deg, fast_median
+from pyaerial.integrity.tdoa import (
+    CLOCK_JUMP_SECONDS,
+    ClockSync,
+    TdoaObservation,
+    clock_jump_seconds,
+    multilaterate,
+    wrap_ticks,
+)
 from pyaerial.models import Verdict, nearest_datum
-from pyaerial.receivers.frames import BEAST_MLAT_CLOCK, RawFrame
+from pyaerial.receivers.frames import (
+    BEAST_CLOCK_HZ,
+    BEAST_CLOCK_MOD,
+    BEAST_MLAT_CLOCK,
+    RawFrame,
+    es_icao,
+)
 from pyaerial.receivers.positions import ReceiverPosition, ReceiverPositions
-from pyaerial.tracker import STORE_GATE_REJECTS
 from pyaerial.units import FT_TO_M
 
 log = logging.getLogger("pyaerial.integrity")
 
-STORE_INTEGRITY = "integrity"
 STATUS_OK = "ok"
 STATUS_SUSPECT = "suspect"
 STATUS_SPOOFED = "spoofed"
 STATUS_UNKNOWN = "unknown"
 
+# Each aircraft is re-evaluated this often, at a phase set by its address,
+# so every tick handles an even share; station-wide work runs this often too.
 _EVAL_INTERVAL = 1.0
+_HALF_MOD = BEAST_CLOCK_MOD // 2
+_FAILING = frozenset({"suspect", "spoofed"})
 _RECENT = 30.0
 _REPLAY_WINDOW = 5.0
+# Copies of one hex received this close together are one transmission
+# (identical squitters repeat at least 0.4 s apart).
+_COPY_WINDOW = 0.2
 _SATURATED_DBFS = -3.0
 _TREND_MAX_ELEVATION = 30.0
 _MIN_MODEL_AIRCRAFT = 8
 _MIN_BIAS_AIRCRAFT = 5
+# Linear arrays: aircraft whose direct or mirrored bias lies this close agree.
+_BIAS_AGREE_DEG = 10.0
 _MIN_CORROBORATION_AIRCRAFT = 5
 _CORROBORATION_RATE = 0.5
 _ELIGIBLE_SECONDS = 60.0
@@ -91,7 +119,13 @@ _REWRITE_SECONDS = 30.0
 # Full per-aircraft checks run this often (staggered); evidence still
 # accumulates every tick.
 _CHECK_INTERVAL = 5.0
+_CHECK_SLOTS = round(_CHECK_INTERVAL / _EVAL_INTERVAL)
 _MLAT_MAX_RMS_M = 500.0
+# Multi-receiver frames kept after clock sync and residuals have used them.
+_TDOA_KEEP = 32
+# Caps are this many times the decimated sample count of the window, so the
+# time trim binds; they only stop a flood (or clock skew) growing memory.
+_CAP_HEADROOM = 1.5
 _SHORT_DFS = frozenset({0, 4, 5, 11, 16, 20, 21})
 # Checks that assume the aircraft itself is the transmitter.
 _RF_CHECKS = frozenset(
@@ -111,6 +145,30 @@ _RF_CHECKS = frozenset(
 )
 _ALT_DFS = frozenset({0, 4, 16, 20})
 _LEVEL = {FAIL: 1.0, WARN: 0.5}
+# A passing score reads as ``ok`` (and the aircraft calibrates the station
+# models) only once it has been tracked this long with this many checks
+# reporting; until then it publishes ``unknown``. Failures publish at once.
+_TRUST_MIN_SECONDS = 30.0
+_TRUST_MIN_CHECKS = 3
+# TIS-B / ADS-R targets get no RF checks (and never calibrate anything).
+_TRUST_MIN_CHECKS_REBROADCAST = 2
+# A status improves only after the better status has held this long; it
+# worsens at once. Stops a score near a threshold flapping the verdict.
+_RECOVER_SECONDS = 30.0
+_SEVERITY = {STATUS_UNKNOWN: 0, STATUS_OK: 0, STATUS_SUSPECT: 1, STATUS_SPOOFED: 2}
+
+
+def _track_started(internal: dict, now: float) -> float:
+    """When tracking of this aircraft began.
+
+    The engine splits long flights and moves ``first_packet`` to the split;
+    ``track_started`` survives it, so checks that wait for track age (message
+    mix, cross-network, Mode S corroboration, the trust bootstrap) carry on.
+    """
+    started = internal.get(STORE_TRACK_STARTED)
+    if started is None:
+        started = internal.get(STORE_FIRST_PACKET)
+    return now if started is None else started
 
 
 def _is_airborne_position(hex_msg: str) -> bool:
@@ -137,6 +195,8 @@ class _PlaneStats:
     rssi_index: dict[str, float]
     rssi_median: dict[str, float]
     bearing_median: dict[str, float]
+    # Receivers that only heard it saturated: rssi_index is at least this.
+    rssi_floor: dict[str, float]
 
 
 class IntegrityMonitor:
@@ -151,11 +211,36 @@ class IntegrityMonitor:
         self.cfg = config.integrity
         self.positions = positions
         self._evidence: dict[str, AircraftEvidence] = {}
+        window = self.cfg.window_seconds
+        receivers = len(config.receivers)
+        pairs = max(1, receivers * (receivers - 1) // 2)
+        self._geo_maxlen = int(window / GEO_SPACING * _CAP_HEADROOM) + 16
+        # Residuals are judged over the last _RECENT seconds only.
+        # Position squitters: 2/s per receiver.
+        self._timing_maxlen = min(
+            TIMING_MAX_SAMPLES, int(window * 2 * _CAP_HEADROOM) + 16
+        )
+        self._resid_maxlen = (
+            int(min(window, _RECENT) / GEO_SPACING * pairs * _CAP_HEADROOM) + 16
+        )
         self._sync = ClockSync()
+        # receiver -> (wall time, clock) of its newest frame with a clock
+        self._rx_clock: dict[str, tuple[float, int]] = {}
+        # receiver -> wall time of its last clock discontinuity
+        self._clock_jumps: dict[str, float] = {}
         self._known: set[str] = set()
         self._scores: dict[str, float] = {}
+        # Score without the aoa check: AoA bias is learned from aircraft that
+        # pass the other checks, or a wrong bias would never be corrected.
+        self._aoa_trust: dict[str, float] = {}
         self._statuses: dict[str, str] = {}
+        # Aircraft with enough evidence to be called ok (sticky).
+        self._established: set[str] = set()
+        # Last time the raw status was at least as bad as the published one.
+        self._held_at: dict[str, float] = {}
         self._signatures: dict[str, tuple] = {}
+        # (status, signature, time) of the last verdict appended to the log.
+        self._logged: dict[str, tuple[str, tuple, float]] = {}
         self._written_at: dict[str, float] = {}
         self._first_fix: dict[str, tuple[float, float, str, float]] = {}
         self._first_fix_km: dict[str, deque] = defaultdict(
@@ -163,8 +248,14 @@ class IntegrityMonitor:
         )
         self._started = started_at if started_at is not None else time.time()
         self._last_eval = 0.0
-        self._next_check: dict[str, float] = {}
-        self._cached: dict[str, tuple[dict[str, CheckResult], dict[str, float] | None]] = {}
+        # icao -> evaluation phase (s) within _EVAL_INTERVAL, and last slot run
+        self._phase: dict[str, float] = {}
+        self._eval_slot: dict[str, int] = {}
+        # icao -> emitter_cluster result from the last station-wide pass
+        self._cluster_flags: dict[str, CheckResult] = {}
+        self._cached: dict[
+            str, tuple[dict[str, CheckResult], dict[str, float] | None]
+        ] = {}
         self._stats: dict[str, _PlaneStats] = {}
         self._rssi_model: dict[str, float] = {}
         self._bearing_bias: dict[str, float] = {}
@@ -178,7 +269,7 @@ class IntegrityMonitor:
                 )
         self._network = (
             NetworkChecker(self.cfg.cross_network)
-            if self.cfg.cross_network.enabled
+            if self.cfg.enabled and self.cfg.cross_network.enabled
             else None
         )
 
@@ -197,15 +288,21 @@ class IntegrityMonitor:
         for store in (
             self._evidence,
             self._scores,
+            self._aoa_trust,
             self._statuses,
+            self._held_at,
             self._signatures,
+            self._logged,
             self._written_at,
             self._first_fix,
-            self._next_check,
+            self._phase,
+            self._eval_slot,
+            self._cluster_flags,
             self._cached,
             self._stats,
         ):
             store.pop(key, None)
+        self._established.discard(key)
         if self._network is not None:
             self._network.forget(key)
 
@@ -214,7 +311,12 @@ class IntegrityMonitor:
     def _ev(self, icao: str, t: float) -> AircraftEvidence:
         ev = self._evidence.get(icao)
         if ev is None:
-            ev = AircraftEvidence(last_seen=t)
+            ev = AircraftEvidence(
+                last_seen=t,
+                geo_maxlen=self._geo_maxlen,
+                resid_maxlen=self._resid_maxlen,
+                timing_maxlen=self._timing_maxlen,
+            )
             self._evidence[icao] = ev
         elif t > ev.last_seen:
             ev.last_seen = t
@@ -222,8 +324,14 @@ class IntegrityMonitor:
 
     def observe_frames(self, frames: list[RawFrame]) -> None:
         """Record evidence from every raw frame (before merge and de-dup)."""
-        copies: dict[str, dict[str, int]] = {}
-        heard_at: dict[str, float] = {}
+        if not self.cfg.enabled:
+            # evaluate() would never trim it.
+            return
+        # hex -> [(wall time, receiver, clock)] of every copy with a clock
+        copies: dict[str, list[tuple[float, str, int]]] = {}
+        # hex -> address (None: bad parity or not an ICAO address); every
+        # receiver delivers its own copy, so check each frame once.
+        addresses: dict[str, str | None] = {}
         for frame in frames:
             hex_msg = frame.hex
             if len(hex_msg) not in (14, 28):
@@ -238,10 +346,21 @@ class IntegrityMonitor:
                 continue
             t = frame.timestamp
             receiver = frame.receiver
+            if frame.clock is not None and receiver:
+                self._watch_clock(receiver, t, frame.clock)
             if df in (17, 18) and len(hex_msg) == 28:
-                icao = hex_msg[2:8].upper()
+                # Same rule as the tracker, so evidence never describes a
+                # ghost address from a corrupted frame.
+                if hex_msg in addresses:
+                    icao = addresses[hex_msg]
+                else:
+                    icao = addresses[hex_msg] = es_icao(hex_msg)
+                if icao is None:
+                    continue
                 ev = self._ev(icao, t)
-                if df == 18 and int(hex_msg[:2], 16) & 0x07 >= 2:
+                # es_icao admits DF18 CF 2 / 6 only with IMF clear: TIS-B /
+                # ADS-R relaying a real aircraft's ICAO address.
+                if df == 18 and int(hex_msg[:2], 16) & 0x07 != 0:
                     ev.rebroadcast = True
                     continue
                 ev.rx_last[receiver] = t
@@ -254,15 +373,14 @@ class IntegrityMonitor:
                 clock = frame.clock
                 if _is_airborne_position(hex_msg):
                     if clock is not None:
-                        ev.pos_clock[receiver].append((clock, _cpr_odd(hex_msg)))
+                        ev.pos_clock[receiver].append((t, clock, _cpr_odd(hex_msg)))
                     key = (receiver, hex_msg)
                     seen = ev.recent_pos.get(key)
                     if seen is not None and 0 < t - seen <= _REPLAY_WINDOW:
                         ev.replays.append((t,))
                     ev.recent_pos[key] = t
                 if clock is not None and receiver:
-                    copies.setdefault(hex_msg, {})[receiver] = clock
-                    heard_at[hex_msg] = min(t, heard_at.get(hex_msg, t))
+                    copies.setdefault(hex_msg, []).append((t, receiver, clock))
             elif df in _SHORT_DFS:
                 try:
                     icao = pms_icao(hex_msg)
@@ -282,24 +400,78 @@ class IntegrityMonitor:
                         feet = None
                     if feet is not None:
                         ev.mode_s_alt.append((t, feet * FT_TO_M))
-        for hex_msg, clocks in copies.items():
-            if len(clocks) >= 2:
-                self._evidence[hex_msg[2:8].upper()].add_tdoa(
-                    TdoaObservation(heard_at[hex_msg], clocks)
-                )
+        for hex_msg, rows in copies.items():
+            if len(rows) >= 2:
+                self._pair_copies(self._evidence[addresses[hex_msg]], rows)
+
+    @staticmethod
+    def _pair_copies(ev: AircraftEvidence, rows: list[tuple[float, str, int]]) -> None:
+        """Group copies of one hex into transmissions by receive time.
+
+        Velocity, identification and status squitters repeat bit-for-bit, so
+        one receiver's copy of a transmission and another's copy of the next
+        must not be paired (0.4 s apart: a ~120,000 km "path difference").
+        Repeats are at least 0.4 s apart; copies of one transmission arrive
+        within delivery jitter of each other.
+        """
+        rows.sort()
+        start = rows[0][0]
+        clocks: dict[str, int] = {}
+        for t, receiver, clock in rows:
+            if t - start > _COPY_WINDOW:
+                if len(clocks) >= 2:
+                    ev.add_tdoa(TdoaObservation(start, clocks))
+                start, clocks = t, {}
+            clocks.setdefault(receiver, clock)
+        if len(clocks) >= 2:
+            ev.add_tdoa(TdoaObservation(start, clocks))
+
+    def _watch_clock(self, receiver: str, t: float, clock: int) -> None:
+        """Resynchronise a receiver whose clock jumped (restart, replay loop)."""
+        last = self._rx_clock.get(receiver)
+        self._rx_clock[receiver] = (t, clock)
+        if last is None:
+            return
+        # Fast path for every frame: clock_jump_seconds' limit is at least
+        # CLOCK_JUMP_SECONDS, so anything inside it is never a jump.
+        step = (clock - last[1] + _HALF_MOD) % BEAST_CLOCK_MOD - _HALF_MOD
+        if abs(step / BEAST_CLOCK_HZ - (t - last[0])) <= CLOCK_JUMP_SECONDS:
+            return
+        jump = clock_jump_seconds(t - last[0], wrap_ticks(clock - last[1]))
+        if jump is None:
+            return
+        # A feed mixing two clock domains would jump constantly: say so once.
+        previous = self._clock_jumps.get(receiver)
+        log.log(
+            logging.INFO if previous is None or t - previous > 60.0 else logging.DEBUG,
+            "Receiver %s clock jumped %+.1f s (restart or replay loop); resynchronising",
+            receiver,
+            jump,
+        )
+        self._clock_jumps[receiver] = t
+        self._sync.reset_receiver(receiver, t)
 
     # --- evaluation ---------------------------------------------------------
 
     def evaluate(
         self, planes: dict[str, dict], now: float | None = None, *, force: bool = False
     ) -> None:
-        """Score *planes*. *force* skips the 1 s throttle and re-checks every aircraft."""
+        """Score the share of *planes* that is due; call once per tick.
+
+        Each aircraft is processed once per ``_EVAL_INTERVAL`` at a phase set
+        by its address, so the per-tick cost stays flat (at hz=2 half the
+        aircraft come up each tick). A new aircraft is processed the first
+        time it is seen, and one currently suspect or spoofed is re-checked
+        at each of its slots rather than every ``_CHECK_INTERVAL``.
+        Station-wide work (pruning, clock refit, calibration, clustering) runs
+        once per interval. *force* processes and re-checks every aircraft now.
+        """
         if not self.cfg.enabled:
             return
         now = time.time() if now is None else now
-        if not force and now - self._last_eval < _EVAL_INTERVAL:
-            return
-        self._last_eval = now
+        station = force or now - self._last_eval >= _EVAL_INTERVAL
+        if station:
+            self._last_eval = now
         self._known = set(planes)
         cutoff = now - self.cfg.window_seconds
         antennas = self.positions.all()
@@ -308,72 +480,109 @@ class IntegrityMonitor:
             for name, p in antennas.items()
         }
 
-        for icao, ev in list(self._evidence.items()):
-            if icao not in planes and ev.last_seen < cutoff:
-                del self._evidence[icao]
-                continue
-            self._trim(ev, now, cutoff)
-        for icao in [icao for icao in self._cached if icao not in planes]:
-            self.forget(icao)
+        if station:
+            for icao, ev in list(self._evidence.items()):
+                if icao in planes:
+                    continue  # trimmed in its own slot
+                if ev.last_seen < cutoff:
+                    del self._evidence[icao]
+                else:
+                    self._trim(ev, now, cutoff)
+            for icao in [icao for icao in self._cached if icao not in planes]:
+                self.forget(icao)
 
-        for icao, plane in planes.items():
+        batch = {icao: planes[icao] for icao in self._due(planes, now, force)}
+        for icao, plane in batch.items():
             ev = self._evidence.get(icao)
             if ev is not None:
+                self._trim(ev, now, cutoff)
                 self._resolve(ev, plane, antennas)
             self._note_first_fix(icao, plane, ev)
 
-        self._sync_clocks(planes, ecefs)
-        self._sync.refit(now)
-        for icao, plane in planes.items():
+        self._sync_clocks(batch, ecefs)
+        if station:
+            self._sync.refit(now)
+        for icao, plane in batch.items():
             ev = self._evidence.get(icao)
             if ev is not None:
                 self._tdoa_residuals(ev, plane, ecefs)
-        due: set[str] = set()
-        for icao in planes:
-            next_check = self._next_check.get(icao)
-            if next_check is None:
-                # Spread aircraft across the interval so no tick does them all.
-                spread = zlib.crc32(icao.encode()) % 1000 / 1000
-                self._next_check[icao] = now + spread * _CHECK_INTERVAL
-            elif now < next_check and icao in self._cached and not force:
-                continue
-            else:
-                self._next_check[icao] = now + _CHECK_INTERVAL
-            due.add(icao)
+        checked = [icao for icao in batch if self._check_due(icao, force)]
+        for icao in checked:
             self._stats[icao] = self._plane_stats(icao, now)
-        stats = {icao: self._stats[icao] for icao in planes}
-        self._calibrate(planes, stats, now)
+        if station:
+            stats = {icao: self._stats[icao] for icao in planes if icao in self._stats}
+            self._calibrate(planes, stats, now)
+        for icao in checked:
+            self._cached[icao] = self._check_plane(
+                icao,
+                batch[icao],
+                self._evidence.get(icao),
+                self._stats[icao],
+                antennas,
+                ecefs,
+                now,
+            )
+        if station:
+            results = {
+                icao: dict(self._cached[icao][0])
+                for icao in planes
+                if icao in self._cached
+            }
+            self._clusters(results, {icao: self._stats[icao] for icao in results}, now)
+            self._cluster_flags = {
+                icao: found["emitter_cluster"]
+                for icao, found in results.items()
+                if "emitter_cluster" in found
+            }
 
-        results: dict[str, dict[str, CheckResult]] = {}
-        emitters: dict[str, dict[str, float]] = {}
-        for icao, plane in planes.items():
-            if icao in due:
-                ev = self._evidence.get(icao)
-                self._cached[icao] = self._check_plane(
-                    icao, plane, ev, stats[icao], antennas, ecefs, now
-                )
+        for icao, plane in batch.items():
             found, emitter = self._cached[icao]
-            results[icao] = dict(found)
-            if emitter is not None:
-                emitters[icao] = emitter
-        self._clusters(results, stats, now)
+            flag = self._cluster_flags.get(icao)
+            if flag is not None:
+                found = {**found, "emitter_cluster": flag}
+            self._publish(icao, plane, found, emitter, now)
 
-        for icao, plane in planes.items():
-            self._publish(icao, plane, results[icao], emitters.get(icao), now)
+    def _due(self, planes: dict[str, dict], now: float, force: bool) -> list[str]:
+        """Aircraft whose evaluation slot has come round since their last run."""
+        due = []
+        for icao in planes:
+            phase = self._phase.get(icao)
+            if phase is None:
+                phase = zlib.crc32(icao.encode()) % 1000 / 1000 * _EVAL_INTERVAL
+                self._phase[icao] = phase
+            slot = math.floor((now - phase) / _EVAL_INTERVAL)
+            if force or self._eval_slot.get(icao) != slot:
+                self._eval_slot[icao] = slot
+                due.append(icao)
+        return due
+
+    def _check_due(self, icao: str, force: bool) -> bool:
+        """Full checks run in one of every _CHECK_SLOTS evaluation slots.
+
+        Which one comes from address bits independent of the slot phase, so
+        aircraft that appeared together still spread over the ticks.
+        """
+        if force or icao not in self._cached or self._statuses.get(icao) in _FAILING:
+            return True
+        offset = zlib.crc32(icao.encode()) // 1000 % _CHECK_SLOTS
+        return (self._eval_slot[icao] + offset) % _CHECK_SLOTS == 0
 
     def _trim(self, ev: AircraftEvidence, now: float, cutoff: float) -> None:
-        for group in (ev.rssi, ev.rssi_geo, ev.aoa, ev.aoa_geo):
+        for group in (ev.rssi, ev.rssi_geo, ev.aoa, ev.aoa_geo, ev.pos_clock):
             for series in group.values():
                 trim(series, cutoff)
-        for series in (ev.cfo, ev.replays, ev.mode_s, ev.mode_s_alt, ev.tdoa_resid):
+        for series in (ev.cfo, ev.replays, ev.mode_s, ev.mode_s_alt):
             trim(series, cutoff)
+        trim(ev.tdoa_resid, max(cutoff, now - _RECENT))
         while ev.tdoa and ev.tdoa[0].time < cutoff:
             ev.tdoa.popleft()
         stale = now - _REPLAY_WINDOW
         if ev.recent_pos:
             ev.recent_pos = {k: t for k, t in ev.recent_pos.items() if t >= stale}
 
-    def _antenna(self, antennas: dict[str, ReceiverPosition], name: str) -> ReceiverPosition:
+    def _antenna(
+        self, antennas: dict[str, ReceiverPosition], name: str
+    ) -> ReceiverPosition:
         return antennas.get(name) or self.positions.get(name)
 
     def _resolve(
@@ -383,46 +592,56 @@ class IntegrityMonitor:
         antennas: dict[str, ReceiverPosition],
     ) -> None:
         """Turn new raw RSSI / AoA samples into range and angle samples."""
+        claimed = PositionLookup(plane)
         for receiver, raw in ev.rssi.items():
-            cursor = ev.rssi_cursor.get(receiver, 0.0)
-            fresh = _newer_than(raw, cursor)
-            if not fresh:
+            if not raw:
                 continue
             ant = self._antenna(antennas, receiver)
             origin = geodesy.ecef(ant.latitude, ant.longitude, ant.altitude)
-            for t, rssi in fresh:
-                pos = position_at(plane, t)
+            up = geodesy.up_vector(ant.latitude, ant.longitude)
+            geo = ev.rssi_geo[receiver]
+            last = geo[-1][0] if geo else -math.inf
+            for t, rssi in raw:
+                if t - last < GEO_SPACING:
+                    continue
+                pos = claimed.at(t)
                 if pos is None:
                     continue
                 alt = pos[2] if pos[2] is not None else ant.altitude
                 target = geodesy.ecef(pos[0], pos[1], alt)
                 slant_km = max(geodesy.slant_range_m(origin, target) / 1000.0, 0.01)
-                elev = geodesy.elevation_deg(
-                    ant.latitude, ant.longitude, ant.altitude, pos[0], pos[1], alt
-                )
-                ev.rssi_geo[receiver].append((t, rssi, slant_km, elev))
-            ev.rssi_cursor[receiver] = fresh[-1][0]
+                elev = geodesy.elevation_between(origin, target, up)
+                geo.append((t, rssi, slant_km, elev, 20 * math.log10(slant_km)))
+                last = t
+            raw.clear()
         for receiver, raw in ev.aoa.items():
-            cursor = ev.aoa_cursor.get(receiver, 0.0)
-            fresh = _newer_than(raw, cursor)
-            if not fresh:
+            if not raw:
                 continue
             ant = self._antenna(antennas, receiver)
-            for t, bearing, elevation in fresh:
-                pos = position_at(plane, t)
+            origin = geodesy.ecef(ant.latitude, ant.longitude, ant.altitude)
+            up = geodesy.up_vector(ant.latitude, ant.longitude)
+            geo = ev.aoa_geo[receiver]
+            last = geo[-1][0] if geo else -math.inf
+            for t, bearing, elevation in raw:
+                if t - last < GEO_SPACING:
+                    continue
+                pos = claimed.at(t)
                 if pos is None:
                     continue
                 alt = pos[2] if pos[2] is not None else ant.altitude
                 expected = geodesy.initial_bearing_deg(
                     ant.latitude, ant.longitude, pos[0], pos[1]
                 )
-                expected_elev = geodesy.elevation_deg(
-                    ant.latitude, ant.longitude, ant.altitude, pos[0], pos[1], alt
+                expected_elev = geodesy.elevation_between(
+                    origin, geodesy.ecef(pos[0], pos[1], alt), up
                 )
-                ev.aoa_geo[receiver].append((t, bearing, expected, elevation, expected_elev))
-            ev.aoa_cursor[receiver] = fresh[-1][0]
+                geo.append((t, bearing, expected, elevation, expected_elev))
+                last = t
+            raw.clear()
 
-    def _note_first_fix(self, icao: str, plane: dict, ev: AircraftEvidence | None) -> None:
+    def _note_first_fix(
+        self, icao: str, plane: dict, ev: AircraftEvidence | None
+    ) -> None:
         if icao in self._first_fix or ev is None:
             return
         recv = plane.get(STORE_RECV_DATA) or {}
@@ -435,7 +654,9 @@ class IntegrityMonitor:
         best: tuple[float, str] | None = None
         for receiver in ev.rx_last:
             ant = self.positions.get(receiver)
-            km = geodesy.ground_distance_km(ant.latitude, ant.longitude, lats[0].value, lons[0].value)
+            km = geodesy.ground_distance_km(
+                ant.latitude, ant.longitude, lats[0].value, lons[0].value
+            )
             if best is None or km < best[0]:
                 best = (km, receiver)
         if best is None:
@@ -445,7 +666,9 @@ class IntegrityMonitor:
         if t0 - self._started >= _STARTUP_GRACE:
             self._first_fix_km[receiver].append(km)
 
-    def _sync_clocks(self, planes: dict[str, dict], ecefs: dict[str, geodesy.Vec3]) -> None:
+    def _sync_clocks(
+        self, planes: dict[str, dict], ecefs: dict[str, geodesy.Vec3]
+    ) -> None:
         """Feed frames from aircraft that currently look genuine into clock sync."""
         if len(ecefs) < 2:
             return
@@ -453,15 +676,14 @@ class IntegrityMonitor:
             ev = self._evidence.get(icao)
             if ev is None or not ev.tdoa:
                 continue
-            trusted = self._scores.get(icao, 1.0) >= self.cfg.ok_score
+            trusted = self._trusted(icao)
             newest = ev.tdoa_synced_until
-            for obs in ev.tdoa:
-                if obs.time <= ev.tdoa_synced_until:
-                    continue
+            claimed = PositionLookup(plane) if trusted else None
+            for obs in _newer_than(ev.tdoa, ev.tdoa_synced_until, key=_obs_time):
                 newest = max(newest, obs.time)
-                if not trusted:
+                if claimed is None:
                     continue
-                pos = position_at(plane, obs.time, max_gap=1.0)
+                pos = claimed.at(obs.time, max_gap=1.0)
                 if pos is None or pos[2] is None:
                     continue
                 self._sync.add_sync(obs, pos, ecefs, icao)
@@ -474,37 +696,49 @@ class IntegrityMonitor:
         if not ev.tdoa or len(ecefs) < 2:
             return
         max_spread = self.cfg.tdoa_tolerance_m / 2
-        newest = ev.tdoa_cursor
-        for obs in reversed(ev.tdoa):
-            if obs.time <= ev.tdoa_cursor:
-                break
-            newest = max(newest, obs.time)
-            pos = position_at(plane, obs.time, max_gap=1.0)
+        fresh = _newer_than(ev.tdoa, ev.tdoa_cursor, key=_obs_time)
+        if fresh:
+            ev.tdoa_cursor = max(obs.time for obs in fresh)
+        last = ev.tdoa_resid[-1][0] if ev.tdoa_resid else -math.inf
+        claimed = PositionLookup(plane)
+        for obs in fresh:
+            if obs.time - last < GEO_SPACING:
+                continue
+            pos = claimed.at(obs.time, max_gap=1.0)
             if pos is None or pos[2] is None:
                 continue
-            for residual in self._sync.residuals_m(obs, pos, ecefs, max_spread):
+            residuals = self._sync.residuals_m(obs, pos, ecefs, max_spread)
+            for residual in residuals:
                 ev.tdoa_resid.append((obs.time, residual))
-        ev.tdoa_cursor = newest
+            if residuals:
+                last = obs.time
+        # Clock sync ran first this tick, so older frames are spent.
+        while len(ev.tdoa) > _TDOA_KEEP:
+            ev.tdoa.popleft()
 
     def _plane_stats(self, icao: str, now: float) -> _PlaneStats:
         ev = self._evidence.get(icao)
-        stats = _PlaneStats({}, {}, {})
+        stats = _PlaneStats({}, {}, {}, {})
         if ev is None:
             return stats
         recent = now - _RECENT
         for receiver, rows in ev.rssi_geo.items():
-            usable = [r for r in rows if r[0] >= recent and r[1] < _SATURATED_DBFS]
+            current = rows_since(rows, recent)
+            usable = [r for r in current if r[1] < _SATURATED_DBFS]
             if len(usable) < 3:
+                if len(current) >= 3:
+                    # Clipped samples understate the signal, so they can
+                    # still show it is too strong (a nearby transmitter).
+                    stats.rssi_floor[receiver] = fast_median(
+                        r[1] + r[4] for r in current
+                    )
                 continue
-            stats.rssi_index[receiver] = statistics.median(
-                rssi + 20 * math.log10(slant) for _t, rssi, slant, _e in usable
-            )
-            stats.rssi_median[receiver] = statistics.median(r[1] for r in usable)
+            stats.rssi_index[receiver] = fast_median(r[1] + r[4] for r in usable)
+            stats.rssi_median[receiver] = fast_median(r[1] for r in usable)
         for receiver, rows in ev.aoa_geo.items():
             corrected = [
-                self._corrected_bearing(receiver, measured)
-                for t, measured, _exp, _el, _eel in rows
-                if t >= recent
+                self._corrected_bearing(receiver, row[1])
+                for row in rows_since(rows, recent)
             ]
             if len(corrected) >= 5:
                 median = circular_median_deg(corrected)
@@ -512,10 +746,10 @@ class IntegrityMonitor:
                     stats.bearing_median[receiver] = median
         return stats
 
-    def _calibrate(self, planes: dict[str, dict], stats: dict[str, _PlaneStats], now: float) -> None:
-        trusted = [
-            icao for icao in planes if self._scores.get(icao, 1.0) >= self.cfg.ok_score
-        ]
+    def _calibrate(
+        self, planes: dict[str, dict], stats: dict[str, _PlaneStats], now: float
+    ) -> None:
+        trusted = [icao for icao in planes if icao in stats and self._trusted(icao)]
         # Station signal model: rssi + 20 log10(range) is constant for one
         # transmitter power; its median over genuine aircraft is the station's.
         by_receiver: dict[str, list[float]] = defaultdict(list)
@@ -528,26 +762,51 @@ class IntegrityMonitor:
             if len(values) >= _MIN_MODEL_AIRCRAFT
         }
 
-        # AoA bias (array orientation) for receivers without a configured offset.
+        # AoA bias (array orientation) for receivers without a configured
+        # offset. A linear array's axis only resolves the mirror ambiguity;
+        # its mounting error still has to be learned.
         recent = now - _RECENT
+        aoa_trusted = [
+            icao
+            for icao in planes
+            if icao in self._established
+            and self._aoa_trust.get(icao, 0.0) >= self.cfg.ok_score
+        ]
         for receiver, (offset, axis) in self._aoa_options.items():
-            if offset is not None or axis is not None:
+            if offset is not None:
                 continue
-            per_plane: list[float] = []
-            for icao in trusted:
+            per_plane: list[tuple[float, ...]] = []
+            for icao in aoa_trusted:
                 ev = self._evidence.get(icao)
                 rows = ev.aoa_geo.get(receiver) if ev is not None else None
                 if not rows:
                     continue
-                diffs = [
-                    geodesy.angle_diff_deg(measured, expected)
-                    for t, measured, expected, _el, _eel in rows
-                    if t >= recent
-                ]
-                if len(diffs) >= 5:
-                    per_plane.append(statistics.median(diffs))
+                recent_rows = [(m, e) for t, m, e, _el, _eel in rows if t >= recent]
+                if len(recent_rows) < 5:
+                    continue
+                # Circular: an array mounted backwards has diffs near ±180.
+                direct = circular_median_deg(
+                    [geodesy.angle_diff_deg(m, e) for m, e in recent_rows]
+                )
+                if axis is None:
+                    per_plane.append((direct,))
+                    continue
+                # A linear array may report the reflection of the bearing
+                # about its axis: then the bias is measured - mirror(expected).
+                mirrored = circular_median_deg(
+                    [
+                        geodesy.angle_diff_deg(m, (2 * axis - e) % 360.0)
+                        for m, e in recent_rows
+                    ]
+                )
+                per_plane.append((direct, mirrored))
             if len(per_plane) >= _MIN_BIAS_AIRCRAFT:
-                bias = circular_median_deg(per_plane)
+                if axis is None:
+                    bias = circular_median_deg([p[0] for p in per_plane])
+                else:
+                    bias = _consensus_angle(
+                        per_plane, _BIAS_AGREE_DEG, _MIN_BIAS_AIRCRAFT
+                    )
                 if bias is not None:
                     self._bearing_bias[receiver] = geodesy.angle_diff_deg(bias, 0.0)
 
@@ -564,10 +823,14 @@ class IntegrityMonitor:
             corroborated / eligible if eligible >= _MIN_CORROBORATION_AIRCRAFT else None
         )
 
+    def _trusted(self, icao: str) -> bool:
+        # ok needs enough evidence, and worsening is immediate, so a new or
+        # currently failing aircraft never calibrates the station models.
+        return self._statuses.get(icao) == STATUS_OK
+
     def _corroboration_eligible(self, plane: dict, now: float) -> bool:
         internal = plane.get(STORE_INTERNAL) or {}
-        first = internal.get(STORE_FIRST_PACKET)
-        if first is None or now - first < _ELIGIBLE_SECONDS:
+        if now - _track_started(internal, now) < _ELIGIBLE_SECONDS:
             return False
         pkt = internal.get(STORE_PACKET_TYPE) or {}
         return pkt.get(CAT_AIRBORNE_BARO, 0) + pkt.get(CAT_AIRBORNE_GNSS, 0) >= 20
@@ -577,6 +840,11 @@ class IntegrityMonitor:
         if offset is not None:
             return (measured + offset) % 360.0
         return (measured - self._bearing_bias.get(receiver, 0.0)) % 360.0
+
+    def _orientation_known(self, receiver: str) -> bool:
+        """Configured, or already learned, so bearings can be judged."""
+        offset, _axis = self._aoa_options.get(receiver, (None, None))
+        return offset is not None or receiver in self._bearing_bias
 
     def _bearing_error(self, receiver: str, measured: float, expected: float) -> float:
         corrected = self._corrected_bearing(receiver, measured)
@@ -608,11 +876,13 @@ class IntegrityMonitor:
         internal = plane.get(STORE_INTERNAL) or {}
         recv = plane.get(STORE_RECV_DATA) or {}
         pkt = internal.get(STORE_PACKET_TYPE) or {}
-        first_packet = internal.get(STORE_FIRST_PACKET, now)
+        first_packet = _track_started(internal, now)
         fix = latest_fix(plane)
         recent = now - _RECENT
 
-        out["identity"] = checks.identity(icao, info.get(STORE_CALLSIGN), info.get("registration"))
+        out["identity"] = checks.identity(
+            icao, info.get(STORE_CALLSIGN), info.get("registration")
+        )
         positions = pkt.get(CAT_AIRBORNE_BARO, 0) + pkt.get(CAT_AIRBORNE_GNSS, 0)
         out["duplicate_icao"] = checks.duplicate_icao(
             int(internal.get(STORE_GATE_REJECTS, 0)),
@@ -631,10 +901,15 @@ class IntegrityMonitor:
                     if heard < recent:
                         continue
                     ant = self._antenna(antennas, receiver)
-                    km = geodesy.ground_distance_km(ant.latitude, ant.longitude, fix[0], fix[1])
-                    limit = geodesy.radio_horizon_km(
-                        max(ant.antenna_height, ant.altitude), fix[2]
-                    ) * cfg.horizon_margin
+                    km = geodesy.ground_distance_km(
+                        ant.latitude, ant.longitude, fix[0], fix[1]
+                    )
+                    limit = (
+                        geodesy.radio_horizon_km(
+                            max(ant.antenna_height, ant.altitude), fix[2]
+                        )
+                        * cfg.horizon_margin
+                    )
                     distances.append((receiver, km, limit))
                 out["radio_horizon"] = checks.radio_horizon(distances, cfg.max_range_km)
 
@@ -643,13 +918,21 @@ class IntegrityMonitor:
                 for receiver, index in stats.rssi_index.items()
                 if receiver in self._rssi_model
             ]
+            excess += [
+                (receiver, floor - self._rssi_model[receiver])
+                for receiver, floor in stats.rssi_floor.items()
+                if receiver in self._rssi_model
+                and floor - self._rssi_model[receiver] > cfg.rssi_excess_db
+            ]
             out["rssi_range"] = checks.rssi_range(excess, cfg.rssi_excess_db)
             out["rssi_trend"] = self._rssi_trend(ev)
             out["aoa"] = self._aoa(ev, recent)
-            tdoa_result, emitter = self._tdoa(plane, ev, fix, ecefs, recent)
+            tdoa_result, emitter = self._tdoa(icao, plane, ev, fix, ecefs, now)
             out["tdoa"] = tdoa_result
-            out["mode_s_altitude"] = self._mode_s_altitude(ev, recv, pkt)
-            if self._corroboration_rate is not None and self._corroboration_eligible(plane, now):
+            out["mode_s_altitude"] = self._mode_s_altitude(ev, recv)
+            if self._corroboration_rate is not None and self._corroboration_eligible(
+                plane, now
+            ):
                 if self._corroboration_rate >= _CORROBORATION_RATE:
                     out["mode_s_corroboration"] = checks.mode_s_corroboration(
                         bool(ev.mode_s), self._corroboration_rate
@@ -670,15 +953,27 @@ class IntegrityMonitor:
                 and typical is not None
                 and len(typical) >= _MIN_FIRST_FIX_SAMPLES
             ):
-                out["appearance"] = checks.appearance(km, alt, statistics.median(typical))
+                out["appearance"] = checks.appearance(
+                    km, alt, statistics.median(typical)
+                )
 
-        if self._network is not None and fix is not None and now - first_packet >= _RECENT:
+        if (
+            self._network is not None
+            and fix is not None
+            and now - first_packet >= _RECENT
+        ):
             self._network.request(icao, now)
             sighting = self._network.result(icao)
             if sighting is not None:
                 distance = None
-                if sighting.found and sighting.latitude is not None and sighting.longitude is not None:
-                    here = position_at(plane, sighting.position_time or now, max_gap=10.0)
+                if (
+                    sighting.found
+                    and sighting.latitude is not None
+                    and sighting.longitude is not None
+                ):
+                    here = position_at(
+                        plane, sighting.position_time or now, max_gap=10.0
+                    )
                     lat, lon = (here[0], here[1]) if here else (fix[0], fix[1])
                     distance = geodesy.ground_distance_km(
                         lat, lon, sighting.latitude, sighting.longitude
@@ -693,10 +988,20 @@ class IntegrityMonitor:
                     long_tracked,
                 )
 
-        if ev is not None and ev.rebroadcast:
+        if self._rebroadcast_only(ev, now):
             out = {name: r for name, r in out.items() if name not in _RF_CHECKS}
             emitter = None
-        return {name: result for name, result in out.items() if result is not None}, emitter
+        return {
+            name: result for name, result in out.items() if result is not None
+        }, emitter
+
+    @staticmethod
+    def _rebroadcast_only(ev: AircraftEvidence | None, now: float) -> bool:
+        # Direct DF17 frames still describe the aircraft's own transmitter;
+        # otherwise one TIS-B frame would switch off the RF checks.
+        if ev is None or not ev.rebroadcast:
+            return False
+        return all(t < now - _RECENT for t in ev.rx_last.values())
 
     def _kinematics(
         self, plane: dict, fix: tuple[float, float, float | None, float] | None
@@ -712,23 +1017,35 @@ class IntegrityMonitor:
         lon0 = nearest_datum(lon_series, target)
         if lat0 is None or lon0 is None:
             return None
-        t0 = lat0.time if abs(lat0.time - target) <= abs(lon0.time - target) else lon0.time
+        t0 = (
+            lat0.time
+            if abs(lat0.time - target) <= abs(lon0.time - target)
+            else lon0.time
+        )
         elapsed = t1 - t0
         if not 8.0 <= elapsed <= 30.0:
             return None
-        distance_m = geodesy.ground_distance_km(lat0.value, lon0.value, fix[0], fix[1]) * 1000
+        distance_m = (
+            geodesy.ground_distance_km(lat0.value, lon0.value, fix[0], fix[1]) * 1000
+        )
         bearing = (
             geodesy.initial_bearing_deg(lat0.value, lon0.value, fix[0], fix[1])
             if distance_m > 0
             else None
         )
-        speeds = [d.value for d in series_window(recv.get(STORE_HORIZ_SPEED) or [], t0, t1)]
+        speeds = [
+            d.value for d in series_window(recv.get(STORE_HORIZ_SPEED) or [], t0, t1)
+        ]
         tracks = [d.value for d in series_window(recv.get(STORE_HEADING) or [], t0, t1)]
-        vrates = [d.value for d in series_window(recv.get(STORE_VERT_SPEED) or [], t0, t1)]
+        vrates = [
+            d.value for d in series_window(recv.get(STORE_VERT_SPEED) or [], t0, t1)
+        ]
         alt_series = recv.get(STORE_ALT) or []
         alt0 = _series_value(alt_series, t0, 3.0)
         alt1 = _series_value(alt_series, t1, 3.0)
-        climb = (alt1 - alt0) / elapsed if alt0 is not None and alt1 is not None else None
+        climb = (
+            (alt1 - alt0) / elapsed if alt0 is not None and alt1 is not None else None
+        )
         return checks.kinematics(
             elapsed_s=elapsed,
             distance_m=distance_m,
@@ -743,8 +1060,8 @@ class IntegrityMonitor:
         best: CheckResult | None = None
         for rows in ev.rssi_geo.values():
             samples = [
-                (20 * math.log10(slant), rssi)
-                for _t, rssi, slant, elev in rows
+                (path_db, rssi)
+                for _t, rssi, _slant, elev, path_db in rows
                 if rssi < _SATURATED_DBFS and elev < _TREND_MAX_ELEVATION
             ]
             best = checks.worst([best, checks.rssi_trend(samples)])
@@ -753,6 +1070,8 @@ class IntegrityMonitor:
     def _aoa(self, ev: AircraftEvidence, recent: float) -> CheckResult | None:
         found: list[CheckResult | None] = []
         for receiver, rows in ev.aoa_geo.items():
+            if not self._orientation_known(receiver):
+                continue
             bearing_errors: list[float] = []
             elevation_errors: list[float] = []
             for t, measured, expected, elev, expected_elev in rows:
@@ -762,28 +1081,38 @@ class IntegrityMonitor:
                 if elev is not None:
                     elevation_errors.append(elev - expected_elev)
             found.append(
-                checks.aoa(bearing_errors, elevation_errors, self.cfg.aoa_tolerance_deg, receiver)
+                checks.aoa(
+                    bearing_errors,
+                    elevation_errors,
+                    self.cfg.aoa_tolerance_deg,
+                    receiver,
+                )
             )
         return checks.worst(found)
 
     def _tdoa(
         self,
+        icao: str,
         plane: dict,
         ev: AircraftEvidence,
         fix: tuple[float, float, float | None, float] | None,
         ecefs: dict[str, geodesy.Vec3],
-        recent: float,
+        now: float,
     ) -> tuple[CheckResult | None, dict[str, float] | None]:
         if not ev.tdoa or len(ecefs) < 2:
             return None, None
+        recent = now - _RECENT
         tolerance = self.cfg.tdoa_tolerance_m
         max_spread = tolerance / 2
-        residuals = [r for t, r in ev.tdoa_resid if t >= recent]
+        residuals = [r for _t, r in rows_since(ev.tdoa_resid, recent)]
         result = checks.tdoa(residuals, tolerance)
+        if result is None or result.status != FAIL:
+            return result, None
+        self._sync.drop_aircraft(icao, now)
         # Locate the real transmitter only for a target that already fails:
         # far outside the receiver baseline the geometry is too weak for the
         # solution itself to be evidence.
-        if result is None or result.status != FAIL or fix is None:
+        if fix is None:
             return result, None
         ground = statistics.median(geodesy.geodetic(*xyz)[2] for xyz in ecefs.values())
         solutions: list[tuple[float, float]] = []
@@ -823,11 +1152,9 @@ class IntegrityMonitor:
         }
         return result, emitter
 
-    def _mode_s_altitude(self, ev: AircraftEvidence, recv: dict, pkt: dict) -> CheckResult | None:
-        # Mode S replies carry barometric altitude; GNSS-height positions
-        # would differ by the geoid/pressure offset, not by spoofing.
-        if pkt.get(CAT_AIRBORNE_GNSS, 0) > pkt.get(CAT_AIRBORNE_BARO, 0):
-            return None
+    def _mode_s_altitude(self, ev: AircraftEvidence, recv: dict) -> CheckResult | None:
+        # Mode S replies carry barometric altitude, and so does ``altitude``
+        # (GNSS height from TC 20-22 positions is kept apart, in gnss_height).
         series = recv.get(STORE_ALT) or []
         diffs = []
         for t, alt in ev.mode_s_alt:
@@ -889,12 +1216,14 @@ class IntegrityMonitor:
             for receiver, bearing in stats[icao].bearing_median.items():
                 bearings[receiver].append((bearing, icao))
         for receiver, rows in bearings.items():
-            for group in _groups(rows, _BEARING_CLUSTER_DEG, min_size=2):
+            for group in _groups(rows, _BEARING_CLUSTER_DEG, min_size=2, period=360.0):
                 centre = circular_median_deg([v for v, _ in group]) or 0.0
                 for _v, icao in group:
                     results[icao].setdefault(
                         "emitter_cluster",
-                        checks.emitter_cluster(f"{receiver} bearing {centre:.0f}°", len(group)),
+                        checks.emitter_cluster(
+                            f"{receiver} bearing {centre:.0f}°", len(group)
+                        ),
                     )
 
     # --- output -------------------------------------------------------------
@@ -908,30 +1237,53 @@ class IntegrityMonitor:
         now: float,
     ) -> None:
         score = 1.0
+        aoa_trust = 1.0
         weighted: dict[str, CheckResult] = {}
         for name, result in found.items():
             weight = self.cfg.weight(name)
             if weight <= 0:
                 continue
             weighted[name] = result
-            score *= 1.0 - weight * _LEVEL.get(result.status, 0.0)
-        if not weighted:
-            status = STATUS_UNKNOWN
-        elif score >= self.cfg.ok_score:
-            status = STATUS_OK
-        elif score < self.cfg.spoofed_score:
-            status = STATUS_SPOOFED
-        else:
-            status = STATUS_SUSPECT
+            factor = 1.0 - weight * _LEVEL.get(result.status, 0.0)
+            score *= factor
+            if name != "aoa":
+                aoa_trust *= factor
+        self._aoa_trust[icao] = aoa_trust
+        # Status follows the published score, so the two never disagree.
         score = round(score, 2)
+        rebroadcast = self._rebroadcast_only(self._evidence.get(icao), now)
+        first_packet = _track_started(plane.get(STORE_INTERNAL) or {}, now)
+        min_checks = _TRUST_MIN_CHECKS_REBROADCAST if rebroadcast else _TRUST_MIN_CHECKS
+        if now - first_packet >= _TRUST_MIN_SECONDS and len(weighted) >= min_checks:
+            self._established.add(icao)
+        if not weighted:
+            raw = STATUS_UNKNOWN
+        elif score >= self.cfg.ok_score:
+            # A few early passes are not verification; a failure is evidence.
+            raw = STATUS_OK if icao in self._established else STATUS_UNKNOWN
+        elif score < self.cfg.spoofed_score:
+            raw = STATUS_SPOOFED
+        else:
+            raw = STATUS_SUSPECT
         self._scores[icao] = score
 
         previous = self._statuses.get(icao)
+        status = raw
+        if (
+            previous is not None
+            and _SEVERITY[raw] < _SEVERITY[previous]
+            and now - self._held_at.get(icao, now) < _RECOVER_SECONDS
+        ):
+            status = previous
+        if _SEVERITY[raw] >= _SEVERITY[status]:
+            self._held_at[icao] = now
         self._statuses[icao] = status
         if status == STATUS_SPOOFED and previous != STATUS_SPOOFED:
             info = plane.get(STORE_INFO) or {}
             reasons = "; ".join(
-                f"{name}: {r.detail}" for name, r in weighted.items() if r.status == FAIL
+                f"{name}: {r.detail}"
+                for name, r in weighted.items()
+                if r.status == FAIL
             )
             log.warning(
                 "Integrity: %s %s looks spoofed (score %.2f): %s",
@@ -946,65 +1298,120 @@ class IntegrityMonitor:
             score,
             tuple(sorted((name, r.status) for name, r in weighted.items())),
             emitter is not None,
-            icao in self._evidence and self._evidence[icao].rebroadcast,
+            rebroadcast,
+        )
+        changed = signature != self._signatures.get(icao)
+        # Status changes are logged at once (hysteresis bounds them); score or
+        # check-only changes at most every _REWRITE_SECONDS, so one check
+        # flapping under a held status cannot flood the integrity table.
+        logged = self._logged.get(icao)
+        log_it = (
+            logged is None
+            or status != logged[0]
+            or (signature != logged[1] and now - logged[2] >= _REWRITE_SECONDS)
         )
         if (
-            signature == self._signatures.get(icao)
+            not changed
+            and not log_it
             and now - self._written_at.get(icao, 0.0) < _REWRITE_SECONDS
         ):
             return
         self._signatures[icao] = signature
         self._written_at[icao] = now
         checks_doc = {name: r.as_dict() for name, r in sorted(weighted.items())}
+        # An unknown verdict has no meaningful score; publishing the 1.0
+        # placeholder would archive unverified samples as fully consistent.
+        published = None if status == STATUS_UNKNOWN else score
         doc: dict[str, object] = {
-            "score": score,
+            "score": published,
             "status": status,
             "checks": checks_doc,
         }
         if emitter is not None:
             doc["emitter"] = emitter
-        ev = self._evidence.get(icao)
-        if ev is not None and ev.rebroadcast:
+        if signature[-1]:
             doc["rebroadcast"] = True
         plane.setdefault(STORE_INFO, {})[STORE_INTEGRITY] = doc
+        if not log_it:
+            return
+        self._logged[icao] = (status, signature, now)
         # The archive labels each telemetry sample with the verdict in effect
         # when it arrived, and keeps every verdict in the integrity table.
         flagged = tuple(name for name, r in checks_doc.items() if r["status"] != PASS)
         plane.setdefault(STORE_INTERNAL, {}).setdefault(STORE_INTEGRITY_LOG, []).append(
-            Verdict(now, score, status, flagged, checks_doc)
+            Verdict(now, published, status, flagged, checks_doc)
         )
 
     def score(self, icao: str) -> float | None:
         return self._scores.get(icao.upper())
 
 
-def _newer_than(series: deque, cursor: float) -> list:
+def _consensus_angle(
+    candidates: list[tuple[float, ...]], tolerance: float, quorum: int
+) -> float | None:
+    """The angle most items agree on, each offering a few candidates.
+
+    For a linear array each aircraft offers the bias read directly and read
+    as a reflection. Only the true bias is common to aircraft at different
+    bearings; the other candidate moves with each aircraft's bearing.
+    """
+    best: list[float] = []
+    for anchor in (c for item in candidates for c in item):
+        agreeing = []
+        for item in candidates:
+            nearest = min(item, key=lambda c: abs(geodesy.angle_diff_deg(c, anchor)))
+            if abs(geodesy.angle_diff_deg(nearest, anchor)) <= tolerance:
+                agreeing.append(nearest)
+        if len(agreeing) > len(best):
+            best = agreeing
+    if len(best) < quorum:
+        return None
+    return circular_median_deg(best)
+
+
+def _newer_than(series: deque, cursor: float, *, key=None) -> list:
     """Samples with time > *cursor*, oldest first (walks back from the end)."""
     fresh = []
     for row in reversed(series):
-        if row[0] <= cursor:
+        if (key(row) if key is not None else row[0]) <= cursor:
             break
         fresh.append(row)
     fresh.reverse()
     return fresh
 
 
+def _obs_time(obs: TdoaObservation) -> float:
+    return obs.time
+
+
 def _groups(
-    rows: list[tuple[float, str]], tolerance: float, *, min_size: int = 3
+    rows: list[tuple[float, str]],
+    tolerance: float,
+    *,
+    min_size: int = 3,
+    period: float | None = None,
 ) -> list[list[tuple[float, str]]]:
-    """Chains of sorted values whose neighbours are within *tolerance*."""
+    """Chains of sorted values whose neighbours are within *tolerance*.
+
+    With *period* (360 for bearings) values are circular, so a chain may
+    continue across the wrap (359° next to 1°).
+    """
     if len(rows) < min_size:
         return []
     ordered = sorted(rows)
-    groups: list[list[tuple[float, str]]] = []
+    chains: list[list[tuple[float, str]]] = []
     current = [ordered[0]]
     for row in ordered[1:]:
         if row[0] - current[-1][0] <= tolerance:
             current.append(row)
         else:
-            if len(current) >= min_size:
-                groups.append(current)
+            chains.append(current)
             current = [row]
-    if len(current) >= min_size:
-        groups.append(current)
-    return groups
+    chains.append(current)
+    if (
+        period is not None
+        and len(chains) > 1
+        and ordered[0][0] + period - ordered[-1][0] <= tolerance
+    ):
+        chains[0] = chains.pop() + chains[0]
+    return [chain for chain in chains if len(chain) >= min_size]

@@ -156,4 +156,36 @@ describe('useFlightPaths', () => {
     rerender({ flights: [flight('b')] });
     await waitFor(() => expect(result.current.pathCoords.a).toBeUndefined());
   });
+
+  it('resync re-reads overlay paths in place after missed live points', async () => {
+    api.fetchTelemetry.mockImplementation((id: string) => Promise.resolve([point(id, 1, 35, -78)]));
+    const { result } = renderHook(() => useFlightPaths('live', null, [flight('a'), flight('b')]));
+    act(() => result.current.setShowAllPaths(true));
+    await waitFor(() => expect(Object.keys(result.current.pathCoords).sort()).toEqual(['a', 'b']));
+    expect(api.fetchTelemetry).toHaveBeenCalledTimes(2);
+
+    const later = deferred<TelemetryPoint[]>();
+    api.fetchTelemetry.mockImplementation((id: string) =>
+      id === 'a' ? later.promise : Promise.resolve([point(id, 1, 35, -78), point(id, 9, 36, -79)]),
+    );
+    act(() => result.current.resyncPaths());
+    await waitFor(() => expect(api.fetchTelemetry).toHaveBeenCalledTimes(4));
+    // Still on screen while its refetch is in flight.
+    expect(result.current.pathCoords.a).toEqual([[35, -78]]);
+    await waitFor(() =>
+      expect(result.current.pathCoords.b).toEqual([
+        [35, -78],
+        [36, -79],
+      ]),
+    );
+    await act(async () => {
+      later.resolve([point('a', 1, 35, -78), point('a', 9, 36.5, -79.5)]);
+      await later.promise;
+    });
+    expect(result.current.pathCoords.a).toEqual([
+      [35, -78],
+      [36.5, -79.5],
+    ]);
+    expect(api.fetchTelemetry).toHaveBeenCalledTimes(4);
+  });
 });

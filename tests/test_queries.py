@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from pyaerial.api import queries
 from pyaerial.api.queries import (
     get_alerts,
     get_history_flights,
@@ -221,3 +222,145 @@ def test_get_stats_without_store():
     assert stats["redis"] is False
     assert stats["history"] is False
     assert stats["engine_seen_at"] is None
+
+
+# --- Live query cost and size bounds -----------------------------------------
+
+
+class _AlertStore:
+    def __init__(self, alerts):
+        self.alerts = alerts
+
+    def engine_is_live(self):
+        return True
+
+    def get_alerts(self, **_kwargs):
+        return [dict(alert) for alert in self.alerts]
+
+
+def _alert(i: int, *, active: bool) -> dict:
+    return {
+        "alert_id": f"a{i}",
+        "flight_id": "f1",
+        "active": active,
+        "activated_at": float(i),
+        "deactivated_at": None if active else float(i) + 1,
+    }
+
+
+def test_tracked_alerts_keep_active_first_then_newest():
+    store = _AlertStore([_alert(i, active=i in (1, 3)) for i in range(6)])
+    out = queries.get_tracked_live_alerts(store, [{"flight_id": "f1"}], limit=3)
+    assert [a["alert_id"] for a in out] == ["a3", "a1", "a5"]
+
+
+def test_tracked_alerts_scale_linearly():
+    """Partitioning used a list-of-dicts membership test: O(n^2) every tick."""
+    store = _AlertStore([_alert(i, active=i % 2 == 0) for i in range(20_000)])
+    started = time.perf_counter()
+    out = queries.get_tracked_live_alerts(store, [{"flight_id": "f1"}], limit=50)
+    assert time.perf_counter() - started < 1.0
+    assert len(out) == 10_000
+    assert all(alert["active"] for alert in out)
+
+
+class _History:
+    """Mimics HistoryStore.get_telemetry paging semantics."""
+
+    def __init__(self, count: int):
+        self.count = count
+
+    def ping(self):
+        return True
+
+    def get_telemetry(self, flight_id, *, since=0.0, limit=None, newest=False):
+        points = [
+            {"timestamp": float(t), "latitude": 1.0, "longitude": 2.0}
+            for t in range(self.count)
+            if since <= 0 or t > since
+        ]
+        if limit:
+            points = points[-limit:] if newest else points[:limit]
+        return points
+
+
+class _Live(_AlertStore):
+    def __init__(self, count: int):
+        super().__init__([])
+        self.count = count
+
+    def get_telemetry(self, flight_id, *, since=0.0, limit=None, newest=False):
+        points = [
+            {"timestamp": float(t), "latitude": 1.0, "longitude": 2.0}
+            for t in range(self.count)
+            if since <= 0 or t > since
+        ]
+        if limit:
+            points = points[-limit:] if newest else points[:limit]
+        return points
+
+
+def _telemetry(view, count, since=0.0, limit=None):
+    store = _Live(count) if view == "live" else _History(count)
+    return queries.get_telemetry(
+        "f",
+        view,
+        since,
+        live_store=store if view == "live" else None,
+        history=store if view == "history" else None,
+        limit=limit,
+    )
+
+
+def test_telemetry_cap_applies_to_live_and_history():
+    cap = queries.MAX_TELEMETRY_POINTS
+    for view in ("live", "history"):
+        points = _telemetry(view, cap + 7)
+        assert len(points) == cap, view
+        assert points.truncated is True, view
+        # No cursor: newest points, so the path ends where the flight is.
+        assert points[-1]["timestamp"] == float(cap + 6), view
+        # With a cursor: page forward from it.
+        paged = _telemetry(view, 100, since=9.0, limit=5)
+        assert [p["timestamp"] for p in paged] == [10.0, 11.0, 12.0, 13.0, 14.0]
+        assert paged.truncated is True
+        whole = _telemetry(view, 5, limit=5)
+        assert len(whole) == 5 and whole.truncated is False, view
+
+
+def test_ws_fetch_telemetry_reports_truncation():
+    from fastapi.testclient import TestClient
+
+    from helpers import make_config
+    from pyaerial.store.redis_live import RedisLiveStore
+    from pyaerial.webapp import create_app
+
+    store = RedisLiveStore("redis://localhost:6379/0", memory_only=True)
+    store.touch_engine()
+    total = queries.DEFAULT_TELEMETRY_POINTS + 10
+    store._mem.telemetry["f1"] = [
+        {"timestamp": float(t), "latitude": 1.0, "longitude": 2.0} for t in range(total)
+    ]
+    app = create_app(config=make_config(), live_store=store)
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/ws/live?streams=stats") as ws,
+    ):
+        for params, size, truncated in (
+            ({}, queries.DEFAULT_TELEMETRY_POINTS, True),
+            ({"limit": 10**9}, total, False),
+        ):
+            ws.send_json(
+                {
+                    "type": "request",
+                    "id": "t",
+                    "action": "fetchTelemetry",
+                    "params": {"flightId": "f1", "view": "live", **params},
+                }
+            )
+            while (reply := ws.receive_json()).get("type") != "response":
+                pass
+            assert reply["success"] is True
+            assert len(reply["data"]) == size
+            assert reply["truncated"] is truncated
+            assert reply["data"][-1]["timestamp"] == float(total - 1)

@@ -1,6 +1,7 @@
-import { useCallback, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import * as api from '../api/client';
-import { describeError, errorCode } from '../api/errors';
+import { describeError, errorCode, type ApiErrorCode } from '../api/errors';
+import { connectLiveSocket, isLiveSocketOpen } from '../api/liveSocket';
 import type { Alert, FlightDetail, PortalView, TelemetryPoint } from '../api/types';
 import { mergeAlertsByEpisode } from '../utils/alertData';
 import { SELECTED_POINT_CAP, insertByTimestamp, trimToCap } from '../utils/buffers';
@@ -15,6 +16,11 @@ interface UseFlightSelectionOptions {
 }
 
 export const FLIGHT_NOT_FOUND = 'Flight not found.';
+
+/** Failures that mean "the socket went away", worth retrying once it is back. */
+const RETRY_ON_RECONNECT = new Set<ApiErrorCode>(['disconnected', 'busy', 'timeout']);
+
+type SelectOpts = { follow?: boolean; panToLatest?: boolean; keepAlert?: boolean };
 
 function sortedTelemetry(points: TelemetryPoint[]): TelemetryPoint[] {
   const sorted = [...points].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
@@ -31,6 +37,8 @@ export function useFlightSelection({
   const [flightDetail, setFlightDetail] = useState<FlightDetail | null>(null);
   const [flightAlerts, setFlightAlerts] = useState<Alert[]>([]);
   const [flightTelemetry, setFlightTelemetry] = useState<TelemetryPoint[]>([]);
+  /** The server left older points out of the selected flight's telemetry. */
+  const [telemetryTruncated, setTelemetryTruncated] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<DrawerTab>('telemetry');
   const [followSelectedPlane, setFollowSelectedPlane] = useState(false);
@@ -42,6 +50,8 @@ export function useFlightSelection({
   // next render apply points to the flight that was just chosen.
   const activeFlightIdRef = useRef<string | null>(null);
   const selectionTokenRef = useRef(0);
+  /** A selection cut off by a disconnect, re-run when the socket is back. */
+  const retryRef = useRef<{ flightId: string; initialTab?: DrawerTab; opts?: SelectOpts } | null>(null);
 
   const setActive = useCallback((flightId: string | null) => {
     activeFlightIdRef.current = flightId;
@@ -88,21 +98,19 @@ export function useFlightSelection({
     if (!flightId) return;
     const token = selectionTokenRef.current;
     try {
-      const points = await api.fetchTelemetry(flightId, portalView);
+      const { points, truncated } = await api.fetchTelemetryPage(flightId, portalView);
       if (token !== selectionTokenRef.current) return;
       if (points.length) appendSelectedTelemetry(points);
+      if (truncated) setTelemetryTruncated(true);
     } catch {
       // the live stream will fill in
     }
   }, [appendSelectedTelemetry, portalView]);
 
   const selectFlight = useCallback(
-    async (
-      flightId: string,
-      initialTab?: DrawerTab,
-      opts?: { follow?: boolean; panToLatest?: boolean; keepAlert?: boolean },
-    ) => {
+    async (flightId: string, initialTab?: DrawerTab, opts?: SelectOpts) => {
       const token = ++selectionTokenRef.current;
+      retryRef.current = null;
       const view = portalView;
       const follow = opts?.follow ?? true;
       const panToLatest = opts?.panToLatest ?? true;
@@ -115,12 +123,13 @@ export function useFlightSelection({
       setFlightDetail(null);
       setFlightAlerts([]);
       setFlightTelemetry([]);
+      setTelemetryTruncated(false);
       if (!opts?.keepAlert) setActiveAlertId(null);
       if (initialTab) setDrawerTab(initialTab);
       try {
         const [detail, telemetry, alerts] = await Promise.all([
           api.fetchFlight(flightId, view),
-          api.fetchTelemetry(flightId, view),
+          api.fetchTelemetryPage(flightId, view),
           api.fetchAlerts(view, { flightId, activeOnly: false }),
         ]);
         if (token !== selectionTokenRef.current) return;
@@ -129,8 +138,9 @@ export function useFlightSelection({
           setSelectionError(FLIGHT_NOT_FOUND);
           return;
         }
-        const points = sortedTelemetry(telemetry);
+        const points = sortedTelemetry(telemetry.points);
         setFlightDetail(detail);
+        setTelemetryTruncated(telemetry.truncated);
         // Live points may have arrived while the fetch was in flight.
         setFlightTelemetry((prev) => insertByTimestamp(points, prev, SELECTED_POINT_CAP));
         setFlightAlerts((prev) => mergeAlertsByEpisode(alerts, prev));
@@ -150,6 +160,11 @@ export function useFlightSelection({
         }
       } catch (err) {
         if (token !== selectionTokenRef.current) return;
+        if (RETRY_ON_RECONNECT.has(errorCode(err)) && !isLiveSocketOpen()) {
+          // Keep showing "loading": the socket's own reconnect brings it back.
+          retryRef.current = { flightId, initialTab, opts };
+          return;
+        }
         setIsLoading(false);
         const message =
           errorCode(err) === 'not_found'
@@ -160,6 +175,23 @@ export function useFlightSelection({
       }
     },
     [mapRef, portalView, setActive],
+  );
+
+  const selectFlightRef = useRef(selectFlight);
+  useLayoutEffect(() => {
+    selectFlightRef.current = selectFlight;
+  });
+  useEffect(
+    () =>
+      connectLiveSocket({
+        onOpen: () => {
+          const retry = retryRef.current;
+          retryRef.current = null;
+          if (!retry || retry.flightId !== activeFlightIdRef.current) return;
+          void selectFlightRef.current(retry.flightId, retry.initialTab, { ...retry.opts, keepAlert: true });
+        },
+      }),
+    [],
   );
 
   const selectAlert = useCallback(
@@ -186,6 +218,7 @@ export function useFlightSelection({
   /** Clear the selection and close the drawer. */
   const closeDrawer = useCallback(() => {
     selectionTokenRef.current += 1;
+    retryRef.current = null;
     setActive(null);
     setDrawerOpen(false);
     setActiveAlertId(null);
@@ -194,6 +227,7 @@ export function useFlightSelection({
     setFlightDetail(null);
     setFlightAlerts([]);
     setFlightTelemetry([]);
+    setTelemetryTruncated(false);
     setSelectionError(null);
     setIsLoading(false);
   }, [setActive]);
@@ -204,6 +238,7 @@ export function useFlightSelection({
     flightDetail,
     flightAlerts,
     flightTelemetry,
+    telemetryTruncated,
     drawerOpen,
     drawerTab,
     setDrawerTab,

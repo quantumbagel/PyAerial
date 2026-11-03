@@ -43,3 +43,6 @@ live_telemetry.db
 /node_modules/
 web/node_modules/
 src/pyaerial/static/
+
+# Compose secrets (webhook URLs etc.)
+secrets/

@@ -12,6 +12,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
+from operator import attrgetter
 from typing import Any, NamedTuple, TypedDict
 
 from pyaerial.constants import (
@@ -51,7 +52,8 @@ class Verdict(NamedTuple):
     """One integrity verdict, logged in ``internal`` each time it changes."""
 
     time: float
-    score: float
+    # None when the status is unknown (no meaningful score yet).
+    score: float | None
     status: str
     # Checks that did not pass (warn or fail), by name.
     flagged: tuple[str, ...]
@@ -159,8 +161,9 @@ def get_latest(
     return nearest_datum(series, after_time)
 
 
-def _datum_time(datum: Datum) -> float:
-    return datum.time
+# C-level key: bisect over long series calls it O(log n) times per lookup,
+# and the engine does millions of lookups (integrity, kinematics, archive).
+_datum_time = attrgetter("time")
 
 
 def nearest_datum(series: Sequence[Datum], at_time: float) -> Datum | None:
@@ -170,6 +173,10 @@ def nearest_datum(series: Sequence[Datum], at_time: float) -> Datum | None:
     """
     if not series:
         return None
+    last = series[-1]
+    if at_time >= last.time:
+        # Most lookups are for "now" or the newest fix.
+        return last
     idx = bisect_right(series, at_time, key=_datum_time)
     if idx == len(series):
         return series[-1]
@@ -254,7 +261,7 @@ def sample_provenance(
 def _tail_after(series: Sequence[Datum], since: float | None) -> Sequence[Datum]:
     if since is None:
         return series
-    return series[bisect_right(series, since, key=_datum_time):]
+    return series[bisect_right(series, since, key=_datum_time) :]
 
 
 def iter_telemetry_samples(

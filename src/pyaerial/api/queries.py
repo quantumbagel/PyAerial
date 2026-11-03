@@ -25,8 +25,24 @@ from pyaerial.store.redis_live import LiveUnavailable
 log = logging.getLogger("pyaerial.webapp")
 
 _MAX_Q = 80
-#: Hard cap on telemetry points returned by one history fetchTelemetry.
-MAX_HISTORY_TELEMETRY_POINTS = 20_000
+#: Hard cap on telemetry points returned by one fetchTelemetry (live or history).
+MAX_TELEMETRY_POINTS = 20_000
+MAX_HISTORY_TELEMETRY_POINTS = MAX_TELEMETRY_POINTS  # pre-1.0 name
+#: Points returned when the request has no ``limit`` (the portal keeps 5000).
+DEFAULT_TELEMETRY_POINTS = 5_000
+
+
+class TelemetryPoints(list):
+    """Telemetry list; ``truncated`` is True when the cap left points out."""
+
+    truncated: bool = False
+
+
+def _capped(points: list[dict[str, Any]], cap: int, *, newest: bool) -> TelemetryPoints:
+    """Keep ``cap`` points: the newest, or the oldest when paging forward."""
+    result = TelemetryPoints(points[-cap:] if newest else points[:cap])
+    result.truncated = len(points) > cap
+    return result
 
 
 def _normalize_q(q: str | None) -> str | None:
@@ -186,12 +202,12 @@ def get_tracked_live_alerts(
     filtered = [alert for alert in alerts if alert.get("flight_id") in flight_ids]
     filtered.sort(key=lambda alert: alert.get("activated_at") or 0, reverse=True)
     if limit:
-        active = [
-            alert
-            for alert in filtered
-            if alert.get("active", True) and not alert.get("deactivated_at")
-        ]
-        rest = [alert for alert in filtered if alert not in active]
+        # One pass; a membership test against a list of dicts was O(n^2).
+        active: list[dict[str, Any]] = []
+        rest: list[dict[str, Any]] = []
+        for alert in filtered:
+            is_active = alert.get("active", True) and not alert.get("deactivated_at")
+            (active if is_active else rest).append(alert)
         filtered = active + rest
         filtered = filtered[: max(limit, len(active))]
     return filtered
@@ -211,9 +227,10 @@ def get_flight_detail(
         flight_data = live_store.get_flight(flight_id)
         if not flight_data:
             return None
-        telemetry = live_store.get_telemetry(flight_id)
-        if telemetry:
-            last = telemetry_point(telemetry[-1])
+        # One point, not the whole ring (unbounded with telemetry_keep_seconds: 0).
+        latest = live_store.latest_telemetry(flight_id)
+        if latest:
+            last = telemetry_point(latest)
             flight_data.update(
                 {
                     "latitude": last.get("latitude"),
@@ -276,25 +293,41 @@ def get_telemetry(
     live_store: LiveStore | None,
     history: HistoryStore | None,
     limit: int | None = None,
-) -> list[dict[str, Any]]:
+) -> TelemetryPoints:
+    # Cap one request so a long flight cannot produce a multi-MB response.
+    # Without a cursor keep the newest points so the path ends at the flight's
+    # last position; with one, page forward from it.
+    cap = MAX_TELEMETRY_POINTS
+    if limit:
+        cap = max(1, min(int(limit), MAX_TELEMETRY_POINTS))
+    newest = since <= 0
     if view == "live":
         if live_store is None or not engine_is_live(live_store):
-            return []
-        return [
-            {**telemetry_point(doc), "flight_id": flight_id}
-            for doc in live_store.get_telemetry(flight_id, since=since)
-        ]
-    history = _require_history(history)
-    if history is None:
-        return []
-    # Cap one request so it cannot return an entire archive. Without a cursor
-    # keep the newest points so the path ends at the flight's last position;
-    # with one, page forward from it.
-    cap = MAX_HISTORY_TELEMETRY_POINTS
-    if limit:
-        cap = max(1, min(int(limit), MAX_HISTORY_TELEMETRY_POINTS))
-    docs = history.get_telemetry(flight_id, since=since, limit=cap, newest=since <= 0)
-    return [{**telemetry_point(doc), "flight_id": flight_id} for doc in docs]
+            return TelemetryPoints()
+        # Capped inside Redis; one extra point tells whether the cap cut any.
+        docs = live_store.get_telemetry(
+            flight_id, since=since, limit=cap + 1, newest=newest
+        )
+    else:
+        history = _require_history(history)
+        if history is None:
+            return TelemetryPoints()
+        # One extra row tells whether the cap cut anything off.
+        docs = history.get_telemetry(
+            flight_id, since=since, limit=cap + 1, newest=newest
+        )
+    page = _capped(docs, cap, newest=newest)
+    points = TelemetryPoints(_telemetry_row(doc, flight_id) for doc in page)
+    points.truncated = page.truncated
+    return points
+
+
+def _telemetry_row(doc: dict[str, Any], flight_id: str) -> dict[str, Any]:
+    row = {**telemetry_point(doc), "flight_id": flight_id}
+    # Optional: only TC 20-22 positions carry it (metres, WGS84 ellipsoid).
+    if doc.get("gnss_height") is not None:
+        row["gnss_height"] = doc["gnss_height"]
+    return row
 
 
 def get_alerts(

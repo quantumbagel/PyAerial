@@ -73,6 +73,8 @@ export function useFlightPaths(
 
   const pendingPathFetches = useRef(new Set<string>());
   const failedPathFetches = useRef(new Set<string>());
+  /** Overlay paths that missed live points (paused tab, reconnect): refetched in place. */
+  const stalePaths = useRef(new Set<string>());
   // Latest view/selection for in-flight fetches: after await we must discard
   // results that no longer belong, not apply the values from the starting render.
   const wantRef = useRef({ portalView, showAllPaths, activeFlightId });
@@ -92,6 +94,8 @@ export function useFlightPaths(
   const fetchAndSetPath = useCallback(async (flightId: string, view: PortalView, force = false) => {
     if (pendingPathFetches.current.has(flightId)) return;
     pendingPathFetches.current.add(flightId);
+    // A stale path is replaced whole: the fetch covers the points it missed.
+    const replace = stalePaths.current.delete(flightId) || force;
     try {
       const [telemetry, alerts] = await Promise.all([
         api.fetchTelemetry(flightId, view),
@@ -110,7 +114,7 @@ export function useFlightPaths(
       setPathTelemetry((prev) => ({
         ...prev,
         // Keep live points that arrived during the fetch.
-        [flightId]: force ? valid : insertByTimestamp(valid, prev[flightId] ?? [], cap),
+        [flightId]: replace ? valid : insertByTimestamp(valid, prev[flightId] ?? [], cap),
       }));
       setPathAlerts((prev) => ({ ...prev, [flightId]: alerts }));
     } catch (err) {
@@ -131,12 +135,14 @@ export function useFlightPaths(
   const resetPaths = useCallback(() => {
     failedPathFetches.current.clear();
     pendingPathFetches.current.clear();
+    stalePaths.current.clear();
     clearAll();
   }, [clearAll]);
 
   // Selection / toggle / view changes decide which paths exist.
   useEffect(() => {
     failedPathFetches.current.clear();
+    stalePaths.current.clear();
     if (showAllPaths) return;
     clearAll();
     if (activeFlightId) void fetchAndSetPath(activeFlightId, portalView);
@@ -150,11 +156,14 @@ export function useFlightPaths(
     setPathCoords((prev) => pruneToKeep(prev, keep));
     setPathTelemetry((prev) => pruneToKeep(prev, keep));
     setPathAlerts((prev) => pruneToKeep(prev, keep));
+    for (const id of stalePaths.current) if (!keep.has(id)) stalePaths.current.delete(id);
     const candidates = activeFlightId
       ? [activeFlightId, ...filteredFlights.map((f) => f.flight_id)]
       : filteredFlights.map((f) => f.flight_id);
     const missing = candidates.filter((id) =>
-      pathNeedsFetch(id, pathCoords, pendingPathFetches.current, failedPathFetches.current),
+      stalePaths.current.has(id)
+        ? !pendingPathFetches.current.has(id)
+        : pathNeedsFetch(id, pathCoords, pendingPathFetches.current, failedPathFetches.current),
     );
     const room = Math.max(0, MAX_PATH_FETCHES - pendingPathFetches.current.size);
     missing.slice(0, room).forEach((id) => {
@@ -263,6 +272,21 @@ export function useFlightPaths(
     if (activeFlightId) void fetchAndSetPath(activeFlightId, portalView, true);
   }, [activeFlightId, fetchAndSetPath, portalView]);
 
+  /**
+   * After live points were missed (paused tab, reconnect): re-read the
+   * selected path now and every overlay in turn, keeping them on screen
+   * meanwhile, so no path is left joining across the gap.
+   */
+  const resyncPaths = useCallback(() => {
+    refetchActivePath();
+    if (!showAllPaths) return;
+    failedPathFetches.current.clear();
+    for (const id of Object.keys(pathCoords)) {
+      if (id !== activeFlightId) stalePaths.current.add(id);
+    }
+    setFetchWave((n) => n + 1);
+  }, [refetchActivePath, showAllPaths, pathCoords, activeFlightId]);
+
   return {
     showAllPaths,
     setShowAllPaths,
@@ -274,5 +298,6 @@ export function useFlightPaths(
     appendLiveTelemetry,
     mergeLiveAlerts,
     refetchActivePath,
+    resyncPaths,
   };
 }

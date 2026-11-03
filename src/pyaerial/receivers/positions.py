@@ -10,6 +10,8 @@ plugins that know their own location (GPS, MAVLink) can call
 
 from __future__ import annotations
 
+import email.utils
+import json
 import logging
 import math
 import threading
@@ -17,8 +19,10 @@ import time
 from dataclasses import dataclass
 
 import requests
+import urllib3
 
 from pyaerial.config.schema import Config, ReceiverConfig
+from pyaerial.urls import redact_url
 
 log = logging.getLogger("pyaerial.receivers.positions")
 
@@ -30,6 +34,107 @@ SOURCE_RUNTIME = "runtime"
 _DEFAULT_JSON_PORT = 8080
 _REFRESH_SECONDS = 60.0
 _FETCH_TIMEOUT = 3.0
+_MAX_BACKOFF_SECONDS = 900.0
+_MAX_BODY_BYTES = 1 << 20
+_JOIN_TIMEOUT = 2.0
+
+
+class FetchError(Exception):
+    """An HTTP fetch that failed; ``retry_after`` is the server's ask (s)."""
+
+    def __init__(self, message: str, *, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(value: object) -> float | None:
+    """Seconds from a ``Retry-After`` header (delta-seconds or HTTP date)."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        try:
+            when = email.utils.parsedate_to_datetime(value.strip())
+        except (TypeError, ValueError):
+            return None
+        seconds = when.timestamp() - time.time()
+    return max(0.0, seconds) if math.isfinite(seconds) else None
+
+
+class Backoff:
+    """Exponential backoff for one endpoint, on the monotonic clock."""
+
+    def __init__(self, base: float, maximum: float):
+        self.base = base
+        self.maximum = maximum
+        self.failures = 0
+        self.until = 0.0
+
+    def ready(self, now: float) -> bool:
+        return now >= self.until
+
+    def success(self, now: float, interval: float) -> None:
+        self.failures = 0
+        self.until = now + interval
+
+    def failure(self, now: float, retry_after: float | None = None) -> float:
+        """Record a failure; return the delay before the next attempt."""
+        self.failures += 1
+        delay = min(self.maximum, self.base * 2 ** min(self.failures - 1, 30))
+        if retry_after is not None:
+            delay = max(delay, min(retry_after, self.maximum))
+        self.until = now + delay
+        return delay
+
+
+def fetch_json(
+    url: str,
+    *,
+    timeout: float,
+    session: requests.Session | None = None,
+    max_bytes: int = _MAX_BODY_BYTES,
+) -> object:
+    """GET *url* and parse its JSON body, raising :class:`FetchError`.
+
+    *timeout* bounds connecting and each read, and the whole body: a server
+    trickling bytes cannot hold the caller past it (``requests`` alone only
+    times out single reads). Redirects are not followed (one could move an
+    https request to plain http). Error messages name only ``scheme://host``:
+    the URL's path or query may carry an API key.
+    """
+    deadline = time.monotonic() + timeout
+    where = redact_url(url)
+    get = session.get if session is not None else requests.get
+    try:
+        response = get(url, timeout=timeout, stream=True, allow_redirects=False)
+    except requests.RequestException as exc:
+        raise FetchError(f"{type(exc).__name__} from {where}") from exc
+    with response:
+        status = response.status_code
+        if 300 <= status < 400:
+            raise FetchError(f"HTTP {status} redirect from {where} (redirects are not followed)")
+        if status >= 400:
+            retry_after = None
+            if status in (429, 503):
+                retry_after = retry_after_seconds(response.headers.get("Retry-After"))
+            raise FetchError(f"HTTP {status} from {where}", retry_after=retry_after)
+        body = bytearray()
+        try:
+            # read1 returns what has arrived, so the deadline is checked
+            # between every network read.
+            while chunk := response.raw.read1(65536, decode_content=True):
+                body += chunk
+                if len(body) > max_bytes:
+                    raise FetchError(f"response from {where} larger than {max_bytes} bytes")
+                if time.monotonic() > deadline:
+                    raise FetchError(f"no complete response from {where} within {timeout:g} s")
+        except (requests.RequestException, urllib3.exceptions.HTTPError, OSError) as exc:
+            raise FetchError(f"{type(exc).__name__} reading from {where}") from exc
+    try:
+        return json.loads(body)
+    except ValueError as exc:
+        raise FetchError(f"invalid JSON from {where}") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +177,7 @@ def parse_receiver_json(doc: object) -> tuple[float, float, float | None] | None
         return None
     lat = doc.get("lat")
     lon = doc.get("lon")
-    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+    if not _is_number(lat) or not _is_number(lon):
         return None
     if not (math.isfinite(lat) and math.isfinite(lon)):
         return None
@@ -82,8 +187,13 @@ def parse_receiver_json(doc: object) -> tuple[float, float, float | None] | None
     if lat == 0 and lon == 0:
         return None
     alt = doc.get("alt_m_amsl", doc.get("alt"))
-    altitude = float(alt) if isinstance(alt, (int, float)) and math.isfinite(alt) else None
+    altitude = float(alt) if _is_number(alt) and math.isfinite(alt) else None
     return float(lat), float(lon), altitude
+
+
+def _is_number(value: object) -> bool:
+    # JSON true/false are ints to isinstance.
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 class ReceiverPositions:
@@ -94,6 +204,7 @@ class ReceiverPositions:
         self._lock = threading.Lock()
         self._positions: dict[str, ReceiverPosition] = {}
         self._urls: dict[str, str] = {}
+        self._backoff: dict[str, Backoff] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         home = config.home
@@ -119,6 +230,7 @@ class ReceiverPositions:
             url = default_position_url(cfg) if fetch else None
             if url:
                 self._urls[name] = url
+                self._backoff[name] = Backoff(_REFRESH_SECONDS, _MAX_BACKOFF_SECONDS)
 
     def get(self, name: str | None) -> ReceiverPosition:
         with self._lock:
@@ -160,34 +272,50 @@ class ReceiverPositions:
         )
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = _JOIN_TIMEOUT) -> None:
         self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout)
+            if thread.is_alive():
+                log.debug("Receiver position poller still busy after %.1f s", timeout)
 
-    def refresh(self) -> None:
+    def refresh(self, now: float | None = None) -> None:
+        """Fetch every ``receiver.json`` that is due (not backing off)."""
+        now = time.monotonic() if now is None else now
         for name, url in list(self._urls.items()):
-            fetched = self._fetch(url)
+            backoff = self._backoff[name]
+            if not backoff.ready(now):
+                continue
+            try:
+                fetched = self._fetch(url)
+            except FetchError as exc:
+                delay = backoff.failure(now, exc.retry_after)
+                log.debug("No receiver position: %s (retry in %.0f s)", exc, delay)
+                continue
+            backoff.success(now, _REFRESH_SECONDS)
             if fetched is None:
                 continue
             lat, lon, alt = fetched
             previous = self.get(name)
             if previous.source == SOURCE_HOME:
                 log.info(
-                    "Receiver %s position %.5f, %.5f from %s", name, lat, lon, url
+                    "Receiver %s position %.5f, %.5f from %s",
+                    name,
+                    lat,
+                    lon,
+                    redact_url(url),
                 )
             self.set(name, lat, lon, alt, source=SOURCE_RECEIVER_JSON)
 
     def _poll(self) -> None:
         while not self._stop.is_set():
             self.refresh()
-            if self._stop.wait(_REFRESH_SECONDS):
+            due = min(b.until for b in self._backoff.values()) - time.monotonic()
+            if self._stop.wait(max(1.0, due)):
                 return
 
     @staticmethod
     def _fetch(url: str) -> tuple[float, float, float | None] | None:
-        try:
-            response = requests.get(url, timeout=_FETCH_TIMEOUT)
-            response.raise_for_status()
-            return parse_receiver_json(response.json())
-        except (requests.RequestException, ValueError) as exc:
-            log.debug("No receiver position from %s: %s", url, exc)
-            return None
+        """Position from *url*; ``None`` if it has none; FetchError on failure."""
+        return parse_receiver_json(fetch_json(url, timeout=_FETCH_TIMEOUT))

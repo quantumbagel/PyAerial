@@ -94,4 +94,55 @@ describe('liveSocket', () => {
     ws.message({ type: 'response', id, success: false, error: 'slow down', code: 'rate_limited' });
     await expect(result).rejects.toMatchObject({ code: 'rate_limited' });
   });
+
+  it('passes fields beside data through sendWsRequestFull (fetchTelemetry truncated)', async () => {
+    const live = await import('./liveSocket');
+    const client = await import('./client');
+    live.connectLiveSocket({});
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    ws.message({ type: 'hello' });
+    const page = client.fetchTelemetryPage('f1', 'history');
+    const { id, action } = JSON.parse(ws.sent[0]);
+    expect(action).toBe('fetchTelemetry');
+    ws.message({ type: 'response', id, success: true, data: [{ timestamp: 1 }], truncated: true });
+    await expect(page).resolves.toEqual({ points: [{ timestamp: 1 }], truncated: true });
+  });
+
+  it('subscribes to the chosen streams and keeps them across reconnects', async () => {
+    vi.useFakeTimers();
+    const live = await import('./liveSocket');
+    live.connectLiveSocket({});
+    const first = FakeSocket.instances[0];
+    expect(first.url).toMatch(/\/ws\/live$/);
+    first.open();
+    first.message({ type: 'hello' });
+
+    live.setLiveStreams(['stats', 'alerts']);
+    const sub = JSON.parse(first.sent[0]);
+    expect(sub).toMatchObject({ action: 'subscribe', params: { streams: ['stats', 'alerts'] } });
+    live.setLiveStreams(['alerts', 'stats']); // same set: nothing sent
+    expect(first.sent).toHaveLength(1);
+
+    first.closeWith(1006);
+    await vi.advanceTimersByTimeAsync(2000);
+    const second = FakeSocket.instances[1];
+    expect(second.url).toMatch(/\/ws\/live\?streams=alerts%2Cstats$/);
+    second.open();
+    second.message({ type: 'hello' });
+    expect(second.sent).toHaveLength(0);
+
+    live.setLiveStreams(null);
+    expect(JSON.parse(second.sent[0])).toMatchObject({ action: 'subscribe', params: { streams: [] } });
+  });
+
+  it('re-sends the choice when it changed while the socket was connecting', async () => {
+    const live = await import('./liveSocket');
+    live.connectLiveSocket({});
+    const ws = FakeSocket.instances[0];
+    live.setLiveStreams(['alerts']);
+    ws.open();
+    ws.message({ type: 'hello' });
+    expect(JSON.parse(ws.sent[0])).toMatchObject({ action: 'subscribe', params: { streams: ['alerts'] } });
+  });
 });

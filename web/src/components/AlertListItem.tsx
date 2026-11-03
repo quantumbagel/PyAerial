@@ -1,6 +1,12 @@
 import { memo } from 'react';
 import type { Alert, Zone } from '../api/types';
-import { alertSortValueLabel, alertTooltip, isAlertActive, type AlertSortField } from '../utils/alertData';
+import {
+  alertSortValueLabel,
+  alertTooltip,
+  endedByLabel,
+  isAlertActive,
+  type AlertSortField,
+} from '../utils/alertData';
 import { displayCallsign, displayIcao } from '../utils/format';
 import { ZoneBadge } from './AlertBadges';
 import { Chip } from './ui';
@@ -23,6 +29,7 @@ export const AlertListItem = memo(function AlertListItem({
   onSelect,
 }: AlertListItemProps) {
   const isEpisodeActive = isAlertActive(alert);
+  const endedBy = endedByLabel(alert);
   return (
     <li>
       <button
@@ -46,6 +53,11 @@ export const AlertListItem = memo(function AlertListItem({
           />
           <span className="ui-row__trailing">{alertSortValueLabel(alert, sortField)}</span>
         </div>
+        {endedBy && (
+          <div className="ui-row__line">
+            <span className="ui-row__secondary">Ended: {endedBy}</span>
+          </div>
+        )}
       </button>
     </li>
   );

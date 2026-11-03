@@ -13,8 +13,11 @@ const MAX_QUEUE_SIZE = 64;
 /** The server pings every 15 s (pyaerial.api.broadcaster._PING_INTERVAL); three missed pings = dead. */
 export const LIVE_IDLE_TIMEOUT_MS = 45_000;
 
+/** A successful `response` message; extra fields (e.g. `truncated`) sit beside `data`. */
+export type WsResponse<T = unknown> = { data: T } & Record<string, unknown>;
+
 type Settle = {
-  resolve: (val: unknown) => void;
+  resolve: (msg: WsResponse) => void;
   reject: (err: ApiError) => void;
   timer: ReturnType<typeof setTimeout>;
 };
@@ -23,6 +26,20 @@ const handlersSet = new Set<LiveSocketHandlers>();
 const pendingRequests = new Map<string, Settle>();
 const requestQueue: (Settle & { id: string; action: string; params: Record<string, unknown> })[] = [];
 let nextId = 0;
+/** Streams to receive (null: the server default, all of them). */
+let wantedStreams: string[] | null = null;
+/** What the current connection was opened or last subscribed with. */
+let socketStreams: string[] | null = null;
+
+function streamsKey(streams: string[] | null): string {
+  return streams ? [...streams].sort().join(',') : '';
+}
+
+function liveUrl(): string {
+  socketStreams = wantedStreams;
+  const key = streamsKey(wantedStreams);
+  return socketUrl(key ? `/ws/live?streams=${encodeURIComponent(key)}` : '/ws/live');
+}
 
 /** The server's first message on an admitted socket (never sent before a 1008/1013 close). */
 export function isHelloMessage(event: MessageEvent): boolean {
@@ -35,12 +52,14 @@ export function isHelloMessage(event: MessageEvent): boolean {
 }
 
 const socket = new ReconnectingSocket({
-  url: () => socketUrl('/ws/live'),
+  url: liveUrl,
   idleTimeoutMs: LIVE_IDLE_TIMEOUT_MS,
   // Rejected sockets are accepted and then closed, so "open" proves nothing:
   // only the hello means we were admitted.
   isReadyMessage: isHelloMessage,
   onOpen: () => {
+    // The wish may have changed while this socket was connecting.
+    if (streamsKey(socketStreams) !== streamsKey(wantedStreams)) sendSubscribe();
     handlersSet.forEach((h) => h.onOpen?.());
     flushQueue();
   },
@@ -133,7 +152,7 @@ function handleMessage(event: MessageEvent) {
     if (!req || !msg.id) return;
     clearTimeout(req.timer);
     pendingRequests.delete(msg.id);
-    if (msg.success) req.resolve(msg.data);
+    if (msg.success) req.resolve(msg as WsResponse);
     else req.reject(apiErrorFromResponse(msg.code, msg.error));
     return;
   }
@@ -164,11 +183,15 @@ export function isLiveSocketOpen(): boolean {
   return socket.isReady;
 }
 
-export function sendWsRequest<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
+/** Like sendWsRequest, but resolves with the whole response (fields beside `data`). */
+export function sendWsRequestFull<T>(
+  action: string,
+  params: Record<string, unknown> = {},
+): Promise<WsResponse<T>> {
+  return new Promise<WsResponse<T>>((resolve, reject) => {
     const id = generateId();
     const settle: Settle = {
-      resolve: resolve as (val: unknown) => void,
+      resolve: resolve as (msg: WsResponse) => void,
       reject,
       timer: scheduleTimeout(id),
     };
@@ -194,4 +217,29 @@ export function sendWsRequest<T>(action: string, params: Record<string, unknown>
     requestQueue.push({ id, action, params, ...settle });
     if (!socket.isRunning) socket.start();
   });
+}
+
+export function sendWsRequest<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {
+  return sendWsRequestFull<T>(action, params).then((msg) => msg.data);
+}
+
+function sendSubscribe(): void {
+  socketStreams = wantedStreams;
+  // [] restores the server default (every stream); added streams get a snapshot.
+  sendWsRequest('subscribe', { streams: wantedStreams ?? [] }).catch((err) => {
+    // A disconnect is fine: the next connection asks for them via ?streams=.
+    if (!(err instanceof ApiError && err.code === 'disconnected')) {
+      console.warn('[WS] subscribe failed', err);
+    }
+  });
+}
+
+/**
+ * Choose the pushed streams (null: all). Applied now when connected, and to
+ * every later connection through `?streams=`, so reconnects keep the choice.
+ */
+export function setLiveStreams(streams: string[] | null): void {
+  if (streamsKey(streams) === streamsKey(wantedStreams)) return;
+  wantedStreams = streams ? [...streams] : null;
+  if (socket.isReady) sendSubscribe();
 }

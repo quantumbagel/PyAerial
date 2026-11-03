@@ -20,6 +20,10 @@ STORE_INTERNAL = "internal"
 STORE_LAT = "latitude"
 STORE_LONG = "longitude"
 STORE_ALT = "altitude"
+# GNSS height above the WGS84 ellipsoid (m), from TC 20-22 positions. Kept
+# apart from STORE_ALT (barometric): the two differ by the geoid and by the
+# pressure-altitude error, often by hundreds of feet.
+STORE_GNSS_HEIGHT = "gnss_height"
 STORE_VERT_SPEED = "vertical_speed"
 STORE_HORIZ_SPEED = "speed"
 STORE_HEADING = "heading"
@@ -39,6 +43,14 @@ STORE_FIRST_PACKET = "first_packet"
 STORE_POSITION_RECEIVERS = "position_receivers"
 # Integrity verdict changes: [(time, score, status, flagged checks, checks doc)]
 STORE_INTEGRITY_LOG = "integrity_log"
+# When the engine first tracked this aircraft. Unlike STORE_FIRST_PACKET it is
+# kept when a long track is split into flight segments (max_flight_seconds).
+STORE_TRACK_STARTED = "track_started"
+# Internal counter of position fixes the CPR jump gate rejected (evidence of
+# two transmitters sharing an ICAO address).
+STORE_GATE_REJECTS = "gate_rejects"
+# info field holding the latest integrity verdict document.
+STORE_INTEGRITY = "integrity"
 
 # --- Alert payload fields -----------------------------------------------------
 ALERT_CAT_TYPE = "type"

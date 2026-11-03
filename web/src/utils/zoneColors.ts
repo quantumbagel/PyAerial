@@ -42,6 +42,13 @@ export function zoneColorFor(zoneName: string, zones?: ZoneColorSource[]): Color
   return asColorPair(ZONE_PALETTE[zoneColorIndex(zoneName, zones) % ZONE_PALETTE.length]);
 }
 
+/** `map[key]` only when it is the map's own string (a rule named "constructor" is not a colour). */
+function ownString(map: Record<string, string>, key: string): string | undefined {
+  if (!Object.prototype.hasOwnProperty.call(map, key)) return undefined;
+  const value = map[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
 /**
  * Colour for one alert: the rule's colour inside its zone, else the global
  * `alert_colors[rule]`, else the zone's colour.
@@ -59,7 +66,7 @@ export function alertColorFor(
     if (zoneRule?.color) return asColorPair(zoneRule.color);
   }
   if (rule && alertColors) {
-    const configured = alertColors[rule] ?? alertColors[rule.toLowerCase()];
+    const configured = ownString(alertColors, rule) ?? ownString(alertColors, rule.toLowerCase());
     if (configured) return asColorPair(configured);
   }
   return zoneColorFor(zoneName, zones);

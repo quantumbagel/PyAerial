@@ -28,7 +28,7 @@ web:
   # allow_localhost_origins: true   # Vite dev server on another port
   # allowed_hosts: ["tracker.example"]  # DNS-rebinding guard for exposed portals
   # beast_host: "0.0.0.0"   # default 127.0.0.1; 0.0.0.0 for remote Beast feeders
-  # beast_port: 30005       # dump1090-compatible Beast TCP for OpenSky (default)
+  # beast_port: 30105       # dump1090-compatible Beast TCP for OpenSky (default)
 
 # CPR decode reference for ADS-B positions, not the geofence and not the ETA target.
 home:
@@ -53,7 +53,7 @@ receivers:
 # Tie a rule to this zone with eta, distance, or proximity.
 # Units: altitude metres (not feet), speed km/h, eta seconds to the polygon
 # boundary along the current track (0 if already inside), distance km,
-# proximity metres. See UNITS.md.
+# proximity metres. See "Units" in CONFIGURATION.md.
 zones:
   aerpaw:
     color: "#f59e0b"

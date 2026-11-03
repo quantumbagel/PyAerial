@@ -16,6 +16,7 @@ from pyaerial.constants import (
     STORE_ALT,
     STORE_CALC_DATA,
     STORE_DISTANCE,
+    STORE_GNSS_HEIGHT,
     STORE_HEADING,
     STORE_HORIZ_SPEED,
     STORE_INFO,
@@ -24,7 +25,7 @@ from pyaerial.constants import (
     STORE_RECV_DATA,
     STORE_VERT_SPEED,
 )
-from pyaerial.models import get_latest
+from pyaerial.models import get_latest, sample_provenance
 
 Resolver = Callable[[str], float | None]
 
@@ -33,6 +34,9 @@ _CALC_FIELDS = {STORE_HORIZ_SPEED, STORE_HEADING}
 _PROXIMITY_KEY = "_proximity"
 _INTEGRITY_KEY = "integrity"
 _HEADING_FIELDS = {STORE_HEADING, "heading", "direction"}
+# integrity.monitor.STATUS_UNKNOWN; not imported to keep calc free of the
+# integrity package.
+_INTEGRITY_UNKNOWN = "unknown"
 
 _FIELD_ALIASES = {
     "speed": STORE_HORIZ_SPEED,
@@ -56,16 +60,60 @@ _FIELD_ALIASES = {
 }
 
 
-def integrity_score(plane: dict) -> float | None:
-    """Latest integrity score written by the integrity monitor, if any."""
-    doc = (plane.get(STORE_INFO) or {}).get(_INTEGRITY_KEY)
-    if not isinstance(doc, dict):
+def canonical_field(field: str) -> str:
+    """The internal name a ``when`` field (or alias) resolves to."""
+    return _FIELD_ALIASES.get(field, field)
+
+
+ALTITUDE_BARO = "baro"
+ALTITUDE_GNSS = "gnss"
+
+
+def altitude_m(
+    plane: dict, at_time: float | None = None
+) -> tuple[float | None, str | None]:
+    """``(metres, source)`` for ``altitude`` rules and alert payloads.
+
+    Barometric altitude wins whenever the aircraft reports it. Only aircraft
+    that send GNSS positions alone (TC 20-22) fall back to ``gnss_height``,
+    which is *geometric* height above the WGS84 ellipsoid, not pressure
+    altitude: the two can differ by tens to hundreds of metres.
+    """
+    baro = get_latest(STORE_RECV_DATA, STORE_ALT, plane, at_time)
+    if baro is not None:
+        return baro.value, ALTITUDE_BARO
+    gnss = get_latest(STORE_RECV_DATA, STORE_GNSS_HEIGHT, plane, at_time)
+    if gnss is not None:
+        return gnss.value, ALTITUDE_GNSS
+    return None, None
+
+
+def integrity_score(plane: dict, at_time: float | None = None) -> float | None:
+    """Integrity score backed by evidence, or None.
+
+    An ``unknown`` (or missing) status publishes score 1.0 without any check
+    having run; returning None makes an ``integrity`` constraint fail, like any
+    other missing field. With *at_time*, the verdict in effect then is used
+    (from the per-plane verdict log), not the latest one.
+    """
+    if at_time is not None:
+        verdict = sample_provenance(plane, at_time)
+        score = verdict.get("integrity_score")
+        status = verdict.get("integrity_status")
+    else:
+        doc = (plane.get(STORE_INFO) or {}).get(_INTEGRITY_KEY)
+        if not isinstance(doc, dict):
+            return None
+        score = doc.get("score")
+        status = doc.get("status")
+    if not isinstance(status, str) or not status or status == _INTEGRITY_UNKNOWN:
         return None
-    score = doc.get("score")
     return float(score) if isinstance(score, (int, float)) else None
 
 
-def _heading_in_range(value: float, minimum: float | None, maximum: float | None) -> bool:
+def _heading_in_range(
+    value: float, minimum: float | None, maximum: float | None
+) -> bool:
     """True if ``value`` (degrees) lies in the (possibly wrapping) heading window."""
     heading = value % 360.0
     if minimum is not None and maximum is not None:
@@ -97,6 +145,14 @@ def make_resolver(
 
     def resolve(field: str) -> float | None:
         target_field = _FIELD_ALIASES.get(field, field)
+        # lat/lon describe the same (possibly dead-reckoned) position that
+        # distance and eta are measured from.
+        if target_field == STORE_LAT:
+            return position[0]
+        if target_field == STORE_LONG:
+            return position[1]
+        if target_field == STORE_ALT:
+            return altitude_m(plane, at_time)[0]
         if target_field in _RECV_FIELDS:
             datum = get_latest(STORE_RECV_DATA, target_field, plane, at_time)
             return datum.value if datum else None
@@ -110,7 +166,7 @@ def make_resolver(
         if target_field == _PROXIMITY_KEY:
             return geo.distance_to_polygon(polygon, position) * 1000  # km -> m
         if target_field == _INTEGRITY_KEY:
-            return integrity_score(plane)
+            return integrity_score(plane, at_time)
         return None
 
     return resolve
@@ -181,16 +237,22 @@ def make_predicted_resolver(
         target_field = _FIELD_ALIASES.get(field, field)
 
         if target_field == STORE_ALT:
-            alt = get_latest(STORE_RECV_DATA, STORE_ALT, plane)
+            # Baro, else geometric GNSS height (see altitude_m).
+            alt = altitude_m(plane)[0]
             if alt is None:
                 return None
             vs = get_latest(STORE_RECV_DATA, STORE_VERT_SPEED, plane)
             if vs is not None:
-                return alt.value + vs.value * predict_seconds
-            return alt.value
+                return alt + vs.value * predict_seconds
+            return alt
 
         if target_field == ALERT_CAT_ETA:
             return max(0.0, predicted_eta)
+
+        if target_field == STORE_LAT:
+            return predicted_pos[0]
+        if target_field == STORE_LONG:
+            return predicted_pos[1]
 
         if target_field == STORE_DISTANCE:
             return geo.distance_to_polygon(polygon, predicted_pos)

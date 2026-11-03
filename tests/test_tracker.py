@@ -1,10 +1,22 @@
 from __future__ import annotations
 
-from pyaerial.classify import classify
+import pytest
+
+from helpers import (
+    IDENT,
+    airborne_position,
+    latest_position,
+    make_config,
+    tracker_at_home,
+    with_crc,
+)
+from pyaerial.classify import CAT_AIRBORNE_BARO, CAT_IDENT, CAT_VELOCITY, classify
 from pyaerial.config.schema import HomeConfig
 from pyaerial.constants import (
+    STORE_ALT,
     STORE_CALLSIGN,
     STORE_FIRST_PACKET,
+    STORE_GNSS_HEIGHT,
     STORE_ICAO,
     STORE_INFO,
     STORE_INTERNAL,
@@ -17,8 +29,9 @@ from pyaerial.constants import (
     STORE_TOTAL_PACKETS,
 )
 from pyaerial.models import Datum
-from pyaerial.tracker import Tracker
-from helpers import make_config
+from pyaerial.receivers.frames import es_icao
+from pyaerial.tracker import Tracker, _format_packet_types
+from pyaerial.units import FT_TO_M
 
 
 def test_typecode_minus_one_is_ignored():
@@ -62,7 +75,10 @@ def test_surface_without_altitude_does_not_clobber_baro():
     tracker = Tracker(make_config())
     plane = {
         STORE_INFO: {STORE_ICAO: "abc123"},
-        STORE_RECV_DATA: {STORE_LAT: [Datum(35.7, 100.0)], "altitude": [Datum(400.0, 100.0)]},
+        STORE_RECV_DATA: {
+            STORE_LAT: [Datum(35.7, 100.0)],
+            "altitude": [Datum(400.0, 100.0)],
+        },
         STORE_INTERNAL: {
             STORE_FIRST_PACKET: 100.0,
             STORE_MOST_RECENT_PACKET: 100.0,
@@ -147,8 +163,8 @@ def test_older_packet_does_not_rewind_last_update():
 
 
 def test_telemetry_series_are_not_clipped_to_live_window():
-    from pyaerial.config.schema import TrackingConfig
     from pyaerial.classify import ClassifiedMessage
+    from pyaerial.config.schema import TrackingConfig
 
     tracker = Tracker(make_config(tracking=TrackingConfig(telemetry_keep_seconds=5)))
     plane = {
@@ -227,9 +243,11 @@ def test_one_bad_fix_does_not_freeze_the_plane_forever():
     for n in range(5):
         assert tracker.ingest([(msg, 101.0 + n * 0.1)]) == 0
     assert tracker._gate_rejects["40621D"] == 5
-    assert tracker.ingest([(msg, 102.0)]) == 1
+    # The reset re-anchors from a global even/odd decode.
+    odd = "8D40621D58C386435CC412692AD6"  # ~ (52.2658, 3.9389)
+    assert tracker.ingest([(odd, 102.0)]) == 1
     lat = tracker.planes["40621D"][STORE_RECV_DATA][STORE_LAT][-1].value
-    assert abs(lat - 52.2572) < 0.01
+    assert abs(lat - 52.2658) < 0.001
     assert "40621D" not in tracker._gate_rejects
 
 
@@ -256,13 +274,13 @@ def test_short_mode_s_frames_skip_the_adsb_decoder(monkeypatch):
     assert calls == ["8d4840d6202cc371c32ce0576098"]
 
 
-def test_first_fix_decodes_against_receiving_antenna():
+def test_first_fix_decodes_from_even_odd_pair_far_from_home():
     from pyaerial.config.schema import ReceiverConfig, ReceiverPositionConfig
     from pyaerial.receivers.positions import ReceiverPositions
 
     # Reference airborne pair near 52.25N 3.92E (pyModeS docs). A home in
-    # North Carolina is far outside the 180 NM local-decode range; the antenna
-    # that heard the frame is not.
+    # North Carolina is far outside the 180 NM local-decode range; the global
+    # even/odd decode needs no reference at all.
     config = make_config(
         receivers={
             "nl": ReceiverConfig(
@@ -272,10 +290,189 @@ def test_first_fix_decodes_against_receiving_antenna():
         }
     )
     tracker = Tracker(config, positions=ReceiverPositions(config, fetch=False))
-    msg = "8d40621d58c382d690c8ac2863a7"
-    tracker.ingest([(msg, 1.0)], receivers={msg: ("nl", "be")})
+    even = "8d40621d58c382d690c8ac2863a7"
+    odd = "8d40621d58c386435cc412692ad6"
+    tracker.ingest([(even, 1.0)], receivers={even: ("nl", "be")})
+    assert "40621D" not in tracker.planes  # one frame is ambiguous
+    tracker.ingest([(odd, 1.5)], receivers={odd: ("nl", "be")})
     plane = tracker.planes["40621D"]
     lat = plane[STORE_RECV_DATA][STORE_LAT][-1].value
-    assert abs(lat - 52.2572) < 0.01
-    assert plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS] == {1.0: ("nl", "be")}
+    lon = plane[STORE_RECV_DATA][STORE_LONG][-1].value
+    assert abs(lat - 52.2658) < 0.001
+    assert abs(lon - 3.9389) < 0.001
+    assert plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS] == {1.5: ("nl", "be")}
     assert plane[STORE_INFO]["receivers"] == ["nl", "be"]
+
+
+# --- CRC, DF18 and TIS-B filtering -------------------------------------------
+# Corrupted or non-ICAO extended squitters never create or update a plane.
+
+
+def _df18(cf: int, me_hex: str = IDENT[8:22], icao: str = "4840d6") -> str:
+    return with_crc(f"{(18 << 3) | cf:02x}{icao}{me_hex}000000")
+
+
+# --- CRC and DF18 filtering --------------------------------------------------
+
+
+def test_corrupted_extended_squitter_creates_no_plane():
+    corrupted = IDENT[:-1] + ("9" if IDENT[-1] != "9" else "8")
+    assert es_icao(corrupted) is None
+    # Bit error in the address field: would otherwise create a ghost aircraft.
+    ghost = IDENT[:2] + "4841d6" + IDENT[8:]
+    tracker = Tracker(make_config())
+    assert tracker.ingest([(corrupted, 1.0), (ghost, 1.0)]) == 0
+    assert tracker.planes == {}
+    assert tracker.ingest([(IDENT, 2.0)]) == 1
+    assert list(tracker.planes) == ["4840D6"]
+
+
+def test_df18_without_icao_address_or_standard_me_is_ignored():
+    # CF 0 (ADS-B NT), 2 (fine TIS-B, ICAO), 6 (ADS-R, ICAO) carry ICAO addresses.
+    for cf in (0, 2, 6):
+        assert es_icao(_df18(cf)) == "4840D6", cf
+    # CF 1 / 5 use non-ICAO addresses; 3 is coarse TIS-B, 4 management, 7 reserved.
+    for cf in (1, 3, 4, 5, 7):
+        assert es_icao(_df18(cf)) is None, cf
+
+
+def test_tisb_imf_flag_marks_non_icao_address():
+    lat, lon = 35.8, -78.7
+    first = (18 << 3) | 2
+    icao_addressed = airborne_position("a1b2c3", lat, lon, 0, first_byte=first)
+    track_number = airborne_position("a1b2c3", lat, lon, 0, first_byte=first, imf=1)
+    assert es_icao(icao_addressed) == "A1B2C3"
+    assert es_icao(track_number) is None
+
+
+def _velocity(icao: str, speed_kts: int = 400) -> str:
+    """DF17 TC19 subtype 1 velocity, due north, with a valid CRC."""
+    me = (19 << 51) | (1 << 48) | (1 << 32) | ((speed_kts + 1) << 21) | (1 << 10)
+    return with_crc(f"8d{icao}{me:014x}000000")
+
+
+def test_gate_reset_is_not_used_up_by_a_velocity_frame():
+    """Regression: after five rejected fixes any next frame (usually velocity)
+    consumed the reset, so the next position was gated against the bad fix
+    again and the plane could stay frozen."""
+    tracker = tracker_at_home()
+    t = 1.0
+    for i in range(2):
+        msg = airborne_position("a1b2c3", 36.0, -78.5, i % 2)
+        tracker.ingest([(msg, t)])
+        t += 0.5
+    assert abs(latest_position(tracker, "A1B2C3")[0] - 36.0) < 0.001
+    # The aircraft really is 0.6 deg north (e.g. the first fix was a ghost).
+    for i in range(5):
+        msg = airborne_position("a1b2c3", 36.6, -78.5, i % 2)
+        assert tracker.ingest([(msg, t)]) == 0
+        t += 0.1
+    assert tracker.ingest([(_velocity("a1b2c3"), t)]) == 1
+    msg = airborne_position("a1b2c3", 36.6, -78.5, 1)
+    assert tracker.ingest([(msg, t + 0.1)]) == 1
+    assert abs(latest_position(tracker, "A1B2C3")[0] - 36.6) < 0.001
+
+
+# --- Tracker bookkeeping --------------------------------------------------------
+
+
+def test_expired_planes_honours_explicit_zero_time():
+    tracker = Tracker(make_config())
+    tracker.ingest([(IDENT, 1_000.0)])
+    assert tracker.planes["4840D6"][STORE_INTERNAL][STORE_MOST_RECENT_PACKET] == 1_000.0
+    # 0.0 is an explicit time, not "now": nothing is older than it.
+    assert tracker.expired_planes(0.0) == []
+    assert tracker.expired_planes(1_000.0 + 10_000) == ["4840D6"]
+
+
+def test_position_receivers_only_kept_for_stored_samples():
+    """A repeated identical fix keeps a two-sample run, but its receivers map
+    grew by one entry per frame for as long as it was heard."""
+    tracker = tracker_at_home()
+    tracker.ingest([(airborne_position("a1b2c3", 36.0, -78.5, 1), 0.0)])
+    t = 0.5
+    msg = airborne_position("a1b2c3", 36.0, -78.5, 0)
+    for _ in range(400):
+        tracker.ingest([(msg, t)], receivers={msg: ("nc",)})
+        t += 0.5
+    plane = tracker.planes["A1B2C3"]
+    recv = plane[STORE_RECV_DATA]
+    sample_times = {d.time for d in recv[STORE_LAT]} | {
+        d.time for d in recv[STORE_LONG]
+    }
+    receivers = plane[STORE_INTERNAL][STORE_POSITION_RECEIVERS]
+    assert set(receivers) == sample_times
+    assert len(receivers) < 10
+
+
+def test_out_of_order_position_does_not_leave_receivers_entry():
+    tracker = tracker_at_home()
+    first = airborne_position("a1b2c3", 36.0, -78.5, 0)
+    second = airborne_position("a1b2c3", 36.001, -78.5, 1)
+    late = airborne_position("a1b2c3", 36.0005, -78.5, 0)
+    for msg, t in ((first, 1.0), (second, 1.5), (late, 1.2)):
+        tracker.ingest([(msg, t)], receivers={msg: ("nc",)})
+    receivers = tracker.planes["A1B2C3"][STORE_INTERNAL][STORE_POSITION_RECEIVERS]
+    assert set(receivers) == {1.5}
+
+
+# --- GNSS height is kept apart from baro altitude ----------------------------
+
+
+HOME = HomeConfig(latitude=35.7275, longitude=-78.6959)
+
+
+# --- GNSS height is not barometric altitude ----------------------------------
+
+
+def test_gnss_height_is_stored_apart_from_baro_altitude():
+    gnss = airborne_position("a1b2c3", 36.0, -78.5, 0, alt_ft=36000, tc=20)
+    result = classify(gnss, HOME, last_position=(36.0, -78.5))
+    assert result is not None
+    recv = result.data[STORE_RECV_DATA]
+    assert STORE_ALT not in recv
+    # Same AC12 25-ft coding as baro (dump1090, readsb, rs1090), not metres.
+    assert recv[STORE_GNSS_HEIGHT] == pytest.approx(36000 * FT_TO_M)
+
+    baro = airborne_position("a1b2c3", 36.0, -78.5, 0, alt_ft=35000, tc=11)
+    recv = classify(baro, HOME, last_position=(36.0, -78.5)).data[STORE_RECV_DATA]
+    assert recv[STORE_ALT] == pytest.approx(35000 * FT_TO_M)
+    assert STORE_GNSS_HEIGHT not in recv
+
+
+def test_gnss_positions_do_not_enter_the_baro_altitude_series():
+    tracker = Tracker(make_config())
+    t = 1.0
+    for i in range(6):
+        tc = 11 if i % 3 else 20
+        alt = 35000 if tc == 11 else 35600
+        msg = airborne_position("a1b2c3", 36.0 + i * 0.001, -78.5, i % 2, alt_ft=alt, tc=tc)
+        tracker.ingest([(msg, t)])
+        t += 0.5
+    recv = tracker.planes["A1B2C3"][STORE_RECV_DATA]
+    assert {round(d.value) for d in recv[STORE_ALT]} == {round(35000 * FT_TO_M)}
+    assert {round(d.value) for d in recv[STORE_GNSS_HEIGHT]} == {round(35600 * FT_TO_M)}
+
+
+# --- Status-line packet-type summary -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "counts, text",
+    [
+        ({CAT_AIRBORNE_BARO: 81, CAT_VELOCITY: 2, CAT_IDENT: 2}, "pos 81, vel 2, id 2"),
+        ({"3": 5, "1": 1}, "pos 5, id 1"),  # restored from JSON
+        ({}, ""),
+    ],
+)
+def test_packet_types_are_formatted_readably(counts, text):
+    assert _format_packet_types(counts) == text
+
+
+def test_status_line_has_no_defaultdict_repr():
+    tracker = Tracker(make_config())
+    tracker.ingest([(IDENT, 1.0)])
+    summary = tracker.top_planes_summary()
+    assert "defaultdict" not in summary
+    assert summary == "Top 1: 4840D6/KLM1023 (1, id 1)"
+    assert tracker.planes["4840D6"][STORE_INTERNAL][STORE_PACKET_TYPE]

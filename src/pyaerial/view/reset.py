@@ -95,14 +95,20 @@ def _reset(
     target = icao.lower().strip() if icao else ""
     if target:
         prompt = (
-            f"This will delete retained history for ICAO {target}. "
+            f"This will delete archived history for ICAO {target} (flights, "
+            "telemetry, integrity verdicts, raw frames, and alerts). "
             "Live Redis is left alone if the tracking engine is running."
         )
     else:
         prompt = (
-            "This will delete all retained flights, tracks, and alerts. "
+            "This will delete the whole research archive: every flight, "
+            "telemetry sample, integrity verdict, raw frame, and alert. "
             "Live Redis is left alone if the tracking engine is running."
         )
+    if history is not None and getattr(history, "state", "") == "incompatible":
+        # e.g. an archive from a newer PyAerial after a downgrade: say so
+        # before the user confirms deleting it.
+        prompt += f"\nThe archive cannot be opened: {history.health()['error']}"
     if not _confirm(prompt, yes):
         return 1
 

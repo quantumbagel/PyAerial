@@ -5,8 +5,8 @@ from __future__ import annotations
 import abc
 import logging
 import threading
-from typing import Protocol
 from collections.abc import Callable
+from typing import Protocol
 
 from pyaerial.receivers.frames import RawFrame
 
@@ -36,6 +36,7 @@ class Emit(Protocol):
         elevation: float | None = None,
         cfo: float | None = None,
     ) -> None: ...
+
 
 _REGISTRY: dict[str, type["Receiver"]] = {}
 _UNAVAILABLE: dict[str, str] = {}
@@ -94,9 +95,7 @@ def unavailable_receivers() -> dict[str, str]:
 def create_receiver(method: str, name: str, emit: Emit, arguments: dict) -> Receiver:
     """Instantiate the receiver registered under ``method``."""
     if method in _UNAVAILABLE:
-        raise KeyError(
-            f"receiver {method!r} is unavailable ({_UNAVAILABLE[method]})."
-        )
+        raise KeyError(f"receiver {method!r} is unavailable ({_UNAVAILABLE[method]}).")
     if method not in _REGISTRY:
         raise KeyError(
             f"unknown receiver method {method!r}; available: {available_receivers()}"

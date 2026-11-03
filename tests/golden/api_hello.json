@@ -1,0 +1,21 @@
+{
+  "actions": [
+    "subscribe",
+    "fetchFlights",
+    "fetchFlight",
+    "fetchTelemetry",
+    "fetchAlerts",
+    "fetchStats",
+    "fetchZones",
+    "fetchConfig"
+  ],
+  "protocol": "pyaerial.live",
+  "streams": [
+    "flights",
+    "alerts",
+    "telemetry",
+    "stats"
+  ],
+  "type": "hello",
+  "version": 1
+}

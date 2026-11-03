@@ -1,7 +1,7 @@
 """
 Canonical unit conversions between stored SI-ish units and aviation display units.
 
-Stored units (see ``UNITS.md``):
+Stored units (see "Units" in ``CONFIGURATION.md``):
 
 - altitude: metres
 - horizontal speed: km/h

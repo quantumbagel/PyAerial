@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import type { Integrity } from '../api/types';
-import { LIST_SEP, formatPosition } from '../utils/format';
-import { checkLabel, integrityLabel, sortedChecks } from '../utils/integrity';
+import { LIST_SEP, formatNumber, formatPosition } from '../utils/format';
+import { checkLabel, integrityLabel, integrityScore, sortedChecks } from '../utils/integrity';
 
 const STATUS_TONE: Record<Integrity['status'], string> = {
   spoofed: 'alert',
@@ -17,15 +17,24 @@ export function IntegritySection({ integrity }: { integrity?: Integrity | null }
   const flagged = checks.filter(([, check]) => check.status !== 'pass');
   const passed = checks.filter(([, check]) => check.status === 'pass');
   const emitter = integrity.emitter;
+  const score = integrityScore(integrity);
   return (
     <section className="info-section">
       <h3>Integrity</h3>
       <dl className="ui-fields">
         <dt className="ui-field-label">Status</dt>
-        <dd className={`ui-field-value ui-field-value--${STATUS_TONE[integrity.status]}`}>
+        <dd className={`ui-field-value ui-field-value--${STATUS_TONE[integrity.status] ?? 'muted'}`}>
           {integrityLabel(integrity)}
-          <span className="ui-field-sub">Score {integrity.score.toFixed(2)} of 1</span>
+          {score != null && <span className="ui-field-sub">Score {formatNumber(score, 2)} of 1</span>}
         </dd>
+        {integrity.rebroadcast && (
+          <>
+            <dt className="ui-field-label">Heard via</dt>
+            <dd className="ui-field-value ui-field-value--muted">
+              Ground rebroadcast only (TIS-B/ADS-R), so receiver signal checks don't apply
+            </dd>
+          </>
+        )}
         {flagged.map(([name, check]) => (
           <Fragment key={name}>
             <dt className="ui-field-label">{checkLabel(name)}</dt>
@@ -39,7 +48,11 @@ export function IntegritySection({ integrity }: { integrity?: Integrity | null }
             <dt className="ui-field-label">Transmitter</dt>
             <dd className="ui-field-value ui-field-value--alert">
               {formatPosition(emitter.latitude, emitter.longitude)}
-              <span className="ui-field-sub">{emitter.offset_km} km from the claimed position</span>
+              {emitter.offset_km != null && Number.isFinite(emitter.offset_km) && (
+                <span className="ui-field-sub">
+                  {formatNumber(emitter.offset_km, 1)} km from the claimed position
+                </span>
+              )}
             </dd>
           </>
         )}

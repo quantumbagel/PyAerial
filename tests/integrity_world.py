@@ -12,9 +12,16 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from pyModeS._bits import crc_remainder
+from pyModeS.util import crc
 
+from helpers import make_config
+from helpers import with_crc as with_crc  # re-exported for the integrity tests
 from pyaerial.classify import CAT_AIRBORNE_BARO, CAT_IDENT, CAT_VELOCITY
+from pyaerial.config.schema import (
+    IntegrityConfig,
+    ReceiverConfig,
+    ReceiverPositionConfig,
+)
 from pyaerial.constants import (
     STORE_ALT,
     STORE_FIRST_PACKET,
@@ -30,9 +37,10 @@ from pyaerial.constants import (
     STORE_RECV_DATA,
     STORE_VERT_SPEED,
 )
-from pyaerial.integrity import geodesy
+from pyaerial.integrity import IntegrityMonitor, geodesy
 from pyaerial.models import Datum
 from pyaerial.receivers.frames import BEAST_CLOCK_HZ, BEAST_CLOCK_MOD, RawFrame
+from pyaerial.receivers.positions import ReceiverPositions
 
 HOME = (35.7275, -78.6959)
 # Station constant: rssi_dbfs = K - 20 log10(range_km).
@@ -40,9 +48,9 @@ STATION_K = 15.0
 
 
 def es_position(icao: str, odd: int, tc: int = 11, salt: int = 0) -> str:
-    """DF17 airborne position frame (parity not meaningful)."""
+    """DF17 airborne position frame with valid parity (CPR not meaningful)."""
     me = (tc << 51) | (odd << 34) | (salt & 0x1FFFF)
-    return f"8d{icao.lower()}{me:014x}000000"
+    return with_crc(f"8d{icao.lower()}{me:014x}000000")
 
 
 def ac13(alt_ft: int) -> int:
@@ -58,7 +66,7 @@ def df4(icao: str, alt_ft: int) -> str:
     """DF4 surveillance altitude reply addressed to *icao*."""
     head = (4 << 27) | ac13(alt_ft)
     body = head << 24
-    parity = crc_remainder(body, 56) ^ int(icao, 16)
+    parity = crc(f"{body:014x}") ^ int(icao, 16)
     return f"{(body | parity):014x}"
 
 
@@ -70,6 +78,8 @@ class Antenna:
     alt: float = 100.0
     clock_offset: float = 0.0  # seconds
     drift_ppm: float = 0.0
+    # AoA array orientation error: degrees added to every measured bearing.
+    bearing_error: float = 0.0
 
 
 @dataclass
@@ -200,7 +210,100 @@ class World:
                     receiver=ant.name,
                     rssi=min(rssi, -3.5),
                     clock=self.clock(ant, arrival),
-                    bearing=(bearing + self.rng.gauss(0, 2)) % 360,
+                    bearing=(bearing + ant.bearing_error + self.rng.gauss(0, 2)) % 360,
                 )
             )
         return out
+
+
+# --- monitor helpers shared by the integrity tests ---------------------------
+
+
+def integrity_config(antennas: list[Antenna], *, kind: str = "dump1090", **integrity):
+    receivers = {
+        a.name: ReceiverConfig(
+            type=kind,
+            port=1234 if kind == "aoa" else None,
+            position=ReceiverPositionConfig(latitude=a.lat, longitude=a.lon, altitude=a.alt),
+        )
+        for a in antennas
+    }
+    config = make_config(receivers=receivers)
+    if integrity:
+        config.integrity = IntegrityConfig(**integrity)
+    return config
+
+
+def make_monitor(world: World, config) -> IntegrityMonitor:
+    positions = ReceiverPositions(config, fetch=False)
+    # Started long ago so the appearance check is not in its startup grace.
+    return IntegrityMonitor(config, positions, started_at=world.t - 1000)
+
+
+def run_world(world: World, monitor: IntegrityMonitor, seconds: float, extra=None) -> None:
+    steps = int(seconds / 0.5)
+    for _ in range(steps):
+        frames = world.step(0.5)
+        if extra is not None:
+            frames.extend(extra(world))
+        monitor.observe_frames(frames)
+        monitor.evaluate(world.planes, world.t, force=True)
+
+
+def integrity_of(world: World, icao: str) -> dict:
+    return world.planes[icao.upper()][STORE_INFO]["integrity"]
+
+
+def add_spoofer(world: World, icao: str, emitter_km: float = 5.0, claim_km: float = 150.0) -> Aircraft:
+    """A target claimed far away but radiated from a transmitter near home."""
+    lat, lon = geodesy.destination(HOME[0], HOME[1], 45, claim_km * 1000)
+    elat, elon = geodesy.destination(HOME[0], HOME[1], 200, emitter_km * 1000)
+    return world.add(
+        Aircraft(
+            icao=icao,
+            lat=lat,
+            lon=lon,
+            alt=9000,
+            speed_kph=700,
+            track=270,
+            emitter=(elat, elon, 50.0),
+        )
+    )
+
+
+def with_velocity(frames: list[RawFrame]) -> list[RawFrame]:
+    """Add two non-position squitters per position (~6 DF17/s, as real)."""
+    out = list(frames)
+    for f in frames:
+        for k in (1, 2):
+            me = (19 << 51) | ((int(f.hex[14:22], 16) * 3 + k) & 0xFFFFFFFFFFF)
+            out.append(
+                RawFrame(
+                    with_crc(f"8d{f.hex[2:8]}{me:014x}000000"),
+                    f.timestamp + 0.15 * k,
+                    f.receiver,
+                    f.rssi,
+                    (f.clock + int(0.15 * k * BEAST_CLOCK_HZ)) % BEAST_CLOCK_MOD,
+                )
+            )
+    return out
+
+
+def drifting_receivers() -> list[Antenna]:
+    """Four receivers with free-running clocks, three of them drifting."""
+    return [
+        Antenna("a", *HOME, clock_offset=12.3, drift_ppm=3),
+        Antenna(
+            "b",
+            *geodesy.destination(*HOME, 80, 40_000),
+            clock_offset=-401.7,
+            drift_ppm=-8,
+        ),
+        Antenna(
+            "c",
+            *geodesy.destination(*HOME, 200, 45_000),
+            clock_offset=77.0,
+            drift_ppm=11,
+        ),
+        Antenna("d", *geodesy.destination(*HOME, 330, 35_000), clock_offset=5.5),
+    ]

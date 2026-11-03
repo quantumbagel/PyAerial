@@ -18,10 +18,15 @@ from dataclasses import dataclass
 import requests
 
 from pyaerial.config.schema import CrossNetworkConfig
+from pyaerial.receivers.positions import Backoff, FetchError, fetch_json
 
 log = logging.getLogger("pyaerial.integrity.network")
 
 _MAX_QUEUE = 64
+_MAX_BACKOFF_SECONDS = 600.0
+_JOIN_TIMEOUT = 2.0
+# Consecutive failures before it is worth a warning.
+_WARN_FAILURES = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,10 +69,13 @@ class NetworkChecker:
         self._lock = threading.Lock()
         self._wanted: dict[str, None] = {}
         self._results: dict[str, NetworkSighting] = {}
+        # Address being fetched; cleared by forget() so the result is dropped.
+        self._inflight: str | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._session = requests.Session()
+        self._backoff = Backoff(config.min_interval_seconds, _MAX_BACKOFF_SECONDS)
 
     def start(self) -> None:
         if self._thread is None:
@@ -76,9 +84,16 @@ class NetworkChecker:
             )
             self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = _JOIN_TIMEOUT) -> None:
         self._stop.set()
         self._wake.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout)
+            if thread.is_alive():
+                log.debug("Cross-network lookup still busy after %.1f s", timeout)
+                return
+        self._session.close()
 
     def request(self, icao: str, now: float) -> None:
         """Queue *icao* unless it was checked within ``recheck_seconds``."""
@@ -100,6 +115,8 @@ class NetworkChecker:
         with self._lock:
             self._results.pop(icao.lower(), None)
             self._wanted.pop(icao.lower(), None)
+            if self._inflight == icao.lower():
+                self._inflight = None
 
     def _next(self) -> str | None:
         with self._lock:
@@ -107,6 +124,7 @@ class NetworkChecker:
                 return None
             key = next(iter(self._wanted))
             del self._wanted[key]
+            self._inflight = key
             return key
 
     def _run(self) -> None:
@@ -116,19 +134,38 @@ class NetworkChecker:
                 self._wake.wait(1.0)
                 self._wake.clear()
                 continue
-            sighting = self._fetch(icao)
-            if sighting is not None:
-                with self._lock:
+            sighting: NetworkSighting | None = None
+            try:
+                sighting = self._fetch(icao)
+            except FetchError as exc:
+                delay = self._backoff.failure(time.monotonic(), exc.retry_after)
+                level = (
+                    logging.WARNING
+                    if self._backoff.failures == _WARN_FAILURES
+                    else logging.DEBUG
+                )
+                log.log(
+                    level,
+                    "Cross-network lookup for %s failed (%d in a row): %s; next in %.0f s",
+                    icao,
+                    self._backoff.failures,
+                    exc,
+                    delay,
+                )
+            else:
+                if self._backoff.failures >= _WARN_FAILURES:
+                    log.info("Cross-network lookups working again")
+                delay = self.config.min_interval_seconds
+                self._backoff.success(time.monotonic(), delay)
+            with self._lock:
+                if sighting is not None and self._inflight == icao:
                     self._results[icao] = sighting
-            if self._stop.wait(self.config.min_interval_seconds):
+                self._inflight = None
+            if self._stop.wait(delay):
                 return
 
-    def _fetch(self, icao: str) -> NetworkSighting | None:
+    def _fetch(self, icao: str) -> NetworkSighting:
+        """Look *icao* up; :class:`FetchError` on any failure."""
         url = self.config.url.replace("{icao}", icao)
-        try:
-            response = self._session.get(url, timeout=self.config.timeout_seconds)
-            response.raise_for_status()
-            return parse_aggregator(response.json(), time.time())
-        except (requests.RequestException, ValueError) as exc:
-            log.debug("Cross-network lookup for %s failed: %s", icao, exc)
-            return None
+        doc = fetch_json(url, timeout=self.config.timeout_seconds, session=self._session)
+        return parse_aggregator(doc, time.time())

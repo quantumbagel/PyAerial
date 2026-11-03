@@ -14,10 +14,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from shapely import Polygon
-
-from pyaerial.alerts.retain import should_retain
-from pyaerial.config.schema import Config
 from pyaerial.constants import (
     STORE_CALLSIGN,
     STORE_FIRST_PACKET,
@@ -25,9 +21,7 @@ from pyaerial.constants import (
     STORE_INFO,
     STORE_INTEGRITY_LOG,
     STORE_INTERNAL,
-    STORE_LAT,
     STORE_MOST_RECENT_PACKET,
-    STORE_RECV_DATA,
 )
 from pyaerial.jsonutil import dumps as json_dumps
 from pyaerial.models import (
@@ -37,13 +31,181 @@ from pyaerial.models import (
     sample_provenance,
 )
 from pyaerial.receivers.frames import RawFrame, frame_fields
+from pyaerial.store.samples import gnss_height_at
 
 log = logging.getLogger("pyaerial.store")
 
 _RECONNECT_DELAY = 2.0
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 # Rows deleted per prune_frames call, so one prune never stalls the engine tick.
-_FRAME_PRUNE_BATCH = 100_000
+# The engine prunes again on the next tick while a call returns a full batch.
+FRAME_PRUNE_BATCH = 20_000
+# Columns a schema 1 (PyAerial 0.12-0.21) archive must have to be upgraded.
+_V1_COLUMNS = {
+    "flights": {
+        "flight_id",
+        "icao",
+        "status",
+        "start_time",
+        "end_time",
+        "retained",
+        "callsign",
+        "model",
+        "owner",
+        "country",
+        "aircraft_type",
+        "info",
+    },
+    "telemetry": {
+        "flight_id",
+        "timestamp",
+        "icao",
+        "latitude",
+        "longitude",
+        "altitude",
+        "speed",
+        "heading",
+    },
+    "alerts": {
+        "alert_id",
+        "flight_id",
+        "icao",
+        "callsign",
+        "zone",
+        "rule",
+        "active",
+        "activated_at",
+        "deactivated_at",
+        "eta",
+        "reason",
+        "last_updated",
+        "latitude",
+        "longitude",
+        "altitude",
+    },
+}
+# Schema version -> (table, column, definition) it added. Each only adds
+# nullable/defaulted columns, so older archives upgrade in place.
+_ADDED_COLUMNS: dict[int, tuple[tuple[str, str, str], ...]] = {
+    2: (
+        ("flights", "registration", "TEXT NOT NULL DEFAULT ''"),
+        ("telemetry", "receivers", "TEXT"),
+        ("telemetry", "integrity_score", "REAL"),
+        ("telemetry", "integrity_status", "TEXT"),
+        ("telemetry", "integrity_flags", "TEXT"),
+    ),
+    # Metres above the WGS84 ellipsoid from TC 20-22 positions; altitude is
+    # barometric only.
+    3: (("telemetry", "gnss_height", "REAL"),),
+}
+# Every integrity verdict change; checks is the full JSON result. score is
+# NULL for an ``unknown`` verdict (no check had evidence). v2 declared it
+# NOT NULL, which SQLite can only drop by rebuilding the table.
+_INTEGRITY_COLUMNS = (
+    "flight_id",
+    "timestamp",
+    "icao",
+    "score",
+    "status",
+    "flags",
+    "checks",
+)
+_INTEGRITY_TABLE = """
+CREATE TABLE IF NOT EXISTS {name} (
+    flight_id TEXT NOT NULL,
+    timestamp REAL NOT NULL,
+    icao TEXT NOT NULL,
+    score REAL,
+    status TEXT NOT NULL,
+    flags TEXT NOT NULL DEFAULT '[]',
+    checks TEXT,
+    PRIMARY KEY (flight_id, timestamp)
+)"""
+_INTEGRITY_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_integrity_icao_ts ON integrity(icao, timestamp)"
+)
+# The current schema, one statement each so a new archive or an upgrade runs
+# them inside one transaction (executescript would commit part way).
+_SCHEMA_DDL = (
+    """CREATE TABLE IF NOT EXISTS flights (
+        flight_id TEXT PRIMARY KEY,
+        icao TEXT NOT NULL,
+        status TEXT NOT NULL,
+        start_time REAL NOT NULL,
+        end_time REAL NOT NULL,
+        retained INTEGER NOT NULL DEFAULT 1,
+        callsign TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        owner TEXT NOT NULL DEFAULT '',
+        country TEXT NOT NULL DEFAULT '',
+        aircraft_type TEXT NOT NULL DEFAULT '',
+        registration TEXT NOT NULL DEFAULT '',
+        info TEXT NOT NULL DEFAULT '{}'
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_flights_end_time ON flights(end_time DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_flights_icao ON flights(icao)",
+    "CREATE INDEX IF NOT EXISTS idx_flights_callsign ON flights(callsign)",
+    # receivers / integrity_flags are JSON arrays; integrity_* is the verdict
+    # in effect when the sample arrived (NULL before the first, score NULL for
+    # unknown). altitude is barometric; gnss_height is metres above the WGS84
+    # ellipsoid (TC 20-22 positions), NULL when not sent.
+    """CREATE TABLE IF NOT EXISTS telemetry (
+        flight_id TEXT NOT NULL,
+        timestamp REAL NOT NULL,
+        icao TEXT NOT NULL,
+        latitude REAL,
+        longitude REAL,
+        altitude REAL,
+        speed REAL,
+        heading REAL,
+        receivers TEXT,
+        integrity_score REAL,
+        integrity_status TEXT,
+        integrity_flags TEXT,
+        gnss_height REAL,
+        PRIMARY KEY (flight_id, timestamp)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_telemetry_icao_ts ON telemetry(icao, timestamp)",
+    _INTEGRITY_TABLE.format(name="integrity"),
+    _INTEGRITY_INDEX,
+    # One row per receiver copy of every frame (archive.raw_frames).
+    """CREATE TABLE IF NOT EXISTS frames (
+        timestamp REAL NOT NULL,
+        receiver TEXT NOT NULL DEFAULT '',
+        hex TEXT NOT NULL,
+        df INTEGER,
+        icao TEXT,
+        rssi REAL,
+        clock INTEGER,
+        bearing REAL,
+        elevation REAL,
+        cfo REAL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_frames_icao_ts ON frames(icao, timestamp)",
+    """CREATE TABLE IF NOT EXISTS alerts (
+        alert_id TEXT PRIMARY KEY,
+        flight_id TEXT NOT NULL,
+        icao TEXT,
+        callsign TEXT,
+        zone TEXT,
+        rule TEXT,
+        active INTEGER,
+        activated_at REAL,
+        deactivated_at REAL,
+        eta REAL,
+        reason TEXT,
+        last_updated REAL,
+        latitude REAL,
+        longitude REAL,
+        altitude REAL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_alerts_flight ON alerts(flight_id)",
+    "CREATE INDEX IF NOT EXISTS idx_alerts_activated ON alerts(activated_at DESC)",
+)
+_SCHEMA_TABLES = ("flights", "telemetry", "integrity", "frames", "alerts")
+# A down archive is logged at ERROR again at most this often (seconds).
+_DOWN_LOG_INTERVAL = 300.0
 # Telemetry columns stored as JSON arrays.
 _JSON_LIST_COLUMNS = ("receivers", "integrity_flags")
 _FLIGHT_STATUS_COMPLETED = "completed"
@@ -119,9 +281,40 @@ def build_telemetry_docs(
             doc["speed"] = speed
         if heading is not None:
             doc["heading"] = heading
+        gnss_height = gnss_height_at(plane, timestamp)
+        if gnss_height is not None:
+            doc["gnss_height"] = gnss_height
         doc.update(sample_provenance(plane, timestamp))
         docs.append(doc)
     return docs
+
+
+def _alert_row(
+    alert: dict[str, Any], flight_id: str, icao: str, info: dict[str, Any]
+) -> tuple:
+    """``alerts`` columns in table order, starting alert_id, flight_id."""
+    alert_id = (
+        alert.get("alert_id")
+        or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', '')}"
+    )
+    lat, lon = _alert_lat_lon(alert)
+    return (
+        alert_id,
+        flight_id,
+        alert.get("icao", icao),
+        alert.get("callsign") or info.get(STORE_CALLSIGN) or "",
+        alert.get("zone", ""),
+        alert.get("rule", ""),
+        1 if alert.get("active", False) else 0,
+        alert.get("activated_at"),
+        alert.get("deactivated_at"),
+        _bind_eta(alert.get("eta")),
+        _bind_reason(alert.get("reason")),
+        alert.get("last_updated"),
+        lat,
+        lon,
+        alert.get("altitude"),
+    )
 
 
 def _contains_pattern(query: str) -> str:
@@ -144,170 +337,319 @@ def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 
 class HistoryStore:
-    """SQLite writer/reader for the research archive."""
+    """SQLite writer/reader for the research archive.
+
+    ``read_only`` (the portal) opens the file with ``mode=ro``: no schema
+    work, no write lock, nothing created. An archive the engine has not
+    created or upgraded yet is reported through :attr:`state` and retried.
+    """
 
     def __init__(
         self,
         path: str | Path,
         *,
-        config: Config | None = None,
-        polygons: dict[str, Polygon] | None = None,
         disabled: bool = False,
+        read_only: bool = False,
     ):
         self.path = str(Path(path).expanduser())
         if not Path(self.path).is_absolute():
             self.path = str(Path(self.path).resolve())
-        self.config = config
-        self.polygons = polygons or {}
         self.disabled = disabled
+        self.read_only = read_only
+        #: ok | missing | needs_upgrade | incompatible | down | disabled
+        self.state = "disabled" if disabled else "down"
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
         self._last_connect_attempt = 0.0
         self._reported_down = False
         self._dropping_frames = False
+        # Last failure (connect, query, or write), cleared by a success.
+        self._last_error: str | None = None
+        self._last_report: tuple[str, float] = ("", float("-inf"))
         if not disabled:
             self._connect()
 
+    def _report(self, state: str, message: str, *, level: int = logging.ERROR) -> None:
+        """Log a problem: on a new state, then at most every _DOWN_LOG_INTERVAL."""
+        self.state = state
+        self._last_error = message
+        self._reported_down = True
+        last_state, last_at = self._last_report
+        now = time.monotonic()
+        if state == last_state and now - last_at < _DOWN_LOG_INTERVAL:
+            return
+        self._last_report = (state, now)
+        log.log(level, "%s", message)
+
+    def _opened(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+        if self._reported_down:
+            log.info("Reconnected to history database %s", self.path)
+        else:
+            log.info(
+                "Opened history database %s%s",
+                self.path,
+                " (read-only)" if self.read_only else "",
+            )
+        self._reported_down = False
+        self._last_report = ("", float("-inf"))
+        self._last_error = None
+        self.state = "ok"
+
     def _connect(self, *, recreate: bool = False) -> None:
+        if self.read_only:
+            self._connect_read_only()
+            return
         try:
             db_path = Path(self.path)
             if db_path.parent:
                 db_path.parent.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(self.path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA foreign_keys=ON")
             try:
+                conn.execute("PRAGMA busy_timeout=5000")
                 if recreate:
                     self._drop_tables(conn)
+                # Schema first: a newer or foreign file is refused before
+                # anything (even its journal mode) is changed.
                 self._ensure_schema(conn)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA foreign_keys=ON")
             except BaseException:
                 conn.close()
                 raise
-            self._conn = conn
-            if self._reported_down:
-                log.info("Reconnected to history database %s", self.path)
-            else:
-                log.info("Opened history database %s", self.path)
-            self._reported_down = False
+            self._opened(conn)
         except HistorySchemaMismatch as exc:
-            if not self._reported_down:
-                log.error("%s", exc)
-                self._reported_down = True
-        except sqlite3.Error:
-            if not self._reported_down:
-                log.info(
-                    "History database unavailable at %s; operating in offline mode.",
-                    self.path,
-                )
-                self._reported_down = True
+            self._report("incompatible", str(exc))
+        except (sqlite3.Error, OSError) as exc:
+            self._report(
+                "down",
+                f"History database unavailable at {self.path} ({exc}); flights "
+                "are kept for retry until it is writable.",
+            )
             self._conn = None
 
-    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, _SCHEMA_VERSION):
-            raise HistorySchemaMismatch(
-                f"History database {self.path} uses schema version {version}; "
-                f"this PyAerial needs version {_SCHEMA_VERSION}. Run "
-                "`pyaerial reset --yes` (or delete the file) to recreate it."
+    def _connect_read_only(self) -> None:
+        """Open for reading only; never creates, upgrades, or locks the file."""
+        if not Path(self.path).is_file():
+            self._report(
+                "missing",
+                f"History archive {self.path} has not been created yet; the "
+                "engine (`pyaerial run`) creates it. History is empty until then.",
+                level=logging.WARNING,
             )
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS flights (
-                flight_id TEXT PRIMARY KEY,
-                icao TEXT NOT NULL,
-                status TEXT NOT NULL,
-                start_time REAL NOT NULL,
-                end_time REAL NOT NULL,
-                retained INTEGER NOT NULL DEFAULT 1,
-                callsign TEXT NOT NULL DEFAULT '',
-                model TEXT NOT NULL DEFAULT '',
-                owner TEXT NOT NULL DEFAULT '',
-                country TEXT NOT NULL DEFAULT '',
-                aircraft_type TEXT NOT NULL DEFAULT '',
-                registration TEXT NOT NULL DEFAULT '',
-                info TEXT NOT NULL DEFAULT '{}'
-            );
-            CREATE INDEX IF NOT EXISTS idx_flights_end_time ON flights(end_time DESC);
-            CREATE INDEX IF NOT EXISTS idx_flights_icao ON flights(icao);
-            CREATE INDEX IF NOT EXISTS idx_flights_callsign ON flights(callsign);
+            return
+        try:
+            conn = sqlite3.connect(
+                f"{Path(self.path).as_uri()}?mode=ro", uri=True, check_same_thread=False
+            )
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute("PRAGMA busy_timeout=5000")
+                if self._detect_version(conn) == 0:
+                    conn.close()
+                    self._report(
+                        "missing",
+                        f"History archive {self.path} is empty; the engine "
+                        "creates its tables on its next start.",
+                        level=logging.WARNING,
+                    )
+                    return
+                if not self._schema_current(conn):
+                    conn.close()
+                    self._report(
+                        "needs_upgrade",
+                        f"History archive {self.path} needs an upgrade by the "
+                        "engine; start `pyaerial run` with this PyAerial. "
+                        "History is unavailable until then.",
+                        level=logging.WARNING,
+                    )
+                    return
+            except BaseException:
+                conn.close()
+                raise
+            self._opened(conn)
+        except HistorySchemaMismatch as exc:
+            self._report("incompatible", str(exc))
+        except sqlite3.Error as exc:
+            self._report(
+                "down", f"History database unavailable at {self.path} ({exc})."
+            )
 
-            -- receivers / integrity_flags are JSON arrays; integrity_* is the
-            -- verdict in effect when the sample arrived (NULL before the first).
-            CREATE TABLE IF NOT EXISTS telemetry (
-                flight_id TEXT NOT NULL,
-                timestamp REAL NOT NULL,
-                icao TEXT NOT NULL,
-                latitude REAL,
-                longitude REAL,
-                altitude REAL,
-                speed REAL,
-                heading REAL,
-                receivers TEXT,
-                integrity_score REAL,
-                integrity_status TEXT,
-                integrity_flags TEXT,
-                PRIMARY KEY (flight_id, timestamp)
-            );
-            CREATE INDEX IF NOT EXISTS idx_telemetry_icao_ts
-                ON telemetry(icao, timestamp);
+    def health(self) -> dict[str, Any]:
+        """``{"state": ok|down|disabled, "error": str|None}`` without I/O.
 
-            -- Every integrity verdict change; checks is the full JSON result.
-            CREATE TABLE IF NOT EXISTS integrity (
-                flight_id TEXT NOT NULL,
-                timestamp REAL NOT NULL,
-                icao TEXT NOT NULL,
-                score REAL NOT NULL,
-                status TEXT NOT NULL,
-                flags TEXT NOT NULL DEFAULT '[]',
-                checks TEXT,
-                PRIMARY KEY (flight_id, timestamp)
-            );
-            CREATE INDEX IF NOT EXISTS idx_integrity_icao_ts
-                ON integrity(icao, timestamp);
+        ``down`` covers a missing connection and a connection whose last
+        write failed (disk full, I/O error) until a write succeeds again.
+        """
+        if self.disabled:
+            return {"state": "disabled", "error": None}
+        ok = self._conn is not None and self._last_error is None
+        return {"state": "ok" if ok else "down", "error": self._last_error}
 
-            -- One row per receiver copy of every frame (archive.raw_frames).
-            CREATE TABLE IF NOT EXISTS frames (
-                timestamp REAL NOT NULL,
-                receiver TEXT NOT NULL DEFAULT '',
-                hex TEXT NOT NULL,
-                df INTEGER,
-                icao TEXT,
-                rssi REAL,
-                clock INTEGER,
-                bearing REAL,
-                elevation REAL,
-                cfo REAL
-            );
-            CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_frames_icao_ts ON frames(icao, timestamp);
-
-            CREATE TABLE IF NOT EXISTS alerts (
-                alert_id TEXT PRIMARY KEY,
-                flight_id TEXT NOT NULL,
-                icao TEXT,
-                callsign TEXT,
-                zone TEXT,
-                rule TEXT,
-                active INTEGER,
-                activated_at REAL,
-                deactivated_at REAL,
-                eta REAL,
-                reason TEXT,
-                last_updated REAL,
-                latitude REAL,
-                longitude REAL,
-                altitude REAL
-            );
-            CREATE INDEX IF NOT EXISTS idx_alerts_flight ON alerts(flight_id);
-            CREATE INDEX IF NOT EXISTS idx_alerts_activated
-                ON alerts(activated_at DESC);
-            """
+    def _schema_mismatch(self, version: int, detail: str = "") -> HistorySchemaMismatch:
+        """A file this PyAerial cannot use. Newer schemas must not be reset."""
+        if version > _SCHEMA_VERSION:
+            return HistorySchemaMismatch(
+                f"History database {self.path} was written by a newer PyAerial "
+                f"(schema version {version}; this one supports up to "
+                f"{_SCHEMA_VERSION}). Upgrade PyAerial, or restore a backup taken "
+                "before the upgrade. The archive is left untouched."
+            )
+        return HistorySchemaMismatch(
+            f"History database {self.path} is not a PyAerial archive{detail}. "
+            "Point database.path at another file, or move this one aside "
+            "(`pyaerial reset --yes` deletes it and starts a new archive)."
         )
-        conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-        conn.commit()
+
+    def _detect_version(self, conn: sqlite3.Connection) -> int:
+        """The archive's schema version; 0 for an empty (new) file.
+
+        0.12/0.13 archives never set ``user_version``: an unversioned file
+        with a ``flights`` table is treated as version 1 (its columns are
+        checked by the upgrade). Any other unversioned file with tables is
+        someone else's database and is never written to.
+        """
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > _SCHEMA_VERSION:
+            raise self._schema_mismatch(version)
+        if version:
+            return version
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        if not tables:
+            return 0
+        if "flights" in tables:
+            return 1
+        raise self._schema_mismatch(
+            0, f" (no schema version; tables: {', '.join(sorted(tables))})"
+        )
+
+    def _schema_current(self, conn: sqlite3.Connection) -> bool:
+        """Read-only check: no DDL (and no write lock) is needed to open it."""
+        return (
+            self._detect_version(conn) == _SCHEMA_VERSION
+            and not self._integrity_score_required(conn)
+            and not self._schema_gaps(conn)
+        )
+
+    @staticmethod
+    def _schema_gaps(conn: sqlite3.Connection) -> bool:
+        """Whether a table or a later (nullable) column is missing.
+
+        The version stamp alone is not proof: 0.22.0 stamped 0.12/0.13
+        archives as v2 without adding the v2 columns.
+        """
+        columns = HistoryStore._table_columns(conn)
+        if any(not columns[table] for table in _SCHEMA_TABLES):
+            return True
+        return any(
+            column not in columns[table]
+            for added in _ADDED_COLUMNS.values()
+            for table, column, _definition in added
+        )
+
+    @staticmethod
+    def _table_columns(conn: sqlite3.Connection) -> dict[str, set[str]]:
+        return {
+            table: {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for table in _SCHEMA_TABLES
+        }
+
+    def _upgrade(self, conn: sqlite3.Connection) -> None:
+        """Create a new archive or upgrade an older one in place, keeping every flight.
+
+        Each version since 1 added columns and tables. Samples archived before
+        a column existed read back without that field: no receivers or verdict
+        before v2, no GNSS height before v3. v3 also lets ``integrity.score``
+        be NULL, which needs a table rebuild. One transaction, version stamped
+        last: a file that is not a PyAerial archive is refused and left
+        untouched, and a failure part way leaves the file as it was.
+        """
+        # IMMEDIATE: an engine and a reset opening the file together must not
+        # both upgrade it. The version is re-read under the lock.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            version = self._detect_version(conn)
+            if version:
+                self._add_columns(conn, version)
+            if version and self._integrity_score_required(conn):
+                self._rebuild_integrity(conn)
+            for statement in _SCHEMA_DDL:
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        if version and version != _SCHEMA_VERSION:
+            log.info(
+                "Upgraded history database %s from schema version %d to %d",
+                self.path,
+                version,
+                _SCHEMA_VERSION,
+            )
+
+    def _add_columns(self, conn: sqlite3.Connection, version: int) -> None:
+        """Check the v1 core, then add every later column that is missing.
+
+        Only the v1 columns are required, whatever version the file claims:
+        later columns are nullable or defaulted, and 0.22.0 stamped 0.12/0.13
+        archives v2 without adding them. An existing ``integrity`` table must
+        have its columns (the score rebuild copies them).
+        """
+        columns = self._table_columns(conn)
+        required = {table: set(cols) for table, cols in _V1_COLUMNS.items()}
+        if columns["integrity"]:
+            required["integrity"] = set(_INTEGRITY_COLUMNS)
+        for table, needed in required.items():
+            if not needed <= columns[table]:
+                raise self._schema_mismatch(
+                    version,
+                    f" (it claims schema version {version}, but its {table} "
+                    "table has other columns)",
+                )
+        for added in _ADDED_COLUMNS.values():
+            for table, column, definition in added:
+                if column not in columns[table]:
+                    conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                    )
+
+    @staticmethod
+    def _integrity_score_required(conn: sqlite3.Connection) -> bool:
+        """True for a v2 (or pre-release v3) ``integrity.score NOT NULL``."""
+        return any(
+            row[1] == "score" and row[3]
+            for row in conn.execute("PRAGMA table_info(integrity)")
+        )
+
+    @staticmethod
+    def _rebuild_integrity(conn: sqlite3.Connection) -> None:
+        """Recreate ``integrity`` without NOT NULL on score, keeping every row.
+
+        SQLite's documented table-rebuild procedure (ALTER TABLE cannot drop
+        a constraint); runs inside the caller's transaction. The table has no
+        triggers, views, or foreign keys referring to it.
+        """
+        cols = ", ".join(_INTEGRITY_COLUMNS)
+        conn.execute(_INTEGRITY_TABLE.format(name="integrity_v3"))
+        conn.execute(f"INSERT INTO integrity_v3 ({cols}) SELECT {cols} FROM integrity")
+        conn.execute("DROP TABLE integrity")  # drops its index too
+        conn.execute("ALTER TABLE integrity_v3 RENAME TO integrity")
+        conn.execute(_INTEGRITY_INDEX)
+
+    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        # A current archive needs no DDL, so opening it never queues behind
+        # the engine's write lock (it took ~5 s with busy_timeout before).
+        if not self._schema_current(conn):
+            self._upgrade(conn)
 
     @staticmethod
     def _drop_tables(conn: sqlite3.Connection) -> None:
@@ -359,12 +701,10 @@ class HistoryStore:
             try:
                 conn.execute("SELECT 1").fetchone()
                 return True
-            except sqlite3.Error:
-                if not self._reported_down:
-                    log.info(
-                        "Lost history database connection; operating in offline mode."
-                    )
-                    self._reported_down = True
+            except sqlite3.Error as exc:
+                self._report(
+                    "down", f"Lost history database connection {self.path} ({exc})."
+                )
                 self._close_conn()
                 return False
 
@@ -385,54 +725,32 @@ class HistoryStore:
         plane: dict,
         *,
         alerts: list[dict[str, Any]] | None = None,
-        from_snapshot: bool = False,
+        retained: bool = True,
     ) -> bool:
-        """Persist a completed flight if the archive policy keeps it.
+        """Write a completed flight, or record that it is not kept.
 
+        The caller decides whether the archive keeps the flight (the archive
+        policy lives with the engine); this only writes what it is told.
         Returns True when it is safe to drop the live Redis copy: the flight
         was written, was intentionally discarded, or persistence is disabled.
         Returns False when the flight should have been written but SQLite was
         unavailable.
-
-        ``from_snapshot`` marks a crash/orphan reconstruction from the clipped
-        live window. Those are persisted whenever they have a position or
-        alerts, and a later longer series may upgrade the archive.
         """
         if self.disabled:
             return True
         alert_docs = alerts or []
-        if self.config is None:
-            log.error("Cannot retain flights without a Config")
-            return False
         flight_id = flight_id_for_plane(plane)
         icao = str(plane.get(STORE_INFO, {}).get(STORE_ICAO, "")).lower()
-        telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
-        retained = should_retain(
-            plane,
-            alert_docs,
-            self.config,
-            self.polygons,
-            positions=len(telemetry_docs),
-        )
-        if not retained and from_snapshot:
-            recv = plane.get(STORE_RECV_DATA) or {}
-            retained = bool(alert_docs) or bool(recv.get(STORE_LAT))
         if not retained:
             log.debug("Discarded flight %s (archive policy)", flight_id)
-            return True
+            if not alert_docs:
+                return True
+            # Episodes carried over from an earlier, archived segment still
+            # get their final state, on the row that segment wrote.
+            return self._update_archived_alerts(alert_docs, flight_id, icao, plane)
         if not self._ensure_connected():
             return False
-        if self.has_completed_flight(flight_id):
-            existing = self.telemetry_count(flight_id)
-            if len(telemetry_docs) <= existing:
-                log.debug("Already archived completed flight %s", flight_id)
-                return True
-            log.info(
-                "Upgrading archived flight %s (%d -> %d telemetry points)",
-                flight_id,
-                existing,
-                len(telemetry_docs),
-            )
+        telemetry_docs = build_telemetry_docs(plane, flight_id, icao)
         if self._persist_completed_flight(
             plane, flight_id, alert_docs, telemetry_docs=telemetry_docs
         ):
@@ -456,6 +774,12 @@ class HistoryStore:
         try:
             with self._session("persist") as conn:
                 with conn:
+                    # Decided under the write lock, from the archive itself:
+                    # a failed check must mean "retry", never "not archived".
+                    conn.execute("BEGIN IMMEDIATE")
+                    if not self._should_write(conn, flight_id, telemetry_docs):
+                        self._last_error = None
+                        return True
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO flights (
@@ -489,8 +813,9 @@ class HistoryStore:
                         INSERT OR REPLACE INTO telemetry (
                             flight_id, timestamp, icao, latitude, longitude,
                             altitude, speed, heading, receivers,
-                            integrity_score, integrity_status, integrity_flags
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            integrity_score, integrity_status, integrity_flags,
+                            gnss_height
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         [
                             (
@@ -510,6 +835,7 @@ class HistoryStore:
                                     if "integrity_flags" in doc
                                     else None
                                 ),
+                                doc.get("gnss_height"),
                             )
                             for doc in telemetry_docs
                         ],
@@ -541,35 +867,10 @@ class HistoryStore:
                             for verdict in verdicts
                         ],
                     )
-                    conn.execute(
-                        "DELETE FROM alerts WHERE flight_id = ?", (flight_id,)
-                    )
-                    alert_rows = []
-                    for alert in alerts:
-                        alert_id = (
-                            alert.get("alert_id")
-                            or f"{flight_id}:{alert.get('zone', '')}:{alert.get('rule', '')}"
-                        )
-                        lat, lon = _alert_lat_lon(alert)
-                        alert_rows.append(
-                            (
-                                alert_id,
-                                flight_id,
-                                alert.get("icao", icao),
-                                alert.get("callsign") or info.get(STORE_CALLSIGN) or "",
-                                alert.get("zone", ""),
-                                alert.get("rule", ""),
-                                1 if alert.get("active", False) else 0,
-                                alert.get("activated_at"),
-                                alert.get("deactivated_at"),
-                                _bind_eta(alert.get("eta")),
-                                _bind_reason(alert.get("reason")),
-                                alert.get("last_updated"),
-                                lat,
-                                lon,
-                                alert.get("altitude"),
-                            )
-                        )
+                    conn.execute("DELETE FROM alerts WHERE flight_id = ?", (flight_id,))
+                    alert_rows = [
+                        _alert_row(alert, flight_id, icao, info) for alert in alerts
+                    ]
                     conn.executemany(
                         """
                         INSERT OR REPLACE INTO alerts (
@@ -580,10 +881,76 @@ class HistoryStore:
                         """,
                         alert_rows,
                     )
+            self._last_error = None
             return True
         except (sqlite3.Error, HistoryUnavailable) as exc:
             log.error("Failed to persist completed flight %s: %s", flight_id, exc)
+            self._last_error = f"archive write failed: {exc}"
             return False
+
+    def _update_archived_alerts(
+        self, alerts: list[dict[str, Any]], flight_id: str, icao: str, plane: dict
+    ) -> bool:
+        """Update the rows of episodes already archived; insert nothing.
+
+        For a flight the policy discards: an episode carried over from an
+        earlier segment already has a row there (kept on that segment), while
+        an episode that began and ended in this flight is discarded with it.
+        False (retry) when SQLite fails.
+        """
+        info = plane.get(STORE_INFO) or {}
+        rows = [_alert_row(alert, flight_id, icao, info) for alert in alerts]
+        try:
+            with self._session("alerts") as conn, conn:
+                conn.executemany(
+                    """
+                    UPDATE alerts SET icao = ?, callsign = ?, zone = ?, rule = ?,
+                        active = ?, activated_at = ?, deactivated_at = ?, eta = ?,
+                        reason = ?, last_updated = ?, latitude = ?, longitude = ?,
+                        altitude = ?
+                    WHERE alert_id = ?
+                    """,
+                    [(*row[2:], row[0]) for row in rows],
+                )
+        except (sqlite3.Error, HistoryUnavailable) as exc:
+            log.error("Failed to update archived alerts of %s: %s", flight_id, exc)
+            self._last_error = f"archive write failed: {exc}"
+            return False
+        self._last_error = None
+        return True
+
+    @staticmethod
+    def _should_write(
+        conn: sqlite3.Connection, flight_id: str, telemetry_docs: list[dict[str, Any]]
+    ) -> bool:
+        """Whether to (re)write a flight; caller holds the write transaction.
+
+        A completed flight is replaced only by a series covering a longer
+        time span. Point counts do not decide it: a crash-recovery snapshot is
+        clipped to the live window and can hold more points over less time.
+        """
+        row = conn.execute(
+            "SELECT status FROM flights WHERE flight_id = ?", (flight_id,)
+        ).fetchone()
+        if row is None or row["status"] != _FLIGHT_STATUS_COMPLETED:
+            return True
+        lo, hi = conn.execute(
+            "SELECT MIN(timestamp), MAX(timestamp) FROM telemetry WHERE flight_id = ?",
+            (flight_id,),
+        ).fetchone()
+        old_span = hi - lo if lo is not None else -1.0
+        stamps = [doc["timestamp"] for doc in telemetry_docs]
+        new_span = max(stamps) - min(stamps) if stamps else -1.0
+        if new_span <= old_span:
+            log.debug("Already archived completed flight %s", flight_id)
+            return False
+        log.info(
+            "Upgrading archived flight %s (%.0f s -> %.0f s of telemetry)",
+            flight_id,
+            max(old_span, 0.0),
+            new_span,
+        )
+        return True
 
     def write_frames(self, frames: list[RawFrame]) -> bool:
         """Append receiver frames to ``frames``. False (frames dropped) when offline."""
@@ -621,10 +988,12 @@ class HistoryStore:
             if not self._dropping_frames:
                 log.warning("Dropping raw frames while history is unavailable: %s", exc)
                 self._dropping_frames = True
+            self._last_error = f"raw frame write failed: {exc}"
             return False
         if self._dropping_frames:
             log.info("Raw frame archiving resumed")
             self._dropping_frames = False
+        self._last_error = None
         return True
 
     def prune_frames(self, before: float) -> int:
@@ -640,7 +1009,7 @@ class HistoryStore:
                         ORDER BY timestamp LIMIT ?
                     )
                     """,
-                    (before, _FRAME_PRUNE_BATCH),
+                    (before, FRAME_PRUNE_BATCH),
                 )
             return cursor.rowcount
         except (sqlite3.Error, HistoryUnavailable) as exc:
@@ -714,7 +1083,11 @@ class HistoryStore:
             sql += " AND timestamp > ?"
             params.append(since)
         limited = limit is not None and limit > 0
-        sql += " ORDER BY timestamp DESC" if limited and newest else " ORDER BY timestamp ASC"
+        sql += (
+            " ORDER BY timestamp DESC"
+            if limited and newest
+            else " ORDER BY timestamp ASC"
+        )
         if limited:
             sql += " LIMIT ?"
             params.append(int(limit))
@@ -971,12 +1344,25 @@ class HistoryStore:
         }
 
     def _telemetry_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
-        doc = {
-            key: value for key, value in _row_dict(row).items() if value is not None
-        }
+        doc = {key: value for key, value in _row_dict(row).items() if value is not None}
         for key in _JSON_LIST_COLUMNS:
-            if key in doc:
-                doc[key] = json.loads(doc[key])
+            if key not in doc:
+                continue
+            try:
+                value = json.loads(doc[key])
+            except (json.JSONDecodeError, TypeError):
+                value = None
+            if isinstance(value, list):
+                doc[key] = value
+                continue
+            # A hand-edited or damaged row: drop the field, keep the sample.
+            log.warning(
+                "Ignoring malformed %s in telemetry %s at %s",
+                key,
+                doc.get("flight_id"),
+                doc.get("timestamp"),
+            )
+            del doc[key]
         return doc
 
     def _alert_from_row(self, row: sqlite3.Row) -> dict[str, Any]:

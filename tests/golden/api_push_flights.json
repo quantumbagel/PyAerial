@@ -1,0 +1,50 @@
+{
+  "flights": [
+    {
+      "active_alerts": [
+        {
+          "activated_at": "T0+0",
+          "alert_id": "a1b2c3-1749999400:pad:warn:00000000000040008000000000000002",
+          "eta": 0.0,
+          "rule": "warn",
+          "zone": "pad"
+        }
+      ],
+      "aircraft_type": "C172",
+      "alert_stats": {
+        "active_count": 1,
+        "episode_count": 1,
+        "total_seconds": 0
+      },
+      "altitude": 457.2,
+      "callsign": "N123AB",
+      "country": null,
+      "end_time": "T0-5",
+      "flight_id": "a1b2c3-1749999400",
+      "heading": 0.0,
+      "icao": "a1b2c3",
+      "integrity": {
+        "checks": {
+          "kinematics": {
+            "detail": "consistent",
+            "status": "pass"
+          }
+        },
+        "score": 0.95,
+        "status": "ok"
+      },
+      "is_live": true,
+      "latitude": 35.725,
+      "longitude": -78.695,
+      "model": "Cessna 172S",
+      "owner": null,
+      "registration": "N123AB",
+      "retained": false,
+      "speed": 185.2,
+      "start_time": "T0-600",
+      "status": "live",
+      "timestamp": "T0-5"
+    }
+  ],
+  "type": "flights"
+}

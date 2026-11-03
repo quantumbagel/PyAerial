@@ -26,8 +26,15 @@ class LiveStore(Protocol):
     ) -> list[dict[str, Any]]: ...
 
     def get_telemetry(
-        self, flight_id: str, *, since: float = 0.0
+        self,
+        flight_id: str,
+        *,
+        since: float = 0.0,
+        limit: int | None = None,
+        newest: bool = False,
     ) -> list[dict[str, Any]]: ...
+
+    def latest_telemetry(self, flight_id: str) -> dict[str, Any] | None: ...
 
     def get_live_telemetry(self, since: float = 0.0) -> list[dict[str, Any]]: ...
 

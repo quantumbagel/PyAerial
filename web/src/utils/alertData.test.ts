@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Alert } from '../api/types';
-import { mergeAlertsByEpisode } from './alertData';
+import { alertTooltip, endedByLabel, mergeAlertsByEpisode } from './alertData';
 
 describe('mergeAlertsByEpisode', () => {
   it('merges an ended snapshot over the live episode with the same alert_id', () => {
@@ -72,5 +72,39 @@ describe('mergeAlertsByEpisode', () => {
     };
     const merged = mergeAlertsByEpisode([existing], [incoming]);
     expect(merged.map((a) => a.alert_id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('endedByLabel', () => {
+  const ended = (ended_by?: string | null): Alert => ({
+    alert_id: 'a',
+    active: false,
+    activated_at: 100,
+    deactivated_at: 200,
+    ended_by,
+  });
+
+  it('labels each deactivation reason', () => {
+    expect(endedByLabel(ended('cleared'))).toBe('left zone / conditions cleared');
+    expect(endedByLabel(ended('lost'))).toBe('aircraft lost');
+    expect(endedByLabel(ended('shutdown'))).toBe('engine shutdown');
+    expect(endedByLabel(ended('restart'))).toBe('engine restart');
+  });
+
+  it('shows nothing when absent or while the episode is active', () => {
+    expect(endedByLabel(ended(undefined))).toBeNull();
+    expect(endedByLabel(ended(null))).toBeNull();
+    expect(endedByLabel({ ...ended('lost'), active: true, deactivated_at: null })).toBeNull();
+    expect(endedByLabel(ended('constructor'))).toBe('constructor');
+  });
+
+  it('adds the reason to the episode tooltip', () => {
+    expect(alertTooltip(ended('lost'), 300)).toMatch(/Ended: .* \(aircraft lost\)/);
+    expect(alertTooltip(ended(undefined), 300)).not.toMatch(/\(/);
+  });
+
+  it('keeps the reason when a later snapshot omits it', () => {
+    const [merged] = mergeAlertsByEpisode([ended('cleared')], [ended(null)]);
+    expect(endedByLabel(merged)).toBe('left zone / conditions cleared');
   });
 });

@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 
 cutoff="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(days=14)).strftime("%Y-%m-%dT00:00:00Z"))')"
 
-printf 'setuptools>=68\nwheel\n' | uv pip compile pyproject.toml - \
+printf 'setuptools>=77\nwheel\n' | uv pip compile pyproject.toml - \
   --universal \
   --python-version 3.11 \
   --generate-hashes \

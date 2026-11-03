@@ -20,10 +20,10 @@ from pyaerial.constants import (
 from pyaerial.models import (
     Datum,
     Plane,
+    Verdict,
     flight_id_for_plane,
     get_latest,
     icao_of,
-    Verdict,
     iter_telemetry_samples,
     last_update,
     nearest_datum,
@@ -176,3 +176,14 @@ def test_sample_provenance_uses_verdict_in_effect_when_sample_arrived():
         "integrity_flags": [],
     }
     assert sample_provenance(plane, 3.0)["integrity_flags"] == ["aoa"]
+
+
+# --- nearest_datum fast path -------------------------------------------------
+
+
+def test_nearest_datum_fast_path_for_latest():
+    series = [Datum(1.0, 10.0), Datum(2.0, 20.0), Datum(3.0, 20.0)]
+    assert nearest_datum(series, 20.0) is series[-1]
+    assert nearest_datum(series, 99.0) is series[-1]
+    assert nearest_datum(series, 16.0) is series[-1]  # tie on equal times -> last
+    assert nearest_datum(series, 14.0) is series[0]

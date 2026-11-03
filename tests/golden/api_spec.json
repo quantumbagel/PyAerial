@@ -1,0 +1,133 @@
+{
+  "actions": {
+    "fetchAlerts": {
+      "params": {
+        "active_only": null,
+        "flightId": null,
+        "limit": 0,
+        "q": null,
+        "rule": null,
+        "since": 0,
+        "skip": 0,
+        "until": null,
+        "view": "live | history"
+      }
+    },
+    "fetchConfig": {
+      "params": {}
+    },
+    "fetchFlight": {
+      "params": {
+        "flightId": "required",
+        "view": "live | history"
+      }
+    },
+    "fetchFlights": {
+      "notes": "History q matches ICAO, callsign, or flight id. since/until are unix seconds on end_time. History limit is capped at 200 and skip at 10000.",
+      "params": {
+        "limit": 50,
+        "q": null,
+        "since": null,
+        "skip": 0,
+        "until": null,
+        "view": "live | history"
+      }
+    },
+    "fetchStats": {
+      "params": {}
+    },
+    "fetchTelemetry": {
+      "notes": "Live and history responses hold at most limit points (default 5000, max 20000): the newest ones, or with since > 0 the oldest ones after since. The response carries truncated: true beside data when points were left out.",
+      "params": {
+        "flightId": "required",
+        "limit": null,
+        "since": 0,
+        "view": "live | history"
+      }
+    },
+    "fetchZones": {
+      "params": {}
+    },
+    "subscribe": {
+      "notes": "Limit which /ws/live streams this connection receives. Omit or pass [] for the default set (flights, alerts, telemetry, stats). Raw frames are not a live stream; connect to /ws/raw (JSON) or /ws/beast / the Beast TCP port (dump1090 binary) instead.",
+      "params": {
+        "streams": [
+          "flights",
+          "alerts",
+          "telemetry",
+          "stats"
+        ]
+      }
+    }
+  },
+  "aliases": [
+    "/ws"
+  ],
+  "beast": {
+    "format": "dump1090 Beast binary (0x1a type + 6-byte 12 MHz clock + signal byte + Mode S payload, 0x1a escaped). Frames are merged across receivers (stronger RSSI; Hamming vote only for the same DF/ICAO). Outbound clock is engine receive time so receivers share one time base.",
+    "tcp_host": "127.0.0.1",
+    "tcp_port": null,
+    "websocket": "/ws/beast"
+  },
+  "beast_websocket": "/ws/beast",
+  "client_request": {
+    "action": "fetchFlights | fetchFlight | fetchTelemetry | fetchAlerts | fetchStats | fetchZones | fetchConfig | subscribe",
+    "id": "opaque-id",
+    "params": {},
+    "type": "request"
+  },
+  "connect": "Open /ws/live, read the hello + snapshot (flights, alerts, stats), then either listen for pushed streams or send type=request messages. Optional /ws/live?streams=flights,alerts limits the initial set. Corrected Mode S frames are pushed as JSON on /ws/raw ({\"type\": \"raw\", \"frames\": [...]}, no handshake) and re-encoded as dump1090 Beast binary on /ws/beast (binary WebSocket) and, when web.beast_port is set, a TCP listener compatible with OpenSky Network's feeder (BEASTHOST/BEASTPORT, default port 30105; dump1090 itself uses 30005, which the engine reads). Raw and Beast are not /ws/live subscribe streams.",
+  "errors": {
+    "codes": [
+      "bad_request",
+      "not_found",
+      "rate_limited",
+      "history_unavailable",
+      "live_unavailable",
+      "internal_error"
+    ],
+    "shape": {
+      "code": "bad_request | not_found | rate_limited | history_unavailable | live_unavailable | internal_error",
+      "error": "human-readable message",
+      "id": "opaque-id",
+      "success": false,
+      "type": "response"
+    }
+  },
+  "limits": {
+    "beast_max_clients": 16,
+    "beast_max_clients_per_ip": 4,
+    "ws_client_queue_bytes": 8388608,
+    "ws_max_connections": 256,
+    "ws_max_connections_per_ip": 32,
+    "ws_max_inflight": 2,
+    "ws_max_message_bytes": 65536,
+    "ws_rate_burst": 100,
+    "ws_rate_burst_per_ip": 400,
+    "ws_rate_limit": 50.0,
+    "ws_rate_limit_per_ip": 200.0
+  },
+  "protocol": "pyaerial.live",
+  "raw": {
+    "format": "JSON text {\"type\": \"raw\", \"frames\": [...]} using the live:raw payload dicts as-is (hex, timestamp, receiver, receivers, rssi, clock, df, icao). No handshake, RPC, or ping.",
+    "websocket": "/ws/raw"
+  },
+  "raw_websocket": "/ws/raw",
+  "server_messages": [
+    "hello",
+    "flights",
+    "alerts",
+    "telemetry",
+    "stats",
+    "ping",
+    "response"
+  ],
+  "streams": {
+    "alerts": "Live alert episodes for currently tracked flights. Pushed snapshots hold every active episode plus the newest inactive ones, at least 50 in total when available (max(50, active count)); fetchAlerts is the full list.",
+    "flights": "Full live flight list whenever positions or alerts change.",
+    "stats": "live_flights / active_alerts / retained_flights / historical_alerts, plus redis / history booleans, engine_seen_at (unix seconds, or null if the tracking engine is not writing a heartbeat) and engine_live (server-side heartbeat freshness check).",
+    "telemetry": "New track points since the client last received telemetry."
+  },
+  "version": 1,
+  "websocket": "/ws/live"
+}

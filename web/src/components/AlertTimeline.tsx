@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { Alert, Zone } from '../api/types';
-import { alertTooltip, alertVisual, formatEpisodeSpan, isAlertActive } from '../utils/alertData';
+import { alertTooltip, alertVisual, endedByLabel, formatEpisodeSpan, isAlertActive } from '../utils/alertData';
 import { formatAltitude, formatEta } from '../utils/format';
 import { ZoneBadge } from './AlertBadges';
 import { StateView } from './ui';
@@ -24,6 +24,7 @@ export function AlertTimeline({ alerts, activeAlertId, zones, alertColors, onSel
         const isEpisodeActive = isAlertActive(alert);
         const selected = alert.alert_id === activeAlertId;
         const { color } = alertVisual(alert, zones, alertColors);
+        const endedBy = endedByLabel(alert);
         return (
           <button
             type="button"
@@ -52,6 +53,11 @@ export function AlertTimeline({ alerts, activeAlertId, zones, alertColors, onSel
               {isEpisodeActive && (
                 <span>
                   <strong>ETA:</strong> {formatEta(alert.eta)}
+                </span>
+              )}
+              {endedBy && (
+                <span>
+                  <strong>Ended:</strong> {endedBy}
                 </span>
               )}
             </div>

@@ -8,14 +8,18 @@ import time
 
 from pyaerial.receivers import Receiver, register_receiver
 from pyaerial.receivers.frames import (
-    BeastParser,
     _BEAST_BUF_MAX,
+    BeastParser,
     parse_avr_line,
     receive_times,
 )
 
 _RECV_BUFFER = 65_536
 _SOCKET_TIMEOUT = 1.0
+# dump1090-fa and readsb send a heartbeat at least every 60 s on idle feeds. We
+# never write to the socket, so a feeder that rebooted (half-open connection)
+# is only noticed by silence; reconnecting then is cheap.
+_IDLE_TIMEOUT = 150.0
 _AVR_FORMATS = {"avr", "raw"}
 _BEAST_FORMATS = {"beast", "binary"}
 
@@ -51,7 +55,9 @@ class Dump1090Receiver(Receiver):
 
     def run(self) -> str | None:
         try:
-            client = socket.create_connection((self.ip, self.port), timeout=_SOCKET_TIMEOUT)
+            client = socket.create_connection(
+                (self.ip, self.port), timeout=_SOCKET_TIMEOUT
+            )
         except OSError as exc:
             return f"failed to connect to {self.ip}:{self.port} ({exc})"
         client.settimeout(_SOCKET_TIMEOUT)
@@ -69,17 +75,32 @@ class Dump1090Receiver(Receiver):
             with contextlib.suppress(OSError):
                 client.close()
 
+    def _recv(self, client: socket.socket, last_data: float) -> bytes | str | None:
+        """One ``recv``: bytes, ``None`` on a quiet second, or a reason to stop."""
+        try:
+            chunk = client.recv(_RECV_BUFFER)
+        except TimeoutError:
+            if time.monotonic() - last_data > _IDLE_TIMEOUT:
+                return f"no data for {_IDLE_TIMEOUT:.0f}s"
+            return None
+        except ConnectionResetError:
+            return "connection reset by peer"
+        except OSError as exc:
+            return f"socket error ({exc})"
+        if not chunk:
+            return "socket connection closed by peer"
+        return chunk
+
     def _run_avr(self, client: socket.socket) -> str | None:
         buffer = ""
+        last_data = time.monotonic()
         while not self.should_stop():
-            try:
-                chunk = client.recv(_RECV_BUFFER)
-            except TimeoutError:
+            chunk = self._recv(client, last_data)
+            if chunk is None:
                 continue
-            except ConnectionResetError:
-                return "connection reset by peer"
-            if not chunk:
-                return "socket connection closed by peer"
+            if isinstance(chunk, str):
+                return chunk
+            last_data = time.monotonic()
 
             buffer += chunk.decode("utf-8", errors="ignore")
             if len(buffer) > _BEAST_BUF_MAX:
@@ -102,15 +123,14 @@ class Dump1090Receiver(Receiver):
 
     def _run_beast(self, client: socket.socket) -> str | None:
         parser = BeastParser()
+        last_data = time.monotonic()
         while not self.should_stop():
-            try:
-                chunk = client.recv(_RECV_BUFFER)
-            except TimeoutError:
+            chunk = self._recv(client, last_data)
+            if chunk is None:
                 continue
-            except ConnectionResetError:
-                return "connection reset by peer"
-            if not chunk:
-                return "socket connection closed by peer"
+            if isinstance(chunk, str):
+                return chunk
+            last_data = time.monotonic()
 
             frames = parser.feed(chunk)
             if not frames:

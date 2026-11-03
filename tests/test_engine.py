@@ -1,34 +1,42 @@
 from __future__ import annotations
 
+import json
+import logging
+import queue
 import threading
 import time
 
+import redis
+from pyModeS.util import crc as pms_crc
+
+import pyaerial.engine as engine_mod
+from fake_redis import FakeRedis
+from helpers import (
+    DF17_HEX,
+    fine_track_plane,
+    make_config,
+    make_engine,
+    pad_config,
+)
+from pyaerial.config.schema import ArchiveConfig
 from pyaerial.constants import (
     STORE_FIRST_PACKET,
     STORE_ICAO,
     STORE_INFO,
     STORE_INTERNAL,
+    STORE_MOST_RECENT_PACKET,
 )
 from pyaerial.engine import (
-    Engine,
     _RECEIVER_BACKOFF_INITIAL,
     _RECEIVER_BACKOFF_MAX,
+    Engine,
     _ReceiverHandle,
 )
-from helpers import make_config
 
 
 class _DummyReceiver:
     def stop(self) -> None:
         return None
-
-
-def _engine(tmp_path) -> Engine:
-    return Engine(
-        make_config(),
-        isolated=True,
-        aircraft_db_path=str(tmp_path / "aircraft.db"),
-    )
 
 
 def _dead_thread() -> threading.Thread:
@@ -46,7 +54,7 @@ def _plane(icao: str = "abc123", first: float = 1.0) -> dict:
 
 
 def test_dead_receiver_waits_before_restart(tmp_path, monkeypatch):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         handle = _ReceiverHandle(
             name="main",
@@ -77,7 +85,7 @@ def test_dead_receiver_waits_before_restart(tmp_path, monkeypatch):
 
 
 def test_receiver_backoff_resets_after_long_run(tmp_path, monkeypatch):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         handle = _ReceiverHandle(
             name="main",
@@ -99,7 +107,7 @@ def test_receiver_backoff_resets_after_long_run(tmp_path, monkeypatch):
 
 
 def test_receiver_backoff_caps(tmp_path, monkeypatch):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         handle = _ReceiverHandle(
             name="main",
@@ -119,7 +127,7 @@ def test_receiver_backoff_caps(tmp_path, monkeypatch):
 
 
 def test_alive_receiver_is_not_restarted(tmp_path, monkeypatch):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         stop = threading.Event()
 
@@ -149,7 +157,7 @@ def test_alive_receiver_is_not_restarted(tmp_path, monkeypatch):
 
 
 def test_message_queue_drops_oldest(tmp_path):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         import queue as queue_mod
 
@@ -164,7 +172,7 @@ def test_message_queue_drops_oldest(tmp_path):
 
 
 def test_pending_finalize_is_capped(tmp_path, monkeypatch, caplog):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         monkeypatch.setattr(
             engine.history_store, "finalize_plane", lambda *a, **k: False
@@ -175,7 +183,12 @@ def test_pending_finalize_is_capped(tmp_path, monkeypatch, caplog):
         )
         monkeypatch.setattr(engine.live_store, "get_alerts", lambda **k: [])
         monkeypatch.setattr(engine.calculator, "deactivate_plane", lambda plane: None)
-        monkeypatch.setattr("pyaerial.engine._PENDING_FINALIZE_MAX", 2)
+        from pyaerial.engine import _pending_cost
+
+        monkeypatch.setattr(
+            "pyaerial.engine._PENDING_FINALIZE_BUDGET_BYTES",
+            2 * _pending_cost(_plane()),
+        )
 
         with caplog.at_level("ERROR", logger="pyaerial.engine"):
             for icao in ("aaa", "bbb", "ccc", "ddd"):
@@ -184,7 +197,7 @@ def test_pending_finalize_is_capped(tmp_path, monkeypatch, caplog):
         # Regression: the "cap" only logged and kept growing.
         assert list(engine._pending_finalize) == ["ccc-1", "ddd-1"]
         assert engine._pending_evicted == 2
-        assert caplog.text.count("Pending finalize cap") == 1
+        assert caplog.text.count("memory budget") == 1
         # Evicted flights keep their live copy for the orphan sweep.
         assert popped == []
         # Re-enqueueing a pending flight updates it in place (no eviction).
@@ -195,7 +208,7 @@ def test_pending_finalize_is_capped(tmp_path, monkeypatch, caplog):
 
 
 def test_retries_wait_while_history_is_down(tmp_path, monkeypatch):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         monkeypatch.setattr(engine.history_store, "disabled", False)
         monkeypatch.setattr(engine.history_store, "ping", lambda: False)
@@ -217,7 +230,7 @@ def test_retries_wait_while_history_is_down(tmp_path, monkeypatch):
 
 
 def test_pending_finalize_retries_then_clears(tmp_path, monkeypatch):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         monkeypatch.setattr(engine.calculator, "deactivate_plane", lambda plane: None)
         monkeypatch.setattr(engine.live_store, "get_alerts", lambda **k: [])
@@ -244,7 +257,7 @@ def test_pending_finalize_retries_then_clears(tmp_path, monkeypatch):
 
 
 def test_yielded_shutdown_skips_finalize(tmp_path, monkeypatch):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         engine._yielded_writer = True
         engine.tracker.planes["abc123"] = _plane()
@@ -261,7 +274,7 @@ def test_yielded_shutdown_skips_finalize(tmp_path, monkeypatch):
 
 
 def test_isolated_engine_uses_memory_store(tmp_path):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         assert engine.live_store.memory_only is True
         assert engine.live_store.writer is True
@@ -272,7 +285,7 @@ def test_isolated_engine_uses_memory_store(tmp_path):
 
 
 def test_finalize_closes_active_alerts(tmp_path, monkeypatch):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         monkeypatch.setattr(engine.calculator, "deactivate_plane", lambda plane: None)
         monkeypatch.setattr(
@@ -302,7 +315,7 @@ def test_finalize_closes_active_alerts(tmp_path, monkeypatch):
 
 
 def test_engine_publishes_raw_frames(tmp_path):
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         seen: list[dict] = []
         engine.live_store.add_raw_listener(lambda payload: seen.append(payload))
@@ -331,7 +344,7 @@ def test_engine_publishes_raw_frames(tmp_path):
 def test_engine_publishes_receivers_from_heard_by(tmp_path):
     from pyaerial.receivers.frames import RawFrame
 
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         seen: list[dict] = []
         engine.live_store.add_raw_listener(lambda payload: seen.append(payload))
@@ -361,7 +374,7 @@ def test_engine_publishes_receivers_from_heard_by(tmp_path):
 def test_engine_outgoing_frames_prefer_stronger_receiver(tmp_path):
     from pyaerial.receivers.frames import RawFrame
 
-    engine = _engine(tmp_path)
+    engine = make_engine(tmp_path)
     try:
         hex_msg = "8d406b902015a678d4d220aa4bda"
         now = time.time()
@@ -404,7 +417,9 @@ def test_engine_scores_integrity_into_live_flights(tmp_path):
             )
         }
     )
-    engine = Engine(config, isolated=True, aircraft_db_path=str(tmp_path / "aircraft.db"))
+    engine = Engine(
+        config, isolated=True, aircraft_db_path=str(tmp_path / "aircraft.db")
+    )
     runner = threading.Thread(target=engine.run, daemon=True)
     runner.start()
     try:
@@ -443,8 +458,12 @@ def test_engine_archives_every_receiver_copy_when_raw_frames_enabled(tmp_path):
             self.pruned.append(before)
             return 0
 
-    config = make_config(archive=ArchiveConfig(raw_frames=True, raw_frames_keep_hours=1))
-    engine = Engine(config, isolated=True, aircraft_db_path=str(tmp_path / "aircraft.db"))
+    config = make_config(
+        archive=ArchiveConfig(raw_frames=True, raw_frames_keep_hours=1)
+    )
+    engine = Engine(
+        config, isolated=True, aircraft_db_path=str(tmp_path / "aircraft.db")
+    )
     real = engine.history_store
     recorder = _Recorder()
     engine.history_store = recorder
@@ -461,4 +480,317 @@ def test_engine_archives_every_receiver_copy_when_raw_frames_enabled(tmp_path):
         assert time.time() - 3600 - recorder.pruned[0] < 5
     finally:
         engine.history_store = real
+        engine.shutdown()
+
+
+# --- Heartbeat counters ------------------------------------------------------
+# Cumulative operational counters since start.
+
+
+def test_heartbeat_publishes_cumulative_counters(tmp_path, monkeypatch):
+    client = FakeRedis()
+    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(lambda *a, **k: client))
+    config = make_config()
+    config.database.path = str(tmp_path / "pyaerial.db")
+    before = time.time()
+    engine = Engine(config, aircraft_db_path=str(tmp_path / "aircraft.db"))
+    try:
+        old = time.time() - 60  # older than the merge window: not held back
+        for n in range(3):
+            engine._enqueue_message(DF17_HEX, old + n, "main")
+        # A full queue drops frames.
+        full = queue.Queue(maxsize=1)
+        real_queue, engine._message_queue = engine._message_queue, full
+        for n in range(3):
+            engine._enqueue_message(DF17_HEX, old + n, "main")
+        engine._message_queue = real_queue
+
+        # A failing stage.
+        def boom(*_a, **_k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(engine.integrity, "evaluate", boom)
+        # A receiver restart.
+        engine._receivers["main"] = _ReceiverHandle(
+            name="main",
+            method="dump1090",
+            receiver=_DummyReceiver(),
+            thread=_dead_thread(),
+            started_at=time.monotonic(),
+            next_restart_at=time.monotonic() - 1,
+        )
+        monkeypatch.setattr(engine, "_start_receiver", lambda *a, **k: None)
+        # A pending-finalize eviction.
+        monkeypatch.setattr(engine_mod, "_PENDING_FINALIZE_BUDGET_BYTES", 1)
+        for icao in ("aaa001", "aaa002"):
+            engine._enqueue_pending_finalize(
+                f"{icao}-1", {STORE_INFO: {STORE_ICAO: icao}}
+            )
+        engine._history_retry_at = time.monotonic() + 3_600  # not archived now
+        engine.tracker.planes["BBB001"] = {
+            STORE_INFO: {STORE_ICAO: "bbb001"},
+            STORE_INTERNAL: {
+                STORE_FIRST_PACKET: time.time(),
+                STORE_MOST_RECENT_PACKET: time.time(),
+            },
+        }
+
+        engine._tick()
+        counters = json.loads(client.kv["live:engine"])["counters"]
+        assert before <= counters["since"] <= time.time()
+        assert counters["frames_received"] == 3
+        assert counters["frames_dropped"] == 2
+        assert counters["receiver_restarts"] == {"main": 1}
+        assert counters["stage_errors"] == {"integrity": 1}
+        assert counters["pending_evicted"] == 1
+        # The frames above created one plane, plus the one added directly.
+        assert counters["planes_tracked"] == len(engine.tracker.planes) == 2
+        assert counters["messages_processed"] >= 0
+
+        # Cumulative: a second tick adds, it does not reset.
+        engine._tick()
+        counters = json.loads(client.kv["live:engine"])["counters"]
+        assert counters["stage_errors"] == {"integrity": 2}
+        assert counters["frames_received"] == 3
+    finally:
+        engine._pending_finalize.clear()
+        engine.shutdown()
+
+
+# --- Raw feed CRC filtering --------------------------------------------------
+
+
+def _with_parity(data_hex: str) -> str:
+    """A 112-bit frame from 88 data bits with a correct CRC-24 parity field."""
+    parity = pms_crc(data_hex + "000000")
+    return f"{data_hex}{parity:06x}"
+
+
+# --- CRC-failed extended squitters never reach the raw feed ------------------
+
+
+def test_raw_feed_drops_only_crc_failed_extended_squitters(tmp_path):
+    tisb = _with_parity("92" + "abcdef" + "58c382d690c8ac")  # DF18 CF=2 (TIS-B)
+    assert pms_crc(tisb) == 0
+    corrupt = DF17_HEX[:-1] + ("0" if DF17_HEX[-1] != "0" else "1")
+    surveillance = "5d4ca2d4e3d2a7"  # DF11; DF4/5/20/21 overlay the address
+    comm_b = "a0001838ca3e51f0a8000047a6c4"  # DF20: parity is address-overlaid
+    short_df17 = "8d406b902015a6"  # a 56-bit DF17 cannot be a valid squitter
+
+    class _Recorder:
+        def __init__(self):
+            self.frames = []
+
+        def write_frames(self, frames):
+            self.frames.extend(frames)
+            return True
+
+        def prune_frames(self, before):
+            return 0
+
+        def health(self):
+            return {"state": "ok", "error": None}
+
+    engine = make_engine(tmp_path, archive=ArchiveConfig(raw_frames=True))
+    real = engine.history_store
+    recorder = _Recorder()
+    engine.history_store = recorder
+    try:
+        published: list[str] = []
+        engine.live_store.add_raw_listener(
+            lambda payload: published.extend(m["hex"] for m in payload["messages"])
+        )
+        # Older than the merge window, so nothing is held for the next tick.
+        now = time.time() - 60
+        sent = [DF17_HEX, tisb, corrupt, surveillance, comm_b, short_df17]
+        for offset, hex_msg in enumerate(sent):
+            # Seconds apart, so the corrupt copy is not merged with the good one.
+            engine._enqueue_message(hex_msg, now + offset, "main")
+        engine._tick()
+        assert sorted(published) == sorted([DF17_HEX, tisb, surveillance, comm_b])
+        # The research archive keeps every copy, corrupted ones included.
+        assert [frame.hex for frame in recorder.frames] == sent
+    finally:
+        engine.history_store = real
+        engine.shutdown()
+
+
+# --- Shared CRC helper -------------------------------------------------------
+
+
+def test_engine_uses_the_shared_crc_helper():
+    from pyaerial.receivers import frames
+
+    assert not hasattr(engine_mod, "_es_crc_failed")
+    assert engine_mod.es_crc_ok is frames.es_crc_ok
+
+
+# --- Queue sized from tracking.hz --------------------------------------------
+
+
+def test_queue_holds_several_ticks_at_peak_rate():
+    size = engine_mod._message_queue_size
+    peak = engine_mod._PEAK_FRAMES_PER_SECOND
+    assert size(2.0) >= 3 * peak / 2.0  # ~3 ticks at 2 Hz
+    assert size(1000.0) == engine_mod._MESSAGE_QUEUE_MIN  # floor
+    assert size(0.01) == engine_mod._MESSAGE_QUEUE_MAX  # ceiling
+    # Bounded memory: ~250 B per queued frame.
+    assert engine_mod._MESSAGE_QUEUE_MAX * 250 < 100 * 1024 * 1024
+
+
+def test_engine_queue_absorbs_a_900_aircraft_tick(tmp_path):
+    from pyaerial.config.schema import TrackingConfig
+
+    engine = Engine(
+        make_config(tracking=TrackingConfig(hz=2)),
+        isolated=True,
+        aircraft_db_path=str(tmp_path / "aircraft.db"),
+    )
+    try:
+        drops: list[int] = []
+        engine._note_dropped = drops.append
+        # 900 aircraft x 4 receivers profiled at ~20.5k frames/s: one 0.5 s
+        # tick plus a slow tick's worth of backlog.
+        for n in range(25_000):
+            engine._enqueue_message("8d406b902015a678d4d220aa4bda", float(n), "r")
+        assert drops == []
+        assert engine._message_queue.maxsize == engine_mod._message_queue_size(2)
+    finally:
+        engine.shutdown()
+
+
+# --- Receiver copies straddling a tick ---------------------------------------
+
+
+class _ManualClock:
+    def __init__(self, now: float):
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _straddle_engine(tmp_path, monkeypatch):
+    clock = _ManualClock(1_000.0)
+    monkeypatch.setattr(engine_mod.time, "time", clock)
+    engine = Engine(
+        make_config(), isolated=True, aircraft_db_path=str(tmp_path / "a.db")
+    )
+    ingested: list[dict] = []
+    observed: list[list[str]] = []
+    real_ingest = engine.tracker.ingest
+    real_observe = engine.integrity.observe_frames
+
+    def ingest(messages, receivers=None):
+        ingested.append(
+            {hx: tuple((receivers or {}).get(hx, ())) for hx, _ts in messages}
+        )
+        return real_ingest(messages, receivers=receivers)
+
+    def observe(frames):
+        observed.append([f.receiver for f in frames])
+        return real_observe(frames)
+
+    monkeypatch.setattr(engine.tracker, "ingest", ingest)
+    monkeypatch.setattr(engine.integrity, "observe_frames", observe)
+    return engine, clock, ingested, observed
+
+
+def test_copies_straddling_a_tick_are_merged_together(tmp_path, monkeypatch):
+    engine, clock, ingested, observed = _straddle_engine(tmp_path, monkeypatch)
+    try:
+        engine._enqueue_message(DF17_HEX, 999.97, "a", rssi=-20.0)  # 30 ms old at the tick
+        engine._tick()
+        assert not any(DF17_HEX in batch for batch in ingested)  # held, not lost
+        engine._enqueue_message(DF17_HEX, 1_000.00, "b", rssi=-10.0)  # arrives after it
+        clock.now = 1_000.5
+        engine._tick()
+        merged = [batch[DF17_HEX] for batch in ingested if DF17_HEX in batch]
+        assert merged == [("b", "a")]  # both receivers, the stronger first
+        assert ["a", "b"] in [sorted(batch) for batch in observed]  # TDOA sees both
+    finally:
+        engine.shutdown()
+
+
+def test_older_copy_is_held_back_with_its_younger_partner(tmp_path, monkeypatch):
+    engine, clock, ingested, _ = _straddle_engine(tmp_path, monkeypatch)
+    try:
+        engine._enqueue_message(DF17_HEX, 999.89, "a", rssi=-20.0)  # older than the window
+        engine._enqueue_message(DF17_HEX, 999.95, "b", rssi=-10.0)  # its younger copy
+        engine._tick()
+        assert not any(DF17_HEX in batch for batch in ingested)
+        clock.now = 1_000.5
+        engine._tick()
+        assert [batch[DF17_HEX] for batch in ingested if DF17_HEX in batch] == [("b", "a")]
+    finally:
+        engine.shutdown()
+
+
+def test_old_and_future_frames_are_not_delayed(tmp_path, monkeypatch):
+    engine, _clock, ingested, _ = _straddle_engine(tmp_path, monkeypatch)
+    try:
+        other = "8d4840d6202cc371c32ce0576098"
+        engine._enqueue_message(DF17_HEX, 999.5, "a")  # older than the window
+        engine._enqueue_message(other, 1_005.0, "a")  # skewed clock: waiting won't help
+        engine._tick()
+        seen = {hx for batch in ingested for hx in batch}
+        assert {DF17_HEX, other} <= seen
+        assert engine._held_frames == []
+    finally:
+        engine.shutdown()
+
+
+def test_shutdown_flushes_held_and_queued_frames(tmp_path, monkeypatch):
+    engine, _clock, ingested, _ = _straddle_engine(tmp_path, monkeypatch)
+    engine._enqueue_message(DF17_HEX, 999.99, "a")
+    engine._tick()
+    assert engine._held_frames
+    engine._enqueue_message("8d4840d6202cc371c32ce0576098", 1_000.0, "b")
+    engine.shutdown()
+    seen = {hx for batch in ingested for hx in batch}
+    assert {DF17_HEX, "8d4840d6202cc371c32ce0576098"} <= seen
+
+
+def test_engine_heartbeat_publishes_history_health(fake, tmp_path):
+    engine = Engine(pad_config(tmp_path), aircraft_db_path=str(tmp_path / "a.db"))
+    try:
+        engine._tick()
+        beat = json.loads(fake.kv["live:engine"])
+        assert beat["history"] == "ok"
+        assert beat["history_pending"] == 0
+        assert beat["history_error"] is None
+        assert '"history":"ok"' in fake.kv["live:engine"]  # healthcheck grep
+        engine.history_store.close()
+        engine.history_store._last_connect_attempt = time.monotonic() + 60
+        engine._pending_finalize["abc123-1"] = fine_track_plane()
+        engine._tick()
+        beat = json.loads(fake.kv["live:engine"])
+        assert beat["history"] == "down"
+        assert beat["history_pending"] == 1
+    finally:
+        engine._pending_finalize.clear()
+        engine.shutdown()
+
+
+# --- Status line counts the whole interval -----------------------------------
+
+
+def test_status_line_counts_messages_over_the_interval(tmp_path, caplog):
+    engine = Engine(
+        make_config(), isolated=True, aircraft_db_path=str(tmp_path / "a.db")
+    )
+    try:
+        engine._last_status_log = time.monotonic()
+        with caplog.at_level(logging.INFO, logger="pyaerial.engine"):
+            engine._log_status(5)
+            engine._log_status(7)
+            engine._last_status_log = time.monotonic() - 3_600
+            engine._log_status(3)
+        infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+        assert len(infos) == 1 and "processed 15 msg(s)" in infos[0]
+        with caplog.at_level(logging.INFO, logger="pyaerial.engine"):
+            engine._last_status_log = time.monotonic() - 3_600
+            engine._log_status(2)
+        assert "processed 2 msg(s)" in caplog.records[-1].getMessage()
+    finally:
         engine.shutdown()

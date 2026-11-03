@@ -10,6 +10,9 @@
 # Secrets
 .env
 .env.*
+# Your local config (may hold webhook URLs); compose bind-mounts it instead.
+/config.yaml
+secrets
 
 # Python
 .venv

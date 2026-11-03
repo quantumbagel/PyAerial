@@ -7,7 +7,8 @@ from typing import Any
 
 from pyaerial.api.payloads import app_config_payload, view_param, zones_payload
 from pyaerial.api.queries import (
-    MAX_HISTORY_TELEMETRY_POINTS,
+    DEFAULT_TELEMETRY_POINTS,
+    MAX_TELEMETRY_POINTS,
     get_alerts,
     get_flight_detail,
     get_history_flights,
@@ -117,9 +118,9 @@ def handle_ws_request(
             history=history,
             limit=_clamp_int(
                 params.get("limit"),
-                MAX_HISTORY_TELEMETRY_POINTS,
+                DEFAULT_TELEMETRY_POINTS,
                 1,
-                MAX_HISTORY_TELEMETRY_POINTS,
+                MAX_TELEMETRY_POINTS,
             ),
         )
 

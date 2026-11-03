@@ -30,7 +30,13 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  setVisibility('visible');
 });
+
+function setVisibility(state: DocumentVisibilityState) {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+  document.dispatchEvent(new Event('visibilitychange'));
+}
 
 describe('mergeFirstPage', () => {
   const key = (x: { id: string }) => x.id;
@@ -108,5 +114,30 @@ describe('useHistoryFeed', () => {
     expect(api.fetchFlights).toHaveBeenCalledTimes(1);
     expect(api.fetchFlights.mock.calls[0][1]).toMatchObject({ skip: 0, limit: HISTORY_PAGE_LIMIT });
     expect(result.current.flights).toHaveLength(HISTORY_PAGE_LIMIT + 1);
+  });
+
+  it('does not poll while the tab is hidden and refreshes when it is shown again', async () => {
+    vi.useFakeTimers();
+    api.fetchFlights.mockResolvedValue([]);
+    renderHook(() => useHistoryFeed(true, noFilter));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    api.fetchFlights.mockClear();
+    api.fetchStats.mockClear();
+
+    act(() => setVisibility('hidden'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(api.fetchFlights).not.toHaveBeenCalled();
+    expect(api.fetchStats).not.toHaveBeenCalled();
+
+    await act(async () => {
+      setVisibility('visible');
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(api.fetchFlights).toHaveBeenCalledTimes(1);
+    expect(api.fetchFlights.mock.calls[0][1]).toMatchObject({ skip: 0 });
   });
 });

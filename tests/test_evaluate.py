@@ -4,9 +4,28 @@ import math
 
 from shapely import Polygon
 
+from helpers import make_config
+from pyaerial.alerts.engine import AlertEngine
 from pyaerial.calc import evaluate
-from pyaerial.config.schema import FieldConstraint, RuleConfig
-from pyaerial.constants import STORE_CALC_DATA, STORE_HEADING, STORE_HORIZ_SPEED
+from pyaerial.calc.geo import build_polygons
+from pyaerial.config.schema import (
+    FieldConstraint,
+    RuleConfig,
+)
+from pyaerial.constants import (
+    STORE_ALT,
+    STORE_CALC_DATA,
+    STORE_FIRST_PACKET,
+    STORE_GNSS_HEIGHT,
+    STORE_HEADING,
+    STORE_HORIZ_SPEED,
+    STORE_ICAO,
+    STORE_INFO,
+    STORE_INTERNAL,
+    STORE_MOST_RECENT_PACKET,
+    STORE_RECV_DATA,
+    STORE_VERT_SPEED,
+)
 from pyaerial.models import Datum
 
 
@@ -18,7 +37,9 @@ def test_horizontal_speed_and_direction_aliases():
         }
     }
     polygon = Polygon([(35.72, -78.70), (35.73, -78.70), (35.73, -78.69)])
-    resolver = evaluate.make_resolver(plane, eta=30.0, polygon=polygon, position=(35.72, -78.70))
+    resolver = evaluate.make_resolver(
+        plane, eta=30.0, polygon=polygon, position=(35.72, -78.70)
+    )
     assert resolver("horizontal_speed") == 180.0
     assert resolver("direction") == 10.0
     assert resolver("speed") == 180.0
@@ -57,15 +78,203 @@ def test_rule_config_rejects_unknown_when_field():
         raise AssertionError("expected validation error")
 
 
+def test_predicted_resolver_projects_latitude_and_longitude():
+    """predict_seconds must move lat/lon too, not just distance and eta."""
+    from pyaerial.constants import STORE_LAT, STORE_LONG, STORE_RECV_DATA
+
+    plane = {
+        STORE_RECV_DATA: {
+            STORE_LAT: [Datum(35.0, 1.0)],
+            STORE_LONG: [Datum(-78.0, 1.0)],
+        }
+    }
+    polygon = Polygon([(36.0, -78.1), (36.1, -78.1), (36.1, -77.9)])
+    # Due north at 900 km/h for 60 s: 15 km, about 0.135 degrees of latitude.
+    resolver = evaluate.make_predicted_resolver(
+        plane, polygon, (35.0, -78.0), 0.0, 900.0, 0.0, 60.0
+    )
+    assert abs(resolver("latitude") - 35.135) < 0.005
+    assert abs(resolver("lon") - -78.0) < 1e-6
+    spec = {
+        "latitude": FieldConstraint(minimum=35.1),
+        "eta": FieldConstraint(minimum=0),
+    }
+    assert evaluate.when_passes(spec, resolver)
+
+
+def test_live_resolver_lat_lon_match_evaluated_position():
+    from pyaerial.constants import STORE_LAT, STORE_LONG, STORE_RECV_DATA
+
+    plane = {
+        STORE_RECV_DATA: {
+            STORE_LAT: [Datum(35.0, 1.0)],
+            STORE_LONG: [Datum(-78.0, 1.0)],
+        }
+    }
+    polygon = Polygon([(36.0, -78.1), (36.1, -78.1), (36.1, -77.9)])
+    coasted = (35.05, -78.01)
+    resolver = evaluate.make_resolver(
+        plane, eta=math.inf, polygon=polygon, position=coasted
+    )
+    assert resolver("lat") == 35.05
+    assert resolver("longitude") == -78.01
+
+
 def test_distance_is_km_proximity_is_metres():
     # A point well south of a 1-degree-ish box; exact km is not asserted,
     # only the 1000x relationship between the two fields.
-    polygon = Polygon([(35.72, -78.70), (35.73, -78.70), (35.73, -78.69), (35.72, -78.69)])
+    polygon = Polygon(
+        [(35.72, -78.70), (35.73, -78.70), (35.73, -78.69), (35.72, -78.69)]
+    )
     plane: dict = {}
     far = (34.0, -78.70)
-    resolver = evaluate.make_resolver(plane, eta=math.inf, polygon=polygon, position=far)
+    resolver = evaluate.make_resolver(
+        plane, eta=math.inf, polygon=polygon, position=far
+    )
     dist = resolver("distance")
     prox = resolver("proximity")
     assert dist is not None and prox is not None
     assert prox == dist * 1000
     assert dist > 1.0
+
+
+# --- altitude rules: baro altitude, else GNSS height -------------------------
+
+
+_PAD = Polygon([(35.72, -78.70), (35.73, -78.70), (35.73, -78.69), (35.72, -78.69)])
+
+
+_IN_PAD = (35.725, -78.695)
+
+
+_LOW = {
+    "altitude": FieldConstraint(maximum=1000),
+    "distance": FieldConstraint(maximum=1),
+}
+
+
+def _altitude_plane(**recv: list[Datum]) -> dict:
+    return {
+        STORE_INFO: {STORE_ICAO: "abc123"},
+        STORE_RECV_DATA: dict(recv),
+        STORE_INTERNAL: {STORE_FIRST_PACKET: 1.0, STORE_MOST_RECENT_PACKET: 2.0},
+    }
+
+
+def test_gnss_only_aircraft_satisfies_altitude_rule():
+    plane = _altitude_plane(**{STORE_GNSS_HEIGHT: [Datum(600.0, 1.0)]})
+    resolver = evaluate.make_resolver(plane, 0.0, _PAD, _IN_PAD)
+    assert resolver("altitude") == 600.0
+    assert resolver("alt") == 600.0
+    assert evaluate.when_passes(_LOW, resolver)
+    assert evaluate.altitude_m(plane) == (600.0, "gnss")
+
+
+def test_baro_is_preferred_over_gnss_when_present():
+    # Baro is older than the GNSS sample, but still wins.
+    plane = _altitude_plane(
+        **{STORE_ALT: [Datum(3000.0, 1.0)], STORE_GNSS_HEIGHT: [Datum(600.0, 2.0)]}
+    )
+    resolver = evaluate.make_resolver(plane, 0.0, _PAD, _IN_PAD)
+    assert resolver("altitude") == 3000.0
+    assert not evaluate.when_passes(_LOW, resolver)
+    assert evaluate.altitude_m(plane) == (3000.0, "baro")
+
+
+def test_no_altitude_of_either_kind_fails_the_rule():
+    resolver = evaluate.make_resolver(_altitude_plane(), 0.0, _PAD, _IN_PAD)
+    assert resolver("altitude") is None
+    assert not evaluate.when_passes(_LOW, resolver)
+
+
+def test_retain_time_lookup_uses_gnss_fallback():
+    plane = _altitude_plane(**{STORE_GNSS_HEIGHT: [Datum(100.0, 1.0), Datum(900.0, 50.0)]})
+    resolver = evaluate.make_resolver(plane, 0.0, _PAD, _IN_PAD, at_time=2.0)
+    assert resolver("altitude") == 100.0
+
+
+def test_predicted_altitude_extrapolates_gnss_height():
+    plane = _altitude_plane(
+        **{
+            STORE_GNSS_HEIGHT: [Datum(600.0, 1.0)],
+            STORE_VERT_SPEED: [Datum(-5.0, 1.0)],
+        }
+    )
+    resolver = evaluate.make_predicted_resolver(
+        plane, _PAD, _IN_PAD, 0.0, 0.0, 0.0, 10.0
+    )
+    assert math.isclose(resolver("altitude"), 550.0)
+    baro = _altitude_plane(
+        **{STORE_ALT: [Datum(2000.0, 1.0)], STORE_GNSS_HEIGHT: [Datum(600.0, 1.0)]}
+    )
+    resolver = evaluate.make_predicted_resolver(
+        baro, _PAD, _IN_PAD, 0.0, 0.0, 0.0, 10.0
+    )
+    assert resolver("altitude") == 2000.0
+
+
+def test_alert_payload_reports_altitude_and_source():
+    config = make_config()
+    engine = AlertEngine(config, build_polygons(config.zones))
+    try:
+        gnss = engine._build_payload(
+            _altitude_plane(**{STORE_GNSS_HEIGHT: [Datum(600.0, 1.0)]}), _IN_PAD
+        )
+        assert gnss[STORE_ALT] == 600.0 and gnss["altitude_source"] == "gnss"
+        both = _altitude_plane(
+            **{STORE_ALT: [Datum(300.0, 1.0)], STORE_GNSS_HEIGHT: [Datum(600.0, 1.0)]}
+        )
+        baro = engine._build_payload(both, _IN_PAD)
+        assert baro[STORE_ALT] == 300.0 and baro["altitude_source"] == "baro"
+        none = engine._build_payload(_altitude_plane(), None)
+        assert none[STORE_ALT] is None and none["altitude_source"] is None
+    finally:
+        engine.close()
+
+
+# --- integrity constraints need evidence -------------------------------------
+# An unknown verdict never satisfies an integrity constraint.
+
+
+_TRUSTED = {
+    "integrity": FieldConstraint(minimum=0.8),
+    "distance": FieldConstraint(maximum=1),
+}
+
+
+def _resolve(doc: dict | None):
+    plane = {STORE_INFO: {"integrity": doc} if doc is not None else {}}
+    return evaluate.make_resolver(plane, 0.0, _PAD, _IN_PAD)
+
+
+def test_unknown_or_missing_status_does_not_satisfy_integrity():
+    for doc in (
+        None,
+        {"score": 1.0, "status": "unknown", "checks": {}},
+        {"score": 1.0},  # no status: no evidence either
+        {"score": 1.0, "status": ""},
+    ):
+        resolver = _resolve(doc)
+        assert resolver("integrity") is None, doc
+        assert not evaluate.when_passes(_TRUSTED, resolver), doc
+        # max-only constraints must not match unchecked aircraft either.
+        spoof = {
+            "integrity": FieldConstraint(maximum=1.0),
+            "distance": FieldConstraint(maximum=1),
+        }
+        assert not evaluate.when_passes(spoof, resolver), doc
+
+
+def test_known_status_uses_published_score():
+    assert evaluate.when_passes(_TRUSTED, _resolve({"score": 0.9, "status": "ok"}))
+    resolver = _resolve({"score": 0.6, "status": "suspect"})
+    assert resolver("integrity") == 0.6
+    assert not evaluate.when_passes(_TRUSTED, resolver)
+
+
+def test_predicted_resolver_also_ignores_unknown():
+    plane = {STORE_INFO: {"integrity": {"score": 1.0, "status": "unknown"}}}
+    resolver = evaluate.make_predicted_resolver(
+        plane, _PAD, _IN_PAD, 0.0, 0.0, 0.0, 10.0
+    )
+    assert resolver("integrity") is None

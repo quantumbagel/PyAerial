@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections import defaultdict
 from typing import Any
@@ -76,25 +77,31 @@ def alert_id_for(doc: dict[str, Any], flight_id: Any = None) -> str:
     return f"{owner}:{doc.get('zone') or ''}:{doc.get('rule') or ''}"
 
 
+def _dump1090_format(args: dict[str, Any]) -> str:
+    """The wire format :class:`Dump1090Receiver` uses for these arguments."""
+    fmt = args.get("format")
+    if fmt is not None:
+        return "beast" if str(fmt).lower() in {"beast", "binary"} else "avr"
+    port = args.get("tcp_connection_port")
+    # Beast unless the port is dump1090's AVR port (also when no port is set).
+    return "avr" if port is not None and str(port) == "30002" else "beast"
+
+
 def antenna_payload(config: Config) -> dict[str, Any]:
     """Station location and configured receivers for the Beast/config payload."""
     receivers: list[dict[str, Any]] = []
     for name, receiver in config.receivers.items():
+        # No host/port: the portal does not use them, and they map the
+        # station's internal network for anyone who can open the page.
         item: dict[str, Any] = {"name": name, "type": receiver.type}
-        if receiver.host:
-            item["host"] = receiver.host
-        if receiver.port is not None:
-            item["port"] = receiver.port
         if receiver.position is not None:
             item["position"] = receiver.position.model_dump()
-        fmt = receiver.format or receiver.options.get("format")
-        if isinstance(fmt, str) and fmt:
-            item["format"] = fmt.lower()
-        elif receiver.type == "dump1090":
-            if receiver.port == 30005:
-                item["format"] = "beast"
-            else:
-                item["format"] = "avr"
+        if receiver.type == "dump1090":
+            item["format"] = _dump1090_format(receiver.receiver_arguments())
+        else:
+            fmt = receiver.format or receiver.options.get("format")
+            if isinstance(fmt, str) and fmt:
+                item["format"] = fmt.lower()
         receivers.append(item)
     return {
         "home": {
@@ -149,6 +156,34 @@ def view_param(view: str) -> str:
     return view if view in ("live", "history") else "live"
 
 
+class OfflineAircraftDB:
+    """An AircraftDB view that never goes online (``enrichment.enabled: false``).
+
+    ``lookup_cached`` fetches missing records from hexdb.io and Planespotters;
+    here it is the local-only ``lookup_cached_fast``. ``is_cached`` is True so
+    nothing schedules a background fetch.
+    """
+
+    def __init__(self, db: AircraftDB) -> None:
+        self._db = db
+
+    @property
+    def available(self) -> bool:
+        return bool(self._db.available)
+
+    def is_cached(self, icao: str) -> bool:
+        return True
+
+    def lookup_cached(self, icao: str) -> dict | None:
+        return self._db.lookup_cached_fast(icao)
+
+    def lookup_cached_fast(self, icao: str) -> dict | None:
+        return self._db.lookup_cached_fast(icao)
+
+    def close(self) -> None:
+        self._db.close()
+
+
 def enrich_from_aircraft_db(
     icao: str, aircraft_db: AircraftDB | None
 ) -> dict[str, str | None]:
@@ -180,6 +215,9 @@ _PROVENANCE_FIELDS = (
     "integrity_status",
     "integrity_flags",
 )
+# Passed through only when known: GNSS height (m, WGS84 ellipsoid) comes from
+# TC 20-22 positions alone, and pre-schema-3 archive rows never had it.
+_OPTIONAL_FIELDS = ("gnss_height",)
 
 
 def telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
@@ -195,6 +233,9 @@ def telemetry_point(doc: dict[str, Any]) -> dict[str, Any]:
     for key in _PROVENANCE_FIELDS:
         if key in doc:
             point[key] = doc[key]
+    for key in _OPTIONAL_FIELDS:
+        if doc.get(key) is not None:
+            point[key] = doc[key]
     return point
 
 
@@ -206,6 +247,24 @@ def _alert_coords(doc: dict[str, Any]) -> tuple[Any, Any]:
     if not isinstance(coords, (list, tuple)) or len(coords) < 2:
         return None, None
     return coords[1], coords[0]
+
+
+def _ended_by(doc: dict[str, Any]) -> str | None:
+    """Why an episode ended (``cleared``, ``lost``, ``shutdown``, ``restart``), if known.
+
+    Values come from the alert engine (``ENDED_*`` in alerts/engine.py) and are
+    passed through as stored.
+    """
+    value = doc.get("ended_by")
+    if not value:
+        reason = doc.get("reason")
+        if isinstance(reason, str) and reason.startswith("{"):
+            try:
+                reason = json.loads(reason)
+            except ValueError:
+                reason = None
+        value = reason.get("ended_by") if isinstance(reason, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def format_alert(doc: dict[str, Any]) -> dict[str, Any]:
@@ -220,6 +279,7 @@ def format_alert(doc: dict[str, Any]) -> dict[str, Any]:
         "active": doc.get("active", False),
         "activated_at": doc.get("activated_at"),
         "deactivated_at": doc.get("deactivated_at"),
+        "ended_by": _ended_by(doc),
         "eta": doc.get("eta"),
         "altitude": doc.get("altitude"),
         "latitude": latitude,

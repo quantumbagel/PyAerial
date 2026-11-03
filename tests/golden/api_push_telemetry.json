@@ -1,0 +1,26 @@
+{
+  "telemetry": [
+    {
+      "altitude": 457.2,
+      "flight_id": "a1b2c3-1749999400",
+      "heading": 0.0,
+      "icao": "a1b2c3",
+      "latitude": 35.722,
+      "longitude": -78.695,
+      "speed": 185.2,
+      "timestamp": "T0-7"
+    },
+    {
+      "altitude": 457.2,
+      "flight_id": "a1b2c3-1749999400",
+      "heading": 0.0,
+      "icao": "a1b2c3",
+      "latitude": 35.725,
+      "longitude": -78.695,
+      "speed": 185.2,
+      "timestamp": "T0-5"
+    }
+  ],
+  "timestamp": "T0+0",
+  "type": "telemetry"
+}

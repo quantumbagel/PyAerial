@@ -163,9 +163,18 @@ export function useHistoryFeed(enabled: boolean, filter: HistoryFilter) {
       void refreshStats(gen);
     };
     refreshAll();
-    const timer = setInterval(refreshAll, HISTORY_REFRESH_MS);
+    // A hidden tab needs no fresh archive pages; catch up when it is shown.
+    const hidden = () => document.visibilityState === 'hidden';
+    const timer = setInterval(() => {
+      if (!hidden()) refreshAll();
+    }, HISTORY_REFRESH_MS);
+    const onVisibility = () => {
+      if (!hidden()) refreshAll();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
       // Invalidate anything still in flight for this generation.
       generation.current += 1;
     };

@@ -1,12 +1,15 @@
 import logging
 import math
+import threading
 import time
+from urllib.parse import urlsplit
 
 import requests
 
 from pyaerial.alerters import Alerter, register_alerter
-from pyaerial.config.loader import redact_url, webhook_url_allowed
+from pyaerial.alerters.contract import build_alert_body, ended_by_of, event_of
 from pyaerial.units import KMH_TO_KT, M_TO_FT, MPS_TO_FT_PER_MIN
+from pyaerial.urls import redact_url, webhook_url_allowed
 
 log = logging.getLogger("pyaerial.alerter.webhook")
 _WEBHOOK_ATTEMPTS = 3
@@ -14,6 +17,128 @@ _WEBHOOK_RETRY_BACKOFF = 0.5
 _WEBHOOK_TIMEOUT = 5
 _WEBHOOK_MAX_RETRY_AFTER = 30.0
 _WEBHOOK_METHODS = frozenset({"POST", "PUT"})
+_WEBHOOK_FORMATS = frozenset({"json", "discord", "slack"})
+# Platform limits; an over-long title makes the whole message a 400.
+_DISCORD_TITLE_MAX = 256
+_DISCORD_FOOTER_MAX = 2048
+_SLACK_HEADER_MAX = 150
+_SLACK_TEXT_MAX = 3000
+
+
+class _RedactWebhookSecrets(logging.Filter):
+    """Strip configured webhook paths/queries from third-party log records.
+
+    At ``logging.level: debug`` urllib3 logs every request line, e.g.
+    ``"POST /api/webhooks/<id>/<token> HTTP/1.1" 204``. The token is the
+    credential, so it is replaced before any handler sees the record.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = threading.Lock()
+        self._replacements: dict[str, str] = {}
+        self._ordered: list[tuple[str, str]] = []
+
+    def register(self, url: str) -> None:
+        parts = urlsplit(url)
+        target = parts.path + (f"?{parts.query}" if parts.query else "")
+        if target in ("", "/"):
+            return
+        with self._lock:
+            self._replacements[url] = f"{redact_url(url)}/<redacted>"
+            self._replacements[target] = "/<redacted>"
+            # Longest first so the full URL wins over its own path.
+            self._ordered = sorted(
+                self._replacements.items(), key=lambda kv: len(kv[0]), reverse=True
+            )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        ordered = self._ordered
+        if not ordered:
+            return True
+        try:
+            message = record.getMessage()
+        except Exception:  # malformed record; leave it to logging
+            return True
+        redacted = message
+        for secret, replacement in ordered:
+            if secret in redacted:
+                redacted = redacted.replace(secret, replacement)
+        if redacted != message:
+            record.msg = redacted
+            record.args = None
+        return True
+
+
+_SECRET_FILTER = _RedactWebhookSecrets()
+# Logger filters are not inherited, so attach to each urllib3 module logger.
+for _name in (
+    "urllib3.connectionpool",
+    "urllib3.connection",
+    "urllib3.poolmanager",
+    "urllib3.response",
+    "urllib3.util.retry",
+):
+    logging.getLogger(_name).addFilter(_SECRET_FILTER)
+
+
+def _truncate(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _alert_ref(meta: dict) -> str:
+    """``alert <id>`` line so chat readers can pair activate with deactivate."""
+    alert_id = meta.get("alert_id")
+    return f"alert {alert_id}" if alert_id else ""
+
+
+def _altitude_text(alt: float | None, payload: dict) -> str:
+    if alt is None:
+        return "N/A"
+    # GNSS height is geometric (WGS84), not the baro altitude pilots use.
+    suffix = " (GNSS)" if payload.get("altitude_source") == "gnss" else ""
+    return f"{int(alt * M_TO_FT)} ft{suffix}"
+
+
+_EVENT_LABELS = {
+    "activate": "Activated",
+    "while_active": "Still active",
+    "deactivate": "Ended",
+}
+_ENDED_BY_TEXT = {
+    "cleared": "conditions cleared",
+    "lost": "aircraft lost",
+    "shutdown": "engine stopped",
+    "restart": "engine restarted",
+}
+_EVENT_VERBS = {
+    "activate": "met",
+    "while_active": "still meets",
+    "deactivate": "no longer meets",
+}
+
+
+def _event_label(meta: dict) -> str:
+    """``Activated`` / ``Still active`` / ``Ended (conditions cleared)``."""
+    event = event_of(meta)
+    label = _EVENT_LABELS.get(event, event.replace("_", " ").capitalize())
+    ended_by = ended_by_of(meta)
+    if event == "deactivate" and ended_by:
+        label = f"{label} ({_ENDED_BY_TEXT.get(ended_by, ended_by)})"
+    return label
+
+
+def _event_title(meta: dict, callsign: str, icao: str, zone: str, rule: str) -> str:
+    # Unchanged from 0.x ("... (While active)"); the event is spelled out in
+    # the Event field / description.
+    event = event_of(meta)
+    hook = f" ({event.replace('_', ' ').capitalize()})" if event else ""
+    return f'{callsign} ({icao}) triggered "{zone}/{rule}"{hook}'
+
+
+def _event_sentence(meta: dict, who: str, zone: str, rule: str) -> str:
+    verb = _EVENT_VERBS.get(event_of(meta), "met")
+    return f'{who} {verb} the criteria for zone "{zone}", rule "{rule}".'
 
 
 def _retry_after_seconds(value: object, fallback: float) -> float:
@@ -106,7 +231,11 @@ def _safe_num(val: object) -> float | int | None:
 def _hex_to_int(hex_str: str | None, default: int = 15680580) -> int:
     if not hex_str or not isinstance(hex_str, str):
         return default
-    clean = hex_str.lstrip("#").strip()
+    clean = hex_str.strip().lstrip("#")
+    if len(clean) == 3:  # CSS shorthand: #f00 is #ff0000
+        clean = "".join(ch * 2 for ch in clean)
+    if len(clean) != 6:
+        return default
     try:
         return int(clean, 16)
     except ValueError:
@@ -127,6 +256,7 @@ class WebhookAlerter(Alerter):
                 "webhook URL must be https (http allowed only for localhost)"
             )
         self.url = url
+        _SECRET_FILTER.register(url)
         headers = arguments.get("headers") or {}
         if not isinstance(headers, dict):
             raise ValueError("webhook headers must be an object of string keys")
@@ -135,7 +265,10 @@ class WebhookAlerter(Alerter):
         if method not in _WEBHOOK_METHODS:
             raise ValueError("webhook method must be POST or PUT")
         self.http_method = method
-        self.payload_format = arguments.get("format", "json")  # json, discord, slack
+        payload_format = str(arguments.get("format") or "json").strip().lower()
+        if payload_format not in _WEBHOOK_FORMATS:
+            raise ValueError("webhook format must be json, discord, or slack")
+        self.payload_format = payload_format
         # Webhook paths carry secrets; logs only ever see scheme://host.
         self._target = redact_url(url)
         self._session = requests.Session()
@@ -215,20 +348,13 @@ class WebhookAlerter(Alerter):
         )
         map_links = meta.get("map_links") or build_map_links(lat, lon)
 
-        alert_data = {
-            **meta,
-            "tracker_links": tracker_links,
-            "map_links": map_links,
-            "telemetry": payload,
-        }
-
-        # Format payload for common notification platforms
         if self.payload_format == "discord":
             body = self._format_discord(meta, payload, tracker_links, map_links)
         elif self.payload_format == "slack":
             body = self._format_slack(meta, payload, tracker_links, map_links)
         else:
-            body = alert_data
+            # Public contract: pyaerial.alerters.contract (pyaerial.alert/1).
+            body = dict(build_alert_body(meta, payload, tracker_links, map_links))
 
         self._deliver(body)
 
@@ -242,15 +368,12 @@ class WebhookAlerter(Alerter):
         icao = (meta.get("icao") or "").upper()
         callsign = meta.get("callsign") or "Unknown"
         zone = meta.get("zone", "Unknown")
-        reason = meta.get("reason")
-        hook = reason.get("hook") if isinstance(reason, dict) else None
-        hook_str = f" ({hook.capitalize()})" if hook else ""
 
-        lat, lon, alt, speed, heading, vert_speed, eta = _alert_telemetry(
-            meta, payload
-        )
+        lat, lon, alt, speed, heading, vert_speed, eta = _alert_telemetry(meta, payload)
 
-        fields = []
+        fields = [
+            {"name": "Event", "value": _event_label(meta) or "N/A", "inline": False}
+        ]
 
         # Position Field
         if lat is not None and lon is not None:
@@ -272,7 +395,7 @@ class WebhookAlerter(Alerter):
         fields.append(
             {
                 "name": "Altitude",
-                "value": f"{int(alt * M_TO_FT)} ft" if alt is not None else "N/A",
+                "value": _altitude_text(alt, payload),
                 "inline": True,
             }
         )
@@ -344,8 +467,12 @@ class WebhookAlerter(Alerter):
 
         rule_raw = meta.get("type", "unknown")
         embed = {
-            "title": f'{callsign} ({icao}) triggered "{zone}/{rule_raw}"{hook_str}',
-            "description": f'Aircraft **{callsign}** (`{icao}`) met criteria for zone "{zone}", rule "{rule_raw}".',
+            "title": _truncate(
+                _event_title(meta, callsign, icao, zone, rule_raw), _DISCORD_TITLE_MAX
+            ),
+            "description": _event_sentence(
+                meta, f"Aircraft **{callsign}** (`{icao}`)", zone, rule_raw
+            ),
             "fields": fields,
             "color": embed_color,
         }
@@ -353,6 +480,9 @@ class WebhookAlerter(Alerter):
         photo_url = meta.get("photo_url")
         if photo_url:
             embed["thumbnail"] = {"url": photo_url}
+        ref = _alert_ref(meta)
+        if ref:
+            embed["footer"] = {"text": _truncate(ref, _DISCORD_FOOTER_MAX)}
 
         return {"embeds": [embed]}
 
@@ -367,20 +497,15 @@ class WebhookAlerter(Alerter):
         callsign = meta.get("callsign") or "Unknown"
         zone = meta.get("zone", "Unknown")
         rule_raw = meta.get("type", "unknown")
-        reason = meta.get("reason")
-        hook = reason.get("hook") if isinstance(reason, dict) else None
-        hook_str = f" ({hook.capitalize()})" if hook else ""
 
-        lat, lon, alt, speed, heading, vert_speed, eta = _alert_telemetry(
-            meta, payload
-        )
+        lat, lon, alt, speed, heading, vert_speed, eta = _alert_telemetry(meta, payload)
 
         pos_str = (
             f"<{map_links.get('google_maps', f'https://www.google.com/maps?q={lat},{lon}')}|{lat:.5f}, {lon:.5f}>"
             if lat is not None and lon is not None
             else "N/A"
         )
-        alt_str = f"{int(alt * M_TO_FT)} ft" if alt is not None else "N/A"
+        alt_str = _altitude_text(alt, payload)
         eta_str = f"{int(eta)}s" if eta is not None else "N/A"
         speed_str = f"{speed * KMH_TO_KT:.1f} kt" if speed is not None else "N/A"
         heading_str = f"{heading:.0f}°" if heading is not None else "N/A"
@@ -390,7 +515,10 @@ class WebhookAlerter(Alerter):
             else "N/A"
         )
 
-        slack_text = f'Aircraft `{callsign}` (`{icao}`) met criteria for zone "{zone}", rule "{rule_raw}".'
+        label = _event_label(meta)
+        slack_text = (f"[{label}] " if label else "") + _event_sentence(
+            meta, f"Aircraft `{callsign}` (`{icao}`)", zone, rule_raw
+        )
 
         fields = [
             {"type": "mrkdwn", "text": f"*Aircraft:* `{callsign}` ({icao})"},
@@ -408,7 +536,10 @@ class WebhookAlerter(Alerter):
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f'{callsign} ({icao}) triggered "{zone}/{rule_raw}"{hook_str}',
+                    "text": _truncate(
+                        _event_title(meta, callsign, icao, zone, rule_raw),
+                        _SLACK_HEADER_MAX,
+                    ),
                 },
             },
             {
@@ -434,6 +565,16 @@ class WebhookAlerter(Alerter):
                         "type": "mrkdwn",
                         "text": "*Plane Trackers:* " + " | ".join(tracker_slack),
                     },
+                }
+            )
+        ref = _alert_ref(meta)
+        if ref:
+            blocks.append(
+                {
+                    "type": "context",
+                    "elements": [
+                        {"type": "plain_text", "text": _truncate(ref, _SLACK_TEXT_MAX)}
+                    ],
                 }
             )
 

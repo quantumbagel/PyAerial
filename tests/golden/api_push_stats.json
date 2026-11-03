@@ -1,0 +1,13 @@
+{
+  "stats": {
+    "active_alerts": 1,
+    "engine_live": true,
+    "engine_seen_at": "T0+0",
+    "historical_alerts": 0,
+    "history": false,
+    "live_flights": 1,
+    "redis": true,
+    "retained_flights": 0
+  },
+  "type": "stats"
+}

@@ -9,7 +9,6 @@ import pytest
 from pyaerial.config.geofence_file import GeofenceFileError, load_geofence_coordinates
 from pyaerial.config.loader import ConfigError, load_config
 
-
 _RING = [
     [35.72, -78.70],
     [35.73, -78.70],
@@ -180,6 +179,110 @@ def test_kmz_member_size_is_capped(tmp_path, monkeypatch):
     assert kmz.stat().st_size < 10_000
     monkeypatch.setattr(geofence_file, "MAX_GEOFENCE_BYTES", 10_000)
     with pytest.raises(GeofenceFileError, match="too large|exceeds"):
+        load_geofence_coordinates(kmz)
+
+
+def _write_geojson(tmp_path: Path, obj: dict, name: str = "zone.geojson") -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(obj))
+    return path
+
+
+_SQUARE = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]
+
+
+def test_geojson_holes_are_rejected_not_filled(tmp_path):
+    hole = [[4, 4], [6, 4], [6, 6], [4, 6], [4, 4]]
+    path = _write_geojson(tmp_path, {"type": "Polygon", "coordinates": [_SQUARE, hole]})
+    with pytest.raises(GeofenceFileError, match="holes"):
+        load_geofence_coordinates(path)
+
+
+def test_kml_holes_are_rejected_not_filled(tmp_path):
+    path = _kml(tmp_path)
+    text = path.read_text().replace(
+        "</outerBoundaryIs>",
+        "</outerBoundaryIs><innerBoundaryIs><LinearRing><coordinates>"
+        "-78.698,35.722 -78.696,35.722 -78.696,35.724 -78.698,35.722"
+        "</coordinates></LinearRing></innerBoundaryIs>",
+    )
+    path.write_text(text)
+    with pytest.raises(GeofenceFileError, match="holes"):
+        load_geofence_coordinates(path)
+
+
+def test_out_of_range_vertex_is_an_error_not_silently_dropped(tmp_path):
+    # 0..360 longitudes: dropping the >180 vertices used to collapse the
+    # square into a zero-area line.
+    ring = [[170, 0], [190, 0], [190, 10], [170, 10], [170, 0]]
+    path = _write_geojson(tmp_path, {"type": "Polygon", "coordinates": [ring]})
+    with pytest.raises(GeofenceFileError, match="outside"):
+        load_geofence_coordinates(path)
+
+
+def test_unparsable_vertex_is_an_error(tmp_path):
+    ring = [[0, 0], [1, 0], ["x", 1], [0, 0]]
+    path = _write_geojson(tmp_path, {"type": "Polygon", "coordinates": [ring]})
+    with pytest.raises(GeofenceFileError, match="invalid coordinate"):
+        load_geofence_coordinates(path)
+    kml = _kml(tmp_path)
+    kml.write_text(kml.read_text().replace("-78.69,35.73,0", "-78.69;35.73"))
+    with pytest.raises(GeofenceFileError, match="invalid KML coordinate"):
+        load_geofence_coordinates(kml)
+
+
+def test_degenerate_ring_is_rejected(tmp_path):
+    ring = [[0, 0], [1, 1], [0, 0], [1, 1]]
+    path = _write_geojson(tmp_path, {"type": "Polygon", "coordinates": [ring]})
+    with pytest.raises(GeofenceFileError, match="3 distinct"):
+        load_geofence_coordinates(path)
+
+
+def test_geometry_collection_with_two_polygons_is_rejected(tmp_path):
+    first = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
+    second = {"type": "Polygon", "coordinates": [[[5, 5], [6, 5], [6, 6], [5, 5]]]}
+    point = {"type": "Point", "coordinates": [0, 0]}
+    path = _write_geojson(
+        tmp_path, {"type": "GeometryCollection", "geometries": [first, second]}
+    )
+    with pytest.raises(GeofenceFileError, match="multiple polygons"):
+        load_geofence_coordinates(path)
+    path = _write_geojson(
+        tmp_path, {"type": "GeometryCollection", "geometries": [point, first]}
+    )
+    assert load_geofence_coordinates(path)[1] == [0.0, 1.0]
+
+
+def test_feature_collection_does_not_skip_a_broken_polygon(tmp_path):
+    good = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
+    bad = {"type": "Polygon", "coordinates": [[[0, 0], [200, 0], [1, 1], [0, 0]]]}
+    point = {"type": "Point", "coordinates": [0, 0]}
+    features = [
+        {"type": "Feature", "geometry": geometry} for geometry in (point, bad, good)
+    ]
+    path = _write_geojson(tmp_path, {"type": "FeatureCollection", "features": features})
+    with pytest.raises(GeofenceFileError, match="outside"):
+        load_geofence_coordinates(path)
+
+
+def test_geojson_with_bom_and_bad_encoding(tmp_path):
+    path = tmp_path / "bom.geojson"
+    body = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
+    path.write_bytes(b"\xef\xbb\xbf" + json.dumps(body).encode())
+    assert len(load_geofence_coordinates(path)) == 4
+    path.write_bytes(b'{"type": "Polygon", "name": "\xe9"}')
+    with pytest.raises(GeofenceFileError, match="invalid GeoJSON"):
+        load_geofence_coordinates(path)
+
+
+def test_corrupt_kmz_is_a_geofence_error(tmp_path):
+    kmz = tmp_path / "bad.kmz"
+    with zipfile.ZipFile(kmz, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("doc.kml", "<kml>" + "x" * 5000 + "</kml>")
+    data = bytearray(kmz.read_bytes())
+    data[60:70] = b"\xff" * 10  # inside the deflate stream
+    kmz.write_bytes(bytes(data))
+    with pytest.raises(GeofenceFileError, match="KMZ"):
         load_geofence_coordinates(kmz)
 
 

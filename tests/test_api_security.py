@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
+import threading
 import time
 
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from helpers import make_config
 from pyaerial.api.app import create_app
 from pyaerial.api.security import (
+    BucketRegistry,
     ConnectionLimiter,
     TokenBucket,
     content_security_policy,
@@ -20,6 +24,7 @@ from pyaerial.api.security import (
 )
 from pyaerial.store.history import HistoryUnavailable
 from pyaerial.store.redis_live import RedisLiveStore
+from pyaerial.webapp import uvicorn_options
 
 
 def _memory_store() -> RedisLiveStore:
@@ -169,8 +174,8 @@ def test_security_headers_on_responses():
 
 def test_csp_allows_exactly_what_the_portal_loads():
     csp = content_security_policy("pi.local:10090")
-    assert "https://fonts.googleapis.com" in csp
-    assert "https://fonts.gstatic.com" in csp
+    assert "fonts.googleapis.com" not in csp
+    assert "fonts.gstatic.com" not in csp
     assert "https://tiles.openfreemap.org" in csp
     assert "worker-src 'self' blob:" in csp
     assert "script-src 'self';" in csp
@@ -369,9 +374,11 @@ def test_history_telemetry_is_capped():
     assert points[-1]["timestamp"] == float(total - 1)
     assert history.calls[-1] == {
         "since": 0.0,
-        "limit": MAX_HISTORY_TELEMETRY_POINTS,
+        # One extra row detects truncation (r5: ``points.truncated``).
+        "limit": MAX_HISTORY_TELEMETRY_POINTS + 1,
         "newest": True,
     }
+    assert points.truncated is True
 
     limited = _FakeHistory(points=50)
     points = get_telemetry("f", "history", 0.0, live_store=None, history=limited, limit=10)
@@ -446,7 +453,8 @@ def test_snapshot_failure_does_not_leave_zombie_client(monkeypatch):
     monkeypatch.setattr("pyaerial.api.broadcaster.get_stats", _broken_stats)
     with TestClient(app) as client:
         with client.websocket_connect("/ws/live") as ws:
-            ws.receive_json()  # hello may or may not be flushed
+            # The hello may or may not be flushed before the server closes (it
+            # is not on 3.14's scheduler), so the first receive may raise too.
             with pytest.raises(WebSocketDisconnect):
                 while True:
                     ws.receive_json()
@@ -525,3 +533,161 @@ def test_beast_tcp_write_error_detaches_client():
         assert writer.closed
 
     asyncio.run(_scenario())
+
+
+# --- Per-IP buckets survive reconnects ---------------------------------------
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+# --- per-IP buckets ------------------------------------------------------------
+
+
+def test_bucket_outlives_the_connection_until_refilled():
+    clock = _ManualClock()
+    registry = BucketRegistry(rate=1.0, burst=3, clock=clock)
+    bucket = registry.acquire("1.2.3.4")
+    for _ in range(3):
+        assert bucket.reserve(0.0) == 0.0
+    registry.release("1.2.3.4")
+    # Reconnecting right away gets the same, empty bucket (no fresh burst).
+    assert registry.acquire("1.2.3.4") is bucket
+    assert bucket.reserve(0.0) is None
+    registry.release("1.2.3.4")
+    clock.now += 10  # refilled, and idle: evicted on the next sweep
+    registry.sweep()
+    assert "1.2.3.4" not in registry
+
+
+def test_buckets_in_use_or_in_debt_are_kept():
+    clock = _ManualClock()
+    registry = BucketRegistry(rate=1.0, burst=2, clock=clock)
+    busy = registry.acquire("busy")
+    registry.acquire("debtor").reserve(0.0)
+    registry.acquire("debtor").reserve(0.0)
+    registry.release("debtor")
+    registry.release("debtor")
+    registry.sweep()
+    assert "busy" in registry and "debtor" in registry
+    assert busy is registry.acquire("busy")
+
+
+def test_registry_is_bounded():
+    clock = _ManualClock()
+    registry = BucketRegistry(rate=0.001, burst=2, max_entries=8, clock=clock)
+    for i in range(50):
+        registry.acquire(f"10.0.0.{i}").reserve(0.0)  # each in debt
+        registry.release(f"10.0.0.{i}")
+        clock.now += 0.01
+    assert len(registry) <= 8
+    assert "10.0.0.49" in registry  # the least recently used went first
+
+
+def test_reconnecting_does_not_reset_the_per_ip_budget():
+    config = make_config()
+    config.web.ws_rate_limit = 1000
+    config.web.ws_rate_burst = 1000
+    config.web.ws_rate_limit_per_ip = 0.01
+    config.web.ws_rate_burst_per_ip = 2
+    app = create_app(config=config)
+
+    def _codes(ws, count: int) -> list:
+        ws.receive_json()  # hello
+        codes = []
+        for i in range(count):
+            ws.send_json({"type": "request", "id": i, "action": "fetchZones"})
+            while (reply := ws.receive_json()).get("type") != "response":
+                pass
+            codes.append(reply.get("code"))
+        return codes
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/live?streams=stats") as ws:
+            assert _codes(ws, 2) == [None, None]
+        with client.websocket_connect("/ws/live?streams=stats") as ws:
+            assert _codes(ws, 1) == ["rate_limited"]
+
+
+# --- Slow-loris --------------------------------------------------------------
+# Idle and half-sent requests are closed; WebSockets are not.
+
+
+@pytest.fixture
+def server():
+    config = make_config()
+    app = create_app(config=config)
+    options = uvicorn_options(config, header_timeout=0.5)
+    uv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, **options))
+    thread = threading.Thread(target=uv.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not uv.started and time.monotonic() < deadline:
+        time.sleep(0.02)
+    port = uv.servers[0].sockets[0].getsockname()[1]
+    yield port
+    uv.should_exit = True
+    thread.join(5)
+
+
+def _closed_within(sock: socket.socket, seconds: float) -> bool:
+    sock.settimeout(seconds)
+    try:
+        while True:
+            if sock.recv(4096) == b"":
+                return True
+    except TimeoutError:
+        return False
+    except OSError:
+        return True
+
+
+def test_options_bound_connections():
+    options = uvicorn_options(make_config())
+    assert options["limit_concurrency"] >= 2 * make_config().web.ws_max_connections
+    assert options["timeout_keep_alive"] <= 5
+    assert options["log_config"] is None  # our formatter, not uvicorn's
+
+
+def test_idle_and_partial_requests_are_closed(server):
+    idle = socket.create_connection(("127.0.0.1", server))
+    partial = socket.create_connection(("127.0.0.1", server))
+    partial.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+    assert _closed_within(idle, 3)
+    assert _closed_within(partial, 3)
+
+
+def test_websocket_outlives_the_header_timeout(server):
+    import base64
+    import os
+
+    sock = socket.create_connection(("127.0.0.1", server))
+    key = base64.b64encode(os.urandom(16)).decode()
+    sock.sendall(
+        (
+            f"GET /ws/live?streams=stats HTTP/1.1\r\nHost: 127.0.0.1:{server}\r\n"
+            "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        ).encode()
+    )
+    assert b"101" in sock.recv(4096).split(b"\r\n", 1)[0]
+    time.sleep(1.5)  # three header timeouts
+    sock.settimeout(0.5)
+    try:
+        data = sock.recv(4096)
+    except TimeoutError:
+        data = b"still open"
+    assert data != b""
+    sock.close()
+
+
+def test_a_normal_request_still_works(server):
+    sock = socket.create_connection(("127.0.0.1", server))
+    sock.sendall(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    assert sock.recv(4096).startswith(b"HTTP/1.1 200")
+    sock.close()

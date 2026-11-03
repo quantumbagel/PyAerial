@@ -1,6 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import type { FlightSummary, RawAntenna, ServerStats } from '../api/types';
 import { useRawFrames } from '../hooks/useRawFrames';
+import { BUSY_BANNER } from '../utils/emptyStates';
 import { emptyRawMessage, filterRawFrames } from '../utils/rawFrames';
 import { RawListItem } from './RawListItem';
 import { Chip, StateView } from './ui';
@@ -55,9 +56,14 @@ export function RawPanel({ searchQuery, flights, antenna, stats, onSelectIcao }:
         </div>
       ) : null}
       <ul className="sidebar-list">
-        {filtered.length === 0 && (status === 'connecting' || status === 'reconnecting') ? (
+        {filtered.length === 0 &&
+        (status === 'connecting' || status === 'reconnecting' || status === 'busy') ? (
           <StateView as="li" kind="loading">
-            {status === 'reconnecting' ? 'Reconnecting to the raw stream…' : 'Connecting to the raw stream…'}
+            {status === 'busy'
+              ? BUSY_BANNER
+              : status === 'reconnecting'
+                ? 'Reconnecting to the raw stream…'
+                : 'Connecting to the raw stream…'}
           </StateView>
         ) : filtered.length === 0 ? (
           <StateView as="li" kind={status === 'rejected' ? 'error' : 'empty'}>

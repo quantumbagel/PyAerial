@@ -117,6 +117,9 @@ describe('durations', () => {
   it('formats ETA and elapsed time the same way', () => {
     expect(formatEta(45.4)).toBe('45s');
     expect(formatEta(null)).toBe(EMPTY);
+    // CONFIGURATION.md (Units): ETA is 0 once the aircraft is inside the zone.
+    expect(formatEta(0)).toBe('Inside zone');
+    expect(formatEta(0.4)).toBe('0s');
     expect(formatAgo(BASE_TS - 12, BASE_TS)).toBe('12s ago');
   });
 });
@@ -165,5 +168,26 @@ describe('flightTimeLabel', () => {
   it('uses the placeholder when no timestamps are present', () => {
     const f = flight({ start_time: 0, end_time: 0, timestamp: 0 });
     expect(flightTimeLabel(f)).toBe(EMPTY);
+  });
+});
+
+describe('formatting edge cases', () => {
+  it('normalises headings to 0-359', () => {
+    expect(formatHeading(359.6)).toBe('0°');
+    expect(formatHeading(360)).toBe('0°');
+    expect(formatHeading(-90)).toBe('270°');
+    expect(formatHeading(185.2)).toBe('185°');
+  });
+
+  it('never shows a negative zero', () => {
+    expect(formatAltitude(-0.1)).toBe('0 m (0 ft)');
+    expect(formatAltitudeCompact(-0)).toBe('0 m');
+    expect(formatAltitude(-7.6)).toBe('-8 m (-25 ft)');
+  });
+
+  it('renders NaN and non-numeric input as the empty marker', () => {
+    expect(formatAltitude(Number.NaN)).toBe(EMPTY);
+    expect(formatSpeed('fast')).toBe(EMPTY);
+    expect(formatHeading(Infinity)).toBe(EMPTY);
   });
 });

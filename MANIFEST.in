@@ -1,8 +1,26 @@
-include README.md
-include CLI.md
-include CONFIGURATION.md
-include UNITS.md
-include scripts/run-engine.sh
+# The sdist is self-contained: docs, deployment files, the test suite, and the
+# portal's TypeScript source (GPL corresponding source for the built assets).
+
+include *.md
+include LICENSE
+include requirements.lock
+include config.yaml
+include .env.example
+include Dockerfile
+include docker-compose.yml
+include .dockerignore
+recursive-include scripts *.sh *.py
+
+# Tests, including their support modules (conftest, helpers, fake_redis,
+# integrity_world, e2e_support).
+recursive-include tests *.py *.json
+
+graft web
+prune web/node_modules
+prune web/dist
+prune web/coverage
+
 graft src/pyaerial/static
 graft src/pyaerial/examples
-recursive-include src/pyaerial/static *
+
+global-exclude __pycache__ *.py[cod] .DS_Store *.db *.db-wal *.db-shm *.tsbuildinfo

@@ -22,6 +22,11 @@ const flights: FlightSummary[] = [
   },
 ];
 
+const TELEMETRY = [
+  { timestamp: NOW - 10, latitude: 35.69, longitude: -78.69, altitude: 1100 },
+  { timestamp: NOW, latitude: 35.7, longitude: -78.7, altitude: 1200 },
+];
+
 const socket = vi.hoisted(() => ({
   reject: false,
   handlers: new Set<{
@@ -40,6 +45,7 @@ vi.mock('./api/liveSocket', () => ({
     return () => socket.handlers.delete(h);
   },
   sendWsRequest: vi.fn(),
+  setLiveStreams: vi.fn(),
   isLiveSocketOpen: () => true,
 }));
 
@@ -60,10 +66,8 @@ vi.mock('./api/client', () => ({
   fetchZones: vi.fn(async () => ({ home: { latitude: 35, longitude: -78 }, zones: [] })),
   fetchConfig: vi.fn(async () => ({ home: { latitude: 35, longitude: -78 }, remember_planes: 60 })),
   fetchFlight: vi.fn(async () => ({ ...flights[0], registration: 'N123' })),
-  fetchTelemetry: vi.fn(async () => [
-    { timestamp: NOW - 10, latitude: 35.69, longitude: -78.69, altitude: 1100 },
-    { timestamp: NOW, latitude: 35.7, longitude: -78.7, altitude: 1200 },
-  ]),
+  fetchTelemetry: vi.fn(async () => TELEMETRY),
+  fetchTelemetryPage: vi.fn(async () => ({ points: TELEMETRY, truncated: false })),
 }));
 
 // MapLibre needs a real canvas/WebGL; the map is exercised separately.
