@@ -1,0 +1,5 @@
+# Findings gitleaks reports that are not secrets (fingerprint per line).
+# tests/test_metrics.py, commit e0a28ee: "tok-secret-0123" was a fake heartbeat
+# token, a sentinel the test asserts never reaches /metrics. It is in pushed
+# history; the fixture now uses the low-entropy "TOKEN_SENTINEL".
+e0a28eecd753ae71edfec8843fc9c58e5188bc02:tests/test_metrics.py:generic-api-key:154

@@ -152,7 +152,7 @@ ODD_RECEIVER = 'odd "name"\\with\nnewline'
 def _heartbeat(seen_at: float) -> dict:
     return {
         "seen_at": seen_at,
-        "token": "tok-secret-0123",
+        "token": "TOKEN_SENTINEL",  # must never reach /metrics
         "history": "ok",
         "history_error": "/very/secret/archive.db",
         "history_pending": 2,
@@ -239,7 +239,7 @@ def test_values_match_the_heartbeat(fake, store):
         "192.0.2.55",
         "198.51.100.7",
         "30005",
-        "tok-secret",
+        "TOKEN_SENTINEL",
         "secret/archive",
     ):
         assert secret not in text
