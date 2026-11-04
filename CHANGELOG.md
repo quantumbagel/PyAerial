@@ -71,7 +71,7 @@ Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading
 - `fetchConfig` no longer includes receiver hosts and ports.
 - The logger `pyaerial.calc.plane` is now `pyaerial.pipeline`; update log filters.
 - Compose: 20 s engine stop grace period, memory limits for Redis and the portal, log rotation, read-only Redis, Beast published on `127.0.0.1:${BEAST_PUBLISH_PORT:-30105}`.
-- The web toolchain moves to Vite 8, Vitest 5, ESLint 10 and jsdom 30 on Node 22.23 (CI and the Docker build).
+- The web toolchain moves to TypeScript 6, Vite 8, Vitest 5, ESLint 10 and jsdom 30 on Node 22.23 (CI and the Docker build).
 - The portal uses system fonts (no Google Fonts) and shows a plain map background when OpenFreeMap is unreachable.
 
 ### Removed
