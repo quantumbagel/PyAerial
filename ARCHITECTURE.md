@@ -11,7 +11,7 @@ Internals for contributors. Users start at the [README](README.md).
 
 `Engine.tick` (`engine/core.py`) runs `tracking.hz` times a second:
 
-1. Drain the receiver intake queue and hold back copies that may still merge (`ReceiverSupervisor.drain`).
+1. Drain the receiver intake queue and hold back copies that may still merge (`ReceiverSupervisor.drain`): every frame waits `MERGE_WINDOW` (0.1 s) after it reached the queue, and at most `MAX_HOLD` (0.5 s), plus up to a tick.
 2. `IntegrityMonitor.observe_frames` sees every receiver copy, as does the raw frame archive (`archive.raw_frames`).
 3. Merge copies, drop duplicates and CRC failures, publish to `live:raw`.
 4. `Tracker.ingest` decodes and updates `tracker.planes`.
@@ -48,7 +48,7 @@ pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls | pyaeri
 - `supervisor.py`: `ReceiverSupervisor`, receiver threads (start, restart with back-off, stop), the bounded intake queue (sized from `tracking.hz`, drop-oldest), the merge-window hold-back, merge/de-dup, raw publish and raw frame archive.
 - `archiver.py`: `FlightArchiver`, checkpoints, finalize, the archive policy (`retain`), deferred flights and their memory budget, retry back-off and the per-tick budget, startup recovery, segmentation (pure helpers in `segments.py`).
 - `guard.py`: `StageGuard`. `lint-imports` keeps `core` above `supervisor | archiver` (independent of each other) above `segments | guard`. Both components take narrow protocols (`FrameArchive`, `RawPublisher`, `FrameDeduper`; `FlightArchive`, `LiveCache`, `AlertHooks`, `EpisodeLog`), not the `Engine`.
-- Test seams: `Engine.tick()`, `process_frames()`, `expire_planes()`, `log_status(now=)`, `request_stop()`, the `history_store=` argument (a real archive behind `isolated=True`); `supervisor.enqueue(frame)`, `drain()`, `held`, `receivers`, `queue`; `archiver.pending`, `checkpoint(now, force=)`, `defer()`, `clear_pending()`, `retry_now()`, `back_off()`, `max_flight_seconds`. Prefer them to private attributes.
+- Test seams: `Engine.tick()`, `process_frames()`, `expire_planes()`, `log_status(now=)`, `request_stop()`, the `history_store=` argument (a real archive behind `isolated=True`); `supervisor.enqueue(frame)`, `drain()`, `flush()`, `held`, `receivers`, `queue`, `clock` (arrival and hold-back time); `archiver.pending`, `checkpoint(now, force=)`, `defer()`, `clear_pending()`, `retry_now()`, `back_off()`, `max_flight_seconds`. Prefer them to private attributes.
 
 **Threads**
 

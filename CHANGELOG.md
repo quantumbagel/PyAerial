@@ -4,6 +4,10 @@ All notable changes to PyAerial are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Receiver copies of one transmission were sometimes not merged: a copy stamped before it reached the engine's queue (dump1090 stamps are spread back from the TCP chunk's arrival) was released alone, and its partner from another receiver was then dropped as a duplicate, losing that receiver's provenance, its stronger signal on the Beast re-serve and its TDOA pairing. Frames are now held for the merge window after they reach the queue (at most 0.5 s), still merging by receive stamp.
+
 ## [1.0.0] - 2026-11-03
 
 ### Breaking / upgrade notes

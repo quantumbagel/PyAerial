@@ -22,6 +22,8 @@ from helpers import (
 from pyaerial.config.schema import ArchiveConfig
 from pyaerial.engine import Engine
 from pyaerial.engine.supervisor import (
+    MAX_HOLD,
+    MERGE_WINDOW,
     RECEIVER_BACKOFF_INITIAL,
     RECEIVER_BACKOFF_MAX,
     ReceiverHandle,
@@ -158,7 +160,7 @@ def test_message_queue_drops_oldest(tmp_path):
         engine.supervisor.enqueue(RawFrame("aa", 1.0, "r"))
         engine.supervisor.enqueue(RawFrame("bb", 2.0, "r"))
         engine.supervisor.enqueue(RawFrame("cc", 3.0, "r"))
-        batch = engine.supervisor.drain()
+        batch = engine.supervisor.flush()
         assert [frame.hex for frame in batch] == ["bb", "cc"]
     finally:
         engine.shutdown()
@@ -305,7 +307,7 @@ def test_engine_publishes_raw_frames(tmp_path):
                 clock=9,
             )
         )
-        engine.supervisor.publish_raw(engine.supervisor.drain())
+        engine.supervisor.publish_raw(engine.supervisor.flush())
         assert len(seen) == 1
         message = seen[0]["messages"][0]
         assert message["hex"] == "8d406b902015a678d4d220aa4bda"
@@ -469,6 +471,13 @@ def test_engine_archives_every_receiver_copy_when_raw_frames_enabled(
 # Cumulative operational counters since start.
 
 
+def _merge_window_passes(supervisor) -> None:
+    """Move the supervisor's clock a merge window on: frames queued so far are
+    not held back at the next drain."""
+    base = supervisor.clock
+    supervisor.clock = lambda: base() + MERGE_WINDOW
+
+
 def test_heartbeat_publishes_cumulative_counters(tmp_path, monkeypatch):
     client = FakeRedis()
     monkeypatch.setattr(redis.Redis, "from_url", staticmethod(lambda *a, **k: client))
@@ -477,7 +486,7 @@ def test_heartbeat_publishes_cumulative_counters(tmp_path, monkeypatch):
     before = time.time()
     engine = Engine(config, aircraft_db_path=str(tmp_path / "aircraft.db"))
     try:
-        old = time.time() - 60  # older than the merge window: not held back
+        old = time.time() - 60
         for n in range(3):
             engine.supervisor.enqueue(RawFrame(DF17_HEX, old + n, "main"))
         # A full queue drops frames.
@@ -486,6 +495,7 @@ def test_heartbeat_publishes_cumulative_counters(tmp_path, monkeypatch):
         for n in range(3):
             engine.supervisor.enqueue(RawFrame(DF17_HEX, old + n, "main"))
         engine.supervisor.queue = real_queue
+        _merge_window_passes(engine.supervisor)
 
         # A failing stage.
         def boom(*_a, **_k):
@@ -574,12 +584,12 @@ def test_raw_feed_drops_only_crc_failed_extended_squitters(tmp_path, monkeypatch
         engine.live_store.add_raw_listener(
             lambda payload: published.extend(m["hex"] for m in payload["messages"])
         )
-        # Older than the merge window, so nothing is held for the next tick.
         now = time.time() - 60
         sent = [DF17_HEX, tisb, corrupt, surveillance, comm_b, short_df17]
         for offset, hex_msg in enumerate(sent):
             # Seconds apart, so the corrupt copy is not merged with the good one.
             engine.supervisor.enqueue(RawFrame(hex_msg, now + offset, "main"))
+        _merge_window_passes(engine.supervisor)  # nothing held for the next tick
         engine.tick()
         assert sorted(published) == sorted([DF17_HEX, tisb, surveillance, comm_b])
         # The research archive keeps every copy, corrupted ones included.
@@ -649,6 +659,7 @@ def _straddle_engine(tmp_path, monkeypatch):
     engine = Engine(
         make_config(), isolated=True, aircraft_db_path=str(tmp_path / "a.db")
     )
+    engine.supervisor.clock = clock  # arrival in the queue, and the hold-back
     ingested: list[dict] = []
     observed: list[list[str]] = []
     real_ingest = engine.tracker.ingest
@@ -669,46 +680,160 @@ def _straddle_engine(tmp_path, monkeypatch):
     return engine, clock, ingested, observed
 
 
+def _merged(ingested: list[dict], hex_msg: str = DF17_HEX) -> list[tuple[str, ...]]:
+    return [batch[hex_msg] for batch in ingested if hex_msg in batch]
+
+
 def test_copies_straddling_a_tick_are_merged_together(tmp_path, monkeypatch):
     engine, clock, ingested, observed = _straddle_engine(tmp_path, monkeypatch)
     try:
-        engine.supervisor.enqueue(RawFrame(DF17_HEX, 999.97, "a", rssi=-20.0))  # 30 ms old at the tick
+        engine.supervisor.enqueue(RawFrame(DF17_HEX, 999.97, "a", rssi=-20.0))
         engine.tick()
-        assert not any(DF17_HEX in batch for batch in ingested)  # held, not lost
+        assert not _merged(ingested)  # held, not lost
         engine.supervisor.enqueue(RawFrame(DF17_HEX, 1_000.00, "b", rssi=-10.0))  # arrives after it
         clock.now = 1_000.5
         engine.tick()
-        merged = [batch[DF17_HEX] for batch in ingested if DF17_HEX in batch]
-        assert merged == [("b", "a")]  # both receivers, the stronger first
+        assert _merged(ingested) == [("b", "a")]  # both receivers, the stronger first
         assert ["a", "b"] in [sorted(batch) for batch in observed]  # TDOA sees both
     finally:
         engine.shutdown()
 
 
-def test_older_copy_is_held_back_with_its_younger_partner(tmp_path, monkeypatch):
+def test_earlier_copy_is_held_back_with_its_younger_partner(tmp_path, monkeypatch):
     engine, clock, ingested, _ = _straddle_engine(tmp_path, monkeypatch)
     try:
-        engine.supervisor.enqueue(RawFrame(DF17_HEX, 999.89, "a", rssi=-20.0))  # older than the window
-        engine.supervisor.enqueue(RawFrame(DF17_HEX, 999.95, "b", rssi=-10.0))  # its younger copy
+        engine.supervisor.enqueue(RawFrame(DF17_HEX, 999.95, "a", rssi=-20.0))
+        clock.now = 1_000.0 + MERGE_WINDOW  # "a" has waited out the window...
+        engine.supervisor.enqueue(RawFrame(DF17_HEX, 999.96, "b", rssi=-10.0))  # ...as "b" lands
         engine.tick()
-        assert not any(DF17_HEX in batch for batch in ingested)
+        assert not _merged(ingested)
         clock.now = 1_000.5
         engine.tick()
-        assert [batch[DF17_HEX] for batch in ingested if DF17_HEX in batch] == [("b", "a")]
+        assert _merged(ingested) == [("b", "a")]
     finally:
         engine.shutdown()
 
 
-def test_old_and_future_frames_are_not_delayed(tmp_path, monkeypatch):
-    engine, _clock, ingested, _ = _straddle_engine(tmp_path, monkeypatch)
+def test_next_squitter_does_not_split_a_held_pair(tmp_path, monkeypatch):
+    # Seen on CI: both copies of a position had waited out the window when
+    # the aircraft's velocity squitter arrived. Matched by aircraft, it held
+    # back only roof's copy (stamped closer to it) and mast's went out alone.
+    velocity = "8dc0ffee990132264004005f7a6f"
+    position = "8dc0ffee5899578791813e4e2058"
+    engine, clock, ingested, _ = _straddle_engine(tmp_path, monkeypatch)
+    try:
+        engine.supervisor.enqueue(RawFrame(position, 999.96, "mast", rssi=-18.0))
+        clock.now = 1_000.04
+        engine.supervisor.enqueue(RawFrame(position, 1_000.00, "roof", rssi=-12.0))
+        clock.now = 1_000.05
+        engine.tick()
+        clock.now = 1_000.14
+        engine.supervisor.enqueue(RawFrame(velocity, 1_000.10, "roof"))
+        clock.now = 1_000.15
+        engine.tick()
+        assert _merged(ingested, position) == [("roof", "mast")]
+        assert engine.supervisor.held == (RawFrame(velocity, 1_000.10, "roof"),)
+    finally:
+        engine.shutdown()
+
+
+def test_only_other_receivers_copies_are_held_with_a_young_frame(tmp_path, monkeypatch):
+    corrupt = DF17_HEX[:-1] + ("0" if DF17_HEX[-1] != "0" else "1")  # 1-2 bits off
+    other = "8d4840d6202cc371c32ce0576098"
+    engine, clock, _ingested, _ = _straddle_engine(tmp_path, monkeypatch)
+    supervisor = engine.supervisor
+    try:
+        supervisor.enqueue(RawFrame(corrupt, 999.95, "a"))  # near copy of "b"'s
+        supervisor.enqueue(RawFrame(DF17_HEX, 999.80, "a"))  # stamped too early
+        supervisor.enqueue(RawFrame(DF17_HEX, 999.95, "b"))  # "b"'s previous one
+        supervisor.enqueue(RawFrame(other, 999.95, "a"))  # another transmission
+        clock.now = 1_000.0 + MERGE_WINDOW
+        supervisor.enqueue(RawFrame(DF17_HEX, 999.97, "b"))
+        released = supervisor.drain()
+        assert [(f.hex, f.timestamp) for f in released] == [
+            (DF17_HEX, 999.80),
+            (DF17_HEX, 999.95),
+            (other, 999.95),
+        ]
+        assert [(f.hex, f.receiver) for f in supervisor.held] == [
+            (corrupt, "a"),
+            (DF17_HEX, "b"),
+        ]
+    finally:
+        engine.shutdown()
+
+
+def test_repeated_identical_squitters_are_not_chained(tmp_path, monkeypatch):
+    # One receiver repeating the same bytes (an unchanged velocity squitter,
+    # here every 50 ms as a 10x replay sends them) holds nothing back: each
+    # goes out once it has waited the window.
+    velocity = "8dc0ffee990132264004005f7a6f"
+    engine, clock, _ingested, _ = _straddle_engine(tmp_path, monkeypatch)
+    supervisor = engine.supervisor
+    try:
+        arrivals: dict[float, float] = {}
+        waits: list[float] = []
+        for n in range(12):
+            stamp = 1_000.0 + 0.05 * n
+            clock.now = stamp
+            arrivals[stamp] = clock.now
+            supervisor.enqueue(RawFrame(velocity, stamp, "capture"))
+            waits += [clock.now - arrivals[f.timestamp] for f in supervisor.drain()]
+        assert waits and max(waits) <= MERGE_WINDOW + 0.05 + 1e-9
+    finally:
+        engine.shutdown()
+
+
+def test_copy_stamped_before_it_was_queued_waits_for_its_partner(tmp_path, monkeypatch):
+    # A dump1090 receiver stamps each frame back from its chunk's arrival, so
+    # a copy can reach the queue with a stamp older than the merge window.
+    # Held by stamp age, it went out alone at the next tick and its partner,
+    # queued just after, was dropped as a duplicate (losing roof's level and
+    # provenance in the e2e test on a busy CI host).
+    engine, clock, ingested, observed = _straddle_engine(tmp_path, monkeypatch)
+    try:
+        engine.supervisor.enqueue(RawFrame(DF17_HEX, 999.80, "mast", rssi=-18.0))
+        engine.tick()
+        assert not _merged(ingested)  # its stamp is old, but it just arrived
+        clock.now = 1_000.0 + 0.6 * MERGE_WINDOW
+        engine.supervisor.enqueue(RawFrame(DF17_HEX, 999.83, "roof", rssi=-12.0))
+        clock.now = 1_000.0 + 1.2 * MERGE_WINDOW
+        engine.tick()  # "mast" waited out the window, "roof" did not: both held
+        assert not _merged(ingested)
+        clock.now = 1_000.5
+        engine.tick()
+        assert _merged(ingested) == [("roof", "mast")]
+        assert ["mast", "roof"] in [sorted(batch) for batch in observed]
+    finally:
+        engine.shutdown()
+
+
+def test_hold_back_goes_by_arrival_and_is_bounded(tmp_path, monkeypatch):
+    engine, clock, ingested, _ = _straddle_engine(tmp_path, monkeypatch)
+    supervisor = engine.supervisor
     try:
         other = "8d4840d6202cc371c32ce0576098"
-        engine.supervisor.enqueue(RawFrame(DF17_HEX, 999.5, "a"))  # older than the window
-        engine.supervisor.enqueue(RawFrame(other, 1_005.0, "a"))  # skewed clock: waiting won't help
-        engine.tick()
-        seen = {hx for batch in ingested for hx in batch}
-        assert {DF17_HEX, other} <= seen
-        assert engine.supervisor.held == ()
+        supervisor.enqueue(RawFrame(DF17_HEX, 990.0, "a"))  # stamped long ago
+        supervisor.enqueue(RawFrame(other, 1_005.0, "a"))  # skewed clock
+        assert supervisor.drain() == []
+        clock.now = 1_000.0 + MERGE_WINDOW  # whatever the stamps say
+        assert {f.hex for f in supervisor.drain()} == {DF17_HEX, other}
+        assert supervisor.held == ()
+
+        # A stuck receive clock keeps queueing young copies with one stamp;
+        # the first still goes out once it has waited MAX_HOLD.
+        first = RawFrame(other, 1_005.0, "a")
+        supervisor.enqueue(first)
+        start = clock.now
+        released: list[RawFrame] = []
+        while clock.now < start + MAX_HOLD + 0.2:
+            clock.now += 0.05
+            supervisor.enqueue(RawFrame(other, 1_005.0, "b"))
+            released += supervisor.drain()
+            if first in released:
+                break
+        assert first in released
+        assert clock.now - start <= MAX_HOLD + 0.05 + 1e-9
     finally:
         engine.shutdown()
 

@@ -13,6 +13,7 @@ import math
 import queue
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -34,8 +35,8 @@ _RECEIVER_BACKOFF_RESET_AFTER = 10.0
 # frames/s) dropped 2.7%. Sized for 3 ticks at a generous 30k frames/s
 # peak (45k at hz=2). Floor: 1 s of peak for fast ticks, since one GC pause or
 # slow archive write spans several of them. Ceiling: queued frames measure
-# ~250 B each, so 240k (8 s of peak) is ~60 MB; beyond that the engine is
-# not keeping up and dropping is the right answer.
+# ~330 B each (with the arrival time), so 240k (8 s of peak) is ~80 MB;
+# beyond that the engine is not keeping up and dropping is the right answer.
 PEAK_FRAMES_PER_SECOND = 30_000
 _MESSAGE_QUEUE_TICKS = 3
 MESSAGE_QUEUE_MIN = PEAK_FRAMES_PER_SECOND
@@ -43,11 +44,17 @@ MESSAGE_QUEUE_MAX = 8 * PEAK_FRAMES_PER_SECOND
 _DROP_LOG_INTERVAL = 10.0
 _RAW_PUBLISH_BATCH = 2_000
 _FRAME_PRUNE_INTERVAL = 600.0
-# Receiver copies of one transmission land within this many seconds of each
-# other; merge_receiver_frames uses the same window. Frames this young wait
-# for the next tick so a late copy (another receiver, the next TCP chunk) is
-# merged with the rest instead of being dropped as a duplicate.
+# Receiver copies of one transmission carry receive stamps within this many
+# seconds of each other; merge_receiver_frames uses the same window. Every
+# frame also waits this long after it reaches the intake queue, so a late copy
+# (another receiver, the next TCP chunk) is merged with the rest instead of
+# being dropped as a duplicate.
 MERGE_WINDOW = 0.1
+# No frame waits longer than this after reaching the queue, whatever copies
+# keep arriving (bounds latency and the held list against a stuck clock).
+MAX_HOLD = 5 * MERGE_WINDOW
+# merge_receiver_frames merges copies differing in at most this many bits.
+NEAR_COPY_BITS = 2
 
 
 def message_queue_size(hz: float) -> int:
@@ -59,6 +66,30 @@ def message_queue_size(hz: float) -> int:
 def _merge_key(hex_msg: str) -> tuple[int, str]:
     """Coarse transmission identity: length plus DF/CA and address bytes."""
     return len(hex_msg), hex_msg[:8]
+
+
+def _copy_of_any(frame: RawFrame, others: list[RawFrame] | None) -> bool:
+    """Whether *frame* is another receiver's copy of a transmission in
+    *others* (same coarse key), as :func:`merge_receiver_frames` would merge
+    it: stamps within the window, at most ``NEAR_COPY_BITS`` differing bits."""
+    bits: int | None = None
+    for other in others or ():
+        if (
+            other.receiver == frame.receiver
+            or abs(other.timestamp - frame.timestamp) > MERGE_WINDOW
+        ):
+            continue
+        if other.hex == frame.hex:
+            return True
+        try:
+            if bits is None:
+                bits = int(frame.hex, 16)
+            differing = (bits ^ int(other.hex, 16)).bit_count()
+        except ValueError:
+            continue
+        if differing <= NEAR_COPY_BITS:
+            return True
+    return False
 
 
 class FrameArchive(Protocol):
@@ -106,8 +137,9 @@ class ReceiverSupervisor:
 
     Test hooks: :meth:`enqueue` is the receivers' entry point, ``receivers``
     may be given a hand-made :class:`ReceiverHandle`, ``queue`` may be
-    replaced by a smaller one, and :attr:`held` shows the frames waiting for
-    the next tick's merge.
+    replaced by a smaller one, :attr:`held` shows the frames waiting for
+    the next tick's merge, and ``clock`` (monotonic seconds; stamps arrival
+    in the queue and drives the hold-back) may be replaced.
     """
 
     def __init__(
@@ -127,12 +159,17 @@ class ReceiverSupervisor:
         self._archive = archive
         self._publisher = publisher
         self._dedupe = dedupe
-        self.queue: queue.Queue[RawFrame] = queue.Queue(
+        self.clock: Callable[[], float] = time.monotonic
+        # (arrival per ``clock``, frame). The arrival is not the receive stamp:
+        # a frame can be stamped well before it is queued (dump1090 stamps are
+        # spread back from the chunk's arrival by 12 MHz clock deltas, and a
+        # receiver thread can be descheduled in between).
+        self.queue: queue.Queue[tuple[float, RawFrame]] = queue.Queue(
             maxsize=message_queue_size(config.tracking.hz)
         )
         self.receivers: dict[str, ReceiverHandle] = {}
-        # Frames younger than MERGE_WINDOW, held for the next tick's merge.
-        self._held_frames: list[RawFrame] = []
+        # Frames that may still merge with a later copy, for the next tick.
+        self._held_frames: list[tuple[float, RawFrame]] = []
         # -inf, not 0: monotonic() can be under the interval on a fresh boot.
         self._last_frame_prune = float("-inf")
         self._dropped_messages = 0
@@ -273,8 +310,9 @@ class ReceiverSupervisor:
 
         Called on receiver threads (thread-safe).
         """
+        entry = (self.clock(), frame)
         try:
-            self.queue.put_nowait(frame)
+            self.queue.put_nowait(entry)
             return
         except queue.Full:
             pass
@@ -285,7 +323,7 @@ class ReceiverSupervisor:
         except queue.Empty:
             pass
         try:
-            self.queue.put_nowait(frame)
+            self.queue.put_nowait(entry)
         except queue.Full:
             dropped += 1
         if dropped:
@@ -311,10 +349,12 @@ class ReceiverSupervisor:
         """Frames ready for this tick: the queue plus held frames, minus
         the copies that may still merge with a later one (see :meth:`_release`).
 
-        *now* (unix seconds) defaults to ``time.time()`` read after the drain.
+        *now* (``clock`` seconds) defaults to ``clock()`` read before the
+        queue is taken, so a frame that lands meanwhile only looks younger.
         """
-        frames = self._take_queued()
-        return self._release(frames, time.time() if now is None else now)
+        if now is None:
+            now = self.clock()
+        return self._release(self._take_queued(), now)
 
     def flush(self) -> list[RawFrame]:
         """Everything queued and held, nothing held back (shutdown)."""
@@ -323,10 +363,10 @@ class ReceiverSupervisor:
     @property
     def held(self) -> tuple[RawFrame, ...]:
         """Frames waiting for the next tick's merge."""
-        return tuple(self._held_frames)
+        return tuple(frame for _arrived, frame in self._held_frames)
 
-    def _take_queued(self) -> list[RawFrame]:
-        batch: list[RawFrame] = []
+    def _take_queued(self) -> list[tuple[float, RawFrame]]:
+        batch: list[tuple[float, RawFrame]] = []
         while True:
             try:
                 batch.append(self.queue.get_nowait())
@@ -338,39 +378,50 @@ class ReceiverSupervisor:
         return batch
 
     def _release(
-        self, frames: list[RawFrame], now: float, *, flush: bool = False
+        self,
+        entries: list[tuple[float, RawFrame]],
+        now: float,
+        *,
+        flush: bool = False,
     ) -> list[RawFrame]:
         """Frames ready for this tick; the rest wait for the next one.
 
         Copies are merged (and de-duplicated) per batch, so a copy arriving
         after the drain used to be dropped, losing that receiver from the
-        sample's provenance and from TDOA. A frame younger than the merge
-        window is held, and so is an older copy of the same transmission
-        held with it, so every copy is merged together. Nothing waits once it
-        is older than the window; a timestamp further in the future (a skewed
-        source clock) is not held either, since waiting would not help.
+        sample's provenance and from TDOA. A frame is held until
+        ``MERGE_WINDOW`` after it reached the queue, and so is any earlier
+        copy of the same transmission held with it: another receiver's
+        frame, stamped within the window, with the same or near-identical
+        bytes (as :func:`merge_receiver_frames` matches them; never just
+        the same aircraft, whose next squitter must not hold back one copy
+        of the previous and release the other).
+
+        Holding by arrival rather than by stamp matters: a copy stamped
+        well before it reached the queue looked old already and went out
+        alone, just before its partner arrived. Latency: a frame waits at
+        least ``MERGE_WINDOW`` (up to one tick more) and never more than
+        ``MAX_HOLD`` (plus a tick) after it reached the queue.
         """
-        batch = self._held_frames + frames if self._held_frames else frames
+        batch = self._held_frames + entries if self._held_frames else entries
         self._held_frames = []
         if flush or not batch:
-            return batch
-        low, high = now - MERGE_WINDOW, now + MERGE_WINDOW
-        young: dict[tuple[int, str], float] = {}
-        for frame in batch:
-            if low < frame.timestamp < high:
-                key = _merge_key(frame.hex)
-                young[key] = min(young.get(key, frame.timestamp), frame.timestamp)
+            return [frame for _arrived, frame in batch]
+        young_after = now - MERGE_WINDOW
+        young: dict[tuple[int, str], list[RawFrame]] = {}
+        for arrived, frame in batch:
+            if arrived > young_after:
+                young.setdefault(_merge_key(frame.hex), []).append(frame)
         if not young:
-            return batch
+            return [frame for _arrived, frame in batch]
+        expired_before = now - MAX_HOLD
         release: list[RawFrame] = []
-        for frame in batch:
-            stamp = frame.timestamp
-            if low < stamp < high:
-                self._held_frames.append(frame)
-                continue
-            first = young.get(_merge_key(frame.hex))
-            if first is not None and first - MERGE_WINDOW <= stamp < first:
-                self._held_frames.append(frame)
+        for entry in batch:
+            arrived, frame = entry
+            if arrived > young_after or (
+                arrived > expired_before
+                and _copy_of_any(frame, young.get(_merge_key(frame.hex)))
+            ):
+                self._held_frames.append(entry)
             else:
                 release.append(frame)
         return release
@@ -405,7 +456,9 @@ class ReceiverSupervisor:
         tracker rejects those itself, and the raw archive stores every copy
         before this point.
         """
-        merged = merge_receiver_frames(frames, window=MERGE_WINDOW)
+        merged = merge_receiver_frames(
+            frames, window=MERGE_WINDOW, max_hamming=NEAR_COPY_BITS
+        )
         pairs = [(frame.hex, frame.timestamp) for frame, _heard in merged]
         new_messages = self._dedupe.collect_new_messages(pairs)
         outgoing_hex = {hex_msg for hex_msg, _ts in new_messages}

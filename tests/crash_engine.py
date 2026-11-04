@@ -139,7 +139,7 @@ def main() -> int:
                 with stalls.open("a") as out:
                     out.write(f"{last - 0.2} {now - 0.2}\n")  # frame stamps
             last = now
-            stamp = now - 0.2  # older than the supervisor's merge window
+            stamp = now - 0.2  # stamped before it is queued, like dump1090
             odd ^= 1
             for n in range(AIRCRAFT):
                 icao = f"c0ffe{n}"

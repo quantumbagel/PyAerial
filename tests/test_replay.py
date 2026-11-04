@@ -278,6 +278,7 @@ def test_replay_example_tracks_every_aircraft_as_genuine(tmp_path, monkeypatch):
     clock = {"now": start}
     monkeypatch.setattr(time, "time", lambda: clock["now"])
     engine = Engine(config, isolated=True, aircraft_db_path=str(tmp_path / "a.db"))
+    engine.supervisor.clock = lambda: clock["now"]  # the merge hold-back too
     flagged: dict[str, set[str]] = {}
     try:
         index = 0
