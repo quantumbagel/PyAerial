@@ -4,6 +4,8 @@ All notable changes to PyAerial are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-03
+
 ### Breaking / upgrade notes
 
 Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading" in the [README](README.md); 1.x stability promises are under "Compatibility" there).
@@ -43,6 +45,9 @@ Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading
 - `pyaerial reset --force` for when Redis is unreachable.
 - `subscribe` sends a snapshot for newly added `flights`, `alerts` and `stats` streams.
 - Compose healthchecks for Redis, the engine and the portal, with startup ordering.
+- `GET /metrics` in Prometheus text format: engine counters and health from the heartbeat, portal WebSocket and Beast clients, drops and rate limiting (`web.metrics: false` disables it).
+- Third-party receivers and alerters through the `pyaerial.receivers` / `pyaerial.alerters` entry points; plugins declare `known_options` and `validate_options`, and `pyaerial validate` lists what is available.
+- The portal's TypeScript types are generated from the server's wire models (`web/src/api/schema.json`), and CI fails on drift.
 - This changelog.
 
 ### Changed
@@ -61,6 +66,7 @@ Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading
 - `fetchConfig` no longer includes receiver hosts and ports.
 - The logger `pyaerial.calc.plane` is now `pyaerial.pipeline`; update log filters.
 - Compose: 20 s engine stop grace period, memory limits for Redis and the portal, log rotation, read-only Redis, Beast published on `127.0.0.1:${BEAST_PUBLISH_PORT:-30105}`.
+- The web toolchain moves to Vite 8, Vitest 5, ESLint 10 and jsdom 30 on Node 22.23 (CI and the Docker build).
 - The portal uses system fonts (no Google Fonts) and shows a plain map background when OpenFreeMap is unreachable.
 
 ### Removed
@@ -89,3 +95,6 @@ Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading
 - Per-IP WebSocket rate limits, a per-IP Beast TCP cap, and bounded send queues.
 
 For changes before this release, see the [git tags](https://github.com/quantumbagel/PyAerial/tags) (`v0.1.0` to `v0.22.0`).
+
+[Unreleased]: https://github.com/quantumbagel/PyAerial/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/quantumbagel/PyAerial/compare/v0.22.0...v1.0.0
