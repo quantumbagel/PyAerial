@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 from e2e_support import position_frame, velocity_frame  # noqa: E402
 from helpers import InlineDispatcher, make_config, make_rule  # noqa: E402
 from pyaerial.alerters import Alerter, register_alerter  # noqa: E402
+from pyaerial.alerts import engine as alerts_engine_mod  # noqa: E402
 from pyaerial.config.schema import (  # noqa: E402
     AlertActionConfig,
     TrackingConfig,
@@ -116,15 +117,17 @@ def main() -> int:
     global _CAPTURE
     archive, capture, ready = sys.argv[1:4]
     _CAPTURE = Path(capture)
+    # Notify inline, as the dispatcher thread would just before the record.
+    # Installed before the engine is built: its startup recovery already
+    # sends restart deactivates, which a real dispatcher closed right after
+    # construction could discard before its worker ran them.
+    alerts_engine_mod.AlertDispatcher = InlineDispatcher  # type: ignore[assignment,misc]
     engine = Engine(
         _config(archive),
         isolated=True,
         aircraft_db_path=archive + ".aircraft",
         history_store=ArchiveWriter(archive),
     )
-    # Notify inline, as the dispatcher thread would just before the record.
-    engine.calculator.alerts._dispatcher.close(timeout=0.0)
-    engine.calculator.alerts._dispatcher = InlineDispatcher()  # type: ignore[assignment]
     signal.signal(signal.SIGTERM, lambda *_: engine.request_stop())
     with open(ready, "a") as out:
         out.write(f"{time.time()}\n")
