@@ -1,23 +1,25 @@
-# Configuration
+# Configuration Guide
 
-PyAerial reads one YAML file. Templates: [`config.yaml`](config.yaml) and [`src/pyaerial/examples/config.yaml`](src/pyaerial/examples/config.yaml). Validation is strict: unknown keys (also inside receiver and alerter `options`, with a "did you mean" hint), NaN or infinite numbers and out-of-range values fail at load. `pyaerial validate` runs the same checks without starting anything.
+PyAerial is configured through a single YAML file. Ready-to-use templates are available in [`config.yaml`](config.yaml) and [`src/pyaerial/examples/config.yaml`](src/pyaerial/examples/config.yaml).
 
-**Annotated example**
+Validation is strict by design: unrecognized keys (including inside receiver and alerter `options` blocks, where suggestions are provided for common typos), invalid numbers like NaN or infinity, and out-of-range numerical parameters will cause loading to fail immediately. You can run `pyaerial validate` at any time to verify your configuration file without starting background services.
+
+## Annotated example
 
 ```yaml
 database:
-  path: pyaerial.db                 # SQLite research archive
+  path: pyaerial.db # SQLite research archive
   redis_uri: redis://localhost:6379/0
 
-home:                               # station reference point (required)
+home: # station reference coordinates (required)
   latitude: 35.727488
   longitude: -78.695942
 
-receivers:                          # at least one
+receivers: # at least one receiver must be defined
   main:
     type: dump1090
     host: localhost
-    port: 30005                     # Beast: signal level + 12 MHz clock for the integrity checks
+    port: 30005 # Beast binary stream providing signal level and 12 MHz clock
     # position: {latitude: 35.7275, longitude: -78.6959, altitude: 95}
   # array:
   #   type: aoa                     # angle-of-arrival sidecar
@@ -28,12 +30,12 @@ receivers:                          # at least one
   #   options: {path: captures/adsb.raw}
 
 archive:
-  flights: all                      # all | rules
-  raw_frames: false                 # true: keep every receiver copy of every frame
+  flights: all # choose between 'all' or 'rules'
+  raw_frames: false # set true to save every receiver copy of every frame
 
 zones:
   airport_approach:
-    coordinates:                    # [latitude, longitude] ring; or file: zones/approach.geojson
+    coordinates: # closed [latitude, longitude] ring, or file: zones/approach.geojson
       - [35.7288, -78.6954]
       - [35.7303, -78.6965]
       - [35.7304, -78.6992]
@@ -41,16 +43,16 @@ zones:
     rules:
       - name: low_altitude_warning
         color: "#ef4444"
-        when:                       # all must hold; needs eta, distance or proximity
-          altitude: { max: 1000 }   # m
-          eta: { max: 120 }         # s
+        when: # all conditions must match; requires eta, distance, or proximity
+          altitude: { max: 1000 } # meters
+          eta: { max: 120 } # seconds
         dwell_seconds: 60
         on_activate:
           - method: print
           - method: webhook
             options:
-              url: "${file:/run/secrets/webhook_url}"   # or "${PYAERIAL_WEBHOOK_URL}"
-              format: discord       # json | discord | slack
+              url: "${file:/run/secrets/webhook_url}" # or "${PYAERIAL_WEBHOOK_URL}"
+              format: discord # choose between json, discord, or slack
         on_deactivate:
           - method: print
         while_active:
@@ -59,90 +61,93 @@ zones:
             - method: print
 ```
 
-Every other key is optional; the tables below give the defaults.
+All other configuration keys are optional and fall back to the defaults documented in the sections below.
 
-**Interpolation and overrides**
+## Variable interpolation and secrets
 
-- `${VAR}` and `${VAR:-default}` expand environment variables in string values. An unset variable without a default fails validation.
-- `${file:/path}` is replaced by the file's single line, verbatim. Relative paths resolve against the config file. Use it for secrets such as webhook URLs (e.g. Docker secrets under `/run/secrets/`). A missing, empty or multi-line file fails validation.
-- The `PYAERIAL_*` variables in [CLI.md](CLI.md) replace values from the file and are not interpolated.
+- String settings can reference environment variables using `${VAR}` or provide fallbacks using `${VAR:-default}`. If an environment variable is unset and provides no default value, validation fails.
+- Secret values such as webhook endpoints or tokens can be read directly from files using `${file:/path}`. PyAerial reads the file, strips any trailing newline, and replaces the expression with the file's single line of text. Relative paths resolve against the directory containing your configuration file. Files that are missing, empty, or contain multiple lines will fail validation.
+- The `PYAERIAL_*` environment variables documented in [CLI.md](CLI.md) override configuration file values directly without requiring interpolation syntax.
 
-**Units**
+## Measurement units
 
-Storage, rules, the WebSocket API and JSON webhooks use SI and WGS84 units. Only displays convert: the portal shows feet and knots beside metric values, and Discord and Slack messages use feet, knots and ft/min.
+Internally, PyAerial stores and processes all measurements in standard SI and WGS84 units across the database, geofence rules, the WebSocket API, and webhook payloads. Unit conversions happen only at the presentation layer: the web portal displays imperial units (feet, knots) alongside metric measurements, and Discord and Slack webhook notifications format altitudes in feet and climb rates in feet per minute.
 
-| Quantity | Unit | From ADS-B |
-|----------|------|------------|
-| `altitude` | m | Barometric altitude: ft x 0.3048 |
-| `gnss_height` | m above the WGS84 ellipsoid | Geometric height (TC 20-22 positions): ft x 0.3048. Can differ from barometric altitude by tens to hundreds of metres |
-| Horizontal speed | km/h | kt x 1.852 |
-| Vertical speed | m/s | ft/min x 0.00508 |
-| Heading | degrees clockwise from true north | Track angle |
-| Position | decimal degrees (WGS84) | CPR-decoded latitude and longitude |
-| `distance` | km | Geodesic distance to the nearest polygon edge |
-| `proximity` | m | `distance` x 1000 |
-| `eta` | s | Travel time along the projected track to the polygon boundary; `0` inside |
+| Quantity         | Base unit                         | Source from ADS-B                                                                                                |
+| ---------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `altitude`       | meters                            | Barometric altitude calculated as feet multiplied by 0.3048                                                      |
+| `gnss_height`    | meters above the WGS84 ellipsoid  | Geometric height from TC 20–22 messages, which can differ from barometric altitude by tens to hundreds of meters |
+| Horizontal speed | kilometers per hour               | Knots multiplied by 1.852                                                                                        |
+| Vertical speed   | meters per second                 | Feet per minute multiplied by 0.00508                                                                            |
+| Heading          | degrees clockwise from true north | Decoded track angle                                                                                              |
+| Position         | decimal degrees (WGS84)           | CPR-decoded latitude and longitude                                                                               |
+| `distance`       | kilometers                        | Geodesic distance to the nearest polygon boundary                                                                |
+| `proximity`      | meters                            | Calculated as `distance` multiplied by 1000                                                                      |
+| `eta`            | seconds                           | Estimated flight time to the polygon boundary along the projected path, or 0 when inside                         |
 
-**`database`**
+## Database configuration (`database`)
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `path` | `pyaerial.db` | SQLite archive. Relative paths resolve against the config file's directory |
-| `redis_uri` | `redis://localhost:6379/0` | Redis live store (`redis://`, `rediss://` or `unix://`) |
-| `redis_password_file` | unset | File holding the Redis password on one line (e.g. a Docker secret). Relative to the config file. Not combinable with a password in `redis_uri` |
+| Setting               | Default                    | Description                                                                                                                                                                            |
+| --------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`                | `pyaerial.db`              | Path to the SQLite research archive, resolved relative to the directory containing your configuration file                                                                             |
+| `redis_uri`           | `redis://localhost:6379/0` | Connection URI for the Redis live store (`redis://`, `rediss://`, or `unix://`)                                                                                                        |
+| `redis_password_file` | unset                      | Path to a single-line file containing the Redis password (such as a Docker secret), resolved relative to the configuration file; cannot be combined with a password inside `redis_uri` |
 
-**`tracking`**
+## Tracking loop settings (`tracking`)
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `hz` | `2` | Evaluation frequency. Also sizes the receiver intake queue; on overflow the oldest frames are dropped with a warning |
-| `remember_planes` | `120` | Seconds without frames before a flight is finalized and archived |
-| `duplicate_packet_merging` | `5` | Frame deduplication window (s) |
-| `backdate_packets` | `10` | Track samples used to estimate velocity and turn rate |
-| `use_kalman_eta` | `false` | Kalman-filter horizontal velocity |
-| `curved_projection` | `false` | Project the track along the estimated turn rate |
-| `telemetry_keep_seconds` | `600` | Live trail kept in Redis; `0` keeps the whole flight |
-| `max_flight_seconds` | `14400` | Archive longer tracks as segments; `0` = no limit |
-| `status_interval` | `10` | Seconds between console status lines |
-| `status_message_top_planes` | `5` | Aircraft listed per status line; `-1` all, `0` none |
-| `advanced_status` | `true` | Add callsign and per-message-type counts to status lines |
+| Setting                     | Default | Description                                                                                                                                      |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `hz`                        | `2`     | Evaluation frequency in Hertz; this also determines the intake queue capacity, and when the queue fills, older frames are dropped with a warning |
+| `remember_planes`           | `120`   | Inactivity window in seconds after which an unobserved aircraft track is finalized and archived                                                  |
+| `duplicate_packet_merging`  | `5`     | Time window in seconds used to deduplicate identical frames across stations                                                                      |
+| `backdate_packets`          | `10`    | Number of recent track samples used to estimate velocity vectors and turn rates                                                                  |
+| `use_kalman_eta`            | `false` | Enables Kalman filtering to smooth horizontal velocity estimates                                                                                 |
+| `curved_projection`         | `false` | Projects trajectories along estimated turning arcs rather than straight lines                                                                    |
+| `telemetry_keep_seconds`    | `600`   | Duration in seconds of recent track history preserved in Redis; set to `0` to keep the full flight path in cache                                 |
+| `max_flight_seconds`        | `14400` | Maximum flight track duration before splitting into separate archive segments; set to `0` to disable segmentation                                |
+| `status_interval`           | `10`    | Interval in seconds between periodic console status summaries                                                                                    |
+| `status_message_top_planes` | `5`     | Number of prominent aircraft listed in each status summary; `-1` lists all aircraft, while `0` disables the list                                 |
+| `advanced_status`           | `true`  | Appends callsign metadata and message-type breakdowns to console status lines                                                                    |
 
-**`archive`**
+## Archival settings (`archive`)
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `flights` | `all` | `all`: keep every flight with at least `min_positions` position samples. `rules`: keep only flights a `retain: true` rule matched. Under both, a flight a `retain: true` rule alerted on is kept |
-| `min_positions` | `2` | Minimum position samples under `flights: all` |
-| `raw_frames` | `false` | Store every receiver copy of every frame in the `frames` table. A busy multi-receiver site writes several GB a day |
-| `raw_frames_keep_hours` | `24` | Raw frame retention; `0` keeps them forever |
+| Setting                 | Default | Description                                                                                                                                                                    |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `flights`               | `all`   | Controls flight archival; `all` saves every flight having at least `min_positions` position samples, while `rules` archives only flights matched by a rule with `retain: true` |
+| `min_positions`         | `2`     | Minimum required position samples before a flight is written to SQLite under `flights: all`                                                                                    |
+| `raw_frames`            | `false` | Stores every individual receiver frame copy in the `frames` database table; active multi-receiver installations can write several gigabytes daily                              |
+| `raw_frames_keep_hours` | `24`    | Retention period in hours for raw frame records; setting to `0` keeps raw frames indefinitely                                                                                  |
 
-**`logging`, `home`, `alert_colors`**
+## Station and logging settings
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `logging.level` | `info` | `debug`, `info`, `warning` (or `warn`), `error`; case-insensitive |
-| `logging.file` | unset | Also log to this file |
-| `home.latitude`, `home.longitude` | required | CPR decode reference and antenna position for receivers without one. Not a geofence centre |
-| `alert_colors` | `{}` | Rule name to hex color, for the map |
+| Setting                           | Default  | Description                                                                                                                                                 |
+| --------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `logging.level`                   | `info`   | Logging verbosity (`debug`, `info`, `warn`, `warning`, or `error`), evaluated case-insensitively                                                            |
+| `logging.file`                    | unset    | Optional filesystem path where logs should be duplicated                                                                                                    |
+| `home.latitude`, `home.longitude` | required | Geographic reference coordinates for the station, used for local CPR decoding and as the fallback antenna location for receivers lacking explicit positions |
+| `alert_colors`                    | `{}`     | Mapping of alert rule names to hex color codes for display on web maps                                                                                      |
 
-**Receivers (`receivers.<name>`)**
+## Receiver configuration (`receivers.<name>`)
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `type` | required | `dump1090`, `readsb`, `aoa`, `replay`, or a plugin's type (`pyaerial validate` lists them) |
-| `host`, `port` | | TCP source (`dump1090`, `readsb`, `aoa`) |
-| `format` | from port | `dump1090` and `readsb`: `beast` / `binary` or `avr` / `raw`, case-insensitive; also accepted in `options`. Port 30002 implies AVR, any other Beast |
-| `position` | unset | Fixed antenna position: `latitude`, `longitude`, `altitude` (m above mean sea level, default 0) |
-| `position_url` | `http://<host>:8080/data/receiver.json` (`dump1090`; `readsb` below) | Where to fetch the antenna position when `position` is unset |
-| `antenna_height` | `10` | Metres above ground, for the radio-horizon check |
-| `options` | `{}` | Type-specific options (below) |
+| Setting          | Default           | Description                                                                                                                                       |
+| ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`           | required          | Receiver driver type, including `dump1090`, `readsb`, `aoa`, `replay`, or custom plugin types (run `pyaerial validate` to list installed plugins) |
+| `host`, `port`   |                   | Network address and port for TCP-based feeds (`dump1090`, `readsb`, and `aoa`)                                                                    |
+| `format`         | derived from port | Wire format for `dump1090` and `readsb` (`beast` or `avr`); port 30002 defaults to AVR, while any other port defaults to Beast                    |
+| `position`       | unset             | Fixed geographic coordinates for the receiver antenna: `latitude`, `longitude`, and `altitude` (meters above mean sea level, defaulting to 0)     |
+| `position_url`   | auto-detected     | URL where receiver metadata can be queried if `position` is omitted                                                                               |
+| `antenna_height` | `10`              | Receiver antenna height in meters above ground level, used for line-of-sight radio horizon calculations                                           |
+| `options`        | `{}`              | Driver-specific configuration parameters                                                                                                          |
 
-- Prefer Beast (30005). AVR text (30002) has no signal level or clock, so most integrity checks cannot run. A `format` that contradicts the port is rejected, and so is a `dump1090` or `readsb` receiver that reads this machine's `web.beast_port`.
-- The antenna position comes from `position`, else the receiver's `receiver.json` (published by dump1090-fa and readsb; refreshed every 60 s, so moving receivers work), else `home`. A fetched position uses the file's altitude or 0 m, so set `position` when receivers sit at very different heights. Failed fetches back off up to 15 min; redirects are not followed.
-- A receiver silent for 150 s is reconnected.
-- Extended squitters that fail CRC and DF18 frames with non-ICAO addresses are ignored. A first airborne position (or the first after 180 s without one) needs an even/odd CPR pair within 10 s.
+Whenever possible, connect to Beast binary feeds (typically on port 30005) rather than text-based AVR feeds (typically on port 30002). AVR streams omit signal levels and high-resolution timing clocks, which prevents the engine from running most integrity checks. The loader rejects configurations where `format` contradicts the specified port, and it prevents receivers from connecting back to PyAerial's own Beast server port.
 
-*readsb (`type: readsb`)*. [readsb](https://github.com/wiedehopf/readsb) serves dump1090's Beast (`--net-bo-port`, 30005) and AVR (`--net-ro-port`, 30002) outputs, so it takes the same keys. An external readsb (or the ultrafeeder container) is read the same way as the bundled dump1090.
+The receiver's physical location is determined first by `position`, then by fetching `receiver.json` from the receiver (dump1090-fa and readsb refresh this file every 60 seconds, which allows mobile receiver setups to track their position), and finally falls back to `home`. If receivers in your setup are mounted at significantly different elevations, provide explicit `position` coordinates with accurate altitudes. HTTP queries back off for up to 15 minutes when a receiver is unreachable and will not follow redirects.
+
+Receivers that remain silent for 150 seconds are automatically disconnected and reconnected. Extended squitter frames failing CRC checks and DF18 frames containing non-ICAO addresses are ignored. The first airborne position received for an aircraft (or the first position after a 180-second silence) requires an even and odd CPR frame pair within 10 seconds before track initialization.
+
+### readsb receivers
+
+[readsb](https://github.com/wiedehopf/readsb) exposes standard dump1090 Beast (`--net-bo-port`, 30005) and AVR (`--net-ro-port`, 30002) feeds, accepting the same parameters as dump1090:
 
 ```yaml
 receivers:
@@ -153,285 +158,296 @@ receivers:
     # position_url: http://feeder.lan/tar1090/data/receiver.json
 ```
 
-- Read the full Beast output, not BeastReduce (`--net-beast-reduce-out-port`, 30006 in ultrafeeder): it is rate-limited and deduplicated, so the integrity checks miss most frames. Port 30006 is rejected; set `options.allow_reduced: true` if yours serves full Beast.
-- readsb only writes `receiver.json` to its `--write-json` directory. Without `position_url`, PyAerial tries tar1090's `http://<host>/tar1090/data/receiver.json`, then `http://<host>:8504/data/receiver.json`, then `http://<host>:8080/data/receiver.json` (ultrafeeder's example port), and keeps the first that has a location. It carries no altitude unless readsb gets one from gpsd. A `--json-location-accuracy` other than 2 rounds the location (a warning is logged), which is too coarse for TDOA: set `position`.
-- Keep readsb's defaults: without `--net-verbatim` it forwards CRC-corrected frames as dump1090 does, so different receivers' copies of a transmission are identical and pair up for TDOA. Give each PyAerial receiver a readsb that decodes one radio: Beast inputs merged into its output (`--net-bi-port`, `beast_in` connectors) mix clocks and repeat frames, which the `timing` and `replay` checks read as spoofing.
+Always connect to full Beast streams rather than BeastReduce ports (`--net-beast-reduce-out-port`, port 30006 in ultrafeeder), because BeastReduce deduplicates and downsamples frames, which disrupts integrity verification. PyAerial rejects port 30006 by default unless `options.allow_reduced: true` is explicitly enabled.
 
-| Option | Default | Meaning |
-|--------|---------|---------|
-| `allow_reduced` | `false` | Accept port 30006 (only when it serves full Beast) |
+If `position_url` is omitted, PyAerial probes tar1090 endpoints in order: `http://<host>/tar1090/data/receiver.json`, `http://<host>:8504/data/receiver.json`, and `http://<host>:8080/data/receiver.json`. If readsb is run with `--json-location-accuracy` set to anything other than 2, coordinates are rounded too coarsely for accurate TDOA multilateration, in which case explicit `position` coordinates should be provided.
 
-*Angle of arrival (`type: aoa`)*. Bearings need a coherent multi-channel SDR (KrakenSDR, bladeRF 2.0, USRP B210/N310) running its own DSP; dump1090 has no phase information. The `aoa` receiver reads one JSON object per line from that sidecar:
+Do not combine feeds from multiple SDRs into a single readsb instance before feeding PyAerial. Merged feeds combine independent receiver clocks and duplicate frames, which the `timing` and `replay` checks will misinterpret as active spoofing.
+
+| Option          | Default | Description                                                                              |
+| --------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `allow_reduced` | `false` | Permits connecting to port 30006 if that port is configured to emit unreduced Beast data |
+
+### Angle of arrival receivers
+
+Determining radio bearings requires a coherent multi-channel SDR (such as a KrakenSDR, bladeRF 2.0, or USRP) running dedicated direction-finding DSP software. The `aoa` driver reads newline-delimited JSON messages from the direction-finding sidecar:
 
 ```json
-{"hex": "8d4840d6202cc371c32ce0576098", "bearing": 213.4, "elevation": 4.1, "cfo": -18250.0, "rssi": -12.5, "clock": 123456789}
+{
+  "hex": "8d4840d6202cc371c32ce0576098",
+  "bearing": 213.4,
+  "elevation": 4.1,
+  "cfo": -18250.0,
+  "rssi": -12.5,
+  "clock": 123456789
+}
 ```
 
-Only `hex` is required. `bearing`: degrees from true north; `elevation`: degrees above the horizon; `cfo`: carrier frequency offset, Hz; `rssi`: dBFS; `clock`: 12 MHz ticks below 2^48. A `time` field is ignored.
+The `hex` field is required. Optional properties include `bearing` (degrees clockwise from true north), `elevation` (degrees above horizon), `cfo` (carrier frequency offset in Hertz), `rssi` (dBFS), and `clock` (12 MHz counter modulo 2^48). Any incoming `time` property is ignored in favor of local arrival timestamps.
 
-| Option | Default | Meaning |
-|--------|---------|---------|
-| `bearing_offset` | learned | Degrees added to every bearing (array orientation error). When unset, it is learned from 5+ aircraft that pass every other check; until then `aoa` reports nothing for this receiver |
-| `array_axis` | unset | Linear (two-element) arrays: also accept bearings mirrored about this axis. Disables learning, so set `bearing_offset` too |
+| Option           | Default | Description                                                                                                                                                                                      |
+| ---------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bearing_offset` | learned | Constant angular offset added to bearings to correct antenna alignment errors; when omitted, PyAerial learns the bias automatically from five or more flights passing all other integrity checks |
+| `array_axis`     | unset   | For two-element linear arrays with directional ambiguity, allows bearings mirrored across this axis; setting this disables automatic bias learning                                               |
 
-*Replay (`type: replay`)*
+### Replay receivers
 
-| Option | Default | Meaning |
-|--------|---------|---------|
-| `path` | required | Capture file, relative to the config file: dump1090 Beast binary, or text lines of bare hex, `*HEX;`, `@CLOCKHEX;` or `timestamp hex` |
-| `speed` | `1.0` | Keep `1.0`: frames are stamped at replay time, so other speeds trip the kinematics and timing checks |
-| `loop` | `true` | Repeat at end of file. Aircraft then jump back to their start, which the integrity checks flag. `false` idles after one pass |
-| `interval` | `0.1` | Seconds between frames without a timestamp or clock |
+The `replay` driver simulates live reception from prerecorded captures:
 
-[`src/pyaerial/examples/replay.yaml`](src/pyaerial/examples/replay.yaml) replays the bundled `captures/adsb.raw` (about 2.5 minutes of synthetic traffic).
+| Option     | Default  | Description                                                                                                                                                                           |
+| ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`     | required | Path to the capture file, resolved relative to the configuration file; supports dump1090 Beast binary captures and raw hex text files                                                 |
+| `speed`    | `1.0`    | Playback speed multiplier; leave this set to `1.0` because frames receive live timestamps upon playback, and altering playback speed will trip kinematics and timing integrity checks |
+| `loop`     | `true`   | Restarts playback at end of file; aircraft will appear to jump across the map on loop reset, which triggers integrity alerts; set to `false` to idle after one playback pass          |
+| `interval` | `0.1`    | Default delay in seconds between frames in captures lacking timing metadata                                                                                                           |
 
-**Zones (`zones.<name>`)**
+The bundled example in [`src/pyaerial/examples/replay.yaml`](src/pyaerial/examples/replay.yaml) replays synthetic traffic from `captures/adsb.raw`.
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `coordinates` | | Closed ring of `[latitude, longitude]` pairs |
-| `file` | | `.kml`, `.kmz` or `.geojson` file instead of `coordinates` (not both); relative to the config file |
-| `color` | unset | Hex color on the map |
-| `rules` | required | One or more rules; names must be unique within the zone |
+## Geofence zones (`zones.<name>`)
 
-A polygon needs 3+ distinct vertices, non-zero area and no self-intersecting edges; it may cross the antimeridian. Geofence files (longitude, latitude order) must be under 20 MB and hold exactly one polygon without holes. KML with `DOCTYPE` or `ENTITY` declarations is rejected.
+| Setting       | Default  | Description                                                                                                                                                       |
+| ------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coordinates` |          | Closed ring of `[latitude, longitude]` coordinate pairs defining the zone perimeter                                                                               |
+| `file`        |          | Path to an external `.kml`, `.kmz`, or `.geojson` file defining the boundary (mutually exclusive with `coordinates`), resolved relative to the configuration file |
+| `color`       | unset    | Hex color code used when rendering the zone perimeter on web maps                                                                                                 |
+| `rules`       | required | List of one or more alert evaluation rules; rule names must be unique within each zone                                                                            |
 
-**Rules (`zones.<name>.rules[]`)**
+Polygon boundaries require at least three distinct coordinate vertices, non-zero area, and no self-intersecting segments. Polygons may safely span across the antimeridian. External geofence files (which use longitude-latitude order) must remain under 20 MB and contain exactly one polygon without interior holes. KML files containing XML entity expansions or document type declarations are rejected for security.
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `name` | required | Unique within the zone |
-| `color` | unset | Hex color for matching aircraft on the map |
-| `when` | required | Conditions (below); all must hold |
-| `dwell_seconds` | required | Whole seconds the conditions must hold to activate, and to count for `retain` |
-| `hysteresis_seconds` | `0` | When non-zero, replaces `dwell_seconds` as the activation hold and delays deactivation by the same time |
-| `predict_seconds` | unset | Evaluate against the position dead-reckoned this far ahead |
-| `retain` | `true` | Archive flights this rule alerted on or matched continuously for `dwell_seconds` (judged per sample, with the verdict at that time), even under `archive.flights: rules` or below `min_positions`. `false` only stops forcing archival |
-| `on_activate`, `on_deactivate` | `[]` | Alerter actions |
-| `while_active` | unset | `interval_seconds` (whole seconds, default `60`) and `actions`, repeated while active |
+## Alert rules (`zones.<name>.rules[]`)
 
-*Conditions (`when`)*. Each field takes `min` and/or `max` (or `minimum` / `maximum`); `min > max` is rejected except for `heading`. There is no implicit inside-polygon test: every rule needs `distance`, `proximity` or `eta`. Units: see above.
+| Setting                        | Default  | Description                                                                                                                                                                                 |
+| ------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                         | required | Unique identifier for the rule within its parent zone                                                                                                                                       |
+| `color`                        | unset    | Hex color code applied to matching aircraft on web maps                                                                                                                                     |
+| `when`                         | required | Dictionary of conditions that must all evaluate to true for the rule to match                                                                                                               |
+| `dwell_seconds`                | required | Consecutive seconds that conditions must hold before triggering an alert activation or counting toward retention                                                                            |
+| `hysteresis_seconds`           | `0`      | When set above zero, replaces `dwell_seconds` for activations and delays alert deactivation by the same duration                                                                            |
+| `predict_seconds`              | unset    | Projects aircraft trajectories this many seconds into the future before checking spatial conditions                                                                                         |
+| `retain`                       | `true`   | Archives flights that triggered this rule or matched its conditions continuously for `dwell_seconds`, regardless of general retention thresholds; set to `false` to disable forced archival |
+| `on_activate`, `on_deactivate` | `[]`     | List of actions dispatched when the rule activates or deactivates                                                                                                                           |
+| `while_active`                 | unset    | Periodic action configuration containing `interval_seconds` (defaulting to 60) and `actions` executed while the alert remains active                                                        |
 
-| Field (aliases) | Meaning |
-|-----------------|---------|
-| `altitude` (`alt`) | Barometric altitude. Aircraft that report none use `gnss_height` |
-| `speed` (`horizontal_speed`) | Ground speed |
-| `vertical_speed` (`vert_speed`) | Climb or descent rate |
-| `latitude` (`lat`), `longitude` (`lon`, `long`) | Position (the predicted one with `predict_seconds`) |
-| `heading` (`direction`) | Track; ranges may wrap through north, e.g. `{min: 350, max: 10}` |
-| `distance` (`dist`), `proximity` | Distance to the nearest polygon edge |
-| `eta` | Time to the polygon boundary; `0` inside |
-| `integrity` | Integrity score, 0-1. Never matches while the verdict is `unknown`. Example: `integrity: {max: 0.5}` with `distance: {max: 50}` |
+### Rule conditions
 
-**Alerters**
+Every condition in the `when` block accepts `min` and `max` constraints (or `minimum` and `maximum`). Condition ranges where `min` exceeds `max` are rejected, with the exception of `heading`, which supports wrapping through north (for example `{min: 350, max: 10}`).
 
-`method: print` logs one line per notification with the event (`hook`) and `alert_id`. `method: webhook` options:
+Geofences do not test boundary containment implicitly; rules must include at least one spatial condition such as `distance`, `proximity`, or `eta`.
 
-| Option | Default | Meaning |
-|--------|---------|---------|
-| `url` | required | `https://` endpoint (`http://` only for localhost). Treat it as a secret (`${file:...}`); logs and errors show only `scheme://host`, even at `debug` |
-| `format` | `json` | `json` (body below), or human-readable `discord` / `slack` messages (case-insensitive) |
-| `method` | `POST` | `POST` or `PUT` |
-| `headers` | `{}` | Extra request headers |
+| Field (aliases)                                 | Description                                                                                                                       |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `altitude` (`alt`)                              | Barometric altitude in meters, falling back to geometric height (`gnss_height`) for aircraft not broadcasting barometric readings |
+| `speed` (`horizontal_speed`)                    | Ground speed in kilometers per hour                                                                                               |
+| `vertical_speed` (`vert_speed`)                 | Rate of climb or descent in meters per second                                                                                     |
+| `latitude` (`lat`), `longitude` (`lon`, `long`) | Aircraft geographic position (or projected position if `predict_seconds` is active)                                               |
+| `heading` (`direction`)                         | Track heading in degrees clockwise from true north                                                                                |
+| `distance` (`dist`), `proximity`                | Distance in kilometers (`distance`) or meters (`proximity`) to the nearest zone boundary                                          |
+| `eta`                                           | Estimated flight time in seconds to the zone boundary, or 0 when inside                                                           |
+| `integrity`                                     | Spoofing integrity score between 0.0 and 1.0; never matches while an aircraft's verdict is `unknown`                              |
 
-Bad options fail `pyaerial validate`. Other `method` values come from installed alerter plugins; `pyaerial validate` lists every receiver and alerter and where it came from (`builtin` or the plugin's distribution). A plugin that fails to load is listed as unavailable and reported only if the config uses it. Delivery: 5 s timeout per attempt; up to 3 attempts with backoff on transport errors and `5xx`; `429` is retried after `Retry-After` (at most 30 s); other `4xx` and all `3xx` (redirects are not followed) fail. Notifications for one `alert_id` are delivered in order.
+## Alerters
 
-*JSON body (`format: json`)*. Schema `pyaerial.alert/1`; see Compatibility in the [README](README.md). Every field is always present; "or null" fields can be `null`. Times are unix seconds; other units follow the table above.
+PyAerial includes built-in alerter methods for terminal logging (`method: print`) and HTTP webhooks (`method: webhook`). The print method logs a single line containing the alert event (`hook`) and unique `alert_id`.
 
-| Field | Type | Meaning |
-|-------|------|---------|
-| `schema` | string | `"pyaerial.alert/1"` |
-| `event` | string | `activate`, `while_active` or `deactivate` |
-| `alert_id` | string | Episode ID, shared by every notification of one episode; pair on it |
-| `flight_id` | string | `{icao}-{first_seen_unix}`, the flight the aircraft is tracked as now |
-| `icao` | string | 6 lowercase hex digits |
-| `callsign` | string | From ADS-B, else the aircraft database; `""` if unknown |
-| `zone`, `rule` | string | Names from the config |
-| `type` | string | Same as `rule` (kept from 0.x) |
-| `color` | string | Rule or zone color, `#rrggbb` or `#rgb` |
-| `timestamp`, `activated_at` | number | When the notification was raised; when the episode activated |
-| `deactivated_at` | number or null | When it ended; `null` unless `event` is `deactivate` |
-| `ended_by` | string or null | `deactivate` only: `cleared` (rule no longer holds), `lost` (not heard for `remember_planes`), `shutdown` (engine stopping), `restart` (left active by an engine that stopped uncleanly; closed at the next start) |
-| `eta` | number or null | Seconds to the zone boundary along the projected track; `0` inside; `null` if never or unknown |
-| `reason` | object | `zones` (zone name to ETA or null, for every zone), `rule`, `hook` (same as `event`, kept from 0.x), `ended_by` (deactivate only) |
-| `registration`, `manufacturer`, `manufacturer_name`, `model`, `aircraft_type`, `owner`, `operator_callsign`, `country`, `photo_url` | string or null | Aircraft database fields |
-| `telemetry` | object | `latitude`, `longitude`, `altitude`, `altitude_source`, `speed`, `heading`, `vertical_speed`, each possibly `null`. `altitude` is barometric, else GNSS height (`altitude_source`: `baro` or `gnss`) |
-| `tracker_links` | object | `flightaware`, `adsbexchange`, `radarbox` URLs; empty if `icao` is empty |
-| `map_links` | object | `google_maps`, `openstreetmap` URLs; empty without a position |
+Webhook alerters accept the following parameters:
 
-Changes from 0.x: `schema` and `event` are new, every field is always present, and `icao` is lowercase. `type` and `reason.hook` remain for compatibility. Discord and Slack messages mark GNSS altitude "(GNSS)".
+| Option    | Default  | Description                                                                                                                         |
+| --------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `url`     | required | Destination HTTP endpoint (must use HTTPS unless targeting localhost); treat this value as sensitive and store it via `${file:...}` |
+| `format`  | `json`   | Payload structure, supporting `json` (documented below), `discord`, or `slack`                                                      |
+| `method`  | `POST`   | HTTP request method (`POST` or `PUT`)                                                                                               |
+| `headers` | `{}`     | Additional HTTP headers sent with each notification                                                                                 |
 
-Every activation gets one deactivation, also across crashes and restarts (`ended_by: restart`), except episodes whose rule was removed from the config before a restart: those close silently. The engine sends a notification and then records it, so a crash in the instant between a notification and its record can repeat one restart deactivate or leave one activation unpaired, and notifications still queued for delivery are lost with the process.
+Webhook requests use a 5-second connection timeout and retry up to three times with exponential backoff on network failures and HTTP 5xx responses. Rate-limited responses (HTTP 429) respect the `Retry-After` header up to a maximum delay of 30 seconds. Permanent client errors (HTTP 4xx) and redirects fail immediately without following redirect targets. All notifications for a given `alert_id` are delivered in strict sequential order.
 
-**`web`**
+### Webhook alert payloads
 
-| Key | Default | Env override | Meaning |
-|-----|---------|--------------|---------|
-| `origins` | `[]` | `PYAERIAL_WEB_ORIGINS` | Extra browser origins for the WebSockets, exact `scheme://host[:port]`; `["*"]` allows any |
-| `allow_localhost_origins` | `false` | | Also allow any `localhost`, `127.0.0.1` or `[::1]` origin (dev servers) |
-| `allowed_hosts` | `[]` | `PYAERIAL_WEB_ALLOWED_HOSTS` | Accepted `Host` names, e.g. `["tracker.example", "*.lan"]`; others get HTTP 400, except `localhost` and `127.0.0.1`. Needed for same-origin WebSockets under a hostname. Add a LAN IP if you browse by IP |
-| `trusted_proxies` | `[]` | | Proxy IPs or CIDRs whose `X-Forwarded-For` is trusted; empty trusts only `127.0.0.1` |
-| `enable_docs` | `false` | | Serve `/docs`, `/redoc` and `/openapi.json` |
-| `metrics` | `true` | | Serve Prometheus `/metrics` ([WEBSOCKET.md](WEBSOCKET.md)): traffic and error counters, receiver names, no hosts or secrets. Set `false` if people who can reach the portal should not see them |
-| `beast_host` | `127.0.0.1` | `PYAERIAL_BEAST_HOST` | Beast TCP bind address; `0.0.0.0` for other hosts or containers |
-| `beast_port` | `30105` | `PYAERIAL_BEAST_PORT` | Beast TCP port (not 30005, dump1090's); `null` (env: `off`) disables it, `/ws/beast` still serves |
-| `beast_max_clients` | `16` | | Concurrent Beast TCP feeders |
-| `beast_max_clients_per_ip` | `4` | | Concurrent Beast TCP feeders per IP |
-| `ws_max_connections` | `256` | | Concurrent WebSocket connections, all endpoints |
-| `ws_max_connections_per_ip` | `32` | | Concurrent WebSocket connections per client IP |
-| `ws_max_inflight` | `2` | | Concurrent RPC requests per connection (1-16) |
-| `ws_rate_limit` / `ws_rate_burst` | `50` / `100` | | RPC requests per second per connection, and burst |
-| `ws_rate_limit_per_ip` / `ws_rate_burst_per_ip` | `200` / `400` | | The same, shared by one client IP's connections |
-| `ws_request_workers` | `4` | | Threads serving RPC requests (1-64) |
+JSON webhooks conform to schema `pyaerial.alert/1`. All fields are present in every payload, with unavailable values set to `null`:
 
-[WEBSOCKET.md](WEBSOCKET.md) describes how clients experience these limits.
+| Field                       | Type           | Description                                                                                                                                                        |
+| --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schema`                    | string         | Constant identifier `pyaerial.alert/1`                                                                                                                             |
+| `event`                     | string         | Lifecycle transition: `activate`, `while_active`, or `deactivate`                                                                                                  |
+| `alert_id`                  | string         | Unique episode identifier shared across all notifications for this alert                                                                                           |
+| `flight_id`                 | string         | Track identifier formatted as `{icao}-{first_seen_unix}`                                                                                                           |
+| `icao`                      | string         | Six-character lowercase hexadecimal ICAO transponder address                                                                                                       |
+| `callsign`                  | string         | Flight callsign from ADS-B or the metadata database, or empty string if unknown                                                                                    |
+| `zone`, `rule`              | string         | Names of the matching geofence zone and rule                                                                                                                       |
+| `type`                      | string         | Identical to `rule` (retained for backward compatibility)                                                                                                          |
+| `color`                     | string         | Configured hex color code for the rule or zone                                                                                                                     |
+| `timestamp`, `activated_at` | number         | Unix timestamp when the notification was created, and when the alert first triggered                                                                               |
+| `deactivated_at`            | number or null | Unix timestamp when the alert ended; `null` unless the event is `deactivate`                                                                                       |
+| `ended_by`                  | string or null | Cause of deactivation: `cleared` (rule stopped matching), `lost` (aircraft vanished), `shutdown` (engine stopping), or `restart` (cleared during startup recovery) |
+| `eta`                       | number or null | Seconds to the zone boundary along the current track, or 0 when inside                                                                                             |
+| `reason`                    | object         | Context object containing `zones` (ETAs to each configured zone), `rule`, `hook` (legacy alias for `event`), and `ended_by`                                        |
+| `telemetry`                 | object         | Latest kinematic readings including `latitude`, `longitude`, `altitude`, `altitude_source` (`baro` or `gnss`), `speed`, `heading`, and `vertical_speed`            |
+| Metadata fields             | string or null | Aircraft registration, manufacturer, model, operator, and Planespotters photo URL                                                                                  |
+| `tracker_links`             | object         | Direct links to FlightAware, ADS-B Exchange, and RadarBox                                                                                                          |
+| `map_links`                 | object         | Direct links to Google Maps and OpenStreetMap at the current coordinates                                                                                           |
 
-*Exposing the portal*. The portal has no authentication or TLS. Before exposing it beyond localhost:
+Every alert activation produces exactly one deactivation event across crashes and restarts (`ended_by: restart`), with the exception of alerts whose rules were removed from the configuration prior to restarting. Because the engine emits notifications before writing them to the database, a crash occurring precisely between transmission and logging may occasionally repeat a restart deactivation.
 
-1. Put a reverse proxy in front that terminates TLS and authenticates users.
-2. Add its hostname to `allowed_hosts`.
-3. List it in `trusted_proxies`, or all clients share its IP for the per-IP limits. Under Docker, a proxy on the host connects from the Compose network's gateway, not `127.0.0.1`: list that address or the subnet.
-4. Change the port mappings in `docker-compose.yml` only deliberately (e.g. `"127.0.0.1:10090:10090"` to `"10090:10090"`).
+## Web service configuration (`web`)
 
-The portal sends CSP, `nosniff`, `no-referrer` and `X-Frame-Options: DENY` headers, and passes only `https:` photo URLs to the browser.
+| Setting                                         | Default       | Description                                                                                                       |
+| ----------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `origins`                                       | `[]`          | Allowed browser origins for WebSocket handshakes (`scheme://host[:port]`), or `["*"]` to allow all                |
+| `allow_localhost_origins`                       | `false`       | Permits connections from local origins (`localhost`, `127.0.0.1`, and `[::1]`)                                    |
+| `allowed_hosts`                                 | `[]`          | Accepted HTTP Host header values; requests presenting unlisted hostnames receive HTTP 400                         |
+| `trusted_proxies`                               | `[]`          | Trusted upstream reverse proxy IP addresses or CIDR blocks used to extract real client IPs from `X-Forwarded-For` |
+| `enable_docs`                                   | `false`       | Serves interactive Swagger and ReDoc documentation at `/docs` and `/redoc`                                        |
+| `metrics`                                       | `true`        | Enables the Prometheus metrics endpoint at `/metrics`                                                             |
+| `beast_host`                                    | `127.0.0.1`   | Network interface address for the outgoing Beast TCP server                                                       |
+| `beast_port`                                    | `30105`       | Port number for the Beast TCP server; set to empty or `null` to shut off TCP streaming                            |
+| `beast_max_clients`                             | `16`          | Maximum total concurrent Beast TCP subscribers                                                                    |
+| `beast_max_clients_per_ip`                      | `4`           | Maximum Beast TCP subscribers per client IP address                                                               |
+| `ws_max_connections`                            | `256`         | Maximum concurrent WebSocket connections across all endpoints                                                     |
+| `ws_max_connections_per_ip`                     | `32`          | Maximum concurrent WebSocket connections per client IP address                                                    |
+| `ws_max_inflight`                               | `2`           | Maximum concurrent in-flight RPC requests allowed on a single connection                                          |
+| `ws_rate_limit` / `ws_rate_burst`               | `50` / `100`  | RPC request rate limit and burst allowance per connection                                                         |
+| `ws_rate_limit_per_ip` / `ws_rate_burst_per_ip` | `200` / `400` | Combined RPC rate limit and burst allowance per client IP address                                                 |
+| `ws_request_workers`                            | `4`           | Thread pool size dedicated to handling RPC requests                                                               |
 
-**`enrichment` and outbound connections**
+### Exposing the portal securely
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `enrichment.enabled` | `true` | The engine looks up each new ICAO address on hexdb.io and Planespotters (registration, type, operator, photo) and caches it in `aircraft.db`. `false` uses the cache only |
+The web portal includes no built-in user authentication or TLS encryption. Before making the service accessible across public or untrusted networks:
 
-Other outbound traffic:
+1. Deploy a reverse proxy in front of PyAerial (such as Nginx, Caddy, or Traefik) to terminate TLS and enforce user authentication.
+2. Add your external domain name to `web.allowed_hosts`.
+3. Add your proxy's internal IP address to `web.trusted_proxies` so per-IP rate limits inspect real client addresses. In Docker environments, host proxies connect through the bridge gateway address rather than `127.0.0.1`.
+4. Ensure port bindings in `docker-compose.yml` bind only to intended interfaces.
 
-- The portal (`pyaerial web`) ignores `enrichment.enabled` and still looks up uncached addresses while a browser is connected.
-- The browser loads map style, tiles, glyphs and sprites from OpenFreeMap (`tiles.openfreemap.org`), with a plain background if it is unreachable, and Planespotters thumbnails when you open a flight. Fonts and scripts come from the portal.
-- `integrity.cross_network` (off by default) sends ICAO addresses to the configured aggregator.
+The web service sets defensive security headers automatically, including Content Security Policy, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and `X-Frame-Options: DENY`.
 
-**`integrity`**
+## External lookups and metadata (`enrichment`)
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `enabled` | `true` | Run the spoofing checks |
-| `ok_score` / `spoofed_score` | `0.8` / `0.5` | Score at or above `ok_score` is `ok`; below `spoofed_score` is `spoofed`; between is `suspect` |
-| `weights` | `{}` | Per-check weight overrides, 0-1, e.g. `{timing: 0.2}` |
-| `disabled_checks` | `[]` | Checks to skip, e.g. `[appearance]` |
-| `window_seconds` | `120` | Evidence kept per aircraft |
-| `horizon_margin` | `1.25` | Radio horizon multiplier (refraction, ducting) |
-| `max_range_km` | `500` | Range limit for `radio_horizon` |
-| `rssi_excess_db` | `15` | `rssi_range` fails when the signal is this much stronger than predicted |
-| `aoa_tolerance_deg` | `15` | Median bearing error allowed |
-| `tdoa_tolerance_m` | `3000` | Median TDOA path-difference residual allowed |
-| `mode_s_altitude_tolerance_m` | `100` | Mode S vs. ADS-B altitude difference allowed |
+| Setting              | Default | Description                                                                                                                                                                                             |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enrichment.enabled` | `true`  | Enables background lookups against hexdb.io and Planespotters to retrieve airframe models, operators, and photos, caching results in `aircraft.db`; setting to `false` restricts lookups to local cache |
 
-`integrity.cross_network` (sends ICAO addresses out):
+Additional outbound network requests include:
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `enabled` | `false` | Compare positions with a public aggregator |
-| `url` | `https://api.adsb.lol/v2/hex/{icao}` | Must contain `{icao}`; readsb-style JSON response |
-| `min_interval_seconds` | `2` | Minimum spacing between requests |
-| `recheck_seconds` | `120` | Re-query an address after this long |
-| `max_distance_km` | `10` | Fail when the aggregator's position is farther away |
-| `timeout_seconds` | `5` | Deadline per request, body included |
+- When a user opens an aircraft in the web portal, the web application fetches Planespotters thumbnail images directly.
+- The web browser downloads map tiles and vector glyphs from OpenFreeMap (`tiles.openfreemap.org`), falling back to a clean neutral background if external maps are unreachable.
+- If `integrity.cross_network` is enabled, the engine queries configured public flight aggregators to verify broadcast positions.
 
-Point `cross_network` at a network this station does not feed; otherwise its own data, spoofed or not, comes back. Failures back off up to 10 min, honouring `Retry-After`; redirects are not followed.
+## Spoofing detection and integrity (`integrity`)
 
-**Integrity output**
+| Setting                       | Default       | Description                                                                                                                                             |
+| ----------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                     | `true`        | Enables the spoofing detection engine                                                                                                                   |
+| `ok_score` / `spoofed_score`  | `0.8` / `0.5` | Aircraft with scores at or above `ok_score` are marked `ok`, scores below `spoofed_score` are marked `spoofed`, and values between are marked `suspect` |
+| `weights`                     | `{}`          | Custom weight overrides for individual checks, between 0.0 and 1.0                                                                                      |
+| `disabled_checks`             | `[]`          | List of check names to exclude from evaluation                                                                                                          |
+| `window_seconds`              | `120`         | Duration in seconds of historical evidence retained per aircraft                                                                                        |
+| `horizon_margin`              | `1.25`        | Safety factor applied to line-of-sight calculations to account for atmospheric refraction                                                               |
+| `max_range_km`                | `500`         | Absolute ceiling in kilometers for radio horizon plausibility checks                                                                                    |
+| `rssi_excess_db`              | `15`          | Signal strength threshold above which an aircraft is deemed too strong for its reported distance                                                        |
+| `aoa_tolerance_deg`           | `15`          | Maximum allowable angular error between measured and reported bearings                                                                                  |
+| `tdoa_tolerance_m`            | `3000`        | Maximum allowable path-difference residual for TDOA multilateration                                                                                     |
+| `mode_s_altitude_tolerance_m` | `100`         | Maximum allowable altitude discrepancy between Mode S replies and ADS-B broadcasts                                                                      |
 
-Each live aircraft has `info.integrity`:
+### Cross-network verification (`integrity.cross_network`)
 
-- `status`: `ok`, `suspect`, `spoofed` or `unknown`.
-- `score`: 0-1, or `null` while `unknown`.
-- `checks`: every check that had evidence, with `status` (`pass`, `warn`, `fail`) and `detail`.
-- `emitter`: when TDOA fails with 3+ receivers, the multilaterated transmitter (`latitude`, `longitude`, `offset_km` from the claimed position).
-- `rebroadcast: true`: heard only through TIS-B / ADS-R, so checks that assume the aircraft is the transmitter are skipped.
+| Setting                | Default                              | Description                                                                            |
+| ---------------------- | ------------------------------------ | -------------------------------------------------------------------------------------- |
+| `enabled`              | `false`                              | Enables position verification against an external flight aggregator                    |
+| `url`                  | `https://api.adsb.lol/v2/hex/{icao}` | Target API endpoint returning readsb-compatible JSON; `{icao}` is replaced dynamically |
+| `min_interval_seconds` | `2`                                  | Minimum spacing between consecutive outbound API queries                               |
+| `recheck_seconds`      | `120`                                | Interval before querying an aircraft's position again                                  |
+| `max_distance_km`      | `10`                                 | Maximum allowed distance discrepancy before triggering a verification failure          |
+| `timeout_seconds`      | `5`                                  | Request timeout per query including body download                                      |
 
-Each failing check multiplies the score by `1 - weight` (half that for `warn`). Checks run every 5 s. The status stays `unknown` until the aircraft has been tracked 30 s with 3+ checks reporting (2 for TIS-B / ADS-R), but a `suspect` or `spoofed` score is published at once. A status worsens immediately and improves only after holding for 30 s. A change to `spoofed` is logged at WARNING.
+Always point cross-network verification at an aggregator that your own receiver station does not feed. Otherwise, your station's own data—including any received spoofed frames—will be echoed back and appear to corroborate itself.
 
-| Check | Weight | Needs | Fails when |
-|-------|--------|-------|------------|
-| `aoa` | 0.7 | `aoa` receiver | Measured bearing or elevation disagrees with the claimed position |
-| `tdoa` | 0.7 | 2+ Beast receivers | Arrival-time differences disagree with the claimed position. Clocks sync from trusted aircraft; no GPS clock needed |
-| `mode_s_altitude` | 0.6 | Mode S replies (DF0/4/16/20) | Interrogation replies report a different altitude than ADS-B |
-| `radio_horizon` | 0.6 | Altitude | A receiver hears it beyond `max_range_km` or the 4/3-earth horizon x `horizon_margin` |
-| `duplicate_icao` | 0.5 | | Positions keep landing far off the track (two transmitters, one address) |
-| `cross_network` | 0.5 | `cross_network.enabled` | The aggregator places the address more than `max_distance_km` away |
-| `emitter_cluster` | 0.5 | Beast or `aoa` | Several aircraft share one carrier offset, one too-strong signal level, or one bearing |
-| `rssi_range` | 0.4 | Beast, 8+ aircraft | Signal is `rssi_excess_db` stronger than the station's model predicts for the claimed range |
-| `rssi_trend` | 0.4 | Beast | Signal stays flat while the claimed range changes 2.5x or more |
-| `kinematics` | 0.4 | | Movement disagrees with reported speed, track or climb rate |
-| `timing` | 0.4 | Beast clock | Position squitters are not randomly spaced 0.4-0.6 s apart, or stop alternating even/odd |
-| `replay` | 0.4 | | The same airborne position frame arrives twice within 5 s while the aircraft moves |
-| `identity` | 0.3 | | An N-number callsign or registration disagrees with the FAA-assigned address |
-| `mode_s_corroboration` | 0.2 | Mode S replies | No replies for this address while at least half the other aircraft send them |
-| `message_mix` | 0.2 | | Airborne positions without velocity or identification messages |
-| `appearance` | 0.2 | | First seen less than 20 km away at altitude |
+### Integrity checks and scoring
 
-**Live state (Redis)**
+Live aircraft records include an `integrity` object detailing the active score:
 
-These keys are internal (see Compatibility in the [README](README.md)). They are a cache of what the engine tracks, for the portal: the engine republishes them each tick (and in full after a Redis restart), deletes a flight's keys once it stops tracking it, and clears what a previous engine left at startup. Nothing in them is needed to recover after a crash, except `live:episode_outbox`. Per-flight keys also expire 7 days after their last write.
+- The overall `status` is classified as `ok`, `suspect`, `spoofed`, or `unknown`.
+- The numeric `score` ranges from 0.0 to 1.0 and remains `null` while status is `unknown`.
+- The `checks` mapping lists all evaluated checks alongside their results (`pass`, `warn`, or `fail`) and diagnostic details.
+- When multilateration across three or more receivers confirms that an aircraft is transmitting from somewhere other than its reported location, `emitter` provides the transmitter's estimated coordinates and offset distance.
+- When an aircraft is heard solely through ground rebroadcasts (TIS-B or ADS-R), `rebroadcast` is set to `true`, causing PyAerial to bypass checks that require direct line-of-sight transmission.
 
-| Key | Type | Contents |
-|-----|------|----------|
-| `live:flights` | Set | Active flight IDs |
-| `live:flight:{flight_id}` | String (JSON) | Latest state |
-| `live:telemetry:{flight_id}` | Sorted set (epoch score) | Track points within `telemetry_keep_seconds` |
-| `live:alerts:{flight_id}` | Hash (`alert_id` to JSON) | This flight's alert episodes |
-| `live:active_alerts` | Hash (`alert_id` to JSON) | Active episodes, all flights |
-| `live:alert_episodes` | Hash (`alert_id` to JSON) | Episodes of the tracked flights, deleted with their flight (history keeps them) |
-| `live:engine` | String (JSON), 10 s TTL | Engine heartbeat, rewritten every tick (fields below) |
-| `live:episode_outbox` | Hash (`alert_id` to JSON) | Alert episodes the archive refused (it was down), until it accepts them; the next engine replays them after a crash. Empty in normal operation |
-| `live:raw` | Pub/Sub channel | Corrected receiver frames, served on `/ws/raw`, `/ws/beast` and Beast TCP |
+Each failing check reduces the score by multiplying it by `1 - weight` (or half that penalty for warnings). Checks run every five seconds. Aircraft remain in `unknown` status until they have been tracked for 30 seconds with at least three checks reporting (or two checks for rebroadcast aircraft), although suspect or spoofed scores publish immediately. A worsening status updates instantly, while an improving status requires 30 seconds of consistent evidence.
 
-`live:engine` fields:
+| Check                  | Weight | Hardware requirements           | Trigger condition                                                                                  |
+| ---------------------- | ------ | ------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `aoa`                  | 0.7    | Angle-of-arrival array          | Measured bearing or elevation contradicts the reported position                                    |
+| `tdoa`                 | 0.7    | Two or more Beast receivers     | Arrival time differences contradict reported positions; clocks synchronize using trusted flights   |
+| `mode_s_altitude`      | 0.6    | Mode S replies (DF0, 4, 16, 20) | Interrogation replies report a different altitude than ADS-B messages                              |
+| `radio_horizon`        | 0.6    | Aircraft altitude               | An aircraft is detected beyond `max_range_km` or past the atmospheric radio horizon                |
+| `duplicate_icao`       | 0.5    |                                 | Sudden position jumps indicating multiple transmitters sharing one address                         |
+| `cross_network`        | 0.5    | Cross-network enabled           | External aggregator places the aircraft farther than `max_distance_km` away                        |
+| `emitter_cluster`      | 0.5    | Beast or AoA receivers          | Multiple aircraft share identical carrier offsets, suspicious signal levels, or identical bearings |
+| `rssi_range`           | 0.4    | Beast receivers                 | Signal is significantly stronger than expected for the reported range                              |
+| `rssi_trend`           | 0.4    | Beast receivers                 | Signal strength remains flat while range changes substantially                                     |
+| `kinematics`           | 0.4    |                                 | Velocity, track, or vertical rate contradict physical trajectory progression                       |
+| `timing`               | 0.4    | Beast receiver clock            | Messages fail to follow expected random jitter intervals or drop even/odd alternation              |
+| `replay`               | 0.4    |                                 | Identical airborne position frames arrive twice within 5 seconds while moving                      |
+| `identity`             | 0.3    |                                 | Reported N-number callsign or registration contradicts the ICAO address                            |
+| `mode_s_corroboration` | 0.2    | Mode S replies                  | Aircraft emits no Mode S replies while surrounding traffic does                                    |
+| `message_mix`          | 0.2    |                                 | Aircraft broadcasts airborne positions without accompanying velocity or identification messages    |
+| `appearance`           | 0.2    |                                 | Aircraft first appears suddenly at high altitude within 20 km of the station                       |
 
-| Field | Meaning |
-|-------|---------|
-| `seen_at`, `token` | Last write (unix seconds); the owning engine's ID |
-| `history` | Archive health: `ok`, `down` or `disabled` |
-| `history_error`, `history_pending` | Last archive error; flights waiting to be archived |
-| `counters` | Since `counters.since` (engine start): `frames_received` (taken off the intake queue), `frames_dropped` (intake queue full), `messages_processed`, `pending_evicted` (deferred flights dropped from memory while the archive was down; their checkpointed part is kept as interrupted), `episodes_dropped` (alert episodes dropped from the unarchived outbox: it was full, or the archive rejected an entry 3 times, or a restored entry was unreadable; logged at ERROR), `receiver_restarts` (per receiver), `stage_errors` (per engine stage). Plus `planes_tracked`, the current count |
+## Redis live state schema
 
-**Research archive (SQLite)**
+Redis functions as a transient live cache for the web portal. All keys are republished each tick and purged during clean engine startup. They are private to the PyAerial service and should not be relied upon by external integrations:
 
-Flight IDs are `{icao}-{first_packet_timestamp}`, e.g. `a1b2c3-1721832000`. `flights.status` is:
+| Redis key                    | Data type       | Description                                                        |
+| ---------------------------- | --------------- | ------------------------------------------------------------------ |
+| `live:flights`               | Set             | Active flight identifiers                                          |
+| `live:flight:{flight_id}`    | String (JSON)   | Most recent flight summary and metadata                            |
+| `live:telemetry:{flight_id}` | Sorted set      | Recent trajectory points scored by epoch timestamp                 |
+| `live:alerts:{flight_id}`    | Hash            | Alert episodes triggered by this flight                            |
+| `live:active_alerts`         | Hash            | Currently active alert episodes across all flights                 |
+| `live:alert_episodes`        | Hash            | Active and recently closed episodes for tracked aircraft           |
+| `live:engine`                | String (JSON)   | Engine heartbeat updated every tick with a 10-second TTL           |
+| `live:episode_outbox`        | Hash            | Alert episodes awaiting delivery to SQLite during database outages |
+| `live:raw`                   | Pub/Sub channel | Stream of clean Mode S frames                                      |
 
-- `live`: being tracked. Every 5 s the engine checkpoints the flight's samples older than 10 s and its new integrity verdicts; alert episodes are written as they activate and close. Hidden from the portal's history.
-- `completed`: finalized after `remember_planes` seconds without frames (or at shutdown, or at a segment boundary), and rewritten whole. A flight `archive.flights` does not keep is deleted instead, with its episodes.
-- `interrupted`: the engine stopped without finalizing it (killed, crashed, power loss). At the next start it ends at its last checkpointed sample, so a crash loses at most about 15 s of each flight (the 5 s checkpoint interval plus the 10 s settle time, plus one tick; slow ticks checkpoint more flights at once rather than less often); its open alerts are closed with one deactivate (`ended_by: restart`, at their last refresh). The same `archive.flights` policy decides, on what was checkpointed, whether it is kept. The API shows it as `completed` with `interrupted: true`.
+The `live:engine` heartbeat payload tracks:
 
-- Flights longer than `tracking.max_flight_seconds` become segments, each a flight of its own (`previous_flight_id` names the one it continues), sharing their boundary sample. Active alerts continue on the next segment under the same `alert_id`, without new notifications; the episode's row is on the segment where it ended (`start_flight_id` is where it began).
-- While the archive is down, finished flights wait in memory (1 GiB) and episodes in an outbox (also copied to Redis), and are written once it is back. A crash during an outage loses the samples since it began.
-- Suspected spoofs are archived like any other flight; filter on the provenance columns to select verified data.
+- `seen_at` and `token` recording the engine's last execution time and lease token
+- `history` reporting database availability (`ok`, `down`, or `disabled`)
+- `history_error` and `history_pending` logging recent database errors and pending write counts
+- `counters` logging operational metrics since startup, including received frames, dropped frames, processed messages, evicted flights, receiver restarts, and stage errors
 
-The database runs in WAL mode; the portal opens it read-only. For backups, upgrades and schema compatibility see Operations in the [README](README.md) (current schema: 4, in `PRAGMA user_version`). A file from a newer PyAerial, or not a PyAerial archive, is refused and left untouched; the engine then runs with history offline, and `pyaerial reset --yes` recreates it.
+## SQLite research archive
 
-| Table | Keys / indexes | Contents |
-|-------|----------------|----------|
-| `flights` | `flight_id`; `icao`, `callsign`, `end_time`, live flights | `status` (above), ICAO, callsign, registration, time bounds, final `info` document (with the last `integrity` verdict), `checkpoint_at`, `previous_flight_id`. `retained` is always 1 (legacy) |
-| `telemetry` | `(flight_id, timestamp)`; `(icao, timestamp)` | Position samples: `altitude`, `gnss_height` (`NULL` except from TC 20-22 positions), speed, heading, provenance |
-| `integrity` | `(flight_id, timestamp)`; `(icao, timestamp)` | Verdict log: every status change, plus score or check changes at most every 30 s. `score` (`NULL` for `unknown`), `status`, `flags` (JSON array of checks that did not pass), `checks` (full JSON) |
-| `frames` | `timestamp`; `(icao, timestamp)` | With `raw_frames: true`, one row per receiver copy, before merging: `receiver`, `hex`, `df`, `icao` (DF17/18 only), `rssi`, `clock` (12 MHz ticks), `bearing`, `elevation`, `cfo` |
-| `alerts` | `alert_id`; `flight_id`, `activated_at`, active episodes | Alert episodes, one row each, written from activation on; `reason` (JSON) has `ended_by` once closed; `start_flight_id` is the segment where it began |
-| `engine_lease` | one row | The running engine's `token` and `renewed_at`; fences out an engine that stalled and was replaced. Internal |
+Long-term flight trajectories and verification evidence are recorded in SQLite. The database operates in WAL mode, and the web portal accesses it read-only.
 
-Telemetry provenance columns:
+Flights are identified by `{icao}-{first_packet_timestamp}`. The database tracks lifecycle progress through the `status` column:
 
-| Column | Meaning |
-|--------|---------|
-| `receivers` | JSON array of receivers that heard the position frame; the kept (strongest) copy first |
-| `integrity_score`, `integrity_status` | Verdict in effect when the sample arrived. `NULL` before the first verdict; `integrity_score` is also `NULL` while `unknown` |
-| `integrity_flags` | JSON array of checks that did not pass in that verdict; `[]` when all passed |
+- Active flights are marked `live` while currently in the air. The engine checkpoints position samples and integrity verdicts every five seconds.
+- Finalized flights are marked `completed` once the aircraft has departed or gone quiet, rewriting the complete trajectory and applying retention filters.
+- Flights that were interrupted by a crash or sudden power cut are marked `interrupted`. When the engine restarts, it marks these flights as interrupted and preserves their track up to the last recorded checkpoint.
+
+Tracks exceeding `tracking.max_flight_seconds` are divided into continuous segments, each assigned its own flight record referencing `previous_flight_id`. Suspicious and spoofed flights are preserved in the archive alongside legitimate traffic so researchers can study spoofing phenomena; verified data can be selected by querying provenance columns.
+
+| Table          | Primary keys and indexes                                    | Description                                                                                          |
+| -------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `flights`      | `flight_id`; indexed on `icao`, `callsign`, and `end_time`  | Flight metadata, start and end timestamps, final integrity verdict, and checkpoint status            |
+| `telemetry`    | Indexed on `(flight_id, timestamp)` and `(icao, timestamp)` | Trajectory points including barometric altitude, geometric height, velocity, and receiver provenance |
+| `integrity`    | Indexed on `(flight_id, timestamp)` and `(icao, timestamp)` | Chronological log of integrity verdicts, recording status changes and periodic score evaluations     |
+| `frames`       | Indexed on `timestamp` and `(icao, timestamp)`              | Raw receiver frames recorded when `raw_frames: true` is enabled                                      |
+| `alerts`       | `alert_id`; indexed on `flight_id` and `activated_at`       | Alert episodes recording activation details, deactivation reasons, and timing                        |
+| `engine_lease` | Single row                                                  | Active engine lease token and renewal timestamp used for split-brain prevention                      |
+
+Telemetry provenance columns allow filtering records according to verification confidence:
+
+- `receivers`: JSON list of all stations that detected the frame, with the strongest receiver first
+- `integrity_score` and `integrity_status`: Verdict in effect when the position frame arrived
+- `integrity_flags`: List of specific checks that did not pass at the time of the sample
 
 ```sql
--- Samples heard by two or more receivers while the aircraft verified as ok
+-- Query verified samples heard by two or more receivers
 SELECT * FROM telemetry
 WHERE integrity_status = 'ok' AND json_array_length(receivers) >= 2;
 
--- Raw receiver copies behind one flight
+-- Query raw receiver copies recorded for a specific flight
 SELECT f.* FROM frames f JOIN flights USING (icao)
 WHERE flights.flight_id = 'a1b2c3-1721832000'
   AND f.timestamp BETWEEN flights.start_time AND flights.end_time;
 ```
-
-Airframe metadata (operator, registration, model, photos) lives in the `aircraft.db` cache, not the archive.

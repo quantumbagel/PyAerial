@@ -1,175 +1,255 @@
-# WebSocket API
+# WebSocket and Streaming API
 
-`pyaerial web` serves live state, history queries and raw Mode S frames.
+The `pyaerial web` service exposes real-time aircraft feeds, historical queries, Prometheus metrics, and reconstructed binary Mode S data over WebSockets and TCP.
 
-**Endpoints**
+## Endpoints
 
-| Endpoint | Format | Purpose |
-|----------|--------|---------|
-| `ws://<host>:<port>/ws/live` (alias `/ws`) | JSON | Push streams and RPC (`hello.protocol: "pyaerial.live"`, version 1) |
-| `ws://<host>:<port>/ws/raw` | JSON | Corrected Mode S frames (portal Raw tab) |
-| `ws://<host>:<port>/ws/beast` | Binary | The same frames as dump1090 Beast |
-| `tcp://<beast_host>:<beast_port>` | Binary | Same bytes as `/ws/beast`, default port 30105 |
-| `GET /api` | JSON | Discovery document, including the active `limits` |
-| `GET /health` | JSON | Liveness: `{"status": "ok"}` |
-| `GET /ready` | JSON | `status`, `redis`, `history`, `engine`; HTTP 503 while Redis is unreachable |
-| `GET /metrics` | Prometheus text 0.0.4 | Engine and portal metrics (below); off with `web.metrics: false` |
-| `/docs`, `/redoc`, `/openapi.json` | HTML / JSON | Only with `web.enable_docs: true` |
+| Endpoint                                      | Format          | Description                                                                                                       |
+| --------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ws://<host>:<port>/ws/live` (or alias `/ws`) | JSON            | Real-time push streams and bidirectional RPC actions adhering to protocol `pyaerial.live` version 1               |
+| `ws://<host>:<port>/ws/raw`                   | JSON            | Stream of individual Mode S frames with signal quality metrics for debugging and raw visualization                |
+| `ws://<host>:<port>/ws/beast`                 | Binary          | Cleaned and merged frames packaged into dump1090 Beast binary format                                              |
+| `tcp://<beast_host>:<beast_port>`             | Binary          | Outgoing TCP socket serving the same Beast binary stream as `/ws/beast` (defaults to port 30105)                  |
+| `GET /api`                                    | JSON            | Discovery document advertising service version and active connection limits                                       |
+| `GET /health`                                 | JSON            | Basic liveness probe returning `{"status": "ok"}`                                                                 |
+| `GET /ready`                                  | JSON            | Readiness check reporting status for Redis, the archive, and the engine; returns HTTP 503 if Redis is unreachable |
+| `GET /metrics`                                | Prometheus text | Operational metrics in Prometheus 0.0.4 format; can be disabled with `web.metrics: false`                         |
+| `/docs`, `/redoc`, `/openapi.json`            | HTML / JSON     | Interactive API documentation, available only when `web.enable_docs: true`                                        |
 
-`/ws/raw`, `/ws/beast` and Beast TCP send no `hello`, accept no RPC and send no `ping`.
+Specialized feeds (`/ws/raw`, `/ws/beast`, and Beast TCP) transmit data without initial handshake greetings, do not accept RPC request payloads, and do not emit keepalive ping messages.
 
-**Metrics**
+## Prometheus metrics
 
-`/metrics` costs one Redis GET (the `live:engine` heartbeat) plus the `/ready` checks. Point Prometheus at it directly (e.g. `http://127.0.0.1:10090/metrics`).
+The `/metrics` endpoint is designed for direct scraping by Prometheus collectors (for example at `http://127.0.0.1:10090/metrics`). Scraping performs an internal health check alongside a single Redis query to inspect the engine's latest heartbeat.
 
-- Portal: `pyaerial_build_info{version}` (always 1), `pyaerial_redis_up`, `pyaerial_archive_up` (as in `/ready`), `pyaerial_websocket_connections{endpoint}` (`/ws/live`, including `/ws`; `/ws/raw`; `/ws/beast`), `pyaerial_beast_tcp_clients`, `pyaerial_websocket_queued_bytes` (`/ws/live` responses and telemetry waiting to be sent), `pyaerial_websocket_rate_limited_total` (requests answered `rate_limited`), `pyaerial_websocket_clients_dropped_total{reason}` (closes with `1013`: `client_too_slow` and `server_budget` on `/ws/live`, `feed_behind` on `/ws/raw` and `/ws/beast`) and `pyaerial_beast_tcp_clients_dropped_total{reason}` (`feed_behind`, `not_reading`).
-- Engine, from the heartbeat: `pyaerial_engine_up` (1 while the heartbeat is fresh). Only while it is 1: `pyaerial_engine_start_time_seconds`, `pyaerial_engine_planes_tracked`, `pyaerial_engine_history_up`, `pyaerial_engine_history_pending`, and the counters `pyaerial_engine_frames_received_total`, `_frames_dropped_total`, `_messages_processed_total`, `_pending_evicted_total`, `_receiver_restarts_total{receiver}` and `_stage_errors_total{stage}`. Counters restart from 0 with the engine.
+Web portal metrics include:
 
-Labels carry receiver names, never hosts, ports or credentials. `web.allowed_hosts` applies as on every route; a request with a browser `Origin` must pass the WebSocket origin rules, else HTTP 403.
+- `pyaerial_build_info{version}` (constant gauge set to 1)
+- `pyaerial_redis_up` and `pyaerial_archive_up` indicating backing storage reachability
+- `pyaerial_websocket_connections{endpoint}` tracking active connections across `/ws/live`, `/ws/raw`, and `/ws/beast`
+- `pyaerial_beast_tcp_clients` counting attached Beast TCP subscribers
+- `pyaerial_websocket_queued_bytes` measuring outbound buffer pressure
+- `pyaerial_websocket_rate_limited_total` recording RPC requests rejected due to rate limits
+- Client drop counters labeled by reason, such as `pyaerial_websocket_clients_dropped_total{reason}` (`client_too_slow`, `server_budget`, or `feed_behind`) and `pyaerial_beast_tcp_clients_dropped_total{reason}` (`feed_behind` or `not_reading`)
 
-**Origins**
+Engine metrics derived from the live heartbeat include:
 
-Browsers must present an allowed `Origin`; others are closed with `1008` (`origin not allowed`). Native clients that omit `Origin` are accepted. Allowed:
+- `pyaerial_engine_up`, which reports 1 whenever the engine heartbeat was updated within the last 10 seconds
+- When the engine is healthy, additional gauges report `pyaerial_engine_start_time_seconds`, `pyaerial_engine_planes_tracked`, `pyaerial_engine_history_up`, and `pyaerial_engine_history_pending`
+- Cumulative engine counters that reset whenever the engine restarts, including `pyaerial_engine_frames_received_total`, `_frames_dropped_total`, `_messages_processed_total`, `_pending_evicted_total`, `_receiver_restarts_total{receiver}`, and `_stage_errors_total{stage}`
 
-- Same origin (`Origin` host and port equal the `Host` header), when the portal is reached by IP address, `localhost`, or a hostname listed in `web.allowed_hosts`.
-- Exact matches in `web.origins` (`https://portal.example` does not match `http://portal.example` or `https://portal.example:8443`); `["*"]` allows any.
-- Any `localhost`, `127.0.0.1` or `[::1]` origin with `web.allow_localhost_origins: true`.
+Metric labels include configured receiver names rather than sensitive network addresses or credentials. Standard host filtering rules apply to the metrics endpoint, and requests originating from browsers must satisfy origin checks.
 
-**Limits**
+## Allowed origins
 
-| Limit | Default (config key) | When exceeded |
-|-------|----------------------|---------------|
-| WebSocket connections, all endpoints | 256 (`web.ws_max_connections`) | Close `1013` (`server connection limit reached`) |
-| Connections per client IP | 32 (`web.ws_max_connections_per_ip`) | Close `1013` (`per-client connection limit reached`) |
-| In-flight RPC requests per connection | 2 (`web.ws_max_inflight`) | The server stops reading the socket until a response has been sent |
-| RPC rate per connection | 50/s, burst 100 (`web.ws_rate_limit`, `web.ws_rate_burst`) | Requests are delayed; one that would wait over 1 s gets `code: "rate_limited"` |
-| RPC rate per client IP | 200/s, burst 400 (`web.ws_rate_limit_per_ip`, `web.ws_rate_burst_per_ip`) | Same |
-| Inbound frame size | 64 KiB (fixed) | Close `1009` |
-| Outbound queue per client | 64 messages / 8 MB (fixed) | Stream messages are skipped or replaced by newer snapshots. A client whose unread RPC responses fill it is closed with `1013` (`client too slow`) |
-| Outbound queues, all clients | 256 MB (fixed) | The client with the largest backlog is closed with `1013` (`server send budget exceeded`) |
-| Slow `/ws/raw` or `/ws/beast` reader | 10 s behind (fixed) | Close `1013` (`client too slow`) |
-| Beast TCP feeders | 16 total, 4 per IP (`web.beast_max_clients`, `web.beast_max_clients_per_ip`) | Extra connections are closed. A feeder that stops reading or falls 10 s behind is dropped |
+Browsers connecting to WebSocket routes must supply an accepted `Origin` header, or the connection will be rejected with status code `1008` (Policy Violation). Non-browser clients that omit the `Origin` header entirely are accepted by default. Allowed origins include:
 
-Behind a reverse proxy, list it in `web.trusted_proxies`, or all clients share the proxy's IP for the per-IP limits.
+- Same-origin connections where the `Origin` host and port match the request `Host` header, provided the portal is reached via an IP address, `localhost`, or a hostname listed in `web.allowed_hosts`.
+- Specific URLs configured in `web.origins` (note that scheme and port must match exactly, meaning `https://portal.example` does not cover `http://portal.example` or alternate ports); setting `["*"]` allows any origin.
+- Local development origins such as `localhost`, `127.0.0.1`, or `[::1]` when `web.allow_localhost_origins: true` is enabled.
 
-**Live feed (`/ws/live`)**
+## Connection limits and backpressure
 
-On connect the server sends `hello`, then snapshots of the subscribed `flights`, `alerts` and `stats` streams, then pushes changes. It sends `{"type": "ping", "timestamp": ...}` every 15 s.
+| Limit                                 | Default config setting                                                             | Handling when exceeded                                                                                                          |
+| ------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Total WebSocket connections           | 256 (`web.ws_max_connections`)                                                     | Closes the connection with status `1013` (Try Again Later)                                                                      |
+| Connections per client IP             | 32 (`web.ws_max_connections_per_ip`)                                               | Closes the connection with status `1013`                                                                                        |
+| In-flight RPC requests per connection | 2 (`web.ws_max_inflight`)                                                          | Server pauses reading from the socket until an existing response has been sent                                                  |
+| RPC rate per connection               | 50/sec with burst of 100 (`web.ws_rate_limit`, `web.ws_rate_burst`)                | Delays processing; requests that would wait longer than 1 second receive error code `rate_limited`                              |
+| RPC rate per client IP                | 200/sec with burst of 400 (`web.ws_rate_limit_per_ip`, `web.ws_rate_burst_per_ip`) | Same rate-limiting behavior applied across all connections from that IP                                                         |
+| Inbound frame size                    | 64 KiB (fixed limit)                                                               | Closes the connection with status `1009` (Message Too Big)                                                                      |
+| Outbound buffer per client            | 64 messages or 8 MB (fixed limit)                                                  | Skips or coalesces older stream messages; clients whose unread RPC responses exceed the limit are disconnected with code `1013` |
+| Combined outbound buffer              | 256 MB (fixed limit)                                                               | Disconnects the slowest client holding the largest backlog with code `1013`                                                     |
+| Slow raw frame reader                 | 10 seconds behind (fixed limit)                                                    | Disconnects `/ws/raw` or `/ws/beast` clients falling behind with code `1013`                                                    |
+| Beast TCP subscribers                 | 16 total, up to 4 per IP (`web.beast_max_clients`, `web.beast_max_clients_per_ip`) | Additional incoming connections are rejected; subscribers that stop reading or fall 10 seconds behind are closed                |
 
-```json
-{"type": "hello", "protocol": "pyaerial.live", "version": 1,
- "streams": ["flights", "alerts", "telemetry", "stats"],
- "actions": ["subscribe", "fetchFlights", "fetchFlight", "fetchTelemetry", "fetchAlerts", "fetchStats", "fetchZones", "fetchConfig"]}
-```
+If you run PyAerial behind a reverse proxy, configure the proxy's IP address or CIDR range in `web.trusted_proxies` so the server can extract client addresses from `X-Forwarded-For`. Otherwise, all clients will share the proxy's IP address and contend for the same per-IP limits.
 
-The exact message shapes (which keys are always sent, which may be `null`, which are left out) are the pydantic models in `src/pyaerial/api/models.py`, published as JSON Schema in [`web/src/api/schema.json`](web/src/api/schema.json).
+## Live feed (`/ws/live`)
 
-Clients must ignore unknown fields and message types; `version` changes only when something is removed or retyped (see Compatibility in the [README](README.md)).
-
-All four streams are on by default; choose with `/ws/live?streams=flights,alerts` or `subscribe`. `ping` is not a stream. While Redis is unreachable, `flights` and `alerts` are not sent and `stats.redis` is `false`.
-
-| Message | Payload | Sent |
-|---------|---------|------|
-| `flights` | `flights`: every live flight summary | When positions, metadata, alerts or integrity change |
-| `alerts` | `alerts`: every active episode plus the newest inactive ones, `max(50, active count)` in total, newest first | On change; `fetchAlerts` returns the full list |
-| `telemetry` | `timestamp`, `telemetry`: points newer than the last one this client received for each flight | Only points that arrive after connecting (or subscribing); use `fetchTelemetry` for the backlog |
-| `stats` | `stats`: `live_flights`, `active_alerts`, `retained_flights`, `historical_alerts`, `redis`, `history`, `engine_seen_at`, `engine_live` | On change |
-
-Flight summary (live and history views share these fields):
+When a client connects to `/ws/live`, the server immediately sends a `hello` handshake message, followed by initial snapshots of the subscribed `flights`, `alerts`, and `stats` streams. After the initial snapshot, it pushes incremental updates whenever state changes, along with a keepalive ping payload (`{"type": "ping", "timestamp": ...}`) every 15 seconds.
 
 ```json
 {
-  "flight_id": "a1b2c3-1721832000", "icao": "a1b2c3", "callsign": "AAL123",
-  "model": "Boeing 737-800", "owner": "American Airlines", "country": "United States",
-  "aircraft_type": "L2J", "registration": "N123AA",
-  "start_time": 1721832000.0, "end_time": 1721832015.2, "timestamp": 1721832015.2,
-  "latitude": 35.7288, "longitude": -78.6954, "altitude": 1250.0, "speed": 420.5, "heading": 185.0,
-  "is_live": true, "status": "live", "retained": false,
-  "integrity": {"score": 1.0, "status": "ok",
-                "checks": {"radio_horizon": {"status": "pass", "detail": "main: 42 km, radio horizon 441 km", "value": 0.1}}},
-  "active_alerts": [{"alert_id": "a1b2c3-1721832000:airport_approach:low_altitude_warning",
-                     "zone": "airport_approach", "rule": "low_altitude_warning", "activated_at": 1721832010.0, "eta": 45.0}],
-  "alert_stats": {"episode_count": 1, "total_seconds": 5, "active_count": 1}
+  "type": "hello",
+  "protocol": "pyaerial.live",
+  "version": 1,
+  "streams": ["flights", "alerts", "telemetry", "stats"],
+  "actions": [
+    "subscribe",
+    "fetchFlights",
+    "fetchFlight",
+    "fetchTelemetry",
+    "fetchAlerts",
+    "fetchStats",
+    "fetchZones",
+    "fetchConfig"
+  ]
 }
 ```
 
-- Units follow [CONFIGURATION.md](CONFIGURATION.md): m, km/h, degrees, unix seconds.
-- Unknown metadata is `null`; placeholders such as `"UNKNOWN"` or `""` are never sent.
-- `integrity` is `null` until the engine scores the aircraft. Otherwise it has `status`, `score` (`null` while `unknown`), `checks`, and when present `emitter` and `rebroadcast`. See "Integrity output" in [CONFIGURATION.md](CONFIGURATION.md).
-- `active_alerts[].alert_id` is never empty (`<flight_id>:<zone>:<rule>` when the store has no id).
-- `status` is `live` or `completed`. A history flight the engine did not finalize (it was killed or crashed) also has `interrupted: true`; its track ends at the engine's last archive checkpoint. The key is absent otherwise.
+Message models and validation schemas are defined using Pydantic in `src/pyaerial/api/models.py` and exported as JSON Schema in [`web/src/api/schema.json`](web/src/api/schema.json). Clients should safely ignore any unknown fields or message types, as the major version only changes when fields are removed or fundamentally altered.
 
-Alert episodes carry `alert_id`, `flight_id`, `icao`, `callsign`, `zone`, `rule`, `active`, `activated_at`, `deactivated_at`, `ended_by`, `eta`, `altitude`, `latitude` and `longitude`. `ended_by` (`cleared`, `lost`, `shutdown`, `restart`; see "Alerters" in [CONFIGURATION.md](CONFIGURATION.md)) is `null` while active or unknown.
+By default, all four streams are activated upon connection. You can customize your subscriptions either by adding query parameters like `/ws/live?streams=flights,alerts` or by sending a `subscribe` RPC request. If Redis becomes temporarily unreachable, the server halts updates on `flights` and `alerts` and sets `stats.redis` to `false`.
 
-Telemetry points carry `flight_id`, `icao`, `latitude`, `longitude`, `altitude` (barometric), `speed`, `heading` and `timestamp`. `gnss_height` is present only for GNSS-height positions. When provenance is known they also carry `receivers` (strongest copy first) and the verdict in effect when the point arrived: `integrity_score` (`null` while `unknown`), `integrity_status` and `integrity_flags`.
+| Stream message | Payload contents                                                                                 | Delivery timing                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `flights`      | Summaries of all currently active flights under the `flights` key                                | Pushed whenever aircraft positions, metadata, active alerts, or integrity scores update |
+| `alerts`       | Array of active alert episodes along with recent inactive episodes up to `max(50, active count)` | Pushed on changes; send `fetchAlerts` if you need the exhaustive historical list        |
+| `telemetry`    | Recent track points under `telemetry` arriving after client connection                           | Pushed as fresh points arrive; send `fetchTelemetry` to retrieve past points            |
+| `stats`        | General system counters including `live_flights`, `active_alerts`, `redis`, and engine health    | Pushed on changes                                                                       |
 
-`stats.engine_live` is computed on the server (heartbeat within 10 s); prefer it to comparing `engine_seen_at` with the browser clock.
-
-**RPC**
-
-Send requests on `/ws/live`:
+A typical flight summary object shared across live and historical views looks like this:
 
 ```json
-{"type": "request", "id": "req-42", "action": "fetchFlight", "params": {"flightId": "a1b2c3-1721832000", "view": "live"}}
+{
+  "flight_id": "a1b2c3-1721832000",
+  "icao": "a1b2c3",
+  "callsign": "AAL123",
+  "model": "Boeing 737-800",
+  "owner": "American Airlines",
+  "country": "United States",
+  "aircraft_type": "L2J",
+  "registration": "N123AA",
+  "start_time": 1721832000.0,
+  "end_time": 1721832015.2,
+  "timestamp": 1721832015.2,
+  "latitude": 35.7288,
+  "longitude": -78.6954,
+  "altitude": 1250.0,
+  "speed": 420.5,
+  "heading": 185.0,
+  "is_live": true,
+  "status": "live",
+  "retained": false,
+  "integrity": {
+    "score": 1.0,
+    "status": "ok",
+    "checks": {
+      "radio_horizon": {
+        "status": "pass",
+        "detail": "main: 42 km, radio horizon 441 km",
+        "value": 0.1
+      }
+    }
+  },
+  "active_alerts": [
+    {
+      "alert_id": "a1b2c3-1721832000:airport_approach:low_altitude_warning",
+      "zone": "airport_approach",
+      "rule": "low_altitude_warning",
+      "activated_at": 1721832010.0,
+      "eta": 45.0
+    }
+  ],
+  "alert_stats": {
+    "episode_count": 1,
+    "total_seconds": 5,
+    "active_count": 1
+  }
+}
 ```
+
+Units follow the standards documented in [CONFIGURATION.md](CONFIGURATION.md): altitudes in meters, speeds in kilometers per hour, headings in degrees, and timestamps in Unix epoch seconds. Missing metadata values are set to `null` rather than arbitrary placeholders like `"UNKNOWN"`. The `integrity` object remains `null` until the engine gathers enough frames to calculate a score, after which it includes `status`, `score`, and individual check results.
+
+The flight `status` field is set to either `live` or `completed`. If an engine crash or unexpected shutdown prevented a flight from being finalized cleanly, the record in history includes `interrupted: true` with its trajectory ending at the last recorded checkpoint.
+
+Alert episodes include the episode identifier (`alert_id`), flight ID, ICAO address, callsign, zone name, rule name, activation timestamps, and position details. Once an alert ends, `ended_by` records why it closed (`cleared`, `lost`, `shutdown`, or `restart`), remaining `null` while the alert is active.
+
+Telemetry samples record latitude, longitude, barometric altitude, ground speed, heading, and the receive timestamp. If geometric altitude was decoded from ADS-B TC 20–22 messages, `gnss_height` is included as well. Samples also record the list of receivers that picked up the message along with the integrity verdict in effect when the frame arrived.
+
+To determine whether the tracking engine is actively running, inspect `stats.engine_live` rather than comparing `engine_seen_at` against local browser clocks.
+
+## RPC actions
+
+Clients can issue request-response commands directly over the `/ws/live` connection:
+
+```json
+{
+  "type": "request",
+  "id": "req-42",
+  "action": "fetchFlight",
+  "params": {
+    "flightId": "a1b2c3-1721832000",
+    "view": "live"
+  }
+}
+```
+
+The server responds by echoing your request `id` along with either a successful result or an error block:
 
 ```json
 {"type": "response", "id": "req-42", "success": true, "data": {"flight_id": "a1b2c3-1721832000", "photo_url": "https://images.planespotters.net/photo/..."}}
 {"type": "response", "id": "req-42", "success": false, "error": "not found", "code": "not_found"}
 ```
 
-`id` is echoed when it is a string of at most 128 characters or an integer; otherwise it is `null`. `error` is for humans; branch on `code`:
+Clients should inspect `code` when handling errors:
 
-| `code` | Meaning |
-|--------|---------|
-| `bad_request` | Malformed JSON, binary frame, unknown action, missing `flightId`, or a non-numeric / non-finite `since` / `until` |
-| `not_found` | `fetchFlight` found no such flight |
-| `rate_limited` | Over the rate limit by more than the server will delay; retry later |
-| `history_unavailable` | The SQLite archive is configured but cannot be read |
-| `live_unavailable` | Redis is unreachable |
-| `internal_error` | Unexpected server error (logged) |
+| Error code            | Meaning                                                                                                                            |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `bad_request`         | The request payload contained malformed JSON, unparseable binary data, an unrecognized action name, or missing required parameters |
+| `not_found`           | The requested flight identifier could not be located                                                                               |
+| `rate_limited`        | The request rate exceeded configured thresholds and could not be buffered; try again later                                         |
+| `history_unavailable` | The SQLite archive is enabled in the configuration but cannot currently be opened or read                                          |
+| `live_unavailable`    | Redis is disconnected or offline                                                                                                   |
+| `internal_error`      | An unexpected error occurred while processing the request                                                                          |
 
-`view` is `"live"` (default) or `"history"`. Times are unix seconds.
+The `view` parameter accepts `"live"` (default) or `"history"`. Available actions include:
 
-| Action | Parameters | Returns |
-|--------|------------|---------|
-| `subscribe` | `streams`: names; omit or `[]` for all four | `{"streams": [...]}`. Replaces the current set. New `flights`, `alerts` and `stats` streams get a snapshot at once; new `telemetry` starts from now. Only unknown names: `bad_request` |
-| `fetchFlights` | `view`; history only: `skip` (0-10000), `limit` (1-200, default 50), `q` (ICAO, callsign or flight ID substring), `since` / `until` (on end time) | Flight summaries. The live view returns all live flights |
-| `fetchFlight` | `flightId` (required), `view` | Flight detail with airframe metadata and photo links (`photo_url`, `photo_photographer`, `photo_link`) |
-| `fetchTelemetry` | `flightId` (required), `view`, `since` (default 0), `limit` (1-20000, default 5000) | Points in time order, with `truncated` beside `data`. Without `since`, the newest points; with it, the oldest after it, so page forward from the last timestamp. Live reads the Redis trail and is empty while the engine heartbeat is stale |
-| `fetchAlerts` | `view`, `flightId`, `rule`, `active_only`, `since`, `skip` (0-10000), `limit` (0-200); history also `until` and `q` (zone, rule, callsign or ICAO) | Alert episodes. `limit: 0` means all (live) or 200 (history). Live defaults to active episodes unless `flightId` is given |
-| `fetchStats` | | Same object as the `stats` stream. Live counts are 0 and `engine_live` is `false` while the heartbeat is stale; `engine_seen_at` is `null` if none was ever written |
-| `fetchZones` | | Station `home`, zone polygons and `alert_colors` |
-| `fetchConfig` | | `home`, `remember_planes`, `receivers` (`name`, `type`, and when known `format` and fixed `position`; no hosts or ports), `beast_websocket`, and `beast_host` / `beast_port` when Beast TCP is on |
+- `subscribe`: Updates the stream subscription list for the current connection, accepting an array of stream names under `streams` (or all streams if omitted). Newly subscribed `flights`, `alerts`, and `stats` streams immediately receive current snapshot messages.
+- `fetchFlights`: Retrieves flight summaries. In live mode, it returns all active flights. In history mode, it supports pagination via `skip` (0–10000) and `limit` (1–200, defaulting to 50), along with substring filtering with `q` and timestamp bounds via `since` and `until`.
+- `fetchFlight`: Fetches detailed records for a specific `flightId`, including operator data, airframe specifications, and Planespotters photo links.
+- `fetchTelemetry`: Returns ordered trajectory points for a flight. By default, it returns up to 5000 points (`limit` can be set up to 20000) along with a `truncated` boolean indicator. Providing a `since` timestamp allows clients to page forward chronologically.
+- `fetchAlerts`: Queries alert episodes. Live queries default to currently active alerts, while historical queries support pagination, rule name filtering, and time ranges.
+- `fetchStats`: Returns the current system statistics payload, matching what the `stats` stream emits.
+- `fetchZones`: Returns the configured station reference coordinates, geofence polygons, and map alert colors.
+- `fetchConfig`: Returns safe public configuration details, such as station coordinates, receiver names and positions, and Beast feed ports, while omitting private receiver credentials, hostnames, and ports.
 
-**Raw frames (`/ws/raw`)**
+## Raw frames (`/ws/raw`)
+
+The `/ws/raw` WebSocket pushes batches of decoded Mode S frames:
 
 ```json
-{"type": "raw", "frames": [{"hex": "8d406b902015a678d4d220aa4bda", "timestamp": 1730000000.125, "receiver": "strong",
-  "receivers": ["strong", "weak"], "rssi": -8.0, "clock": 12, "df": 17, "icao": "406b90"}]}
+{
+  "type": "raw",
+  "frames": [
+    {
+      "hex": "8d406b902015a678d4d220aa4bda",
+      "timestamp": 1730000000.125,
+      "receiver": "strong",
+      "receivers": ["strong", "weak"],
+      "rssi": -8.0,
+      "clock": 12,
+      "df": 17,
+      "icao": "406b90"
+    }
+  ]
+}
 ```
 
-`timestamp` is engine receive time. `receiver` is the strongest copy; `receivers` lists every receiver that heard the frame, strongest first. `rssi` is dBFS.
+The `timestamp` reflects when the engine received the frame. The `receiver` property names the receiver with the strongest signal, while `receivers` lists all stations that heard the transmission in order of signal strength. Signal levels (`rssi`) are expressed in dBFS.
 
-**Beast feed (`/ws/beast` and TCP)**
+## Beast binary feed (`/ws/beast` and TCP)
 
-PyAerial does not forward dump1090's socket. It merges the frames of all receivers (an exact duplicate keeps the stronger RSSI; near-identical copies within 100 ms keep a CRC-clean one), drops DF17/18 frames that fail CRC, and skips frames already sent within `tracking.duplicate_packet_merging` seconds. The rest are re-encoded as dump1090 Beast:
+Instead of simply retransmitting dump1090's raw TCP output, PyAerial merges incoming frames across all stations, selects the cleanest frame that passes CRC checks, removes duplicate messages received within `tracking.duplicate_packet_merging` seconds, and encodes the stream into standard dump1090 Beast binary format:
 
 ```
 <0x1a> <type> <6-byte 12 MHz clock> <1-byte signal> <Mode S payload>
 ```
 
-- `type`: `0x31` (Mode A/C, 2 bytes), `0x32` (Mode S short, 7 bytes) or `0x33` (Mode S long, 14 bytes). Any `0x1a` byte after the type is doubled.
-- Clock: derived from engine receive time, `int(timestamp * 12e6) mod 2^48`, so all receivers share one time base. Hardware dump1090 clocks are not mixed in.
-- Signal: dump1090-fa's `sqrt(signalLevel) * 255` byte. dBFS = `20 * log10(byte / 255)`.
+Frame format details:
 
-Beast TCP (`web.beast_host` / `web.beast_port` in [CONFIGURATION.md](CONFIGURATION.md)) is what OpenSky Network's feeder expects:
+- Frame type bytes use `0x31` for 2-byte Mode A/C, `0x32` for 7-byte Mode S short messages, and `0x33` for 14-byte Mode S long messages. Any `0x1a` byte appearing in the payload or header is escaped by doubling it.
+- Clock timestamps are synthesized from the engine's monotonic receive time using `int(timestamp * 12e6) mod 2^48`, giving all merged receiver sources a shared, synchronized time base.
+- Signal levels represent the signal byte standard used by dump1090-fa (`sqrt(signalLevel) * 255`), which corresponds to `20 * log10(byte / 255)` dBFS.
+
+Feeders such as OpenSky Network can consume this stream directly by pointing to PyAerial's Beast TCP port (configured via `web.beast_host` and `web.beast_port` in [CONFIGURATION.md](CONFIGURATION.md)):
 
 ```yaml
 opensky:
   image: ghcr.io/sdr-enthusiasts/docker-opensky-network:latest
   environment:
-    - BEASTHOST=pyaerial_web   # or the host running `pyaerial web`
+    - BEASTHOST=pyaerial_web
     - BEASTPORT=30105
     - LAT=35.727488
     - LONG=-78.695942
@@ -177,28 +257,44 @@ opensky:
     - OPENSKY_USERNAME=youruser
 ```
 
-**Python client**
+## Python client example
+
+This example demonstrates subscribing to live flights and issuing a historical query using the `websockets` library:
 
 ```python
-import asyncio, json
+import asyncio
+import json
 import websockets
 
 async def main():
-    async with websockets.connect("ws://127.0.0.1:10090/ws/live?streams=flights,alerts") as ws:
-        assert json.loads(await ws.recv())["type"] == "hello"
-        await ws.send(json.dumps({"type": "request", "id": "hist", "action": "fetchFlights",
-                                  "params": {"view": "history", "limit": 10}}))
-        async for raw in ws:
-            msg = json.loads(raw)
-            if msg["type"] == "flights":
-                for f in msg["flights"]:
-                    print(f["icao"], f["callsign"], f["latitude"], f["longitude"], f["altitude"])
-            elif msg["type"] == "alerts":
-                for a in msg["alerts"]:
-                    if a["active"]:
-                        print("ALERT", a["zone"], a["rule"], a["icao"], a["eta"])
-            elif msg["type"] == "response" and msg["id"] == "hist":
-                print("history:", [f["flight_id"] for f in msg.get("data") or []])
+    uri = "ws://127.0.0.1:10090/ws/live?streams=flights,alerts"
+    async with websockets.connect(uri) as ws:
+        greeting = json.loads(await ws.recv())
+        assert greeting["type"] == "hello"
+
+        # Request recent historical flights
+        request = {
+            "type": "request",
+            "id": "hist-req",
+            "action": "fetchFlights",
+            "params": {"view": "history", "limit": 10}
+        }
+        await ws.send(json.dumps(request))
+
+        async for raw_message in ws:
+            msg = json.loads(raw_message)
+            msg_type = msg.get("type")
+
+            if msg_type == "flights":
+                for flight in msg.get("flights", []):
+                    print(f"Live: {flight['icao']} {flight.get('callsign')} at {flight.get('altitude')}m")
+            elif msg_type == "alerts":
+                for alert in msg.get("alerts", []):
+                    if alert.get("active"):
+                        print(f"Alert in zone {alert['zone']}: {alert['rule']} on {alert['icao']}")
+            elif msg_type == "response" and msg.get("id") == "hist-req":
+                flights = msg.get("data", [])
+                print("History results:", [f["flight_id"] for f in flights])
 
 asyncio.run(main())
 ```

@@ -1,105 +1,103 @@
 # Changelog
 
-All notable changes to PyAerial are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
+All notable changes to PyAerial are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
 ### Fixed
 
-- Receiver copies of one transmission were sometimes not merged: a copy stamped before it reached the engine's queue (dump1090 stamps are spread back from the TCP chunk's arrival) was released alone, and its partner from another receiver was then dropped as a duplicate, losing that receiver's provenance, its stronger signal on the Beast re-serve and its TDOA pairing. Frames are now held for the merge window after they reach the queue (at most 0.5 s), still merging by receive stamp.
-- A Beast TCP feeder that stopped reading could keep its slot for minutes on Linux, where the kernel send buffer grows to several MiB before the 10 s drain timeout even starts. Accepted Beast sockets now use a 64 KiB send buffer.
+- Multiple copies of a single transmission received across different stations are now reliably merged. Previously, if a frame copy was timestamped before entering the engine's queue—which happens because dump1090 timestamps are spread back across the duration of a received TCP chunk—it could be dispatched on its own while matching frames arriving shortly after from other receivers were dropped as duplicates. This caused the engine to lose alternate receiver provenance, stronger signal readings, and TDOA pairing opportunities. Frames are now held in the queue for the merge window (up to 0.5 seconds) while still coalescing based on their physical receive timestamps.
+- Sockets for connected Beast TCP feeders now use an explicit 64 KiB send buffer. On Linux systems, kernel send buffers could previously balloon to several megabytes before the 10-second drain timeout kicked in, allowing stalled feeder clients to tie up connections for minutes.
 
 ## [1.0.0] - 2026-11-03
 
-### Breaking / upgrade notes
+### Breaking changes and upgrade notes
 
-Back up the archive and run `pyaerial validate` before upgrading (see "Upgrading" in the [README](README.md); 1.x stability promises are under "Compatibility" there).
+Before upgrading an existing deployment, back up your SQLite archive and run `pyaerial validate` against your configuration file. Stability commitments across the 1.x series are detailed in the Compatibility section of the [README](README.md).
 
-- `web.beast_port` defaults to **30105** (was 30005, dump1090's own port). Point OpenSky and other feeders at 30105. A dump1090 receiver that reads the portal's Beast port on this machine is rejected.
-- Stricter validation rejects: unknown keys in receiver and alerter `options`; an unknown dump1090 `format` or one that contradicts the port (`beast` on 30002, `avr` on 30005); duplicate rule names in a zone; degenerate or self-intersecting polygons; geofence files with holes, several polygons or bad vertices; `min > max` (except heading); NaN and infinite numbers; bad webhook `format` and `method`.
-- An `integrity` rule condition never matches an `unknown` verdict (it saw a placeholder score of 1.0).
-- `unknown` verdicts have `score: null` live, in `integrity.score` and in `telemetry.integrity_score`.
-- `altitude` is barometric only. GNSS height is a separate `gnss_height`; rules and alerts use it only when an aircraft reports no barometric altitude.
-- A first airborne position (or the first after 180 s without one) waits for an even/odd CPR pair, so tracks start a few seconds later but never at an aliased position.
-- DF18 frames with non-ICAO addresses are no longer tracked.
-- Archive schema 4. Archives from 0.12-0.22 are upgraded in place on the engine's first start; there is no downgrade.
-- **Stop `pyaerial run` gracefully before upgrading** (`docker compose stop`, Ctrl-C, SIGTERM). A 0.x engine that crashed left its in-flight flights only in Redis; the new engine does not import them (it logs a warning with their count and clears them).
-- The archive is now the source of truth for flights and alert episodes: a tracked flight is written as `live` from its first checkpoint, and a crash leaves it `interrupted` (ending at its last checkpoint) instead of being rebuilt from Redis. Under `archive.flights: rules`, an interrupted flight that no rule matches is deleted, where a crash leftover used to be kept.
-- Docker Compose: the Redis password is a Compose secret read through `PYAERIAL_REDIS_PASSWORD_FILE`, no longer part of `PYAERIAL_REDIS`; a one-shot `redis-config` service renders the Redis config; the image ships only the example config, so bind-mount yours (Compose does). Recreate the stack after pulling.
-- `fetchTelemetry` returns at most 5000 points by default (`limit` up to 20000), live and history, with `truncated` beside `data`.
-- `pyaerial` without a subcommand exits 2 (was 0).
-- JSON webhook bodies: `icao` is lowercase; `type` and `reason.hook` are kept for compatibility.
+- Outgoing Beast data on `web.beast_port` now defaults to port 30105 rather than 30005, which avoids conflicting with dump1090's own default Beast port. Reconfigure OpenSky feeders and external consumers to connect to port 30105. Receiver configurations attempting to read PyAerial's own Beast port on the local machine will now be rejected.
+- Configuration validation has been tightened across all subsystems. The parser rejects unrecognized keys in receiver and alerter `options` blocks, flags format mismatches such as specifying `beast` on port 30002 or `avr` on port 30005, disallows duplicate rule names within a zone, and rejects degenerate polygons, self-intersecting boundaries, multi-polygon geofences, and polygons containing interior holes. Values where `min` exceeds `max` (except for wrap-around headings), NaN or infinite numbers, and unsupported webhook methods or formats will now fail validation on startup.
+- Rule conditions that check `integrity` will no longer match aircraft whose integrity verdict is `unknown`. Previously, unverified aircraft were assigned a placeholder score of 1.0; they now report `score: null` in live feeds, in `integrity.score`, and across `telemetry.integrity_score`.
+- Altitudes are now treated strictly as barometric measurements. Geometric height reported in ADS-B messages is stored separately as `gnss_height`, and alert rules evaluate geometric height only when an aircraft provides no barometric data.
+- Initial airborne position tracking now waits for an even and odd CPR message pair, which prevents aircraft tracks from beginning at aliased positions across the globe.
+- DF18 messages carrying non-ICAO transponder addresses are no longer ingested into tracking state.
+- The research database advances to schema version 4. Existing archives from versions 0.12 through 0.22 are migrated in place automatically during the engine's initial startup. Database migrations roll forward only, so an older PyAerial version cannot read an upgraded database.
+- Stop existing `pyaerial run` processes gracefully before upgrading (using `docker compose stop`, Ctrl-C, or SIGTERM). In previous 0.x releases, an ungraceful crash left active flights stranded in Redis. The 1.0.0 engine treats the SQLite database as the sole source of truth and purges leftover unfinalized flights found in Redis upon startup after logging a count warning.
+- Active flights and alert episodes are now anchored in the SQLite archive from their first 5-second checkpoint. If the engine terminates abruptly, surviving flights are preserved as `interrupted` records ending at their last recorded checkpoint. Under `archive.flights: rules`, interrupted tracks that failed to trigger a retention rule are discarded cleanly.
+- In Docker Compose setups, the Redis password is provided as a Docker secret via `PYAERIAL_REDIS_PASSWORD_FILE` rather than through the `PYAERIAL_REDIS` connection string. A one-shot `redis-config` container prepares the configuration file, and the PyAerial container ships only sample configs, requiring host configs to be bind-mounted into `/opt/PyAerial/config.yaml`.
+- The `fetchTelemetry` WebSocket RPC now defaults to returning up to 5000 points (with an upper limit of 20000) and supplies a `truncated` boolean indicator alongside returned data.
+- Invoking `pyaerial` without specifying a subcommand now exits with status code 2 instead of 0.
+- Webhook JSON payloads now format `icao` addresses in lowercase, retaining legacy fields like `type` and `reason.hook` for backward compatibility.
 
 ### Added
 
-- `database.redis_password_file` / `PYAERIAL_REDIS_PASSWORD_FILE`.
-- `${file:/path}` config interpolation for secrets.
-- Versioned JSON webhook body: `"schema": "pyaerial.alert/1"`, a top-level `event`, and every field always present (field table in [CONFIGURATION.md](CONFIGURATION.md)).
-- `tracking.max_flight_seconds` (default 14400): long tracks are archived as segments; active alerts carry over under the same `alert_id`.
-- `enrichment.enabled`: turn off the engine's hexdb.io / Planespotters lookups.
-- `readsb` receiver type: dump1090's Beast/AVR client plus readsb's tar1090 `receiver.json` locations; its BeastReduce port (30006) is rejected unless `options.allow_reduced: true`.
-- Per-IP limits: `web.ws_rate_limit_per_ip` / `web.ws_rate_burst_per_ip` (200/s, burst 400) and `web.beast_max_clients_per_ip` (4).
-- `integrity.cross_network.timeout_seconds`.
-- `gnss_height` in the `telemetry` table and on WebSocket telemetry points.
-- Alert notifications carry `alert_id`, `flight_id` and `altitude_source`; deactivations carry `reason.ended_by` (`cleared`, `lost`, `shutdown`, `restart`), also on WebSocket alerts and in the portal. `print` lines show the hook and `alert_id`.
-- Archive health (`history`, `history_error`, `history_pending`) in the `live:engine` heartbeat.
-- An archive lease (`engine_lease` table): a second engine waits out a running one, and an engine that stalled and was replaced can no longer write the archive.
-- Archive checkpoints: every 5 s each tracked flight's samples (older than 10 s), new integrity verdicts and open alert episodes are written, so a crash loses at most about 15 s per flight (was everything older than the Redis telemetry window). New `flights.status` value `interrupted`; new columns `flights.checkpoint_at`, `flights.previous_flight_id`, `alerts.start_flight_id`. The API marks interrupted flights `interrupted: true` (status stays `completed`), and the portal's history shows a badge.
-- `counters` in the `live:engine` heartbeat: frames received and dropped, messages processed, deferred flights and outbox episodes dropped, receiver restarts, stage errors, tracked aircraft.
-- Replay of dump1090 Beast binary captures, and a bundled sample capture used by `examples/replay.yaml`.
-- `pyaerial reset --force` for when Redis is unreachable.
-- `subscribe` sends a snapshot for newly added `flights`, `alerts` and `stats` streams.
-- Compose healthchecks for Redis, the engine and the portal, with startup ordering.
-- `GET /metrics` in Prometheus text format: engine counters and health from the heartbeat, portal WebSocket and Beast clients, drops and rate limiting (`web.metrics: false` disables it).
-- Third-party receivers and alerters through the `pyaerial.receivers` / `pyaerial.alerters` entry points; plugins declare `known_options` and `validate_options`, and `pyaerial validate` lists what is available.
-- The portal's TypeScript types are generated from the server's wire models (`web/src/api/schema.json`), and CI fails on drift.
-- This changelog.
+- Added support for reading Redis credentials from a file using `database.redis_password_file` and the corresponding `PYAERIAL_REDIS_PASSWORD_FILE` environment variable.
+- Added support for reading secret values directly from external files in YAML configurations via `${file:/path}`.
+- Introduced versioned JSON webhook alert payloads under schema identifier `pyaerial.alert/1`, adding top-level `event` indicators and ensuring all fields are present consistently.
+- Added `tracking.max_flight_seconds` (defaulting to 14400 seconds) to split exceptionally long flights into linked archive segments while maintaining active alert continuity under the same `alert_id`.
+- Added the `enrichment.enabled` configuration toggle to allow disabling external hexdb.io and Planespotters API queries.
+- Introduced a dedicated `readsb` receiver driver that consumes Beast or AVR streams while querying tar1090 `receiver.json` endpoints for dynamic antenna positions.
+- Added configurable per-IP connection and rate limits for WebSockets and Beast TCP subscribers via `web.ws_rate_limit_per_ip`, `web.ws_rate_burst_per_ip`, and `web.beast_max_clients_per_ip`.
+- Added `integrity.cross_network.timeout_seconds` to constrain external aggregator verification queries.
+- Added `gnss_height` tracking across database tables and live WebSocket telemetry points.
+- Enriched alert notifications with `alert_id`, `flight_id`, and `altitude_source` properties. Alert deactivations include an `ended_by` reason (`cleared`, `lost`, `shutdown`, or `restart`), which also surfaces across WebSocket feeds and in the web portal.
+- Added archive health indicators (`history`, `history_error`, and `history_pending`) to the engine's live Redis heartbeat payload.
+- Added database lease fencing via the `engine_lease` table to ensure that multiple engines cannot write to the same database simultaneously.
+- Introduced periodic database checkpoints every 5 seconds for live flights, minimizing data loss during an unexpected power cut or crash to approximately 15 seconds per flight. Interrupted flights surface an `interrupted: true` flag in API queries and display a warning badge in web history.
+- Added detailed operational counters to the engine heartbeat to track received frames, dropped frames, processed messages, evicted flights, receiver restarts, and stage errors.
+- Added the ability to replay dump1090 Beast binary captures alongside synthetic sample data in `examples/replay.yaml`.
+- Added the `--force` flag to `pyaerial reset` to allow purging SQLite data when Redis is unreachable.
+- Subscribing to `flights`, `alerts`, or `stats` streams on an existing WebSocket connection now immediately pushes a fresh snapshot of current state.
+- Added Docker Compose health checks and startup ordering dependencies for Redis, the engine, and the web portal.
+- Added a Prometheus metrics endpoint at `GET /metrics` reporting real-time engine counters, heartbeat status, and web client statistics.
+- Added dynamic plugin loading for third-party receivers and alerters via standard Python entry points (`pyaerial.receivers` and `pyaerial.alerters`).
+- Generated TypeScript API types from server wire models to ensure the frontend build enforces strict contract compatibility in CI.
 
 ### Changed
 
-- Integrity verdicts stay `unknown` until an aircraft has been tracked 30 s with at least 3 checks reporting (2 for TIS-B/ADS-R); failures publish at once; a status improves only after holding 30 s. The `integrity` table logs score or check changes at most every 30 s.
-- The AoA bias is learned from aircraft that pass every check except `aoa`; without `bearing_offset`, `aoa` stays silent until it is learned.
-- `retain` needs a continuous match for `dwell_seconds` and uses the verdict in effect at each sample.
-- Flight pushes also follow integrity changes.
-- Older archives are upgraded in place in one transaction instead of being refused; an archive from a newer PyAerial is refused and left untouched.
-- The portal opens the archive read-only and shows history as unavailable until the engine has created or upgraded it.
-- Redis is a cache of what the engine tracks: it is republished every tick (in full after a Redis restart), cleared at startup, and no longer read to recover after a crash. Only alert episodes the archive refused during an outage are kept there (`live:episode_outbox`). Per-flight keys expire 7 days after their last write.
-- The engine intake queue is sized from `tracking.hz`.
-- `cross_network` and `receiver.json` requests have deadlines, back off on failure and honour `Retry-After`.
-- `logging.level` is case-insensitive and accepts `warn`; errors from `PYAERIAL_*` overrides name the variable.
-- The AoA sidecar's `time` field is ignored; frames use local receive time.
-- `fetchConfig` no longer includes receiver hosts and ports.
-- The logger `pyaerial.calc.plane` is now `pyaerial.pipeline`; update log filters.
-- Compose: 20 s engine stop grace period, memory limits for Redis and the portal, log rotation, read-only Redis, Beast published on `127.0.0.1:${BEAST_PUBLISH_PORT:-30105}`.
-- The web toolchain moves to TypeScript 6, Vite 8, Vitest 5, ESLint 10 and jsdom 30 on Node 22.23 (CI and the Docker build).
-- The portal uses system fonts (no Google Fonts) and shows a plain map background when OpenFreeMap is unreachable.
+- Aircraft integrity verdicts now remain in `unknown` status until an aircraft has been tracked for at least 30 seconds with three or more checks reporting (or two checks for rebroadcast data). Verification failures publish immediately, while improving verdicts require 30 seconds of consistent evidence.
+- The angle-of-arrival bias is learned dynamically from aircraft that pass all other integrity checks. When `bearing_offset` is omitted, the AoA check remains silent until sufficient calibration data has been collected.
+- Rules configured with `retain: true` now require conditions to hold continuously for `dwell_seconds`, evaluating the specific verdict in effect at each recorded sample.
+- Flight updates are now pushed to web clients whenever integrity verdicts change.
+- SQLite archives from previous releases are upgraded automatically in a single database transaction upon startup.
+- The web portal opens the SQLite archive in read-only mode and displays history as unavailable until the engine finishes running migrations.
+- Redis now acts strictly as an ephemeral cache of active flight state, republishing state each tick and clearing cached entries upon engine startup.
+- The intake queue capacity scales automatically with `tracking.hz`.
+- External HTTP queries for receiver metadata and cross-network position checks now enforce deadlines and handle HTTP 429 backoff according to `Retry-After` headers.
+- The `logging.level` setting is evaluated case-insensitively and accepts `warn` as an alias for `warning`.
+- The AoA sidecar driver now ignores incoming `time` fields, stamping frames with local arrival times instead.
+- The `fetchConfig` WebSocket RPC no longer exposes receiver hostnames and ports to connected clients.
+- The logger previously named `pyaerial.calc.plane` has been renamed to `pyaerial.pipeline`.
+- Docker Compose includes a 20-second stop grace period for the engine, restricts Redis and portal containers to 1 GB of memory, and publishes Beast TCP on `127.0.0.1`.
+- Upgraded the web development toolchain to TypeScript 6, Vite 8, Vitest 5, ESLint 10, and jsdom 30 running on Node 22.
+- The web portal uses system fonts rather than loading Google Fonts externally and renders a neutral fallback map background when OpenFreeMap tiles cannot be reached.
 
 ### Removed
 
-- UNITS.md; units are now a section of CONFIGURATION.md.
+- Removed `UNITS.md`; unit conversion documentation has been incorporated directly into `CONFIGURATION.md`.
 
 ### Fixed
 
-- Every alert activation gets one deactivation, also across crashes (`ended_by: restart`); a crash in the instant between a notification and its record can repeat one restart deactivate or leave one activation unpaired, and notifications still queued for delivery are lost with the process.
-- Frames that fail CRC are no longer tracked or re-served on `/ws/raw`, `/ws/beast` or Beast TCP.
-- A receiver clock jump (dump1090 restart, replay loop) resets that receiver's clock sync and `timing` check.
-- Zones that cross the antimeridian.
-- dump1090 and AoA receivers reconnect after 150 s of silence.
-- A replay with `loop: false` no longer starts over when the engine restarts it.
-- `radio_horizon` applies `max_range_km` to every receiver.
-- Slow WebSocket clients and Beast TCP feeders that stop reading are disconnected instead of holding resources.
-- Many robustness fixes in tracking, integrity, storage and the portal.
+- Guaranteed that every alert activation receives a matching deactivation notification even across unexpected engine crashes (`ended_by: restart`).
+- Frames failing CRC checks are no longer ingested into tracking state or redistributed across `/ws/raw`, `/ws/beast`, or Beast TCP feeds.
+- Abrupt receiver clock jumps reset clock synchronization state and the corresponding timing check.
+- Fixed geofence calculations for zones that cross the 180th meridian.
+- dump1090 and AoA receiver drivers automatically reconnect after 150 seconds of silence.
+- Prerecorded replays with `loop: false` no longer restart unexpectedly when the receiver supervisor cycles.
+- Corrected line-of-sight radio horizon calculations to apply `max_range_km` across all configured receivers.
+- Slow WebSocket clients and stalled Beast TCP readers are disconnected cleanly to prevent resource exhaustion.
+- Resolved various race conditions and edge cases across tracking, integrity evaluation, storage, and web UI components.
 
 ### Security
 
-- The Redis password no longer appears in container environments or `docker inspect`.
-- Webhook URLs never reach logs, including at `debug`.
-- dump1090 runs with its network input ports disabled, so frames cannot be injected.
-- The image no longer contains the local `config.yaml`; `.dockerignore` excludes it and `secrets/`.
-- Outbound fetches (`receiver.json`, `cross_network`) do not follow redirects and bound response size and time.
-- Per-IP WebSocket rate limits, a per-IP Beast TCP cap, and bounded send queues.
+- Removed Redis passwords from container environment variables and `docker inspect` outputs by migrating to Docker secrets.
+- Webhook endpoints are stripped from application logs and debug messages.
+- The bundled dump1090 service disables all network input sockets, preventing frame injection over the network.
+- The production Docker image excludes local `config.yaml` and `secrets/` directories.
+- Outbound HTTP requests for receiver locations and cross-network verification enforce strict payload size limits and refuse to follow redirects.
+- Added per-IP connection caps, per-IP rate limiting, and bounded outbound buffer queues across all web feeds.
 
-For changes before this release, see the [git tags](https://github.com/quantumbagel/PyAerial/tags) (`v0.1.0` to `v0.22.0`).
+For details on changes prior to 1.0.0, refer to the [git release tags](https://github.com/quantumbagel/PyAerial/tags) from `v0.1.0` through `v0.22.0`.
 
 [Unreleased]: https://github.com/quantumbagel/PyAerial/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/quantumbagel/PyAerial/compare/v0.22.0...v1.0.0

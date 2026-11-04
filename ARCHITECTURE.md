@@ -1,29 +1,31 @@
 # Architecture
 
-Internals for contributors. Users start at the [README](README.md).
+This document outlines the internal design, component structure, and operational guarantees of PyAerial for contributors and maintainers. If you are looking for configuration or user documentation, start with the [README](README.md).
 
-**Processes**
+## Core processes
 
-- `pyaerial run` (engine, `engine/`) is the only writer of Redis and the SQLite archive. At start it claims the `live:engine` heartbeat and the archive's `engine_lease`; a second engine refuses to start, and an engine that loses either yields.
-- `pyaerial web` (portal, `webapp.py` and `api/`) reads Redis and opens the archive read-only. It never tracks.
+PyAerial separates real-time sensor processing from client-facing presentation into two distinct services:
 
-**Pipeline**
+- `pyaerial run` represents the tracking engine implemented in `src/pyaerial/engine/`. It is the sole process that writes to Redis and the SQLite research database. During startup, the engine claims the `live:engine` heartbeat key and takes out an `engine_lease` in SQLite. If another engine instance is already active, a second engine will refuse to start; similarly, if a running engine ever loses its lease, it yields execution to protect data integrity.
+- `pyaerial web` provides the web portal and client API, implemented across `webapp.py` and `api/`. It reads live aircraft snapshots from Redis and opens the SQLite archive in read-only mode. The web service never decodes radio frames, mutates tracking state, or triggers alert evaluations.
 
-`Engine.tick` (`engine/core.py`) runs `tracking.hz` times a second:
+## Processing pipeline
 
-1. Drain the receiver intake queue and hold back copies that may still merge (`ReceiverSupervisor.drain`): every frame waits `MERGE_WINDOW` (0.1 s) after it reached the queue, and at most `MAX_HOLD` (0.5 s), plus up to a tick.
-2. `IntegrityMonitor.observe_frames` sees every receiver copy, as does the raw frame archive (`archive.raw_frames`).
-3. Merge copies, drop duplicates and CRC failures, publish to `live:raw`.
-4. `Tracker.ingest` decodes and updates `tracker.planes`.
-5. `IntegrityMonitor.evaluate` scores aircraft. `PlaneCalculator.calculate_all` (`pipeline.py`) runs kinematics, enrichment and the alert engine.
-6. Publish the tracked flights to Redis (a cache for the portal) and refresh the heartbeat.
-7. Expire idle aircraft, split long flights, retry deferred archive work and checkpoint live flights into the archive (`FlightArchiver`).
+The engine processes incoming radio traffic in discrete ticks orchestrated by `Engine.tick` in `engine/core.py`. The loop runs at the rate specified by `tracking.hz`, executing the following stages in sequence:
 
-Each stage runs under a `StageGuard` (`engine/guard.py`, one instance shared by the engine, supervisor and archiver): an exception is logged (one traceback per stage per interval), counted in `counters.stage_errors`, and the tick continues.
+1. The receiver supervisor drains newly received frames from the intake queue while briefly buffering frames that may still have duplicate copies in transit. Every received frame is held for `MERGE_WINDOW` (100 ms) after entering the queue, up to a maximum hold of `MAX_HOLD` (500 ms) plus the duration of a single tick.
+2. The integrity monitor observes all raw receiver copies through `IntegrityMonitor.observe_frames`, capturing signal metrics and arrival timestamps across every station before any deduplication occurs. If raw frame archival is enabled in the configuration, copies are recorded in the database as well.
+3. Frames are deduplicated across stations, discarding corrupt frames that fail CRC checks, and surviving clean frames are published to the `live:raw` Redis pub/sub channel.
+4. The tracker ingests clean frames, decodes Mode S and ADS-B payloads, and updates active aircraft state in `tracker.planes`.
+5. The integrity engine evaluates available evidence to update each aircraft's spoofing score, while `PlaneCalculator.calculate_all` calculates velocity vectors, fetches cached enrichment data, evaluates geofence rules, and raises alerts.
+6. Tracked aircraft summaries and active alerts are refreshed in Redis to serve connected web clients, and the engine heartbeat is renewed.
+7. The engine cleans up stale aircraft that have not broadcast within `remember_planes`, divides excessively long flights into clean segments, retries any deferred database operations, and checkpoints live flight tracks into the SQLite archive.
 
-**Layers**
+Each processing stage runs inside a `StageGuard` boundary (`engine/guard.py`). If an unexpected exception occurs inside a stage, the guard catches the error, logs the traceback once per throttle interval, increments `counters.stage_errors`, and allows the rest of the tick loop to continue running uninterrupted.
 
-Higher layers may import lower ones, never the reverse; `|` separates independent siblings. `lint-imports` enforces this from `[tool.importlinter]` in `pyproject.toml`:
+## Architectural layers
+
+To maintain clean separation of concerns and prevent circular dependencies, PyAerial organizes its packages into distinct layers. Components in higher layers may import from lower layers, but lower layers may never import upward. Independent sibling packages separated by `|` cannot import from one another. This hierarchy is strictly enforced by `lint-imports` during CI using settings in `pyproject.toml`:
 
 ```
 pyaerial.cli
@@ -42,68 +44,81 @@ pyaerial.models | pyaerial.logging_setup
 pyaerial.constants | pyaerial.units | pyaerial.jsonutil | pyaerial.urls | pyaerial.plugins
 ```
 
-**Engine package**
+## The engine subsystem
 
-- `core.py`: `Engine`, the tick loop, stage guards, status line, heartbeat counters, signals, startup and shutdown order; `run_engine`.
-- `supervisor.py`: `ReceiverSupervisor`, receiver threads (start, restart with back-off, stop), the bounded intake queue (sized from `tracking.hz`, drop-oldest), the merge-window hold-back, merge/de-dup, raw publish and raw frame archive.
-- `archiver.py`: `FlightArchiver`, checkpoints, finalize, the archive policy (`retain`), deferred flights and their memory budget, retry back-off and the per-tick budget, startup recovery, segmentation (pure helpers in `segments.py`).
-- `guard.py`: `StageGuard`. `lint-imports` keeps `core` above `supervisor | archiver` (independent of each other) above `segments | guard`. Both components take narrow protocols (`FrameArchive`, `RawPublisher`, `FrameDeduper`; `FlightArchive`, `LiveCache`, `AlertHooks`, `EpisodeLog`), not the `Engine`.
-- Test seams: `Engine.tick()`, `process_frames()`, `expire_planes()`, `log_status(now=)`, `request_stop()`, the `history_store=` argument (a real archive behind `isolated=True`); `supervisor.enqueue(frame)`, `drain()`, `flush()`, `held`, `receivers`, `queue`, `clock` (arrival and hold-back time); `archiver.pending`, `checkpoint(now, force=)`, `defer()`, `clear_pending()`, `retry_now()`, `back_off()`, `max_flight_seconds`. Prefer them to private attributes.
+The engine package (`src/pyaerial/engine/`) is structured into several focused modules:
 
-**Threads**
+- `core.py` houses the `Engine` class, driving the tick loop, supervising stage guards, printing terminal status summaries, maintaining heartbeat counters, handling Unix signals, and orchestrating clean startup and shutdown sequences.
+- `supervisor.py` contains `ReceiverSupervisor`, which manages background receiver threads, applies exponential backoff when a connection drops, buffers frames across the merge window, coordinates deduplication, and feeds the raw Redis stream and raw frame archiver.
+- `archiver.py` implements `FlightArchiver`, which controls periodic database checkpoints, finalizes completed flights, enforces retention policies, manages in-memory retry queues when SQLite is unreachable, and divides long tracks into segments using helpers from `segments.py`.
+- `guard.py` defines `StageGuard`, a lightweight boundary that wraps individual tick stages, prevents unexpected crashes from halting the tracking loop, and surfaces error counts in Prometheus metrics.
 
-- The tick loop (main thread) owns `tracker.planes`.
-- Each receiver runs on its own thread and hands frames over through the bounded intake queue (`emit`); when it is full the oldest frame is dropped.
-- Enrichment lookups run on `callsign-lookup-*` threads fed by a queue; results come back under a lock and are applied on a later tick.
-- Alerter calls run on `AlertDispatcher` workers, each with a bounded queue. Jobs for one `alert_id` stay on one worker, so they arrive in order.
-- Receiver-position polling and `cross_network` lookups have their own background threads.
-- The portal is one asyncio loop. Blocking Redis and SQLite work goes to `asyncio.to_thread` or the RPC pool (`web.ws_request_workers`); the `live:raw` subscriber is a thread.
+For testing purposes, the engine exposes clean control points such as `Engine.tick()`, `process_frames()`, `expire_planes()`, and `request_stop()`. Similarly, the supervisor and archiver expose helper methods like `supervisor.enqueue(frame)`, `supervisor.drain()`, and `archiver.checkpoint(now, force=True)`. Tests should rely on these documented seams rather than accessing private class attributes.
 
-**Persistence and recovery**
+## Concurrency and threads
 
-The archive is the record; Redis is a cache of what the engine tracks.
+PyAerial uses a combination of dedicated OS threads and asynchronous event loops:
 
-- A tracked flight gets a `live` row with its first checkpoint (`FlightArchiver.checkpoint`, each flight every `CHECKPOINT_SECONDS` = 5 s, spread over the ticks): samples older than `SETTLE_SECONDS` = 10 s, and new integrity verdicts. Alert episodes are written at activation and deactivation (`store/recorder.py`, `EpisodeRecorder`: notify, then record), their while-active refreshes with the checkpoint.
-- Finalize rewrites the whole flight as `completed`, or deletes it by the archive policy (`discard_flight`; an episode carried over a segment split moves back to the segment where it began). Failed writes wait in memory (`retry_pending`, 1 GiB budget, overflow counted as `pending_evicted`); refused episodes wait in a bounded outbox that is copied to Redis (`live:episode_outbox`) until the archive accepts them.
-- Startup (`recover_on_startup`, retried by the tick while the archive is down): replay the episode outbox, close every open episode of another process with one `ended_by: restart` deactivate (`AlertEngine.close_restored`), keep each leftover `live` flight as `interrupted` or delete it by the policy (a flight whose episode could not be closed stays `live` for the next start), then clear the Redis cache.
-- Fencing (`ArchiveWriter.take_lease`): the `engine_lease` row holds the running engine's token and is renewed every tick; it expires after 10 s, the heartbeat's TTL. A new engine waits out a live lease (refusing to start if it stays renewed) and takes over an expired one, before recovery. Every engine write transaction (checkpoint, episodes, finalize, discard, interrupt, raw frames) first checks the token, so an engine that stalled and was replaced writes nothing more (`LeaseLost`); it checks the lease before each tick and yields. Residual window: alert notifications of the tick during which the stalled engine wakes up, before its next lease check, can duplicate the new engine's restart deactivates; nothing reaches the archive. An engine that yields Redis but still holds its archive lease (the other engine uses another archive) finalizes its flights there.
+- The main thread runs the tracking engine's tick loop and exclusively owns the `tracker.planes` dictionary, eliminating the need for complex locking during track evaluation.
+- Every configured receiver runs in its own background thread, delivering incoming frames to the intake queue through `emit`. If the queue reaches capacity, the oldest frames are dropped immediately to keep processing latency low.
+- Callsign and aircraft registration lookups run on background `callsign-lookup-*` threads fed by an internal queue. Completed lookups return their results behind a thread lock and are applied during subsequent engine ticks.
+- Outbound alert notifications are dispatched using `AlertDispatcher` worker threads with bounded queues. All actions associated with a single `alert_id` are routed to the same worker thread, ensuring that activation, repeat, and deactivation messages always arrive in sequence.
+- Periodic receiver position polling and external aggregator queries run in independent background threads.
+- The web portal runs inside an asyncio event loop. Blocking filesystem and database operations are delegated to worker threads via `asyncio.to_thread` or the RPC thread pool (`web.ws_request_workers`), while an independent background thread listens to incoming frames on the `live:raw` Redis channel.
 
-The archive package `store/archive/`:
+## Persistence and crash recovery
 
-- `schema.py`: DDL, `SCHEMA_VERSION`, migrations and inspection helpers (functions over a `sqlite3` connection). An upgrade runs in one transaction.
-- `writer.py`: `ArchiveWriter`, for the engine and `pyaerial reset`. Creates and upgrades the schema; checkpoints, episodes, finalize, discard and recovery reads; writes and prunes raw frames; reports `health()`.
-- `reader.py`: `ArchiveReader`, for the portal. Opens the file `mode=ro`, never runs DDL, hides `live` flights and their episodes, and reports `missing`, `needs_upgrade`, `incompatible` or `down` in `state`.
-- `rows.py` (row decoding) and `_conn.py` (connection, lock, reconnect backoff) are shared. Plane-to-row conversion is in `store/codec.py`.
+The research archive in SQLite serves as the permanent source of truth, while Redis functions as an ephemeral, read-heavy cache for web clients.
 
-The live store package `store/live/` (Redis keys in CONFIGURATION.md):
+When an aircraft is detected, the archiver creates a new flight record marked as `live`. Every five seconds, the engine checkpoints samples older than ten seconds into SQLite along with newly finalized integrity verdicts. Alert episodes are written to the database when they activate and when they close, while interim updates sync during regular checkpoints.
 
-- `writer.py`: `LiveWriter`, for the engine (and `pyaerial reset` with `writer=False`, which never claims the heartbeat). Claims and refreshes `live:engine`, publishes the tracked flights, telemetry and episodes in one pipeline per tick (deleting flights no longer tracked; everything again after a failure or reconnect), keeps the episode outbox copy, publishes raw frames. It holds nothing recovery needs.
-- `null.py`: `NullLiveWriter`, the isolated engine's (replay, profiling, tests): writes nothing.
-- `reader.py`: `LiveReader`, for the portal. Read-only queries (`_queries.py`, shared with the writer), `engine_heartbeat()`, the `live:raw` subscription; raises `LiveUnavailable` while Redis is down.
-- `keys.py` (key names, TTLs, heartbeat payload), `_conn.py` (client and reconnect backoff), `_reads.py` (Redis queries) and `_raw.py` (raw listeners and subscription) are shared. `lint-imports` keeps the portal's readers, and everything `pyaerial.api` / `pyaerial.webapp` import, from reaching a writer: the `store` packages do not re-export `ArchiveWriter` or `LiveWriter`; import them from `store.archive.writer` and `store.live.writer`.
-- `protocols.py`: `LiveReadStore` (api/), `EpisodeStore` (alerts), `LiveWriteStore` (engine).
+When an aircraft stops transmitting for longer than `remember_planes`, the flight is marked `completed` and rewritten in full, or removed entirely if it fails retention criteria. If SQLite becomes temporarily unreachable, completed flights wait in an in-memory buffer capped at 1 GiB, and unwritten alert episodes are buffered in an outbox that mirrors into Redis (`live:episode_outbox`).
 
-**Adding a receiver or alerter**
+If the tracking engine stops abruptly due to a power loss or crash, the subsequent engine run recovers cleanly during startup:
 
-- Receiver: subclass `pyaerial.receivers.Receiver` and implement `run()` (call `self.emit(...)` per frame, poll `should_stop()`, return a reason when exiting). Top-level `host` / `port` reach only `dump1090`, `readsb` and `aoa` (`ReceiverConfig.receiver_arguments`); other receivers read `options`.
-- Alerter: subclass `pyaerial.alerters.Alerter` and implement `alert(meta, payload)`.
-- Both declare `known_options: ClassVar[frozenset[str]]` (every `options` key they read; the loader rejects others with a "did you mean" hint) and may override `@classmethod validate_options(options, *, config_dir) -> list[str]`: plugin-specific checks returning error messages, no I/O beyond local files, may normalize `options` in place (`replay` resolves its path). A message starting with `options.<key>:` is reported against that key. A receiver that reads a Beast/AVR feed also implements `endpoint(options) -> ReceiverEndpoint` (host, port, wire format), used by the self-feed check and the portal.
-- Registration is by entry point: groups `pyaerial.receivers` and `pyaerial.alerters` (the builtins are declared in `pyproject.toml`; if PyAerial's metadata is missing they are imported directly). A third-party distribution declares, e.g., `[project.entry-points."pyaerial.receivers"] mysdr = "mypkg.sdr:MySdrReceiver"`. Builtin names cannot be replaced (warning); a plugin that fails to import or lacks `known_options` is logged once and skipped. In-process code may use `@register_receiver("name")` / `@register_alerter("name")`.
-- The loader (`config/loader.py`) only calls the contract; rules that need several sections (the self-feed Beast port check) stay there.
-- The JSON webhook body (`alerters/contract.py`) and the WebSocket messages are public contracts pinned by golden files in `tests/golden/`.
+- The new engine replays any uncommitted alert episodes discovered in the Redis outbox.
+- It finds any open alert episodes that were left active by the previous process and cleanly deactivates them with an `ended_by: restart` event.
+- Leftover flights marked as `live` from the previous run are converted to `interrupted`, terminating their tracks at their last recorded checkpoint. If a flight does not meet retention rules, it is deleted.
+- The Redis live cache is purged so stale aircraft do not linger on web maps.
 
-**Tests and checks**
+To prevent split-brain scenarios where two engine processes attempt to write to the same database simultaneously, the engine uses cooperative leasing. The active engine acquires a lease token in the `engine_lease` table and renews it on every tick. The lease expires after ten seconds, matching the Redis heartbeat timeout. A newly started engine waits for any existing lease to expire before taking over. Furthermore, every database write checks the active lease token, ensuring that an engine that stalled and resumed after its lease was revoked will fail immediately with `LeaseLost` rather than corrupting the archive.
+
+## Archive and storage packages
+
+Database operations are split between SQLite storage (`store/archive/`) and Redis state management (`store/live/`):
+
+- `store/archive/schema.py` contains table DDL, current schema version constants, and migration helpers. All schema migrations run inside an isolated database transaction.
+- `store/archive/writer.py` provides `ArchiveWriter`, used by both the engine and `pyaerial reset`. It manages table creation, migrations, flight checkpoints, episode writes, finalization, raw frame storage, and database health reporting.
+- `store/archive/reader.py` provides `ArchiveReader` for the web portal. It opens the SQLite database in read-only mode (`mode=ro`), filters out active flights from public history views, and exposes current database availability states (`missing`, `needs_upgrade`, `incompatible`, or `down`).
+- `store/live/writer.py` implements `LiveWriter`, which claims the engine heartbeat in Redis, serializes tracked aircraft and active alerts in single-tick batch pipelines, and publishes raw frames.
+- `store/live/reader.py` implements `LiveReader`, exposing read-only query helpers for the web portal and tracking Redis connection health.
+
+Architectural boundaries in `pyproject.toml` prevent the web portal and API layers from importing storage writer classes directly.
+
+## Extending receivers and alerters
+
+PyAerial supports third-party receiver and alerter plugins via standard Python entry points:
+
+- To implement a custom receiver, subclass `pyaerial.receivers.Receiver` and implement its `run()` method. Your code should call `self.emit(frame)` whenever a new frame is received, monitor `self.should_stop()`, and return an exit reason upon shutdown. The built-in `host` and `port` configuration keys apply to `dump1090`, `readsb`, and `aoa` types, while custom receivers receive their configuration via the `options` mapping. If your receiver streams Beast or AVR binary data over a socket, implementing `endpoint(options)` allows PyAerial to run automatic loopback checks.
+- To create a custom alerter, subclass `pyaerial.alerters.Alerter` and implement `alert(meta, payload)`.
+- Plugins must declare `known_options: ClassVar[frozenset[str]]` containing all accepted configuration keys. The configuration loader automatically rejects unrecognized keys and offers suggestions for minor typos. You can optionally implement `@classmethod validate_options(options, *, config_dir)` to perform domain-specific configuration validation.
+- Register plugins using entry point groups `pyaerial.receivers` and `pyaerial.alerters` in your package's `pyproject.toml`. PyAerial's built-in components are registered the same way. When testing or running embedded scripts, you can also register classes directly using `@register_receiver("name")` and `@register_alerter("name")`.
+- The webhook JSON payload and WebSocket message formats are public contracts protected by golden tests in `tests/golden/`.
+
+## Development and testing
+
+To run the local test suite, linter, import checker, and frontend verification:
 
 ```bash
 pip install -e ".[dev]"
 pytest
-pytest -m slow   # crash injection: SIGKILL loop against a real archive (~1 min)
+pytest -m slow   # runs crash-injection tests against real SQLite archives (~1 min)
 ruff check src tests
 lint-imports
 cd web && npm ci && npm run lint && npm run typecheck && npm test
 ```
 
-After an intended contract change, regenerate the golden files and review the diff:
+If you make deliberate changes to public webhook schemas or API wire models, update the test golden files and carefully inspect the resulting diff:
 
 ```bash
 PYAERIAL_UPDATE_GOLDEN=1 pytest tests/test_contract_webhook.py tests/test_contract_api.py
