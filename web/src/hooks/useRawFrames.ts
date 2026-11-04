@@ -35,7 +35,6 @@ export function useRawFrames(enabled: boolean) {
       setFrames((prev) => prependRawFrames(prev, batch));
     };
     const timer = setInterval(flush, RAW_FLUSH_MS);
-    setStatus('connecting');
     const disconnect = connectRawSocket({
       onOpen: () => setStatus('connected'),
       onClose: (code) => setStatus(rawCloseStatus(code)),
@@ -51,6 +50,8 @@ export function useRawFrames(enabled: boolean) {
     return () => {
       clearInterval(timer);
       disconnect();
+      // The next subscription starts out connecting, not with this one's status.
+      setStatus('connecting');
     };
   }, [enabled]);
 

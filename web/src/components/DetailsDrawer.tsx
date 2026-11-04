@@ -120,7 +120,8 @@ export function DetailsDrawer({
   const alertListRef = useRef<HTMLDivElement>(null);
   const headingId = useId();
   const tabIds = useTabIds();
-  const [prevTelemetryLength, setPrevTelemetryLength] = useState(0);
+  // Only compared against in the effect below, never rendered: a ref, not state.
+  const prevTelemetryLength = useRef(0);
   const [now, setNow] = useState(() => Date.now() / 1000);
   const displayFlight = useMemo(
     () => mergeDisplayFlight(flightDetail, flightSummary),
@@ -189,8 +190,8 @@ export function DetailsDrawer({
   useEffect(() => {
     if (!open || drawerTab !== 'telemetry') return;
     const el = tableContainerRef.current;
-    const oldLength = prevTelemetryLength;
-    setPrevTelemetryLength(flightTelemetry.length);
+    const oldLength = prevTelemetryLength.current;
+    prevTelemetryLength.current = flightTelemetry.length;
     if (!el || flightTelemetry.length === 0) return;
     if (oldLength === 0) {
       el.scrollTop = el.scrollHeight;
@@ -198,7 +199,7 @@ export function DetailsDrawer({
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       if (distanceFromBottom < 100) el.scrollTop = el.scrollHeight;
     }
-  }, [flightTelemetry, prevTelemetryLength, open, drawerTab]);
+  }, [flightTelemetry, open, drawerTab]);
 
   useEffect(() => {
     if (!open || drawerTab !== 'telemetry') return undefined;

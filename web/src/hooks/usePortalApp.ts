@@ -8,7 +8,7 @@ import { localDayEndSeconds, localDayStartSeconds } from '../utils/historyFilter
 import { readStored, writeStored } from '../utils/storage';
 import { useBootstrap } from './useBootstrap';
 import { useFlightPaths } from './useFlightPaths';
-import { FLIGHT_NOT_FOUND, useFlightSelection } from './useFlightSelection';
+import { useFlightSelection } from './useFlightSelection';
 import { useHistoryFeed } from './useHistoryFeed';
 import { useLiveFeed } from './useLiveFeed';
 import { useSidebarTab } from './useSidebarTab';
@@ -35,8 +35,11 @@ type PathLiveApi = {
 export function usePortalApp() {
   const [portalView, setPortalView] = useState<PortalView>(initialPortalView);
   const sidebar = useSidebarTab();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  // `query` is what the search box shows; `settled` feeds history's server-side
+  // search. They differ only while typing in history (debounced); everywhere
+  // else they move together, so a view switch starts from the query on screen.
+  const [search, setSearch] = useState({ query: '', settled: '' });
+  const searchQuery = search.query;
   const [historySinceDate, setHistorySinceDate] = useState('');
   const [historyUntilDate, setHistoryUntilDate] = useState('');
   const [zonesVisible, setZonesVisible] = useState(true);
@@ -54,14 +57,17 @@ export function usePortalApp() {
     document.title = `PyAerial · ${portalView === 'live' ? 'Live' : 'History'}`;
   }, [portalView]);
 
+  const setSearchQuery = useCallback(
+    (query: string) =>
+      setSearch((s) => ({ query, settled: portalView === 'history' ? s.settled : query })),
+    [portalView],
+  );
+
   useEffect(() => {
-    if (portalView !== 'history') {
-      setDebouncedSearch(searchQuery);
-      return undefined;
-    }
-    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    if (search.settled === search.query) return undefined;
+    const timer = window.setTimeout(() => setSearch((s) => ({ ...s, settled: s.query })), 300);
     return () => window.clearTimeout(timer);
-  }, [searchQuery, portalView]);
+  }, [search]);
 
   const bootstrap = useBootstrap();
   const { switchTab, noteActivatedAlerts, resetUnread } = sidebar;
@@ -93,11 +99,11 @@ export function usePortalApp() {
 
   const historyFilter = useMemo(
     () => ({
-      q: debouncedSearch.trim(),
+      q: search.settled.trim(),
       since: localDayStartSeconds(historySinceDate),
       until: localDayEndSeconds(historyUntilDate),
     }),
-    [debouncedSearch, historySinceDate, historyUntilDate],
+    [search.settled, historySinceDate, historyUntilDate],
   );
   const history = useHistoryFeed(portalView === 'history', historyFilter);
   const activeFeed = portalView === 'live' ? live : history;
@@ -183,6 +189,8 @@ export function usePortalApp() {
     (view: PortalView) => {
       if (view === portalView) return;
       setPortalView(view);
+      // Drop a pending debounce: the new view starts from the query on screen.
+      setSearch((s) => (s.settled === s.query ? s : { ...s, settled: s.query }));
       resetUnread();
       closeDrawer();
       resetPaths();
@@ -198,31 +206,18 @@ export function usePortalApp() {
   useEffect(() => {
     const id = pendingUrlFlight.current;
     if (!id) return;
-    void selectFlight(id);
-  }, [selectFlight, portalView]);
+    void selectFlight(id, undefined, {
+      onNotFound: () => {
+        if (portalView === 'live') switchPortalView('history');
+        else pendingUrlFlight.current = null;
+      },
+    });
+  }, [selectFlight, portalView, switchPortalView]);
 
   useEffect(() => {
     const id = pendingUrlFlight.current;
-    if (!id) return;
-    if (selection.flightDetail && activeFlightId === id) {
-      pendingUrlFlight.current = null;
-      return;
-    }
-    if (selection.selectionError === FLIGHT_NOT_FOUND && !selection.isLoading) {
-      if (portalView === 'live') {
-        switchPortalView('history');
-      } else {
-        pendingUrlFlight.current = null;
-      }
-    }
-  }, [
-    portalView,
-    switchPortalView,
-    selection.flightDetail,
-    activeFlightId,
-    selection.selectionError,
-    selection.isLoading,
-  ]);
+    if (id && selection.flightDetail && activeFlightId === id) pendingUrlFlight.current = null;
+  }, [selection.flightDetail, activeFlightId]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

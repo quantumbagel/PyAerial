@@ -260,8 +260,10 @@ export function Sidebar({
           Alerts
           {unreadAlertsCount > 0 && sidebarTab !== 'alerts' ? (
             <span className="ui-count">
-              {unreadAlertsCount}
-              <span className="visually-hidden"> new</span>
+              {/* One spoken phrase: accessible-name algorithms join sibling
+                  inline elements inconsistently (jsdom 30 gives "Alerts1new"). */}
+              <span aria-hidden="true">{unreadAlertsCount}</span>
+              <span className="visually-hidden">{` ${unreadAlertsCount} new`}</span>
             </span>
           ) : null}
         </Tab>

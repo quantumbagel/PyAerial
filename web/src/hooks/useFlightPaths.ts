@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../api/client';
 import type { Alert, FlightSummary, PortalView, TelemetryPoint } from '../api/types';
 import { mergeAlertsByEpisode } from '../utils/alertData';
@@ -40,6 +40,11 @@ function hasFix(p: { latitude?: number | null; longitude?: number | null }): boo
 
 function sameCoord(a: LatLng | undefined, b: LatLng): boolean {
   return !!a && a[0] === b[0] && a[1] === b[1];
+}
+
+function hasUnwanted(paths: Record<string, unknown>, keep: Set<string>): boolean {
+  for (const id in paths) if (!keep.has(id)) return true;
+  return false;
 }
 
 function pruneToKeep<T>(prev: Record<string, T>, keep: Set<string>): Record<string, T> {
@@ -126,6 +131,20 @@ export function useFlightPaths(
     }
   }, []);
 
+  // Paths that may exist: the selection, plus every listed flight with "Paths" on.
+  const keep = useMemo(() => {
+    const ids = new Set(showAllPaths ? filteredFlights.map((f) => f.flight_id) : []);
+    if (activeFlightId) ids.add(activeFlightId);
+    return ids;
+  }, [showAllPaths, filteredFlights, activeFlightId]);
+  // Drop the others while rendering (not in an effect after commit), so a path
+  // that no longer belongs is never drawn. Converges: pruning leaves none behind.
+  if (hasUnwanted(pathCoords, keep) || hasUnwanted(pathTelemetry, keep) || hasUnwanted(pathAlerts, keep)) {
+    setPathCoords((prev) => pruneToKeep(prev, keep));
+    setPathTelemetry((prev) => pruneToKeep(prev, keep));
+    setPathAlerts((prev) => pruneToKeep(prev, keep));
+  }
+
   const clearAll = useCallback(() => {
     setPathCoords({});
     setPathTelemetry({});
@@ -144,18 +163,14 @@ export function useFlightPaths(
     failedPathFetches.current.clear();
     stalePaths.current.clear();
     if (showAllPaths) return;
-    clearAll();
+    // False positive: fetchAndSetPath is async and only sets state after its await.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (activeFlightId) void fetchAndSetPath(activeFlightId, portalView);
-  }, [showAllPaths, activeFlightId, portalView, clearAll, fetchAndSetPath]);
+  }, [showAllPaths, activeFlightId, portalView, fetchAndSetPath]);
 
-  // With "Paths" on: drop paths for flights no longer listed, fetch missing ones.
+  // With "Paths" on: fetch missing paths (unlisted ones were pruned above).
   useEffect(() => {
     if (!showAllPaths) return;
-    const keep = new Set(filteredFlights.map((f) => f.flight_id));
-    if (activeFlightId) keep.add(activeFlightId);
-    setPathCoords((prev) => pruneToKeep(prev, keep));
-    setPathTelemetry((prev) => pruneToKeep(prev, keep));
-    setPathAlerts((prev) => pruneToKeep(prev, keep));
     for (const id of stalePaths.current) if (!keep.has(id)) stalePaths.current.delete(id);
     const candidates = activeFlightId
       ? [activeFlightId, ...filteredFlights.map((f) => f.flight_id)]
@@ -172,6 +187,7 @@ export function useFlightPaths(
   }, [
     showAllPaths,
     filteredFlights,
+    keep,
     portalView,
     fetchAndSetPath,
     activeFlightId,

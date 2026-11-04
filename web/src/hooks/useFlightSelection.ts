@@ -20,7 +20,13 @@ export const FLIGHT_NOT_FOUND = 'Flight not found.';
 /** Failures that mean "the socket went away", worth retrying once it is back. */
 const RETRY_ON_RECONNECT = new Set<ApiErrorCode>(['disconnected', 'busy', 'timeout']);
 
-type SelectOpts = { follow?: boolean; panToLatest?: boolean; keepAlert?: boolean };
+type SelectOpts = {
+  follow?: boolean;
+  panToLatest?: boolean;
+  keepAlert?: boolean;
+  /** Runs when the server has no such flight (kept across a reconnect retry). */
+  onNotFound?: () => void;
+};
 
 function sortedTelemetry(points: TelemetryPoint[]): TelemetryPoint[] {
   const sorted = [...points].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
@@ -135,6 +141,7 @@ export function useFlightSelection({
         if (!detail) {
           setIsLoading(false);
           setSelectionError(FLIGHT_NOT_FOUND);
+          opts?.onNotFound?.();
           return;
         }
         const points = sortedTelemetry(telemetry.points);
@@ -165,12 +172,11 @@ export function useFlightSelection({
           return;
         }
         setIsLoading(false);
-        const message =
-          errorCode(err) === 'not_found'
-            ? FLIGHT_NOT_FOUND
-            : describeError(err, 'Failed to load flight details.');
+        const notFound = errorCode(err) === 'not_found';
+        const message = notFound ? FLIGHT_NOT_FOUND : describeError(err, 'Failed to load flight details.');
         console.error(message, err);
         setSelectionError(message);
+        if (notFound) opts?.onNotFound?.();
       }
     },
     [mapRef, portalView, setActive],

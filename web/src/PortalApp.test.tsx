@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from './api/errors';
 import type { FlightSummary, LiveMessage } from './api/types';
 import { makeAlert, makeFlight, makePoint } from './test/fixtures';
 
@@ -77,6 +78,7 @@ vi.mock('./components/MapView', () => ({
 }));
 
 const { PortalApp } = await import('./PortalApp');
+const client = await import('./api/client');
 
 beforeEach(() => {
   socket.reject = false;
@@ -153,5 +155,44 @@ describe('PortalApp', () => {
     const badge = await screen.findByRole('tab', { name: /Alerts.*1 new/ });
     fireEvent.click(badge);
     await waitFor(() => expect(screen.queryByRole('tab', { name: /1 new/ })).toBeNull());
+  });
+
+  it('falls back to history for a ?flight= deep link that is no longer live', async () => {
+    window.history.replaceState(null, '', '/?flight=f1');
+    vi.mocked(client.fetchFlight).mockImplementationOnce(async () => {
+      throw new ApiError('not_found', 'Flight not found');
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<PortalApp />);
+    const drawer = await screen.findByRole('complementary');
+    await waitFor(() => expect(within(drawer).getByText('N123')).toBeInTheDocument());
+    expect(client.fetchFlight).toHaveBeenLastCalledWith('f1', 'history');
+    expect(window.location.search).toContain('view=history');
+    expect(window.location.search).toContain('flight=f1');
+    error.mockRestore();
+  });
+
+  it('starts history from the query on screen, not a stale debounced one', async () => {
+    const historyQueries = () =>
+      vi
+        .mocked(client.fetchFlights)
+        .mock.calls.filter(([view]) => view === 'history')
+        .map(([, opts]) => opts?.q);
+    render(<PortalApp />);
+    await screen.findByRole('button', { name: /TEST1/ });
+    const search = screen.getByRole('searchbox', { name: 'Search flights and alerts' });
+    vi.mocked(client.fetchFlights).mockClear();
+
+    // Typed in live, then switched: no debounce to wait for.
+    fireEvent.change(search, { target: { value: 'test1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'History' }));
+    await waitFor(() => expect(historyQueries()).toEqual(['test1']));
+
+    // Typed in history and left before the debounce fired: coming back uses it.
+    fireEvent.change(search, { target: { value: 'abc' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Live' }));
+    vi.mocked(client.fetchFlights).mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'History' }));
+    await waitFor(() => expect(historyQueries()).toEqual(['abc']));
   });
 });

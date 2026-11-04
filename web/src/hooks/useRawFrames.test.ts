@@ -32,4 +32,16 @@ describe('useRawFrames', () => {
     act(() => raw.handlers!.onOpen?.());
     expect(result.current.status).toBe('connected');
   });
+
+  it('starts each new subscription as connecting, not with the last status', () => {
+    const { result, rerender } = renderHook(({ enabled }) => useRawFrames(enabled), {
+      initialProps: { enabled: true },
+    });
+    act(() => raw.handlers!.onOpen?.());
+    expect(result.current.status).toBe('connected');
+    rerender({ enabled: false });
+    expect(raw.handlers).toBeNull();
+    rerender({ enabled: true });
+    expect(result.current.status).toBe('connecting');
+  });
 });

@@ -146,16 +146,11 @@ export function useHistoryFeed(enabled: boolean, filter: HistoryFilter) {
 
   useEffect(() => {
     if (!enabled) return undefined;
+    // State starts out empty and loading: initially, and after the teardown below.
     const gen = ++generation.current;
     lists.current = { flights: [], alerts: [] };
     fetched.current = { flights: 0, alerts: 0 };
     hasMore.current = { flights: true, alerts: true };
-    setFlights([]);
-    setAlerts([]);
-    setFlightsError(null);
-    setAlertsError(null);
-    setIsLoadingFlights(true);
-    setIsLoadingAlerts(true);
 
     const refreshAll = () => {
       void refreshKind('flights', gen);
@@ -175,8 +170,15 @@ export function useHistoryFeed(enabled: boolean, filter: HistoryFilter) {
     return () => {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisibility);
-      // Invalidate anything still in flight for this generation.
+      // Invalidate anything still in flight for this generation, then drop its
+      // results, so the next generation (or re-enable) starts empty and loading.
       generation.current += 1;
+      setFlights([]);
+      setAlerts([]);
+      setFlightsError(null);
+      setAlertsError(null);
+      setIsLoadingFlights(true);
+      setIsLoadingAlerts(true);
     };
   }, [enabled, q, since, until, refreshKind, refreshStats]);
 
