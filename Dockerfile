@@ -1,8 +1,9 @@
 # Base images are pinned by tag and digest; Dependabot (docker ecosystem) bumps both.
 
 # ---- web portal -------------------------------------------------------------
-# node:22 currently resolves to 22.23, which throws SyntaxError while loading tsc.
-FROM node:22.16-bookworm-slim@sha256:048ed02c5fd52e86fda6fbd2f6a76cf0d4492fd6c6fee9e2c463ed5108da0e34 AS webbuild
+# Node 22 LTS, matching CI's setup-node. The web toolchain needs >= 22.22.2
+# (jsdom 30); the old 22.16 hold (tsc SyntaxError on 22.23) no longer reproduces.
+FROM node:22.23-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS webbuild
 ENV NODE_DISABLE_COMPILE_CACHE=1
 WORKDIR /opt/PyAerial
 COPY web/package.json web/package-lock.json ./web/

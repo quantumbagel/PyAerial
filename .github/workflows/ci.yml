@@ -56,7 +56,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.16"
+          node-version: "22.23"
           cache: npm
           cache-dependency-path: web/package-lock.json
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -88,8 +88,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          # Match the Dockerfile: later 22.x releases break loading tsc.
-          node-version: "22.16"
+          # Match the Dockerfile; jsdom 30 needs Node >= 22.22.2.
+          node-version: "22.23"
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
@@ -126,7 +126,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.16"
+          node-version: "22.23"
       - run: npm audit --audit-level=high
 
   gitleaks:
