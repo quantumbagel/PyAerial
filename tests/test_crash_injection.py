@@ -20,6 +20,7 @@ Slow (about 40 s): ``pytest -m slow``; CI runs it as its own step.
 from __future__ import annotations
 
 import json
+import math
 import random
 import signal
 import sqlite3
@@ -74,6 +75,26 @@ def _wait_ready(tmp_path: Path, count: int, timeout: float = 20.0) -> float:
             return times[count - 1]
         time.sleep(0.05)
     raise AssertionError("crash engine did not start")
+
+
+def test_driver_never_repeats_a_position_frame_within_the_dedupe_window():
+    # A byte-identical frame within tracking.duplicate_packet_merging is
+    # dropped as a duplicate (by design), which would read as a lost sample
+    # below: a straight reversal retraced its outbound frames at every turn.
+    sys.path.insert(0, str(DRIVER.parent))
+    import crash_engine
+    from e2e_support import position_frame
+
+    window = crash_engine._config(":memory:").tracking.duplicate_packet_merging
+    for n in range(crash_engine.AIRCRAFT):
+        sent: dict[str, float] = {}
+        now = 1_800_000_000.0 + n * 0.013
+        for tick in range(1_000):  # over a lap, at the driver's 0.1 s ticks
+            now += 1.0 / crash_engine.HZ
+            lat, lon, _track = crash_engine._position(n, now)
+            hex_msg = position_frame(f"c0ffe{n}", lat, lon, 300.0, tick % 2)
+            assert now - sent.get(hex_msg, -math.inf) > window, (n, now)
+            sent[hex_msg] = now
 
 
 def test_kill_9_loop_keeps_the_archive_and_notifications_consistent(tmp_path):

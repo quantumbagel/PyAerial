@@ -1,9 +1,8 @@
 """A tracking engine for the crash-injection test (``test_crash_injection.py``).
 
 Runs a real :class:`~pyaerial.engine.Engine` over a SQLite archive (no
-Redis: ``NullLiveWriter``) fed with synthetic aircraft that fly back and
-forth across the ``pad`` zone, so alerts activate and clear every few
-seconds. Each alert notification is appended to a capture file *before*
+Redis: ``NullLiveWriter``) fed with synthetic aircraft that fly laps across
+the ``pad`` zone, so alerts activate and clear every few seconds. Each alert notification is appended to a capture file *before*
 the episode is recorded (the engine's order), as a webhook consumer would
 see it. SIGTERM stops it gracefully; the test kills it with SIGKILL.
 
@@ -55,6 +54,13 @@ STALL_SECONDS = 0.5
 AIRCRAFT = 8
 SPEED_MPS = 150.0
 WEST, EAST, LAT = -78.705, -78.685, 35.725  # the pad spans -78.70 .. -78.69
+# Laps are a stadium: legs TURN_RADIUS_M either side of LAT, joined by
+# semicircles beyond the pad. Reversing along one line retraced the outbound
+# positions, and a frame byte-identical to one sent within
+# tracking.duplicate_packet_merging (5 s) is dropped as a duplicate, by
+# design: up to ~2.5 s of samples around each turn were never tracked.
+TURN_RADIUS_M = 100.0
+_M_PER_DEG = 111_320.0
 _CAPTURE: Path | None = None
 
 
@@ -103,14 +109,34 @@ def _config(archive: str):
     return config
 
 
-def _position(n: int, now: float) -> tuple[float, float]:
-    """Longitude and track of aircraft *n*: back and forth across the pad."""
-    span = (EAST - WEST) * 111_320 * math.cos(math.radians(LAT))
-    leg = span / SPEED_MPS
-    phase = (now / leg + n / AIRCRAFT * 2) % 2.0
-    if phase < 1.0:
-        return WEST + (EAST - WEST) * phase, 90.0
-    return EAST - (EAST - WEST) * (phase - 1.0), 270.0
+def _position(n: int, now: float) -> tuple[float, float, float]:
+    """Latitude, longitude and track of aircraft *n* on its lap."""
+    cos_lat = math.cos(math.radians(LAT))
+    leg = (EAST - WEST) * _M_PER_DEG * cos_lat
+    arc = math.pi * TURN_RADIUS_M
+    lap = 2 * (leg + arc)
+    s = (now * SPEED_MPS + n / AIRCRAFT * lap) % lap
+    r_lat = TURN_RADIUS_M / _M_PER_DEG
+    r_lon = r_lat / cos_lat
+    if s < leg:  # eastbound
+        return LAT - r_lat, WEST + (EAST - WEST) * s / leg, 90.0
+    s -= leg
+    if s < arc:  # turning north around the east end
+        a = s / TURN_RADIUS_M
+        return (
+            LAT - r_lat * math.cos(a),
+            EAST + r_lon * math.sin(a),
+            (90.0 - math.degrees(a)) % 360,
+        )
+    s -= arc
+    if s < leg:  # westbound
+        return LAT + r_lat, EAST - (EAST - WEST) * s / leg, 270.0
+    a = (s - leg) / TURN_RADIUS_M  # turning south around the west end
+    return (
+        LAT + r_lat * math.cos(a),
+        WEST - r_lon * math.sin(a),
+        (270.0 - math.degrees(a)) % 360,
+    )
 
 
 def main() -> int:
@@ -146,8 +172,8 @@ def main() -> int:
             odd ^= 1
             for n in range(AIRCRAFT):
                 icao = f"c0ffe{n}"
-                lon, track = _position(n, now)
-                frames = [position_frame(icao, LAT, lon, 300.0, odd)]
+                lat, lon, track = _position(n, now)
+                frames = [position_frame(icao, lat, lon, 300.0, odd)]
                 if tick % 5 == 0:
                     frames.append(velocity_frame(icao, SPEED_MPS * 3.6, track))
                 for hex_msg in frames:
