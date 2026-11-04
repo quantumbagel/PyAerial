@@ -72,10 +72,17 @@ def test_non_reading_client_is_dropped_and_readers_keep_up(monkeypatch):
 
             read_task = asyncio.create_task(_read())
             chunk = b"\x1a\x33" + b"\x00" * 21
-            for _ in range(300):
+            # Feed until the non-reader is dropped (bounded): when that takes
+            # depends on the kernel's buffers, not on a fixed burst size.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 20.0
+            sent = 0
+            while loop.time() < deadline and (hub.tcp_client_count > 1 or sent < 300):
                 hub._broadcast(chunk * 200)
+                sent += 1
                 await asyncio.sleep(0.01)
-            dropped = await _wait_for(lambda: hub.tcp_client_count == 1)
+            dropped = hub.tcp_client_count == 1
+            await _wait_for(lambda: received >= sent * len(chunk) * 200, 5.0)
             remaining = hub.tcp_client_count
             writer.close()
             read_task.cancel()
@@ -89,8 +96,8 @@ def test_non_reading_client_is_dropped_and_readers_keep_up(monkeypatch):
     assert received > 1_000_000  # the reader got the stream meanwhile
 
 
-def test_accepted_sockets_use_tcp_keepalive():
-    async def _scenario() -> int:
+def test_accepted_sockets_use_tcp_keepalive_and_a_small_send_buffer():
+    async def _scenario() -> tuple[int, int]:
         hub = BeastHub(None, host="127.0.0.1", port=0)
         await hub.start()
         try:
@@ -98,10 +105,14 @@ def test_accepted_sockets_use_tcp_keepalive():
             await _wait_for(lambda: hub.tcp_client_count == 1)
             (server_side,) = hub._tcp_clients
             sock = server_side.get_extra_info("socket")
-            value = sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
+            keepalive = sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
+            sndbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
             writer.close()
-            return value
+            return keepalive, sndbuf
         finally:
             await hub.stop()
 
-    assert asyncio.run(_scenario()) != 0
+    keepalive, sndbuf = asyncio.run(_scenario())
+    assert keepalive != 0
+    # Linux reports double the requested size (bookkeeping overhead).
+    assert beast._SEND_BUFFER_BYTES <= sndbuf <= 2 * beast._SEND_BUFFER_BYTES

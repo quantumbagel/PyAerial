@@ -7,6 +7,7 @@ All notable changes to PyAerial are documented here. The format follows [Keep a 
 ### Fixed
 
 - Receiver copies of one transmission were sometimes not merged: a copy stamped before it reached the engine's queue (dump1090 stamps are spread back from the TCP chunk's arrival) was released alone, and its partner from another receiver was then dropped as a duplicate, losing that receiver's provenance, its stronger signal on the Beast re-serve and its TDOA pairing. Frames are now held for the merge window after they reach the queue (at most 0.5 s), still merging by receive stamp.
+- A Beast TCP feeder that stopped reading could keep its slot for minutes on Linux, where the kernel send buffer grows to several MiB before the 10 s drain timeout even starts. Accepted Beast sockets now use a 64 KiB send buffer.
 
 ## [1.0.0] - 2026-11-03
 

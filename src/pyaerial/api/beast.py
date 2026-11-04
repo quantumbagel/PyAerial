@@ -37,6 +37,11 @@ _OVERFLOW_GRACE_SECONDS = 10.0
 _REFUSAL_LOG_INTERVAL = 60.0
 # Dead peers (unplugged, NAT timeout) are found by TCP keepalive, not traffic.
 _KEEPALIVE = (("TCP_KEEPIDLE", 60), ("TCP_KEEPINTVL", 15), ("TCP_KEEPCNT", 4))
+#: Kernel send buffer per feeder. Linux autotunes it up to tcp_wmem's max
+#: (4 MiB) for a peer that does not read, so the drain timeout started only
+#: after minutes of feed (and pinned megabytes per slot). Seconds of even a
+#: busy feed (~50 kB/s) fit in this, and it covers 100 ms+ RTT feeders.
+_SEND_BUFFER_BYTES = 64 * 1024
 
 
 class _Feed(asyncio.Queue):
@@ -55,10 +60,12 @@ class _Feed(asyncio.Queue):
         self.put_nowait(None)
 
 
-def _enable_keepalive(writer: asyncio.StreamWriter) -> None:
+def _tune_socket(writer: asyncio.StreamWriter) -> None:
     sock = writer.get_extra_info("socket")
     if sock is None:
         return
+    with contextlib.suppress(OSError):
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, _SEND_BUFFER_BYTES)
     with contextlib.suppress(OSError):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         for name, value in _KEEPALIVE:
@@ -338,7 +345,7 @@ class BeastHub:
         assert task is not None
         self._tcp_clients[writer] = task
         self._tcp_per_ip[ip] += 1
-        _enable_keepalive(writer)
+        _tune_socket(writer)
         log.debug("Beast TCP client connected: %s", peer)
         queue = self._attach()
         pump = asyncio.create_task(self._tcp_writer(writer, queue))
