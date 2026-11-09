@@ -7,7 +7,8 @@ export interface PlaneStyle {
   fill: string;
   stroke: string;
   opacity: number;
-  glow: string | null;
+  /** Selection ring drawn around the silhouette (a crisp outline, not a glow). */
+  outline: string | null;
 }
 
 export interface PathStyle {
@@ -43,7 +44,7 @@ export function planeStyle(
       fill: visual.color,
       stroke: visual.dark,
       opacity: 1,
-      glow: isSelected ? visual.color : null,
+      outline: isSelected ? PALETTE.white : null,
     };
   }
   // Flagged tracks keep the live size but read as "not trusted": dark fill,
@@ -56,20 +57,20 @@ export function planeStyle(
       fill: status === 'spoofed' ? PALETTE.alertDark : PALETTE.warnDark,
       stroke: tone,
       opacity: 1,
-      glow: isSelected ? tone : null,
+      outline: isSelected ? PALETTE.white : null,
     };
   }
   if (isSelected) {
-    return { size: 30, fill: PALETTE.white, stroke: PALETTE.accent, opacity: 1, glow: PALETTE.accent };
+    return { size: 30, fill: PALETTE.white, stroke: PALETTE.accent, opacity: 1, outline: null };
   }
   if (flight.is_live) {
-    return { size: 24, fill: PALETTE.live, stroke: PALETTE.liveDark, opacity: 1, glow: null };
+    return { size: 24, fill: PALETTE.live, stroke: PALETTE.liveDark, opacity: 1, outline: null };
   }
-  return { size: 24, fill: PALETTE.neutral, stroke: PALETTE.neutralDark, opacity: 0.65, glow: null };
+  return { size: 24, fill: PALETTE.neutral, stroke: PALETTE.neutralDark, opacity: 0.65, outline: null };
 }
 
 export function planeStyleKey(style: PlaneStyle): string {
-  return `${style.size}|${style.fill}|${style.stroke}|${style.opacity}|${style.glow ?? ''}`;
+  return `${style.size}|${style.fill}|${style.stroke}|${style.opacity}|${style.outline ?? ''}`;
 }
 
 /** Sprite id for a plane style. Heading is applied with `icon-rotate`, not the image. */
@@ -93,7 +94,7 @@ function emptyImage(width: number, height: number): PlaneImage {
  * the symbol layer rotates the same sprite with `icon-rotate`.
  */
 export function renderPlaneIcon(style: PlaneStyle, pixelRatio = 1): PlaneImage {
-  const pad = style.glow ? 6 : 1;
+  const pad = style.outline ? 3 : 1;
   const cssSize = Math.max(1, Math.round(style.size));
   const width = Math.max(1, Math.round((cssSize + pad * 2) * pixelRatio));
   const height = width;
@@ -109,16 +110,18 @@ export function renderPlaneIcon(style: PlaneStyle, pixelRatio = 1): PlaneImage {
   ctx.translate(pad * pixelRatio, pad * pixelRatio);
   const scale = (cssSize / 24) * pixelRatio;
   ctx.scale(scale, scale);
-  if (style.glow) {
-    ctx.shadowColor = style.glow;
-    ctx.shadowBlur = 8 / scale;
-  }
   ctx.globalAlpha = style.opacity;
+  ctx.lineJoin = 'round';
+  const path = new Path2D(PLANE_PATH);
+  if (style.outline) {
+    // About 1.5 CSS px of ring outside the silhouette.
+    ctx.strokeStyle = style.outline;
+    ctx.lineWidth = 1 + (3 * 24) / cssSize;
+    ctx.stroke(path);
+  }
   ctx.fillStyle = style.fill;
   ctx.strokeStyle = style.stroke;
   ctx.lineWidth = 1;
-  ctx.lineJoin = 'round';
-  const path = new Path2D(PLANE_PATH);
   ctx.fill(path);
   ctx.stroke(path);
   try {

@@ -14,8 +14,8 @@ export const PALETTE = {
   warnDark: '#78350f',
   alert: '#ef4444',
   alertDark: '#7f1d1d',
-  neutral: '#64748b',
-  neutralDark: '#334155',
+  neutral: '#7c7c82',
+  neutralDark: '#3a3a3e',
   home: '#38bdf8',
   white: '#ffffff',
 } as const;

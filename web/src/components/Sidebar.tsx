@@ -171,49 +171,51 @@ export function Sidebar({
             </a>
             <h1>PyAerial</h1>
           </div>
-          <div className="sidebar-header-controls">
-            <div className="ui-btn-group" role="group" aria-label="Data source">
-              {(['live', 'history'] as const).map((view) => (
-                <Button
-                  key={view}
-                  variant="toggle"
-                  flex
-                  active={portalView === view}
-                  aria-pressed={portalView === view}
-                  onClick={() => onSwitchPortalView(view)}
-                >
-                  {VIEW_LABEL[view]}
-                </Button>
-              ))}
-            </div>
-            <div className="sidebar-stats ui-btn-group">
-              <Stat
-                title={
-                  isLive
-                    ? 'Aircraft the tracker is following right now'
-                    : 'Completed flights kept because a retain rule held long enough'
-                }
+          <div className="ui-segmented" role="group" aria-label="Data source">
+            {(['live', 'history'] as const).map((view) => (
+              <Button
+                key={view}
+                variant="toggle"
+                flex
+                active={portalView === view}
+                aria-pressed={portalView === view}
+                onClick={() => onSwitchPortalView(view)}
               >
-                <span>{isLive ? 'Aircraft' : 'Flights'}</span>
-                <StatValue tone="live">{formatNumber(displayFlightCount)}</StatValue>
-              </Stat>
-              <Stat title={isLive ? 'Alert episodes active right now' : 'Archived alert episodes'}>
-                <span>{isLive ? 'Active alerts' : 'Alerts'}</span>
-                <StatValue tone="warn">{formatNumber(displayAlertCount)}</StatValue>
-              </Stat>
-            </div>
+                {VIEW_LABEL[view]}
+              </Button>
+            ))}
           </div>
+        </div>
+        <div className="sidebar-stats ui-btn-group">
+          <Stat
+            title={
+              isLive
+                ? 'Aircraft the tracker is following right now'
+                : 'Completed flights kept because a retain rule held long enough'
+            }
+          >
+            <span>{isLive ? 'Aircraft' : 'Flights'}</span>
+            <StatValue>{formatNumber(displayFlightCount)}</StatValue>
+          </Stat>
+          <Stat title={isLive ? 'Alert episodes active right now' : 'Archived alert episodes'}>
+            <span>{isLive ? 'Active alerts' : 'Alerts'}</span>
+            {/* Amber only when there is something to look at. */}
+            <StatValue tone={isLive && displayAlertCount > 0 ? 'warn' : undefined}>
+              {formatNumber(displayAlertCount)}
+            </StatValue>
+          </Stat>
         </div>
       </div>
       <div className="sidebar-search">
         <Input
           type="search"
-          placeholder={
+          placeholder="Search"
+          title={
             sidebarTab === 'raw'
-              ? 'Search hex or ICAO…'
+              ? 'Hex or ICAO'
               : isLive
-                ? 'Search callsign, ICAO, registration, model, or alert…'
-                : 'Search callsign, ICAO, or flight ID…'
+                ? 'Callsign, ICAO, registration, model or alert'
+                : 'Callsign, ICAO or flight ID'
           }
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}

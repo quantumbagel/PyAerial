@@ -8,29 +8,33 @@
 :root {
     color-scheme: dark;
 
-    /* Surfaces & text */
-    --bg: #121212;
-    --panel: #1a1a1a;
-    --panel-raised: #151515;
-    --panel-hover: #222222;
-    --border: #2d2d2d;
-    --border-subtle: #262626;
-    --input-bg: #2a2a2a;
-    --input-border: #3f3f46;
-    --text: #fafafa;
-    --text-secondary: #a1a1aa;
+    /* Surfaces & text: one graphite ramp, darkest to lightest. The map and
+       its aircraft carry the colour; the chrome stays grey. */
+    --bg: #0f0f10;
+    --panel: #141415;
+    --panel-raised: #19191b;
+    --panel-hover: #232325;
+    --panel-active: #2a2a2d;
+    /* Hairlines: primary text at low opacity */
+    --border: rgba(237, 237, 237, 0.09);
+    --border-subtle: rgba(237, 237, 237, 0.06);
+    --input-bg: var(--panel-raised);
+    --input-border: rgba(237, 237, 237, 0.12);
+    --text: #ededed;
+    --text-secondary: #a1a1a6;
     /* ≥ 4.5:1 on --panel, --panel-raised and --panel-hover */
-    --text-muted: #8e8e98;
+    --text-muted: #8e8e93;
     --text-on-accent: #ffffff;
-    --accent-active-bg: #1e3a5f;
-    --surface-overlay: rgba(26, 26, 26, 0.95);
-    --surface-toolbar: rgba(15, 18, 24, 0.9);
-    --surface-toolbar-border: rgba(51, 65, 85, 0.8);
-    --surface-toolbar-divider: rgba(51, 65, 85, 0.9);
-    --surface-card: #11141a;
-    --surface-photo: #0c0f16;
-    --surface-ghost: rgba(255, 255, 255, 0.03);
-    --surface-ghost-hover: rgba(255, 255, 255, 0.08);
+    --text-on-light: #141415;
+    --highlight-top: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --surface-overlay: rgba(20, 20, 21, 0.95);
+    --surface-toolbar: rgba(20, 20, 21, 0.94);
+    --surface-toolbar-border: var(--border);
+    --surface-toolbar-divider: var(--border);
+    --surface-card: var(--panel-raised);
+    --surface-photo: var(--bg);
+    --surface-ghost: var(--panel-raised);
+    --surface-ghost-hover: var(--panel-hover);
     --scrim: rgba(0, 0, 0, 0.5);
 
     /* Spacing */
@@ -43,33 +47,35 @@
     --space-6: 24px;
     --space-8: 32px;
 
-    /* Radii */
+    /* Radii: tags, controls, cards and panels. Nested: inner = outer − padding. */
     --radius-sm: 4px;
-    --radius-md: 6px;
-    --radius-lg: 8px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
     --radius-pill: 999px;
 
-    /* Type: nothing smaller than 0.75rem */
+    /* Type: nothing smaller than 0.75rem. Hierarchy from size and colour;
+       weights stay at 400 and 500. */
     /* System fonts only: the portal loads no third-party font CSS or files. */
     --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
     --font-xs: 0.75rem;
     --font-sm: 0.75rem;
-    --font-meta: 0.75rem;
-    --font-section: 0.8rem;
-    --font-body: 0.8125rem;
-    --font-title: 0.95rem;
+    --font-meta: 0.8125rem;
+    --font-section: 0.875rem;
+    --font-body: 0.875rem;
+    --font-brand: 1rem;
+    --font-title: 1.25rem;
     --font-icon: 1rem;
-    --font-icon-lg: 1.5rem;
+    --font-icon-lg: 1.25rem;
 
     /* Controls */
-    --control-h-sm: 24px;
-    --control-h-md: 28px;
-    --control-px: var(--space-2);
-    --control-py: var(--space-1);
-    --row-py: var(--space-2);
-    --row-px: var(--space-3);
-    --row-gap: var(--space-0);
+    --control-h-sm: 32px;
+    --control-h-md: 36px;
+    --control-px: var(--space-3);
+    --control-py: 0px;
+    --row-py: var(--space-3);
+    --row-px: var(--space-4);
+    --row-gap: var(--space-1);
 
     /* Layout */
     --sidebar-w: 360px;
@@ -87,7 +93,7 @@
     --duration-slow: 0.35s;
     --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 
-    --shadow-toolbar: 0 4px 16px rgba(0, 0, 0, 0.45);
+    --shadow-toolbar: 0 4px 16px rgba(0, 0, 0, 0.4);
     --shadow-popup: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
 }
 

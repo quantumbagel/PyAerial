@@ -25,7 +25,7 @@ export function IntegritySection({ integrity }: { integrity?: Integrity | null }
         <dt className="ui-field-label">Status</dt>
         <dd className={`ui-field-value ui-field-value--${STATUS_TONE[integrity.status] ?? 'muted'}`}>
           {integrityLabel(integrity)}
-          {score != null && <span className="ui-field-sub">Score {formatNumber(score, 2)} of 1</span>}
+          {score != null && <span className="ui-field-sub">Score {formatNumber(score, 2)}</span>}
         </dd>
         {integrity.rebroadcast && (
           <>

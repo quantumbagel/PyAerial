@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import type { FlightSummary, Zone } from '../api/types';
 import { flightSortValueLabel, type FlightSortField } from '../utils/flightData';
-import { displayCallsign, displayField, displayIcao } from '../utils/format';
+import { displayCallsign, displayIcao } from '../utils/format';
 import { FlightAlertBadges, IntegrityBadge } from './AlertBadges';
 import { Badge, Chip } from './ui';
 
@@ -42,7 +42,8 @@ export const FlightListItem = memo(function FlightListItem({
           {flight.callsign ? <Chip>{icao}</Chip> : null}
         </div>
         <div className="ui-row__line">
-          <span className="ui-row__secondary">{displayField(flight.model)}</span>
+          {/* No model yet: leave the line quiet instead of printing a dash. */}
+          <span className="ui-row__secondary">{flight.model?.trim() || null}</span>
           <span className="ui-row__trailing">{flightSortValueLabel(flight, sortField)}</span>
         </div>
       </button>

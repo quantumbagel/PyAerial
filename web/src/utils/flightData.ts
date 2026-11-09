@@ -4,8 +4,10 @@ import {
   formatAltitudeCompact,
   formatDateTime,
   formatNumber,
+  formatTime,
   formatTimeRange,
   isFlightLive,
+  isSameLocalDay,
 } from './format';
 import { integrityScore } from './integrity';
 import { sortBy, sortValueLabel, type SortDirection, type SortField } from './sort';
@@ -34,7 +36,11 @@ function flightIdentity(flight: FlightSummary): string | null {
 /** When the flight was seen: last fix for live flights, the full span otherwise. */
 export function flightTimeLabel(flight: FlightSummary): string {
   if (isFlightLive(flight)) {
-    return formatDateTime(flight.timestamp ?? flight.end_time ?? flight.start_time);
+    const ts = flight.timestamp ?? flight.end_time ?? flight.start_time;
+    // Live rows are nearly always today, so the date is noise there.
+    return isSameLocalDay(ts, Date.now() / 1000)
+      ? formatTime(ts, { withSeconds: true })
+      : formatDateTime(ts);
   }
   return formatTimeRange(flight.start_time, flight.end_time);
 }
@@ -42,7 +48,7 @@ export function flightTimeLabel(flight: FlightSummary): string {
 export const FLIGHT_SORT_FIELDS: readonly SortField<FlightSummary, FlightSortField>[] = [
   {
     id: 'last_seen',
-    label: 'Last Seen',
+    label: 'Last seen',
     defaultDirection: 'desc',
     value: getFlightLastSeen,
     display: flightTimeLabel,

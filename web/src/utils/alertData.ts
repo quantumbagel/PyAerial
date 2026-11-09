@@ -223,7 +223,13 @@ export function formatEpisodeSpan(alert: EpisodeLike, now = Date.now() / 1000): 
   if (!start) return EMPTY;
   const duration = formatEpisodeDuration(start, alert.deactivated_at, now);
   const end = isAlertActive(alert) ? null : alert.deactivated_at;
-  if (!end) return `${formatDateTime(start, { withSeconds: true })} (${duration})`;
+  if (!end) {
+    // An episode running now that began today needs no date.
+    const head = isSameLocalDay(start, now)
+      ? formatTime(start, { withSeconds: true })
+      : formatDateTime(start, { withSeconds: true });
+    return `${head} (${duration})`;
+  }
   const tail = isSameLocalDay(start, end)
     ? formatTime(end, { withSeconds: true })
     : formatDateTime(end, { withSeconds: true });

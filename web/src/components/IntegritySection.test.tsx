@@ -18,7 +18,7 @@ describe('IntegritySection', () => {
       />,
     );
     expect(screen.getByText('Likely spoofed')).toBeInTheDocument();
-    expect(screen.getByText('Score 0.12 of 1')).toBeInTheDocument();
+    expect(screen.getByText('Score 0.12')).toBeInTheDocument();
     expect(screen.getByText('Arrival-time difference')).toBeInTheDocument();
     expect(screen.getByText('misses claimed position by 41.2 km')).toBeInTheDocument();
     expect(screen.getByText('88.4 km from the claimed position')).toBeInTheDocument();
