@@ -45,7 +45,7 @@ dev = [
     "pytest>=8.0",
     "httpx>=0.27",
     "ruff>=0.8",
-    "import-linter==2.15",
+    "import-linter==2.16",
     "mypy==2.4.1",
 ]
 
